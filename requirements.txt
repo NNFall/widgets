@@ -1,0 +1,17 @@
+﻿# requirements.txt
+openai
+telethon
+python-dotenv
+aiosqlite
+httpx
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+aiogram
+aiohttp
+pydub
+asyncpg
+aiohttp-session
+SQLAlchemy
+alembic
+bcrypt
