@@ -1,0 +1,38 @@
+# .dockerignore
+
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Python virtual environment
+.venv
+venv
+env
+
+# Python cache
+__pycache__
+*.pyc
+
+# IDE config
+.vscode/
+
+# Базы данных и сессии (самое важное для решения проблемы)
+*.db
+*.sqlite
+*.sqlite3
+*.session
+*.session-journal
+
+# Папки, которые монтируются как volumes
+data/
+logs/
+
+# Файл с секретами
+.env
+credentials.json
+*.log

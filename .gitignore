@@ -15,12 +15,21 @@ __pycache__/
 
 # Файл базы данных
 *.db
+*.sqlite
+*.sqlite3
 
 # Файл с секретными данными
 .env
 
 # Файл с ключами доступа
 credentials.json
+
+# Локальные runtime-файлы
+data/
+logs/
+*.log
+*.session
+*.session-journal
 
 # Папка с виртуальным окружением Python
 .venv/
