@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import secrets
 from html import escape
@@ -138,9 +138,20 @@ async def tenant_create_submit(request: web.Request) -> web.StreamResponse:
         )
         tenant_id = tenant.id
 
-    message = 'Заказчик создан.'
     if generated:
-        message += f" Пароль: {password}"
+        content = f"""
+        <section class='card notice'>
+          <h2>Заказчик создан</h2>
+          <p>Сохраните пароль сейчас, повторно он показан не будет.</p>
+          <p><strong>Email:</strong> {escape(email)}</p>
+          <p><strong>Пароль:</strong> <code>{escape(password)}</code></p>
+          <div class='actions'>
+            <a class='button' href='/admin/tenants/{tenant_id}'>Перейти к доступу</a>
+          </div>
+        </section>
+        """
+        return render_layout('Заказчик создан', content, nav_extra=_nav_links(tenant_id, active='credentials'))
+    message = 'Заказчик создан.'
     raise web.HTTPFound(f"/admin/tenants/{tenant_id}?alert={quote_plus(message)}")
 
 
@@ -262,9 +273,20 @@ async def tenant_credentials_save(request: web.Request) -> web.StreamResponse:
         for extra in duplicates:
             await user_repo.delete(extra.id)
 
-    message = 'Данные сохранены'
     if generated and password_to_set:
-        message += f". Новый пароль: {password_to_set}"
+        content = f"""
+        <section class='card notice'>
+          <h2>Пароль обновлён</h2>
+          <p>Сохраните пароль сейчас, повторно он показан не будет.</p>
+          <p><strong>Email:</strong> {escape(email)}</p>
+          <p><strong>Новый пароль:</strong> <code>{escape(password_to_set)}</code></p>
+          <div class='actions'>
+            <a class='button' href='/admin/tenants/{tenant_id}'>Вернуться к доступу</a>
+          </div>
+        </section>
+        """
+        return render_layout('Пароль обновлён', content, nav_extra=_nav_links(tenant_id, active='credentials'))
+    message = 'Данные сохранены'
     raise web.HTTPFound(f"/admin/tenants/{tenant_id}?alert={quote_plus(message)}")
 
 
@@ -296,32 +318,25 @@ async def tenant_edit(request: web.Request) -> web.Response:
         f"<option value='{widget.id}'>{escape(widget.name)} ({escape(widget.slug)})</option>"
         for widget in available_widgets
     )
-    select_form = (
-        f"<form method='post' action='/admin/tenants/{tenant_id}/widgets/attach-select' class='stack' style='margin-top:16px;'>"
-        f"  <div class='column'>
-"
-        f"    <label>Выбрать свободный виджет
-"
-        f"      <select name='widget_id'>
-"
-        f"        <option value=''>-- выбрать --</option>
-"
-        f"        {select_options}
-"
-        f"      </select>
-"
-        f"    </label>
-"
-        f"  </div>"
-        f"  <div class='column' style='max-width: 220px;'>
-"
-        f"    <button type='submit'>Привязать выбранный</button>
-"
-        f"  </div>
-"
-        f"</form>"
-    ) if available_widgets else "<p class='muted' style='margin-top:16px;'>Свободных виджетов пока нет. Отвяжите виджет у другого заказчика, чтобы он появился здесь.</p>"
 
+    if available_widgets:
+        select_form = f"""
+        <form method='post' action='/admin/tenants/{tenant_id}/widgets/attach-select' class='stack' style='margin-top:16px;'>
+        <div class='column'>
+            <label>Выбрать свободный виджет
+            <select name='widget_id'>
+                <option value=''>-- выбрать --</option>
+                {select_options}
+            </select>
+            </label>
+        </div>
+        <div class='column' style='max-width: 220px;'>
+            <button type='submit'>Привязать выбранный</button>
+        </div>
+        </form>
+        """
+    else:
+        select_form = "<p class='muted' style='margin-top:16px;'>Свободных виджетов пока нет. Отвяжите виджет у другого заказчика, чтобы он появился здесь.</p>"
 
     content = f"""
     {notice}
