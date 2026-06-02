@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import logging
 
 from aiohttp import web
@@ -17,6 +17,10 @@ async def _init_history_db(app: web.Application) -> None:
     await history_db.init_db()
 
 
+async def _home(request: web.Request) -> web.StreamResponse:
+    raise web.HTTPFound('/admin')
+
+
 setup_logging()
 logger = logging.getLogger(__name__)
 
@@ -30,6 +34,7 @@ async def create_app(config: AppConfig | None = None) -> web.Application:
     app.on_startup.append(_init_history_db)
 
     init_db_signals(app)
+    app.router.add_get('/', _home)
     setup_admin_routes(app)
     setup_api_routes(app)
     setup_client_routes(app)

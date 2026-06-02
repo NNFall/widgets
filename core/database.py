@@ -1,6 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 import aiosqlite
@@ -10,6 +11,14 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = settings.DATABASE_URL
+
+
+def _ensure_parent_directory(database_url: str) -> None:
+    if database_url == ":memory:":
+        return
+    path = Path(database_url)
+    if path.parent and str(path.parent) != ".":
+        path.parent.mkdir(parents=True, exist_ok=True)
 
 
 async def _ensure_column(db: aiosqlite.Connection, table: str, column: str, definition: str) -> None:
@@ -24,6 +33,7 @@ async def _ensure_column(db: aiosqlite.Connection, table: str, column: str, defi
 
 async def init_db() -> None:
     """Initialise the lightweight message store used for conversation history."""
+    _ensure_parent_directory(DATABASE_URL)
     async with aiosqlite.connect(DATABASE_URL) as db:
         await db.execute(
             """

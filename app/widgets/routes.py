@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -69,12 +69,14 @@ def _assemble_document(title: str, html_segment: str, css: str | None, js: str |
 
 
 def _adjust_widget_urls(html: str, slug: str) -> str:
-    return (
-        html
-        .replace('/api/send', f'/w/{slug}/api/send')
-        .replace('/api/history', f'/w/{slug}/api/history')
-        .replace('/api/audio', f'/w/{slug}/api/audio')
-    )
+    for endpoint in ('send', 'history', 'audio'):
+        path = f'/api/{endpoint}'
+        full_path = f'/w/{slug}{path}'
+        token = f'__KAIGO_WIDGET_{endpoint.upper()}__'
+        html = html.replace(full_path, token)
+        html = html.replace(path, full_path)
+        html = html.replace(token, full_path)
+    return html
 
 
 async def render_widget(request: web.Request) -> web.Response:
@@ -144,12 +146,17 @@ async def widget_api_send(request: web.Request) -> web.Response:
 
 async def widget_api_history(request: web.Request) -> web.Response:
     slug = request.match_info['slug']
-    await _get_widget(request, slug)
+    widget = await _get_widget(request, slug)
 
     try:
         uid, is_new = await _get_or_set_uid(request)
         user_id = _uid_to_user_id(uid)
-        history = await db.get_history(user_id=user_id, limit=50)
+        history = await db.get_history(
+            user_id=user_id,
+            limit=50,
+            widget_id=widget.id,
+            widget_slug=widget.slug,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception('widget_api_history: ошибка получения истории')
         return web.json_response({"type": "error", "content": "Не удалось получить историю."}, status=500)

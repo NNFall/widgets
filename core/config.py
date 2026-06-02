@@ -1,9 +1,7 @@
-# /core/config.py
-
 import os
-import logging  # <-- ВОТ ЭТА НЕДОСТАЮЩАЯ СТРОКА
-from dotenv import load_dotenv
+import logging
 from enum import Enum
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -26,13 +24,24 @@ class AppSettings:
         # --- Настройки сессии Telethon (неизменяемые) ---
         self.SESSION_NAME = "my_ai_session"
 
-        # --- Настройки базы данных (неизменяемые) ---
-        self.DATABASE_URL = "dialogs.db"
+        # --- Настройки базы данных истории сообщений ---
+        self.DATABASE_URL = os.getenv("MESSAGE_DATABASE_URL", "dialogs.db")
 
-        # --- Настройки промптов (неизменяемые) ---
-        # УБЕДИСЬ, ЧТО ТЫ ВСТАВИЛ СЮДА СВОЮ РЕАЛЬНУЮ ССЫЛКУ
-        self.PROMPT_GOOGLE_DOC_URL = "https://docs.google.com/document/d/166D0J46nHiSXTod7wEjASLWf8QAhBbDv8MDO9s-X7Vg/edit?usp=sharing" # Вставь свою ссылку
-        self.SERVICE_ACCOUNT_FILE = 'credentials.json'
+        # --- Настройки промптов ---
+        self.PROMPT_GOOGLE_DOC_URL = os.getenv("PROMPT_GOOGLE_DOC_URL")
+        self.SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE", "credentials.json")
+        self.DEFAULT_SYSTEM_PROMPT = os.getenv(
+            "DEFAULT_SYSTEM_PROMPT",
+            "Ты полезный AI-ассистент. Отвечай кратко, понятно и по делу.",
+        )
+
+        # --- Настройки админки ---
+        self.ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+        self.ADMIN_EMAILS = {
+            email.strip().lower()
+            for email in os.getenv("ADMIN_EMAILS", "").split(",")
+            if email.strip()
+        }
 
         # --- НАСТРОЙКИ НЕЙРОСЕТИ (ИЗМЕНЯЕМЫЕ) ---
         # Эти значения будут использоваться как стартовые и могут быть изменены "на лету"
