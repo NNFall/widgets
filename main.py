@@ -15,7 +15,7 @@ def configure_logging() -> None:
         datefmt="%H:%M:%S",
         force=True,
     )
-    for noisy_logger in ("aiohttp.access", "aiogram.dispatcher", "telethon"):
+    for noisy_logger in ("aiohttp.access", "aiogram.dispatcher", "telethon", "httpx", "httpcore"):
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
 
