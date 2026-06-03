@@ -1,15 +1,19 @@
 # Kaigo Widgets
 
-Платформа для AI-виджетов на домене [kaigo.online](https://kaigo.online). Проект хранит заказчиков, пользователей и настройки виджетов в PostgreSQL, а историю сообщений виджетов - в отдельной SQLite-базе.
+Платформа для AI-виджетов на доменах [kaigo.online](https://kaigo.online) и [kaigo.space](https://kaigo.space). Проект хранит заказчиков, пользователей и настройки виджетов в PostgreSQL, а историю сообщений виджетов - в отдельной SQLite-базе.
 
 На текущем сервере этот проект живёт рядом с отдельной статической визиткой: корень домена и часть SPA-маршрутов отдаются из `/root/kaigo/dist`, а маршруты виджетов проксируются в aiohttp-приложение на `127.0.0.1:8080`.
 
+Дополнительно `kaigo.space` теперь разделен на два входа: корень домена открывает страницу Kaigo Widgets, а старый realtime voice agents интерфейс доступен только по `/real-time/`.
+
 ## Что сейчас развернуто
 
-- Домен: `kaigo.online`
+- Домены: `kaigo.online`, `kaigo.space`
 - Nginx проксирует неперехваченные статикой пути на `127.0.0.1:8080`
 - Docker-сервисы: `ai_project_app`, `ai_project_db`
 - Статический сайт на корне: `/root/kaigo/dist`
+- `kaigo.space/` проксируется напрямую в widgets backend на `127.0.0.1:8080`
+- `kaigo.space/real-time/` проксируется в отдельный realtime container на `127.0.0.1:8001`
 - Публичный демо-виджет: [`/w/demka`](https://kaigo.online/w/demka)
 - Админка приложения: `http://127.0.0.1:8080/admin` на сервере
 - Кабинет клиента: [`/client/login`](https://kaigo.online/client/login)
@@ -31,7 +35,9 @@
 
 Публичный домен:
 
-- `/` - статическая визитка из `/root/kaigo/dist`
+- `kaigo.online/` - статическая визитка из `/root/kaigo/dist`
+- `kaigo.space/` - главная страница Kaigo Widgets из aiohttp backend
+- `kaigo.space/real-time/` - realtime voice agents из `/root/realtime`
 - `/w/{slug}` - публичная страница виджета, например `/w/demka`
 - `/w/{slug}?version=N` - предпросмотр конкретной версии ассета виджета
 
@@ -68,7 +74,9 @@
 
 | Route | Назначение |
 | --- | --- |
-| `/` | Статическая визитка из `/root/kaigo/dist` на публичном домене |
+| `kaigo.online/` | Статическая визитка из `/root/kaigo/dist` |
+| `kaigo.space/` | Главная страница Kaigo Widgets из aiohttp backend |
+| `kaigo.space/real-time/` | Realtime voice agents, отдельный контейнер `/root/realtime` |
 | `/assets/*` | Статические assets визитки |
 | `/about*`, `/projects*`, `/project/*`, `/login*`, `/auth*`, `/admin*` | SPA-маршруты визитки, отдаются через `index.html` |
 
@@ -85,7 +93,7 @@
 | `/admin` | Админка виджетов и заказчиков, доступна напрямую на `127.0.0.1:8080` |
 | `/client/login` | Вход клиента, проксируется через публичный домен |
 
-Если открыть само aiohttp-приложение напрямую, `/` редиректит в `/admin`.
+Если открыть само aiohttp-приложение напрямую, `/` показывает компактную главную страницу Kaigo Widgets с переходами в кабинет клиента, демо-виджет, realtime-раздел и healthcheck-и.
 
 ## Переменные окружения
 
