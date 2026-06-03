@@ -189,29 +189,42 @@ def _render_layout(title: str, content: str, *, nav_links: Iterable[tuple[str, s
       <head>
         <title>{escape(title)}</title>
         <style>
-          body {{ font-family: Arial, sans-serif; background: #f9fafb; margin: 40px; color: #111827; }}
-          header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }}
-          nav a {{ margin-left: 12px; color: #2563eb; text-decoration: none; font-weight: 600; }}
+          body {{ font-family: Inter, Arial, sans-serif; background: #f6f8fb; margin: 0; color: #111827; }}
+          body::before {{ content: ''; position: fixed; inset: 0 0 auto; height: 4px; background: linear-gradient(90deg, #2563eb, #10b981, #f59e0b); }}
+          header, section.card, details.dialog-card, body > p {{ max-width: 1080px; margin-left: auto; margin-right: auto; }}
+          header {{ display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 32px 24px 20px; margin-bottom: 8px; }}
+          h1 {{ margin: 0; font-size: 28px; }}
+          h2, h3 {{ margin-top: 0; }}
+          nav {{ display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }}
+          nav a {{ color: #2563eb; text-decoration: none; font-weight: 700; padding: 7px 10px; border-radius: 8px; }}
+          nav a:hover {{ background: #eff6ff; }}
           .button {{ display: inline-block; padding: 8px 16px; background: #2563eb; color: #fff; border-radius: 8px; text-decoration: none; }}
-          section.card {{ background: #fff; padding: 24px; border-radius: 16px; box-shadow: 0 8px 30px rgba(15, 23, 42, 0.08); margin-bottom: 24px; }}
+          section.card {{ background: #fff; padding: 24px; border-radius: 8px; border: 1px solid #e5e7eb; box-shadow: 0 12px 26px rgba(15, 23, 42, 0.06); margin-bottom: 20px; }}
           label {{ display: block; margin-bottom: 12px; font-weight: 600; }}
           input {{ width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; box-sizing: border-box; }}
-          button {{ padding: 10px 18px; border: none; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; }}
+          input:focus {{ border-color: #2563eb; box-shadow: 0 0 0 4px rgba(37, 99, 235, .12); outline: none; }}
+          button {{ padding: 10px 18px; border: none; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; font-weight: 700; }}
           .muted {{ color: #6b7280; font-size: 14px; }}
           .actions {{ margin-top: 16px; }}
           ul.conv-list {{ list-style: none; margin: 0; padding: 0; }}
           ul.conv-list li {{ background: #f3f4f6; padding: 12px 16px; border-radius: 12px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 4px; }}
           ul.conv-list li .muted {{ font-size: 13px; color: #6b7280; }}
           ul.conv-list li .preview {{ color: #374151; font-size: 14px; }}
-          details.dialog-card {{ border: 1px solid #e5e7eb; border-radius: 12px; background: #fff; padding: 0 16px; margin-bottom: 16px; }}
+          details.dialog-card {{ border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; padding: 0 16px; margin-bottom: 16px; box-shadow: 0 10px 22px rgba(15, 23, 42, 0.05); }}
           details.dialog-card summary {{ cursor: pointer; padding: 16px 0; display: flex; flex-direction: column; gap: 4px; }}
           details.dialog-card summary::-webkit-details-marker {{ display: none; }}
           .dialog-body {{ padding: 12px 0 16px; display: flex; flex-direction: column; gap: 12px; }}
-          .message {{ background: #f9fafb; border-radius: 12px; padding: 12px 16px; }}
+          .message {{ background: #f9fafb; border-radius: 8px; padding: 12px 16px; }}
           .message.user {{ border-left: 4px solid #2563eb; }}
           .message.assistant {{ border-left: 4px solid #10b981; }}
           .message .message-meta {{ font-size: 13px; color: #6b7280; margin-bottom: 6px; }}
           .message .message-text {{ white-space: pre-wrap; line-height: 1.5; color: #111827; }}
+          @media (max-width: 720px) {{
+            header {{ align-items: flex-start; flex-direction: column; padding: 28px 16px 16px; }}
+            h1 {{ font-size: 24px; }}
+            section.card, details.dialog-card, body > p {{ margin-left: 16px; margin-right: 16px; }}
+            section.card {{ padding: 18px; }}
+          }}
         </style>
       </head>
       <body>

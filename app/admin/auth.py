@@ -5,6 +5,7 @@ import secrets
 from aiohttp import web
 from aiohttp_session import get_session
 
+from app.admin.layout import render_layout
 from app.db import models
 from app.db.repositories import TenantRepository, UserRepository
 from app.db.session import session_scope
@@ -17,12 +18,23 @@ DEFAULT_TENANT_NAME = 'Demo Tenant'
 
 
 async def login_page(request: web.Request) -> web.Response:
-    form = '''<html><body><form method="post">
-    <label>Email <input name="email" placeholder="Email"/></label>
-    <label>Password <input name="password" type="password" placeholder="Password"/></label>
-    <button type="submit">Login</button>
-    </form></body></html>'''
-    return web.Response(text=form, content_type='text/html')
+    form = """
+    <section class='card login-card'>
+      <p class='eyebrow'>kAIgo widgets</p>
+      <h2>Вход в админку</h2>
+      <p class='muted'>Управление виджетами, ассетами и диалогами.</p>
+      <form method="post">
+        <label>Email
+          <input name="email" type="email" placeholder="admin@example.com" autocomplete="email" required>
+        </label>
+        <label>Password
+          <input name="password" type="password" placeholder="Пароль" autocomplete="current-password">
+        </label>
+        <button type="submit">Войти</button>
+      </form>
+    </section>
+    """
+    return render_layout("Вход", form)
 
 
 async def login_submit(request: web.Request) -> web.Response:

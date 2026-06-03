@@ -25,6 +25,27 @@ logger = logging.getLogger(__name__)
 DEFAULT_CSS = """.widget-container { font-family: Arial, sans-serif; border: 1px solid #ddd; padding: 16px; border-radius: 12px; box-shadow: 0 6px 20px rgba(15, 23, 42, 0.08);}"""
 DEFAULT_JS = """console.log('widget loaded');"""
 
+PROVIDER_ERROR_CODES = {
+    "missing_api_key",
+    "invalid_api_key",
+    "account_inactive",
+    "provider_timeout",
+    "provider_connection_error",
+    "provider_api_error",
+    "provider_error",
+    "empty_provider_response",
+}
+
+
+def _status_for_result(result: dict | None, default_error_status: int = 502) -> int:
+    if not result:
+        return default_error_status
+    if result.get("type") != "error":
+        return 200
+    if result.get("code") in PROVIDER_ERROR_CODES:
+        return 502
+    return 500
+
 
 async def _get_widget(request: web.Request, slug: str) -> models.Widget:
     async with session_scope(request.app) as db_session:
@@ -131,12 +152,8 @@ async def widget_api_send(request: web.Request) -> web.Response:
         widget_slug=widget.slug,
     )
 
-    if not result:
-        payload = {"type": "error", "content": "Нет ответа."}
-        status_code = 502
-    else:
-        payload = result
-        status_code = 200 if result.get("type") != "error" else 500
+    payload = result or {"type": "error", "content": "Нет ответа."}
+    status_code = _status_for_result(result)
 
     response = web.json_response(payload, status=status_code)
     if is_new:
@@ -224,8 +241,8 @@ async def widget_api_audio(request: web.Request) -> web.Response:
 
     if not result or result.get("type") == "error":
         content = (result or {}).get("content", "Не удалось получить ответ от AI.")
-        payload = {"type": "error", "content": content}
-        status_code = 502
+        payload = {"type": "error", "code": (result or {}).get("code"), "content": content}
+        status_code = _status_for_result(result)
     else:
         ai_text = result.get("content", "")
         payload = {

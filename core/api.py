@@ -95,14 +95,18 @@ async def process_message(
         len(history),
     )
 
-    ai_response_message = await ai_service.get_ai_response(
-        history=history,
-        system_prompt=system_prompt,
-        tools=tools,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
+    try:
+        ai_response_message = await ai_service.get_ai_response(
+            history=history,
+            system_prompt=system_prompt,
+            tools=tools,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    except ai_service.AIServiceError as exc:
+        logger.error("AI provider failed [%s]: %s", exc.code, exc.detail)
+        return {"type": "error", "code": exc.code, "content": exc.public_message}
 
     if not ai_response_message:
         return {"type": "error", "content": "Не удалось получить ответ от AI."}

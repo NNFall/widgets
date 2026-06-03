@@ -72,6 +72,9 @@ cp .env.example .env
 - `DATABASE_URL` - PostgreSQL DSN для SQLAlchemy, например `postgresql+asyncpg://user:password@db:5432/dbname`
 - `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` - параметры контейнера PostgreSQL
 - `VSEGPT_API_KEY` - ключ API для AI/STT
+- `VSEGPT_BASE_URL` - OpenAI-compatible endpoint VseGPT, по умолчанию `https://api.vsegpt.ru/v1`
+- `VSEGPT_REQUEST_TIMEOUT` - таймаут запроса к AI-провайдеру в секундах
+- `VSEGPT_MAX_RETRIES` - число повторов запроса SDK, по умолчанию `0`
 - `MESSAGE_DATABASE_URL` - путь к SQLite истории сообщений, по умолчанию `/app/data/dialogs.sqlite3`
 - `PROMPT_GOOGLE_DOC_URL` - Google Doc с системным промптом и блоком `---TOOLS---`
 - `SERVICE_ACCOUNT_FILE` - путь к JSON-credentials Google service account, если нужен Google Docs prompt
@@ -92,6 +95,7 @@ docker compose logs -f app
 
 ```bash
 curl http://127.0.0.1:8080/api/health
+curl http://127.0.0.1:8080/api/health/ai
 curl http://127.0.0.1:8080/w/demka
 ```
 
@@ -113,6 +117,14 @@ SQLite хранит историю сообщений виджетов. Для D
 
 Виджет отправляет запросы в VseGPT через OpenAI-compatible API. Если Google Docs credentials отсутствуют или Google Docs недоступен, приложение использует `DEFAULT_SYSTEM_PROMPT` и продолжает отвечать.
 
+Проверить именно chat endpoint можно так:
+
+```bash
+curl http://127.0.0.1:8080/api/health/ai
+```
+
+Ответ `{"status":"ok"}` означает, что VseGPT принял ключ и модель. Если endpoint возвращает `invalid_api_key`, текущий `VSEGPT_API_KEY` не найден у VseGPT. Если возвращает `account_inactive`, VseGPT распознал аккаунт, но подписка/баланс неактивны.
+
 Если AI возвращает `Connection error`, проверьте DNS внутри контейнера:
 
 ```bash
@@ -125,7 +137,7 @@ PY
 
 В `docker-compose.yml` для приложения уже задан DNS `1.1.1.1` и `8.8.8.8`; после изменения compose нужно пересоздать контейнер.
 
-Если VseGPT отвечает `User with this API key not found`, сеть уже работает, но значение `VSEGPT_API_KEY` в `.env` не принято API. В этом случае замените ключ на актуальный и пересоздайте контейнер:
+Если VseGPT отвечает `User with this API key not found` или `This API key not found`, сеть уже работает, но значение `VSEGPT_API_KEY` в `.env` не принято API. В этом случае замените ключ на актуальный и пересоздайте контейнер:
 
 ```bash
 docker compose up -d --force-recreate app

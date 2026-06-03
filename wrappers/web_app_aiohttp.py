@@ -8,11 +8,32 @@ import uuid
 from aiohttp import web
 
 from core import api as core_api, database as db
+from core.config import settings as core_settings
 
 logger = logging.getLogger(__name__)
 
 COOKIE_NAME = "uid"
 COOKIE_MAX_AGE = 24 * 60 * 60  # 24 hours
+PROVIDER_ERROR_CODES = {
+    "missing_api_key",
+    "invalid_api_key",
+    "account_inactive",
+    "provider_timeout",
+    "provider_connection_error",
+    "provider_api_error",
+    "provider_error",
+    "empty_provider_response",
+}
+
+
+def _status_for_result(result: dict | None, default_error_status: int = 502) -> int:
+    if not result:
+        return default_error_status
+    if result.get("type") != "error":
+        return 200
+    if result.get("code") in PROVIDER_ERROR_CODES:
+        return 502
+    return 500
 
 
 async def _get_or_set_uid(request) -> tuple[str, bool]:
@@ -55,13 +76,15 @@ def _transcribe_audio_bytes(audio_data: bytes) -> str:
 
         from openai import OpenAI
         client = OpenAI(
-            api_key=os.getenv("VSEGPT_API_KEY"),
-            base_url="https://api.vsegpt.ru/v1",
+            api_key=(core_settings.VSEGPT_API_KEY or "").strip(),
+            base_url=core_settings.VSEGPT_BASE_URL,
+            timeout=core_settings.VSEGPT_REQUEST_TIMEOUT,
+            max_retries=core_settings.VSEGPT_MAX_RETRIES,
         )
 
         with open(temp_mp3.name, "rb") as audio_file:
             transcript = client.audio.transcriptions.create(
-                model="stt-openai/whisper-1",
+                model=core_settings.default_stt_model,
                 response_format="json",
                 language="ru",
                 file=audio_file,
@@ -88,10 +111,14 @@ HTML_PAGE = """<!DOCTYPE html>
       --chat-primary: #2563eb;
       --chat-primary-hover: #1d4ed8;
       --chat-bg: #ffffff;
-      --chat-shadow: 0 20px 45px rgba(37, 99, 235, 0.25);
-      --chat-radius: 20px;
+      --chat-surface: #f8fafc;
+      --chat-accent: #10b981;
+      --chat-warning: #f59e0b;
+      --chat-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
+      --chat-radius: 18px;
       --chat-gray-100: #f9fafb;
       --chat-gray-200: #e5e7eb;
+      --chat-gray-300: #d1d5db;
       --chat-gray-400: #9ca3af;
       --chat-gray-500: #6b7280;
       --chat-gray-900: #111827;
@@ -130,14 +157,14 @@ HTML_PAGE = """<!DOCTYPE html>
       height: 64px;
       border-radius: 50%;
       border: none;
-      background: var(--chat-primary);
+      background: linear-gradient(135deg, var(--chat-primary), #14b8a6);
       color: #ffffff;
       display: flex;
       align-items: center;
       justify-content: center;
       box-shadow: var(--chat-shadow);
       cursor: pointer;
-      transition: transform 0.3s ease, box-shadow 0.3s ease;
+      transition: transform 0.3s ease, box-shadow 0.3s ease, filter 0.2s ease;
       position: relative;
       outline: none;
     }
@@ -145,6 +172,11 @@ HTML_PAGE = """<!DOCTYPE html>
     .chat-toggle:focus-visible {
       outline: 3px solid rgba(37, 99, 235, 0.35);
       outline-offset: 3px;
+    }
+
+    .chat-toggle:hover {
+      filter: saturate(1.08);
+      transform: translateY(-2px);
     }
 
     .chat-toggle__icon::before {
@@ -204,6 +236,7 @@ HTML_PAGE = """<!DOCTYPE html>
       height: min(520px, calc(100vh - 120px));
       background: var(--chat-bg);
       border-radius: var(--chat-radius);
+      border: 1px solid rgba(148, 163, 184, 0.28);
       box-shadow: var(--chat-shadow);
       display: flex;
       flex-direction: column;
@@ -225,7 +258,7 @@ HTML_PAGE = """<!DOCTYPE html>
       align-items: center;
       justify-content: space-between;
       padding: 18px 20px;
-      background: linear-gradient(135deg, var(--chat-primary), #4f46e5);
+      background: linear-gradient(135deg, #1f2937, var(--chat-primary));
       color: #ffffff;
     }
 
@@ -261,7 +294,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
     .chat-panel__log {
       flex: 1;
-      background: var(--chat-gray-100);
+      background: var(--chat-surface);
       padding: 20px;
       overflow-y: auto;
       display: flex;
@@ -278,7 +311,8 @@ HTML_PAGE = """<!DOCTYPE html>
       padding: 12px 16px;
       border-radius: 16px;
       background: #ffffff;
-      box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
+      border: 1px solid rgba(229, 231, 235, 0.9);
+      box-shadow: 0 10px 22px rgba(15, 23, 42, 0.07);
       display: flex;
       flex-direction: column;
       gap: 6px;
@@ -318,7 +352,35 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     .chat-message--system .chat-message__bubble {
-      background: #f3f4f6;
+      background: #fff7ed;
+      border-color: #fed7aa;
+    }
+
+    .chat-message--system .chat-message__label,
+    .chat-message--system .chat-message__text {
+      color: #9a3412;
+    }
+
+    .chat-message--typing .chat-message__bubble {
+      background: #ecfdf5;
+      border-color: #bbf7d0;
+    }
+
+    .chat-message--typing .chat-message__text::after {
+      content: '';
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      margin-left: 6px;
+      border-radius: 50%;
+      background: var(--chat-accent);
+      animation: chatPulse 1s ease-in-out infinite;
+      vertical-align: middle;
+    }
+
+    @keyframes chatPulse {
+      0%, 100% { opacity: 0.25; transform: translateY(0); }
+      50% { opacity: 1; transform: translateY(-2px); }
     }
 
     .chat-panel__controls {
@@ -338,7 +400,7 @@ HTML_PAGE = """<!DOCTYPE html>
       flex: 1;
       padding: 10px 14px;
       border: 1px solid var(--chat-gray-200);
-      border-radius: 12px;
+      border-radius: 10px;
       font-size: 14px;
       transition: border 0.2s ease, box-shadow 0.2s ease;
     }
@@ -352,7 +414,7 @@ HTML_PAGE = """<!DOCTYPE html>
     .chat-panel__send {
       padding: 0 18px;
       border: none;
-      border-radius: 12px;
+      border-radius: 10px;
       background: var(--chat-primary);
       color: #ffffff;
       font-size: 14px;
@@ -368,14 +430,14 @@ HTML_PAGE = """<!DOCTYPE html>
     }
 
     .chat-panel__send:disabled {
-      background: var(--chat-gray-200);
+      background: var(--chat-gray-300);
       color: var(--chat-gray-500);
       cursor: not-allowed;
     }
 
     .chat-panel__voice {
       border: none;
-      border-radius: 12px;
+      border-radius: 10px;
       padding: 12px 16px;
       font-size: 14px;
       font-weight: 600;
@@ -451,7 +513,7 @@ HTML_PAGE = """<!DOCTYPE html>
     const recBtn = document.getElementById('rec');
     const recStatusEl = document.getElementById('recStatus');
 
-    const roleLabels = { user: 'Вы', assistant: 'ИИ', system: 'Система' };
+    const roleLabels = { user: 'Вы', assistant: 'ИИ', system: 'Система', typing: 'ИИ' };
 
     const params = new URLSearchParams(window.location.search);
     const autoOpenDelay = Number(params.get('autoOpenDelay') || 0);
@@ -539,6 +601,35 @@ HTML_PAGE = """<!DOCTYPE html>
       row.appendChild(bubble);
       logEl.appendChild(row);
       logEl.scrollTop = logEl.scrollHeight;
+      return row;
+    }
+
+    function removeMessage(row) {
+      if (row && row.parentNode) {
+        row.parentNode.removeChild(row);
+      }
+    }
+
+    function providerErrorText(data) {
+      if (!data || !data.code) {
+        return (data && data.content) || 'Не удалось получить ответ.';
+      }
+      if (data.code === 'invalid_api_key' || data.code === 'missing_api_key') {
+        return 'AI сейчас не настроен: провайдер не принял ключ доступа.';
+      }
+      if (data.code === 'account_inactive') {
+        return 'AI сейчас недоступен: аккаунт провайдера требует продления.';
+      }
+      if (data.code === 'provider_timeout') {
+        return 'AI не успел ответить. Попробуйте отправить сообщение еще раз.';
+      }
+      return data.content || 'AI-провайдер временно недоступен.';
+    }
+
+    function setSending(isSending) {
+      sendBtn.disabled = isSending;
+      sendBtn.textContent = isSending ? 'Жду ответ' : 'Отправить';
+      recBtn.disabled = isSending;
     }
 
     async function loadHistory() {
@@ -566,7 +657,9 @@ HTML_PAGE = """<!DOCTYPE html>
       }
       appendMessage('user', message);
       msgEl.value = '';
-      sendBtn.disabled = true;
+      setSending(true);
+      recStatusEl.textContent = 'AI думает...';
+      const typingRow = appendMessage('typing', 'Печатаю ответ');
       try {
         const response = await fetch('/api/send', {
           method: 'POST',
@@ -574,6 +667,7 @@ HTML_PAGE = """<!DOCTYPE html>
           body: JSON.stringify({ message })
         });
         const data = await response.json();
+        removeMessage(typingRow);
         if (response.ok && data.type !== 'error') {
           if (data.type === 'tool_calls') {
             appendMessage('system', JSON.stringify(data.content));
@@ -581,12 +675,14 @@ HTML_PAGE = """<!DOCTYPE html>
             appendMessage('assistant', data.content || '[пустой ответ]');
           }
         } else {
-          appendMessage('system', data.content || 'Не удалось получить ответ.');
+          appendMessage('system', providerErrorText(data));
         }
       } catch (error) {
+        removeMessage(typingRow);
         appendMessage('system', String(error));
       } finally {
-        sendBtn.disabled = false;
+        setSending(false);
+        recStatusEl.textContent = '';
         msgEl.focus({ preventScroll: true });
       }
     }
@@ -616,6 +712,7 @@ HTML_PAGE = """<!DOCTYPE html>
             return;
           }
           appendMessage('user', '[Голосовое сообщение]');
+          recStatusEl.textContent = 'Обрабатываю голос...';
           try {
             const formData = new FormData();
             formData.append('audio', blob, 'recording.ogg');
@@ -625,12 +722,13 @@ HTML_PAGE = """<!DOCTYPE html>
               appendMessage('user', '[Транскрипция] ' + (data.transcription || '(пусто)'));
               appendMessage('assistant', data.ai_response || '[пустой ответ]');
             } else {
-              appendMessage('system', data.content || 'Не удалось обработать аудио.');
+              appendMessage('system', providerErrorText(data));
             }
           } catch (error) {
             appendMessage('system', String(error));
           } finally {
             window.mediaRecorder = null;
+            recStatusEl.textContent = '';
           }
         };
         window.mediaRecorder.start();
@@ -749,15 +847,8 @@ async def api_send(request):
         payload = {"type": "error", "content": "Ошибка обработки сообщения."}
         status_code = 500
     else:
-        if not result:
-            payload = {"type": "error", "content": "Нет ответа."}
-            status_code = 502
-        elif result.get("type") == "error":
-            payload = result
-            status_code = 500
-        else:
-            payload = result
-            status_code = 200
+        payload = result or {"type": "error", "content": "Нет ответа."}
+        status_code = _status_for_result(result)
 
     response = web.json_response(payload, status=status_code)
     if is_new:
@@ -833,8 +924,8 @@ async def api_audio(request):
     else:
         if not ai_result or ai_result.get("type") == "error":
             content = (ai_result or {}).get("content", "Не удалось получить ответ от AI.")
-            status_code = 502
-            payload = {"type": "error", "content": content}
+            status_code = _status_for_result(ai_result)
+            payload = {"type": "error", "code": (ai_result or {}).get("code"), "content": content}
         else:
             if ai_result.get("type") == "tool_calls":
                 ai_text = json.dumps(ai_result.get("content", []), ensure_ascii=False)
@@ -851,38 +942,6 @@ async def api_audio(request):
     if is_new:
         response.set_cookie(COOKIE_NAME, uid, max_age=COOKIE_MAX_AGE, samesite="Lax")
     return response
-
-    if not transcription:
-        response = web.json_response(
-            {"type": "error", "content": "Не удалось распознать речь."},
-            status=502,
-        )
-        if is_new:
-            response.set_cookie(COOKIE_NAME, uid, max_age=COOKIE_MAX_AGE, samesite="Lax")
-        return response
-
-    ai_result = await core_api.process_message(user_id=user_id, text=transcription)
-    if not ai_result or ai_result.get("type") == "error":
-        content = (ai_result or {}).get("content", "Не удалось получить ответ от AI.")
-        status_code = 502
-        payload = {"type": "error", "content": content}
-    else:
-        if ai_result.get("type") == "tool_calls":
-            ai_text = json.dumps(ai_result.get("content", []), ensure_ascii=False)
-        else:
-            ai_text = ai_result.get("content", "")
-        payload = {
-            "type": "audio_response",
-            "transcription": transcription,
-            "ai_response": ai_text or "",
-        }
-        status_code = 200
-
-    response = web.json_response(payload, status=status_code)
-    if is_new:
-        response.set_cookie(COOKIE_NAME, uid, max_age=COOKIE_MAX_AGE, samesite="Lax")
-    return response
-
 
 @web.middleware
 async def cors_middleware(request, handler):

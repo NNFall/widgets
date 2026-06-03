@@ -14,6 +14,9 @@ class AppSettings:
     def __init__(self):
         # --- API Ключи (неизменяемые) ---
         self.VSEGPT_API_KEY = os.getenv("VSEGPT_API_KEY")
+        self.VSEGPT_BASE_URL = os.getenv("VSEGPT_BASE_URL", "https://api.vsegpt.ru/v1").rstrip("/")
+        self.VSEGPT_REQUEST_TIMEOUT = float(os.getenv("VSEGPT_REQUEST_TIMEOUT", "45"))
+        self.VSEGPT_MAX_RETRIES = int(os.getenv("VSEGPT_MAX_RETRIES", "0"))
         self.TELEGRAM_API_ID = os.getenv("TELEGRAM_API_ID")
         self.TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH")
         
