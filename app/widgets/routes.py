@@ -34,6 +34,7 @@ PROVIDER_ERROR_CODES = {
     "empty_provider_response",
     "model_not_found",
     "rate_limited",
+    "location_unsupported",
 }
 
 

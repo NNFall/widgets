@@ -40,7 +40,7 @@ class AIServiceError(Exception):
 def normalize_chat_model(model: str | None) -> str:
     value = (model or config.settings.default_model or "").strip()
     if not value:
-        return "gemini-2.5-pro"
+        return "gemini-3-flash-preview"
     if value.startswith("google/"):
         return value.split("/", 1)[1]
     if value.startswith("openai/") or value.startswith("gpt-"):
@@ -56,7 +56,7 @@ def normalize_chat_model(model: str | None) -> str:
 def normalize_stt_model(model: str | None) -> str:
     value = (model or config.settings.default_stt_model or "").strip()
     if not value:
-        return "gemini-2.5-flash"
+        return "gemini-3-flash-preview"
     if value.startswith("google/"):
         return value.split("/", 1)[1]
     if value.startswith("stt-openai/") or "whisper" in value.lower():
@@ -132,6 +132,16 @@ def _classify_provider_detail(detail: str, status_code: int = 502) -> AIServiceE
         return AIServiceError(
             code="account_inactive",
             public_message="AI-аккаунт неактивен или требует продления подписки.",
+            detail=detail,
+            status_code=502,
+        )
+    if "user location is not supported" in lowered or "location is not supported" in lowered:
+        return AIServiceError(
+            code="location_unsupported",
+            public_message=(
+                "Google AI Studio недоступен из текущего региона сервера. "
+                "Используйте сервер/прокси в поддерживаемом регионе или Vertex AI."
+            ),
             detail=detail,
             status_code=502,
         )

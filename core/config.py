@@ -63,11 +63,13 @@ class AppSettings:
 
         # --- НАСТРОЙКИ НЕЙРОСЕТИ (ИЗМЕНЯЕМЫЕ) ---
         # Эти значения будут использоваться как стартовые и могут быть изменены "на лету"
-        self.default_model = os.getenv("GOOGLE_AI_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-2.5-pro"
+        self.default_model = (
+            os.getenv("GOOGLE_AI_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-3-flash-preview"
+        )
         self.default_temperature = 0.5
         self.default_max_tokens = 10000
         self.default_stt_model = (
-            os.getenv("GOOGLE_AI_STT_MODEL") or os.getenv("GEMINI_TRANSCRIBE_MODEL") or "gemini-2.5-flash"
+            os.getenv("GOOGLE_AI_STT_MODEL") or os.getenv("GEMINI_TRANSCRIBE_MODEL") or "gemini-3-flash-preview"
         )
         self.operation_mode = OperationMode.ALL
 

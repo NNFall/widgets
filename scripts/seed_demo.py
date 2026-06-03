@@ -44,7 +44,7 @@ async def main() -> None:
                 tenant_id=tenant.id,
                 name="Demo Widget",
                 slug="demo-widget",
-                ai_model="gemini-2.5-pro",
+                ai_model="gemini-3-flash-preview",
                 intro_text="Здравствуйте!"
             )
             session.add(widget)

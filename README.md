@@ -100,8 +100,8 @@ cp .env.example .env
 - `DATABASE_URL` - PostgreSQL DSN для SQLAlchemy, например `postgresql+asyncpg://user:password@db:5432/dbname`
 - `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` - параметры контейнера PostgreSQL
 - `GOOGLE_AI_API_KEY` - ключ Google AI Studio. Также поддерживаются алиасы `GOOGLE_API_KEY` и `GEMINI_API_KEY`
-- `GOOGLE_AI_MODEL` - модель чата, по умолчанию `gemini-2.5-pro`
-- `GOOGLE_AI_STT_MODEL` - модель для аудио-транскрибации, по умолчанию `gemini-2.5-flash`
+- `GOOGLE_AI_MODEL` - модель чата, по умолчанию `gemini-3-flash-preview`
+- `GOOGLE_AI_STT_MODEL` - модель для аудио-транскрибации, по умолчанию `gemini-3-flash-preview`
 - `GOOGLE_AI_BASE_URL` - официальный OpenAI-compatible endpoint Gemini, по умолчанию `https://generativelanguage.googleapis.com/v1beta/openai/`
 - `GOOGLE_AI_NATIVE_BASE_URL` - native Gemini endpoint для `generateContent`, по умолчанию `https://generativelanguage.googleapis.com/v1beta`
 - `GOOGLE_AI_REQUEST_TIMEOUT` - таймаут запроса к Google AI Studio в секундах
@@ -148,7 +148,7 @@ SQLite хранит историю сообщений виджетов. Для D
 
 Виджет отправляет текстовые запросы в официальный Google AI Studio Gemini API через OpenAI-compatible endpoint. Голосовые сообщения распознаются через native Gemini `generateContent` с аудио-входом. Если Google Docs credentials отсутствуют или Google Docs недоступен, приложение использует `DEFAULT_SYSTEM_PROMPT` и продолжает отвечать.
 
-Модель чата по умолчанию: `gemini-2.5-pro`. Если в базе остались старые значения вроде `google/gemini-2.5-flash`, сервис автоматически убирает префикс `google/`. Старые несовместимые значения заменяются на `GOOGLE_AI_MODEL` с warning в логах.
+Модель чата по умолчанию: `gemini-3-flash-preview`. Если в базе остались старые значения вроде `google/gemini-2.5-flash`, сервис автоматически убирает префикс `google/`. Старые несовместимые значения заменяются на `GOOGLE_AI_MODEL` с warning в логах.
 
 Проверить именно chat endpoint можно так:
 
@@ -156,7 +156,7 @@ SQLite хранит историю сообщений виджетов. Для D
 curl http://127.0.0.1:8080/api/health/ai
 ```
 
-Ответ `{"status":"ok"}` означает, что Google AI Studio принял ключ и модель. Если endpoint возвращает `missing_api_key`, добавьте `GOOGLE_AI_API_KEY`, `GOOGLE_API_KEY` или `GEMINI_API_KEY` в `.env`. Если возвращает `invalid_api_key`, ключ не принят Google AI Studio. Если возвращает `model_not_found`, проверьте `GOOGLE_AI_MODEL` или модель конкретного виджета.
+Ответ `{"status":"ok"}` означает, что Google AI Studio принял ключ и модель. Если endpoint возвращает `missing_api_key`, добавьте `GOOGLE_AI_API_KEY`, `GOOGLE_API_KEY` или `GEMINI_API_KEY` в `.env`. Если возвращает `invalid_api_key`, ключ не принят Google AI Studio. Если возвращает `model_not_found`, проверьте `GOOGLE_AI_MODEL` или модель конкретного виджета. Если возвращает `location_unsupported`, Google AI Studio недоступен из текущего региона сервера; официальный вариант обхода - запуск из поддерживаемого региона или Gemini API через Vertex AI.
 
 Если AI возвращает `Connection error`, проверьте DNS внутри контейнера:
 

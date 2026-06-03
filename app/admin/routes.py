@@ -216,7 +216,7 @@ def _widget_form(widget: models.Widget | None = None) -> str:
 
         <label>Slug<input type='text' name='slug' value='{slug}' required></label>
 
-        <label>Gemini модель<input type='text' name='ai_model' value='{ai_model}' placeholder='gemini-2.5-pro' required></label>
+        <label>Gemini модель<input type='text' name='ai_model' value='{ai_model}' placeholder='gemini-3-flash-preview' required></label>
 
         <label>Gemini модель для речи<input type='text' name='stt_model' value='{stt_model}' placeholder='{core_settings.default_stt_model}'></label>
 

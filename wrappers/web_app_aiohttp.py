@@ -22,6 +22,7 @@ PROVIDER_ERROR_CODES = {
     "empty_provider_response",
     "model_not_found",
     "rate_limited",
+    "location_unsupported",
 }
 
 
@@ -572,6 +573,9 @@ HTML_PAGE = """<!DOCTYPE html>
       }
       if (data.code === 'rate_limited') {
         return 'Квота Google AI Studio временно ограничила запросы. Попробуйте позже.';
+      }
+      if (data.code === 'location_unsupported') {
+        return 'Gemini API недоступен из региона этого сервера. Нужен поддерживаемый регион или Vertex AI.';
       }
       if (data.code === 'provider_timeout') {
         return 'Gemini не успел ответить. Попробуйте отправить сообщение еще раз.';
