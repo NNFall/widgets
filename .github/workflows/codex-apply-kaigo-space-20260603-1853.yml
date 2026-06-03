@@ -1,0 +1,41 @@
+name: Codex Apply Kaigo Space Widgets Home
+
+on:
+  push:
+    paths:
+      - .github/workflows/codex-apply-kaigo-space-20260603-1853.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download patch
+        run: |
+          curl -fsSL "https://kaigo.online/assets/codex-patches/kaigo-space-widgets-home-20260603-1853.patch" -o /tmp/codex.patch
+          echo "91cace9f2e1e73d45ee402370672e523a46af94ad6416c84f46cf2e8b882bdfa  /tmp/codex.patch" | sha256sum -c -
+
+      - name: Apply patch
+        run: |
+          git apply --check /tmp/codex.patch
+          git apply /tmp/codex.patch
+
+      - name: Validate Python syntax
+        run: python3 -m compileall app core wrappers scripts main.py
+
+      - name: Commit changes
+        run: |
+          rm .github/workflows/codex-apply-kaigo-space-20260603-1853.yml
+          git config user.name "codex-app"
+          git config user.email "codex-app@users.noreply.github.com"
+          git add README.md app/server.py docs/KAIGO_SPACE_PLAN.md docs/KAIGO_SPACE_OPERATIONS.md .github/workflows/codex-apply-kaigo-space-20260603-1853.yml
+          git commit -m "Add kaigo.space widgets home and routing docs"
+          git push
