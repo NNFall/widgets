@@ -10,7 +10,7 @@ import asyncio
 from datetime import datetime
 from typing import Dict
 
-from core import api as core_api, database as db
+from core import ai_service, api as core_api, database as db
 
 app = FastAPI(title="AI Web Widget Simple")
 
@@ -73,22 +73,8 @@ async def process_audio_background(task_id: str, user_id: int, audio_data: bytes
                 "progress": 60
             })
             
-            # Транскрибируем
-            from openai import OpenAI
-            client = OpenAI(
-                api_key=os.getenv("VSEGPT_API_KEY"),
-                base_url="https://api.vsegpt.ru/v1",
-            )
-            
-            with open(temp_mp3.name, "rb") as audio_file:
-                transcript = client.audio.transcriptions.create(
-                    model="stt-openai/whisper-1",
-                    response_format="json",
-                    language="ru",
-                    file=audio_file
-                )
-            
-            text = transcript.text.strip()
+            # Транскрибируем через Gemini.
+            text = await ai_service.transcribe_audio(audio_data, mime_type="audio/ogg")
             
             tasks_storage[task_id].update({
                 "message": "Получаем ответ от AI...",
@@ -377,4 +363,3 @@ async def start():
     config = uvicorn.Config(app, host="0.0.0.0", port=8001, loop="asyncio", lifespan="on")
     server = uvicorn.Server(config)
     await server.serve()
-

@@ -106,7 +106,12 @@ async def process_message(
         )
     except ai_service.AIServiceError as exc:
         logger.error("AI provider failed [%s]: %s", exc.code, exc.detail)
-        return {"type": "error", "code": exc.code, "content": exc.public_message}
+        return {
+            "type": "error",
+            "code": exc.code,
+            "content": exc.public_message,
+            "status_code": exc.status_code,
+        }
 
     if not ai_response_message:
         return {"type": "error", "content": "Не удалось получить ответ от AI."}

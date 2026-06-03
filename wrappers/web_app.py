@@ -10,7 +10,7 @@ import json
 from typing import Dict, List
 from datetime import datetime
 
-from core import api as core_api, database as db
+from core import ai_service, api as core_api, database as db
 
 app = FastAPI(title="AI Web Widget")
 
@@ -104,22 +104,8 @@ async def process_audio_async(user_id: str, audio_data: bytes, task_id: str):
                 "message": "Распознаем речь..."
             })
             
-            # Транскрибируем
-            from openai import OpenAI
-            client = OpenAI(
-                api_key=os.getenv("VSEGPT_API_KEY"),
-                base_url="https://api.vsegpt.ru/v1",
-            )
-            
-            with open(temp_mp3.name, "rb") as audio_file:
-                transcript = client.audio.transcriptions.create(
-                    model="stt-openai/whisper-1",
-                    response_format="json",
-                    language="ru",
-                    file=audio_file
-                )
-            
-            text = transcript.text.strip()
+            # Транскрибируем через Gemini.
+            text = await ai_service.transcribe_audio(audio_data, mime_type="audio/ogg")
             
             # Уведомляем о получении ответа от AI
             await manager.send_message(user_id, {
@@ -469,5 +455,4 @@ async def start():
     config = uvicorn.Config(app, host="0.0.0.0", port=8000, loop="asyncio", lifespan="on")
     server = uvicorn.Server(config)
     await server.serve()
-
 

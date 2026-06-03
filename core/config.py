@@ -13,10 +13,25 @@ class OperationMode(Enum):
 class AppSettings:
     def __init__(self):
         # --- API Ключи (неизменяемые) ---
-        self.VSEGPT_API_KEY = os.getenv("VSEGPT_API_KEY")
-        self.VSEGPT_BASE_URL = os.getenv("VSEGPT_BASE_URL", "https://api.vsegpt.ru/v1").rstrip("/")
-        self.VSEGPT_REQUEST_TIMEOUT = float(os.getenv("VSEGPT_REQUEST_TIMEOUT", "45"))
-        self.VSEGPT_MAX_RETRIES = int(os.getenv("VSEGPT_MAX_RETRIES", "0"))
+        self.GOOGLE_AI_API_KEY = (
+            os.getenv("GOOGLE_AI_API_KEY")
+            or os.getenv("GOOGLE_API_KEY")
+            or os.getenv("GEMINI_API_KEY")
+        )
+        self.GOOGLE_AI_BASE_URL = os.getenv(
+            "GOOGLE_AI_BASE_URL",
+            "https://generativelanguage.googleapis.com/v1beta/openai/",
+        ).rstrip("/") + "/"
+        self.GOOGLE_AI_NATIVE_BASE_URL = os.getenv(
+            "GOOGLE_AI_NATIVE_BASE_URL",
+            "https://generativelanguage.googleapis.com/v1beta",
+        ).rstrip("/")
+        self.GOOGLE_AI_REQUEST_TIMEOUT = float(
+            os.getenv("GOOGLE_AI_REQUEST_TIMEOUT") or os.getenv("GEMINI_REQUEST_TIMEOUT") or "60"
+        )
+        self.GOOGLE_AI_MAX_RETRIES = int(
+            os.getenv("GOOGLE_AI_MAX_RETRIES") or os.getenv("GEMINI_MAX_RETRIES") or "0"
+        )
         self.TELEGRAM_API_ID = os.getenv("TELEGRAM_API_ID")
         self.TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH")
         
@@ -48,10 +63,12 @@ class AppSettings:
 
         # --- НАСТРОЙКИ НЕЙРОСЕТИ (ИЗМЕНЯЕМЫЕ) ---
         # Эти значения будут использоваться как стартовые и могут быть изменены "на лету"
-        self.default_model = "google/gemini-2.5-flash"
+        self.default_model = os.getenv("GOOGLE_AI_MODEL") or os.getenv("GEMINI_MODEL") or "gemini-2.5-pro"
         self.default_temperature = 0.5
         self.default_max_tokens = 10000
-        self.default_stt_model = "stt-openai/whisper-v3-turbo"
+        self.default_stt_model = (
+            os.getenv("GOOGLE_AI_STT_MODEL") or os.getenv("GEMINI_TRANSCRIBE_MODEL") or "gemini-2.5-flash"
+        )
         self.operation_mode = OperationMode.ALL
 
 settings = AppSettings()

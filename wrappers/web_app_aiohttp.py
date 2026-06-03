@@ -1,14 +1,11 @@
 ﻿import asyncio
 import json
 import logging
-import os
-import tempfile
 import uuid
 
 from aiohttp import web
 
-from core import api as core_api, database as db
-from core.config import settings as core_settings
+from core import ai_service, api as core_api, database as db
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +20,8 @@ PROVIDER_ERROR_CODES = {
     "provider_api_error",
     "provider_error",
     "empty_provider_response",
+    "model_not_found",
+    "rate_limited",
 }
 
 
@@ -32,7 +31,7 @@ def _status_for_result(result: dict | None, default_error_status: int = 502) -> 
     if result.get("type") != "error":
         return 200
     if result.get("code") in PROVIDER_ERROR_CODES:
-        return 502
+        return int(result.get("status_code") or default_error_status)
     return 500
 
 
@@ -49,55 +48,6 @@ async def _get_or_set_uid(request) -> tuple[str, bool]:
 
 def _uid_to_user_id(uid: str) -> int:
     return abs(hash(uid)) % (2**31)
-
-
-def _cleanup_temp_files(*paths: str) -> None:
-    for path in paths:
-        if not path:
-            continue
-        try:
-            os.remove(path)
-        except OSError:
-            pass
-
-
-def _transcribe_audio_bytes(audio_data: bytes) -> str:
-    """Синхронно конвертирует полученные байты в MP3 и распознаёт речь."""
-    temp_input = tempfile.NamedTemporaryFile(delete=False, suffix=".ogg")
-    temp_mp3 = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-    try:
-        temp_input.write(audio_data)
-        temp_input.close()
-        temp_mp3.close()
-
-        from pydub import AudioSegment  # импортируем лениво, чтобы не тянуть модуль без необходимости
-        audio_segment = AudioSegment.from_file(temp_input.name)
-        audio_segment.export(temp_mp3.name, format="mp3")
-
-        from openai import OpenAI
-        client = OpenAI(
-            api_key=(core_settings.VSEGPT_API_KEY or "").strip(),
-            base_url=core_settings.VSEGPT_BASE_URL,
-            timeout=core_settings.VSEGPT_REQUEST_TIMEOUT,
-            max_retries=core_settings.VSEGPT_MAX_RETRIES,
-        )
-
-        with open(temp_mp3.name, "rb") as audio_file:
-            transcript = client.audio.transcriptions.create(
-                model=core_settings.default_stt_model,
-                response_format="json",
-                language="ru",
-                file=audio_file,
-            )
-
-        text = getattr(transcript, "text", None)
-        if not text and isinstance(transcript, dict):
-            text = transcript.get("text")
-        if not text:
-            text = str(transcript)
-        return (text or "").strip()
-    finally:
-        _cleanup_temp_files(temp_input.name, temp_mp3.name)
 
 
 HTML_PAGE = """<!DOCTYPE html>
@@ -615,15 +565,18 @@ HTML_PAGE = """<!DOCTYPE html>
         return (data && data.content) || 'Не удалось получить ответ.';
       }
       if (data.code === 'invalid_api_key' || data.code === 'missing_api_key') {
-        return 'AI сейчас не настроен: провайдер не принял ключ доступа.';
+        return 'Gemini сейчас не настроен: добавьте ключ Google AI Studio.';
       }
-      if (data.code === 'account_inactive') {
-        return 'AI сейчас недоступен: аккаунт провайдера требует продления.';
+      if (data.code === 'model_not_found') {
+        return 'Gemini-модель недоступна. Проверьте модель в настройках виджета.';
+      }
+      if (data.code === 'rate_limited') {
+        return 'Квота Google AI Studio временно ограничила запросы. Попробуйте позже.';
       }
       if (data.code === 'provider_timeout') {
-        return 'AI не успел ответить. Попробуйте отправить сообщение еще раз.';
+        return 'Gemini не успел ответить. Попробуйте отправить сообщение еще раз.';
       }
-      return data.content || 'AI-провайдер временно недоступен.';
+      return data.content || 'Gemini временно недоступен.';
     }
 
     function setSending(isSending) {
@@ -895,13 +848,19 @@ async def api_audio(request):
     logger.info("api_audio: uid=%s user_id=%s bytes=%s", uid[:8], user_id, len(audio_data))
 
     try:
-        transcription = await asyncio.to_thread(_transcribe_audio_bytes, audio_data)
+        transcription = await ai_service.transcribe_audio(audio_data, mime_type="audio/ogg")
+    except ai_service.AIServiceError as exc:
+        logger.error("api_audio: ошибка Gemini STT [%s]: %s", exc.code, exc.detail)
+        response = web.json_response(
+            {"type": "error", "code": exc.code, "content": exc.public_message, "status_code": exc.status_code},
+            status=_status_for_result({"type": "error", "code": exc.code, "status_code": exc.status_code}),
+        )
+        if is_new:
+            response.set_cookie(COOKIE_NAME, uid, max_age=COOKIE_MAX_AGE, samesite="Lax")
+        return response
     except Exception as exc:  # noqa: BLE001
         logger.exception("api_audio: ошибка распознавания аудио")
-        response = web.json_response(
-            {"type": "error", "content": "Не удалось распознать аудио."},
-            status=502,
-        )
+        response = web.json_response({"type": "error", "content": "Не удалось распознать аудио."}, status=502)
         if is_new:
             response.set_cookie(COOKIE_NAME, uid, max_age=COOKIE_MAX_AGE, samesite="Lax")
         return response
@@ -925,7 +884,12 @@ async def api_audio(request):
         if not ai_result or ai_result.get("type") == "error":
             content = (ai_result or {}).get("content", "Не удалось получить ответ от AI.")
             status_code = _status_for_result(ai_result)
-            payload = {"type": "error", "code": (ai_result or {}).get("code"), "content": content}
+            payload = {
+                "type": "error",
+                "code": (ai_result or {}).get("code"),
+                "content": content,
+                "status_code": (ai_result or {}).get("status_code"),
+            }
         else:
             if ai_result.get("type") == "tool_calls":
                 ai_text = json.dumps(ai_result.get("content", []), ensure_ascii=False)

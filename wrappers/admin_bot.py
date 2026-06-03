@@ -112,7 +112,7 @@ async def command_update_prompt(message: Message):
 @dp.message(Command("setmodel"), is_subscribed_filter)
 async def command_set_model(message: Message):
     try:
-        # Пример команды: /setmodel google/gemini-pro
+        # Пример команды: /setmodel gemini-2.5-pro
         new_model = message.text.split()[1]
         core_config.set_default_model(new_model) # Вызываем нашу новую функцию
         await message.answer(f"✅ Модель ИИ по умолчанию была изменена на: `{new_model}`")

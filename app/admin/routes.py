@@ -216,9 +216,9 @@ def _widget_form(widget: models.Widget | None = None) -> str:
 
         <label>Slug<input type='text' name='slug' value='{slug}' required></label>
 
-        <label>AI модель<input type='text' name='ai_model' value='{ai_model}' required></label>
+        <label>Gemini модель<input type='text' name='ai_model' value='{ai_model}' placeholder='gemini-2.5-pro' required></label>
 
-        <label>Модель распознавания речи<input type='text' name='stt_model' value='{stt_model}' placeholder='{core_settings.default_stt_model}'></label>
+        <label>Gemini модель для речи<input type='text' name='stt_model' value='{stt_model}' placeholder='{core_settings.default_stt_model}'></label>
 
         <label>Температура<input type='number' step='0.1' min='0' max='2' name='temperature' value='{temperature}'></label>
 
@@ -370,9 +370,9 @@ async def widget_overview(request: web.Request) -> web.Response:
 
             ('Шаблон', widget.template),
 
-            ('AI модель', widget.ai_model),
+            ('Gemini модель', widget.ai_model),
 
-            ('STT модель', widget.stt_model or core_settings.default_stt_model),
+            ('Gemini модель для речи', widget.stt_model or core_settings.default_stt_model),
 
             ('Температура', f"{widget.temperature}"),
 
@@ -1045,4 +1045,3 @@ def setup_admin_routes(app: web.Application) -> None:
     app.router.add_get('/admin/widgets/{widget_id}/assets/{version}/preview', widget_assets_preview)
 
     setup_tenant_admin_routes(app)
-

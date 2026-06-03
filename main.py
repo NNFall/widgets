@@ -27,8 +27,8 @@ async def main() -> None:
 
     logger.info("Режим работы: %s", config.settings.operation_mode.value)
     logger.info(
-        "VSEGPT_API_KEY: %s",
-        "установлен" if config.settings.VSEGPT_API_KEY else "НЕ УСТАНОВЛЕН",
+        "GOOGLE_AI_API_KEY/GEMINI_API_KEY: %s",
+        "установлен" if config.settings.GOOGLE_AI_API_KEY else "НЕ УСТАНОВЛЕН",
     )
     logger.info(
         "TELEGRAM_API_ID: %s",

@@ -31,7 +31,7 @@ async def main() -> None:
                 tenant_id=tenant.id,
                 name='Demo Widget',
                 slug='demo-widget',
-                ai_model='gpt-4o-mini',
+                ai_model='gemini-2.5-pro',
                 intro_text='Добро пожаловать!',
                 template=DEFAULT_TEMPLATE_KEY,
             )

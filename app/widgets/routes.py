@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Optional
 
@@ -10,12 +9,11 @@ from app.db import models
 from app.db.repositories import WidgetAssetRepository, WidgetRepository
 from app.db.session import session_scope
 from app.widgets.templates import get_template_html
-from core import api as core_api, database as db
+from core import ai_service, api as core_api, database as db
 from wrappers.web_app_aiohttp import (
     COOKIE_MAX_AGE,
     COOKIE_NAME,
     _get_or_set_uid,
-    _transcribe_audio_bytes,
     _uid_to_user_id,
     HTML_PAGE,
 )
@@ -34,6 +32,8 @@ PROVIDER_ERROR_CODES = {
     "provider_api_error",
     "provider_error",
     "empty_provider_response",
+    "model_not_found",
+    "rate_limited",
 }
 
 
@@ -43,7 +43,7 @@ def _status_for_result(result: dict | None, default_error_status: int = 502) -> 
     if result.get("type") != "error":
         return 200
     if result.get("code") in PROVIDER_ERROR_CODES:
-        return 502
+        return int(result.get("status_code") or default_error_status)
     return 500
 
 
@@ -207,13 +207,23 @@ async def widget_api_audio(request: web.Request) -> web.Response:
     logger.info('widget_api_audio: slug=%s uid=%s bytes=%s', slug, uid[:8], len(audio_data))
 
     try:
-        transcription = await asyncio.to_thread(_transcribe_audio_bytes, audio_data)
+        transcription = await ai_service.transcribe_audio(
+            audio_data,
+            model=widget.stt_model,
+            mime_type="audio/ogg",
+        )
+    except ai_service.AIServiceError as exc:
+        logger.error('widget_api_audio: ошибка Gemini STT [%s]: %s', exc.code, exc.detail)
+        response = web.json_response(
+            {"type": "error", "code": exc.code, "content": exc.public_message, "status_code": exc.status_code},
+            status=_status_for_result({"type": "error", "code": exc.code, "status_code": exc.status_code}),
+        )
+        if is_new:
+            response.set_cookie(COOKIE_NAME, uid, max_age=COOKIE_MAX_AGE, samesite="Lax")
+        return response
     except Exception as exc:  # noqa: BLE001
         logger.exception('widget_api_audio: ошибка распознавания')
-        response = web.json_response(
-            {"type": "error", "content": "Не удалось распознать аудио."},
-            status=502,
-        )
+        response = web.json_response({"type": "error", "content": "Не удалось распознать аудио."}, status=502)
         if is_new:
             response.set_cookie(COOKIE_NAME, uid, max_age=COOKIE_MAX_AGE, samesite="Lax")
         return response
@@ -241,7 +251,12 @@ async def widget_api_audio(request: web.Request) -> web.Response:
 
     if not result or result.get("type") == "error":
         content = (result or {}).get("content", "Не удалось получить ответ от AI.")
-        payload = {"type": "error", "code": (result or {}).get("code"), "content": content}
+        payload = {
+            "type": "error",
+            "code": (result or {}).get("code"),
+            "content": content,
+            "status_code": (result or {}).get("status_code"),
+        }
         status_code = _status_for_result(result)
     else:
         ai_text = result.get("content", "")
