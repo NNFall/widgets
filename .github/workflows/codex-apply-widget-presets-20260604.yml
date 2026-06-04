@@ -1,0 +1,41 @@
+name: Codex Apply Widget Presets
+
+on:
+  push:
+    paths:
+      - .github/workflows/codex-apply-widget-presets-20260604.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download patch
+        run: |
+          curl -fsSL "https://kaigo.online/assets/codex-patches/widget-presets-inline-prompts-20260604.patch" -o /tmp/codex.patch
+          echo "117881539759127579f7c573b3b5af8d67293089632ef44b4fa83af62570e340  /tmp/codex.patch" | sha256sum -c -
+
+      - name: Apply patch
+        run: |
+          git apply --check /tmp/codex.patch
+          git apply /tmp/codex.patch
+
+      - name: Validate Python syntax
+        run: python3 -m compileall app core wrappers scripts main.py
+
+      - name: Commit changes
+        run: |
+          rm .github/workflows/codex-apply-widget-presets-20260604.yml
+          git config user.name "codex-app"
+          git config user.email "codex-app@users.noreply.github.com"
+          git add README.md app/admin/routes.py app/server.py app/widgets/templates.py app/widgets/presets.py core/api.py core/utils.py docs/WIDGET_PRESETS.md scripts/seed_widget_presets.py .github/workflows/codex-apply-widget-presets-20260604.yml
+          git commit -m "Add widget presets and inline prompts"
+          git push
