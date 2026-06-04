@@ -2,6 +2,7 @@
 
 from typing import Dict
 
+from app.widgets.presets import PRESET_BY_TEMPLATE, build_widget_html
 from wrappers.web_app_aiohttp import HTML_PAGE
 
 HTML_RED = (
@@ -18,6 +19,19 @@ DEFAULT_TEMPLATE_KEY = 'blue'
 TEMPLATES: Dict[str, str] = {
     'blue': HTML_PAGE,
     'red': HTML_RED,
+    **{
+        template_key: build_widget_html(preset)
+        for template_key, preset in PRESET_BY_TEMPLATE.items()
+    },
+}
+
+TEMPLATE_LABELS: Dict[str, str] = {
+    'blue': 'Blue classic',
+    'red': 'Red classic',
+    **{
+        template_key: preset.name
+        for template_key, preset in PRESET_BY_TEMPLATE.items()
+    },
 }
 
 

@@ -14,7 +14,7 @@
 - Статический сайт на корне: `/root/kaigo/dist`
 - `kaigo.space/` проксируется напрямую в widgets backend на `127.0.0.1:8080`
 - `kaigo.space/real-time/` проксируется в отдельный realtime container на `127.0.0.1:8001`
-- Публичный демо-виджет: [`/w/demka`](https://kaigo.online/w/demka)
+- Публичные демо-виджеты: [`/w/demka`](https://kaigo.online/w/demka), `/w/dental-consultant`, `/w/realty-consultant`, `/w/auto-service-consultant`, `/w/beauty-consultant`
 - Админка приложения: `http://127.0.0.1:8080/admin` на сервере
 - Кабинет клиента: [`/client/login`](https://kaigo.online/client/login)
 - Healthcheck приложения: [`/api/health`](https://kaigo.online/api/health)
@@ -40,6 +40,7 @@
 - `kaigo.space/real-time/` - realtime voice agents из `/root/realtime`
 - `/w/{slug}` - публичная страница виджета, например `/w/demka`
 - `/w/{slug}?version=N` - предпросмотр конкретной версии ассета виджета
+- `docs/WIDGET_PRESETS.md` - список готовых шаблонов и инструкция seed
 
 Кабинет клиента:
 
@@ -156,6 +157,8 @@ SQLite хранит историю сообщений виджетов. Для D
 
 Виджет отправляет текстовые запросы в официальный Google AI Studio Gemini API через OpenAI-compatible endpoint. Голосовые сообщения распознаются через native Gemini `generateContent` с аудио-входом. Если Google Docs credentials отсутствуют или Google Docs недоступен, приложение использует `DEFAULT_SYSTEM_PROMPT` и продолжает отвечать.
 
+Поле `prompt_source` у виджета поддерживает Google Doc URL и inline-текст системного промпта. Inline-промпты используются preset-виджетами, чтобы стоматология, недвижимость, автосервис и салон красоты отвечали по разным сценариям без отдельных документов.
+
 Модель чата по умолчанию: `gemini-3-flash-preview`. Если в базе остались старые значения вроде `google/gemini-2.5-flash`, сервис автоматически убирает префикс `google/`. Старые несовместимые значения заменяются на `GOOGLE_AI_MODEL` с warning в логах.
 
 Проверить именно chat endpoint можно так:
@@ -183,6 +186,16 @@ PY
 ```bash
 docker compose up -d --force-recreate app
 ```
+
+## Готовые шаблоны
+
+Preset-виджеты создаются или обновляются так:
+
+```bash
+docker exec ai_project_app python scripts/seed_widget_presets.py
+```
+
+Подробности и smoke-тесты: [docs/WIDGET_PRESETS.md](docs/WIDGET_PRESETS.md).
 
 ## Безопасность
 

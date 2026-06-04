@@ -22,7 +22,7 @@ from core.config import settings as core_settings
 
 from core import database as history_db
 
-from app.widgets.templates import DEFAULT_TEMPLATE_KEY, TEMPLATES, get_template_html
+from app.widgets.templates import DEFAULT_TEMPLATE_KEY, TEMPLATE_LABELS, TEMPLATES, get_template_html
 
 def _default_widget_assets(template_key: str) -> Tuple[str, str | None, str | None]:
 
@@ -185,6 +185,7 @@ def _widget_form(widget: models.Widget | None = None) -> str:
     ai_model = escape(widget.ai_model) if widget else core_settings.default_model
 
     prompt_source = escape(widget.prompt_source or '') if widget else ''
+    prompt_placeholder = escape(core_settings.PROMPT_GOOGLE_DOC_URL or 'Текст системного промпта')
 
     intro_text = escape(widget.intro_text or '') if widget else ''
 
@@ -200,7 +201,7 @@ def _widget_form(widget: models.Widget | None = None) -> str:
 
     options = ''.join(
 
-        f"<option value='{escape(key)}'{ ' selected' if key == template else ''}>{escape(key.title())}</option>"
+        f"<option value='{escape(key)}'{ ' selected' if key == template else ''}>{escape(TEMPLATE_LABELS.get(key, key.title()))}</option>"
 
         for key in TEMPLATES
 
@@ -224,7 +225,7 @@ def _widget_form(widget: models.Widget | None = None) -> str:
 
         <label>Максимум токенов<input type='number' min='1' name='max_tokens' value='{max_tokens}'></label>
 
-        <label>Источник промпта<input type='text' name='prompt_source' value='{prompt_source}' placeholder='{core_settings.PROMPT_GOOGLE_DOC_URL}'></label>
+        <label>Источник промпта или inline prompt<textarea name='prompt_source' placeholder='{prompt_placeholder}'>{prompt_source}</textarea></label>
 
         <label>Приветствие<textarea name='intro_text'>{intro_text}</textarea></label>
 

@@ -4,11 +4,14 @@ from html import escape
 
 from aiohttp import web
 from aiohttp_session import setup as setup_session, SimpleCookieStorage, get_session
+from sqlalchemy import select
 
 from app.admin.routes import setup_admin_routes
 from app.api.routes import setup_api_routes
 from app.config import AppConfig, load_config
+from app.db import models
 from app.db import init_db_signals
+from app.db.session import session_scope
 from app.logging_config import setup_logging
 from app.widgets.routes import setup_widget_routes
 from app.client.routes import CLIENT_SESSION_USER_ID, setup_client_routes
@@ -18,11 +21,47 @@ async def _init_history_db(app: web.Application) -> None:
     await history_db.init_db()
 
 
+async def _load_home_widgets(request: web.Request) -> list[models.Widget]:
+    try:
+        async with session_scope(request.app) as db_session:
+            result = await db_session.execute(
+                select(models.Widget).order_by(models.Widget.id).limit(8)
+            )
+            return list(result.scalars())
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to load widgets for home page", exc_info=True)
+        return []
+
+
 async def _home(request: web.Request) -> web.StreamResponse:
     session = await get_session(request)
     is_client = bool(session.get(CLIENT_SESSION_USER_ID))
     primary_href = "/client" if is_client else "/client/login"
     primary_label = "Открыть кабинет" if is_client else "Войти в кабинет"
+    widgets = await _load_home_widgets(request)
+    if widgets:
+        widget_cards = "\n".join(
+            f"""
+        <article class="template-card">
+          <div>
+            <span class="tag">{escape(widget.status)}</span>
+            <h3>{escape(widget.name)}</h3>
+            <p>{escape((widget.intro_text or 'AI-консультант с отдельным сценарием и публичной страницей.')[:180])}</p>
+          </div>
+          <a class="button" href="/w/{escape(widget.slug)}">Открыть /w/{escape(widget.slug)}</a>
+        </article>"""
+            for widget in widgets
+        )
+    else:
+        widget_cards = """
+        <article class="template-card">
+          <div>
+            <span class="tag">demo</span>
+            <h3>Демо-виджет</h3>
+            <p>База временно недоступна для списка, но публичный демо-чат можно открыть напрямую.</p>
+          </div>
+          <a class="button" href="/w/demka">Открыть /w/demka</a>
+        </article>"""
 
     html = f"""<!doctype html>
 <html lang="ru">
@@ -161,6 +200,60 @@ async def _home(request: web.Request) -> web.StreamResponse:
         color: var(--muted);
         font-size: 14px;
       }}
+      .section-head {{
+        margin: 30px 0 14px;
+        display: flex;
+        justify-content: space-between;
+        align-items: end;
+        gap: 16px;
+      }}
+      .section-head h2 {{
+        margin: 0;
+        font-size: 24px;
+      }}
+      .section-head p {{
+        margin: 6px 0 0;
+        color: var(--muted);
+        line-height: 1.5;
+      }}
+      .template-grid {{
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }}
+      .template-card {{
+        min-height: 190px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        gap: 18px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        padding: 20px;
+        box-shadow: 0 12px 24px rgba(15, 23, 42, 0.05);
+      }}
+      .template-card h3 {{
+        margin: 10px 0 8px;
+        font-size: 20px;
+      }}
+      .template-card p {{
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.55;
+      }}
+      .tag {{
+        display: inline-flex;
+        align-items: center;
+        min-height: 26px;
+        padding: 4px 9px;
+        border-radius: 8px;
+        background: #ecfdf5;
+        color: #047857;
+        font-size: 12px;
+        font-weight: 900;
+        text-transform: uppercase;
+      }}
       footer {{
         margin-top: 28px;
         color: var(--muted);
@@ -177,7 +270,8 @@ async def _home(request: web.Request) -> web.StreamResponse:
           justify-content: flex-start;
         }}
         .grid,
-        .meta {{
+        .meta,
+        .template-grid {{
           grid-template-columns: 1fr;
         }}
       }}
@@ -226,6 +320,17 @@ async def _home(request: web.Request) -> web.StreamResponse:
         <div class="metric"><strong>Backend</strong><span><a href="/api/health">/api/health</a></span></div>
         <div class="metric"><strong>Gemini</strong><span><a href="/api/health/ai">/api/health/ai</a></span></div>
         <div class="metric"><strong>Админка</strong><span><a href="/admin">/admin</a></span></div>
+      </section>
+
+      <section class="section-head" aria-label="Демо-шаблоны">
+        <div>
+          <h2>Готовые демо-шаблоны</h2>
+          <p>Эти виджеты уже лежат в базе, имеют свои промпты и публичные страницы.</p>
+        </div>
+        <a class="button" href="/admin/widgets">Управлять</a>
+      </section>
+      <section class="template-grid">
+{widget_cards}
       </section>
 
       <footer>kaigo.space разделяет widgets на корне и real-time по пути /real-time/.</footer>

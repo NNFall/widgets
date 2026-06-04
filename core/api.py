@@ -83,12 +83,15 @@ async def process_message(
     model = options.get("model") or settings.default_model
     temperature = options.get("temperature", settings.default_temperature)
     max_tokens = options.get("max_tokens", settings.default_max_tokens)
+    prompt_label = prompt_source or "default"
+    if prompt_source and not prompt_source.startswith(("http://", "https://")):
+        prompt_label = "inline"
     logger.info(
         "process_message: user=%s widget=%s model=%s prompt=%s stt=%s temperature=%s max_tokens=%s history=%s",
         user_id,
         widget_slug or widget_id or "-",
         model,
-        prompt_source or "default",
+        prompt_label,
         stt_model,
         temperature,
         max_tokens,

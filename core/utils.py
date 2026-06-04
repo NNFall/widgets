@@ -100,6 +100,9 @@ async def get_prompt_and_tools(prompt_url: str | None = None) -> tuple[str, list
     prompt_url = prompt_url or default_prompt_url
     if not prompt_url:
         return _default_prompt()
+    if not prompt_url.startswith(("http://", "https://")):
+        system_prompt, tools = parse_prompt_and_tools(prompt_url)
+        return system_prompt or config.settings.DEFAULT_SYSTEM_PROMPT, tools
     if prompt_url == default_prompt_url:
         current_time = time.time()
         if (current_time - _prompt_cache["last_updated"]) > CACHE_LIFETIME_SECONDS:
