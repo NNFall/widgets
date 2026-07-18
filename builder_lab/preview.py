@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from html import escape
 
 from .models import WidgetArtifact
@@ -27,7 +28,7 @@ def preview_iframe_attributes() -> dict[str, str]:
 
 
 def _safe_style(css: str) -> str:
-    return css.replace("</style", "<\\/style").replace("</STYLE", "<\\/STYLE")
+    return re.sub(r"</\s*style", "<\\\\/style", css, flags=re.IGNORECASE)
 
 
 def build_preview_document(artifact: WidgetArtifact) -> str:

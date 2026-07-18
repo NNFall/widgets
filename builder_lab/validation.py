@@ -131,7 +131,19 @@ class _ArtifactHTMLParser(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
         self.node_count += 1
-        attributes = {name.lower(): value or "" for name, value in attrs}
+        normalized_attributes = [(name.lower(), value or "") for name, value in attrs]
+        attributes: dict[str, str] = {}
+        for name, value in normalized_attributes:
+            if name in attributes:
+                self._add(
+                    _issue(
+                        "duplicate_attribute",
+                        "body_html",
+                        f"Attribute {name} must not be repeated",
+                    )
+                )
+            else:
+                attributes[name] = value
         if tag in FORBIDDEN_ELEMENTS or tag not in ALLOWED_ELEMENTS:
             self._add(_issue("forbidden_element", "body_html", f"Element <{tag}> is not allowed"))
         region = attributes.get("data-region")
@@ -139,7 +151,7 @@ class _ArtifactHTMLParser(HTMLParser):
             self.regions.add(region)
             if attributes.get("aria-label") or attributes.get("title"):
                 self.labelled_regions.add(region)
-        for name, value in attributes.items():
+        for name, value in normalized_attributes:
             if name.startswith("on"):
                 self._add(_issue("forbidden_attribute", "body_html", f"Attribute {name} is not allowed"))
                 continue
@@ -265,6 +277,8 @@ def _validate_css(css: str) -> list[ValidationIssue]:
         add("css_too_large", "Stylesheet exceeds the size limit")
     normalized = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
     lower = normalized.lower()
+    if re.search(r"</\s*style\b", normalized, re.IGNORECASE):
+        add("unsafe_style_terminator", "CSS must not contain an HTML style terminator")
     if re.search(r"@import\b", lower):
         add("unsafe_css_at_rule", "CSS @import is not allowed")
     if re.search(r"url\s*\(", lower):

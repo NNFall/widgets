@@ -73,6 +73,15 @@ class ArtifactValidationTests(unittest.TestCase):
         self.assertIn("forbidden_element", codes)
         self.assertIn("forbidden_attribute", codes)
 
+    def test_rejects_duplicate_attributes_before_url_validation(self):
+        candidate = artifact(
+            body_html=GOOD_HTML.replace(
+                "</section>",
+                '<a href="javascript:alert(1)" href="#safe">x</a></section>',
+            )
+        )
+        self.assertIn("duplicate_attribute", self.codes(candidate))
+
     def test_rejects_external_urls_forms_and_unsafe_data(self):
         candidate = artifact(
             body_html=GOOD_HTML.replace(
@@ -103,6 +112,10 @@ class ArtifactValidationTests(unittest.TestCase):
         self.assertIn("unscoped_css", codes)
         self.assertIn("unsafe_css_at_rule", codes)
         self.assertIn("external_css_resource", codes)
+
+    def test_rejects_case_insensitive_style_terminator(self):
+        unsafe = GOOD_CSS + '\n.kaigo-widget::before { content: "</StYlE><script>bad()</script>"; }'
+        self.assertIn("unsafe_style_terminator", self.codes(artifact(css=unsafe)))
 
     def test_rejects_oversized_stylesheet_and_excessive_motion(self):
         self.assertIn("css_too_large", self.codes(artifact(css=GOOD_CSS + (" " * 100_000))))

@@ -33,6 +33,14 @@ class PreviewDocumentTests(unittest.TestCase):
         )
         self.assertNotIn('<script id="escape">', document)
 
+    def test_style_terminator_is_escaped_case_insensitively(self):
+        document = build_preview_document(
+            artifact(css='.kaigo-widget { content: "</StYlE><script id=escape>bad()</script>"; }')
+        )
+        self.assertNotIn("</StYlE>", document)
+        self.assertNotIn("</StYlE><script id=escape>", document)
+        self.assertIn("<\\/style><script id=escape>", document)
+
     def test_parent_iframe_contract_is_opaque(self):
         attributes = preview_iframe_attributes()
         self.assertEqual(attributes["sandbox"], "allow-scripts")
