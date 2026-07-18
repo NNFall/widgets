@@ -93,7 +93,7 @@ def render_builder_page(enabled_engines: tuple[EngineName, ...]) -> str:
     .viewport {{ position:relative; width:100%; height:100%; min-height:520px; transition:width .45s cubic-bezier(.16,1,.3,1),border-radius .45s ease; }}
     .viewport.mobile {{ width:min(390px,calc(100% - 32px)); height:calc(100% - 32px); min-height:600px; border:9px solid #282622; border-radius:34px; overflow:hidden; box-shadow:0 20px 50px rgba(27,23,18,.2); }}
     iframe {{ display:block; width:100%; height:100%; min-height:inherit; border:0; background:transparent; }}
-    .preview-empty {{ position:absolute; z-index:1; width:min(380px,calc(100% - 48px)); padding:26px 0; border-top:1px solid rgba(33,31,27,.25); border-bottom:1px solid rgba(33,31,27,.25); color:#5d574f; }}
+    .preview-empty {{ position:absolute; z-index:1; left:50%; top:50%; width:min(380px,calc(100% - 48px)); padding:26px 0; border-top:1px solid rgba(33,31,27,.25); border-bottom:1px solid rgba(33,31,27,.25); color:#5d574f; transform:translate(-50%,-50%); }}
     .preview-empty strong {{ display:block; color:#2e2a25; font-size:18px; letter-spacing:-.025em; }}
     .preview-empty span {{ display:block; margin-top:8px; font-size:13px; line-height:1.55; }}
     .preview-empty.hidden {{ display:none; }}
@@ -155,8 +155,8 @@ def render_builder_page(enabled_engines: tuple[EngineName, ...]) -> str:
       </header>
       <div class="canvas">
         <div class="draft-flag">Экспериментальный черновик</div>
-        <div class="preview-empty" id="preview-empty"><strong>Пока здесь чистый лист.</strong><span>После первой проверенной стадии появится рабочий виджет. Следующие части будут меняться без перезагрузки страницы.</span></div>
         <div class="viewport" id="viewport">
+          <div class="preview-empty" id="preview-empty"><strong>Пока здесь чистый лист.</strong><span>После первой проверенной стадии появится рабочий виджет. Следующие части будут меняться без перезагрузки страницы.</span></div>
           <iframe id="preview" sandbox="{escape(iframe['sandbox'])}" referrerpolicy="{escape(iframe['referrerpolicy'])}" title="{escape(iframe['title'])}"></iframe>
         </div>
       </div>

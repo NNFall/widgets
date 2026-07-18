@@ -62,6 +62,11 @@ class BuilderLabWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("new EventSource", body)
         self.assertIn("event.source", body)
         self.assertIn("Экспериментальный черновик", body)
+        viewport_index = body.index('class="viewport"')
+        empty_index = body.index('class="preview-empty"')
+        iframe_index = body.index('<iframe id="preview"')
+        self.assertLess(viewport_index, empty_index)
+        self.assertLess(empty_index, iframe_index)
         self.assertEqual(response.headers["Cache-Control"], "no-store")
         self.assertIn("default-src 'none'", response.headers["Content-Security-Policy"])
 
