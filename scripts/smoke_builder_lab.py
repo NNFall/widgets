@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
-import time
 from pathlib import Path
 
 if __package__ in {None, ""}:
@@ -27,71 +27,99 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
-    args = parse_args()
+def validate_smoke_evidence(
+    engine: str,
+    events: list[dict],
+    snapshot: dict,
+) -> None:
+    terminal = next(
+        (
+            event
+            for event in reversed(events)
+            if event.get("type") in {"run.completed", "run.failed", "run.cancelled"}
+        ),
+        None,
+    )
+    if terminal is None or snapshot.get("status") != "completed":
+        raise RuntimeError(
+            f"builder run did not complete: {snapshot.get('error_code') or snapshot.get('status')}"
+        )
+    committed = [event for event in events if event.get("type") == "artifact.committed"]
+    if engine == "direct" and len(committed) < 4:
+        raise RuntimeError("direct smoke requires at least four committed revisions")
+    usage = snapshot.get("usage") or {}
+    if int(usage.get("total_tokens", 0) or 0) <= 0:
+        raise RuntimeError("smoke requires positive provider token usage")
+
+
+async def run_smoke(args: argparse.Namespace) -> int:
     base_url = args.base_url.rstrip("/")
-    deadline = time.monotonic() + args.timeout
-    with httpx.Client(timeout=httpx.Timeout(30, read=None)) as client:
-        response = client.post(
+    events: list[dict] = []
+    async with asyncio.timeout(args.timeout):
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30, read=None)) as client:
+            response = await client.post(
             f"{base_url}/api/runs",
             json={"engine": args.engine, "brief": args.brief, "creativity": 0.9},
-        )
-        response.raise_for_status()
-        run = response.json()
-        run_id = run["run_id"]
-        terminal_event = None
-        with client.stream("GET", f"{base_url}/api/runs/{run_id}/events") as stream:
-            stream.raise_for_status()
-            for line in stream.iter_lines():
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("builder-lab smoke timed out")
-                if not line.startswith("data: "):
-                    continue
-                event = json.loads(line[6:])
-                print(
-                    json.dumps(
-                        {
-                            "sequence": event["sequence"],
-                            "type": event["type"],
-                            "stage": event["stage"],
-                            "status": event["status"],
-                            "revision": event["revision"],
-                        },
-                        ensure_ascii=False,
+            )
+            response.raise_for_status()
+            run_id = response.json()["run_id"]
+            async with client.stream(
+                "GET", f"{base_url}/api/runs/{run_id}/events"
+            ) as stream:
+                stream.raise_for_status()
+                async for line in stream.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    event = json.loads(line[6:])
+                    events.append(event)
+                    print(
+                        json.dumps(
+                            {
+                                "sequence": event["sequence"],
+                                "type": event["type"],
+                                "stage": event["stage"],
+                                "status": event["status"],
+                                "revision": event["revision"],
+                            },
+                            ensure_ascii=False,
+                        )
                     )
-                )
-                if event["type"] in {"run.completed", "run.failed", "run.cancelled"}:
-                    terminal_event = event
-        snapshot = client.get(f"{base_url}/api/runs/{run_id}").json()
-        if terminal_event is None or snapshot["status"] != "completed":
+            snapshot_response = await client.get(f"{base_url}/api/runs/{run_id}")
+            snapshot_response.raise_for_status()
+            snapshot = snapshot_response.json()
+            validate_smoke_evidence(args.engine, events, snapshot)
+            preview = await client.get(f"{base_url}/api/runs/{run_id}/preview")
+            preview.raise_for_status()
+            if "kaigo-builder-preview" not in preview.text:
+                raise RuntimeError("preview acknowledgement runtime is missing")
             print(
                 json.dumps(
                     {
-                        "status": snapshot.get("status"),
-                        "error_code": snapshot.get("error_code"),
+                        "status": snapshot["status"],
+                        "revision": snapshot["artifact"]["revision"],
+                        "stage": snapshot["artifact"]["stage"],
+                        "usage": snapshot["usage"],
+                        "elapsed_seconds": snapshot["elapsed_seconds"],
+                        "committed_revisions": len(
+                            [event for event in events if event["type"] == "artifact.committed"]
+                        ),
                     },
                     ensure_ascii=False,
-                ),
-                file=sys.stderr,
+                )
             )
-            return 1
-        preview = client.get(f"{base_url}/api/runs/{run_id}/preview")
-        preview.raise_for_status()
-        if "kaigo-builder-preview" not in preview.text:
-            raise RuntimeError("preview acknowledgement runtime is missing")
-        print(
-            json.dumps(
-                {
-                    "status": snapshot["status"],
-                    "revision": snapshot["artifact"]["revision"],
-                    "stage": snapshot["artifact"]["stage"],
-                    "usage": snapshot["usage"],
-                    "elapsed_seconds": snapshot["elapsed_seconds"],
-                },
-                ensure_ascii=False,
-            )
-        )
-        return 0
+            return 0
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        return asyncio.run(run_smoke(args))
+    except TimeoutError:
+        print("builder-lab smoke timed out", file=sys.stderr)
+        return 2
+    except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
