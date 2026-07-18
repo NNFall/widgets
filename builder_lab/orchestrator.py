@@ -15,7 +15,7 @@ from .models import (
     ValidationIssue,
     WidgetArtifact,
 )
-from .store import RunStore, TERMINAL_STATUSES
+from .store import RunStore, RunTerminal, TERMINAL_STATUSES
 from .validation import issue_fingerprint, validate_artifact
 
 
@@ -38,6 +38,7 @@ class BuilderOrchestrator:
         self.store = store
         self._factories = dict(engine_factories)
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._cancel_tasks: dict[str, asyncio.Task[None]] = {}
         self._engines: dict[str, BuilderEngine] = {}
         self._stages: dict[str, Stage | None] = {}
 
@@ -67,6 +68,8 @@ class BuilderOrchestrator:
     def _discard_task(self, run_id: str, task: asyncio.Task[None]) -> None:
         if self._tasks.get(run_id) is task:
             self._tasks.pop(run_id, None)
+        if not task.cancelled():
+            task.exception()
 
     async def wait(self, run_id: str) -> BuilderRunSnapshot:
         task = self._tasks.get(run_id)
@@ -79,15 +82,26 @@ class BuilderOrchestrator:
         if not requested:
             return False
         engine = self._engines.get(run_id)
+        remote_cancel: asyncio.Task[None] | None = None
         if engine is not None:
-            try:
-                await engine.cancel()
-            except BuilderEngineError:
-                pass
+            remote_cancel = asyncio.create_task(
+                self._best_effort_cancel(engine),
+                name=f"kaigo-builder-provider-cancel-{run_id}",
+            )
+            self._cancel_tasks[run_id] = remote_cancel
         task = self._tasks.get(run_id)
         if task is not None and not task.done():
             task.cancel()
+        if remote_cancel is not None:
+            await asyncio.shield(remote_cancel)
         return True
+
+    @staticmethod
+    async def _best_effort_cancel(engine: BuilderEngine) -> None:
+        try:
+            await asyncio.wait_for(engine.cancel(), timeout=10)
+        except (BuilderEngineError, TimeoutError, asyncio.TimeoutError):
+            pass
 
     async def retry(self, run_id: str) -> BuilderRunSnapshot:
         snapshot = await self.store.snapshot(run_id)
@@ -96,9 +110,11 @@ class BuilderOrchestrator:
         return await self.start(snapshot.request)
 
     async def close(self) -> None:
-        for run_id in list(self._tasks):
-            await self.cancel(run_id)
         tasks = list(self._tasks.values())
+        await asyncio.gather(
+            *(self.cancel(run_id) for run_id in list(self._tasks)),
+            return_exceptions=True,
+        )
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -118,23 +134,23 @@ class BuilderOrchestrator:
                 await self._run_direct(run_id, request, engine)
             else:
                 await self._run_antigravity(run_id, request, engine)
-            await self.store.append_event(
-                run_id,
-                event_type="run.completed",
-                stage=self._stages.get(run_id),
-                status="completed",
-                message="Генерация завершена",
-                revision=(await self.store.snapshot(run_id)).artifact.revision,
-            )
-            await self.store.mark_terminal(
+            completed = await self.store.snapshot(run_id)
+            await self.store.finish(
                 run_id,
                 RunStatus.COMPLETED,
+                event_type="run.completed",
+                stage=self._stages.get(run_id),
+                message="Генерация завершена",
+                revision=completed.artifact.revision,
                 elapsed_seconds=time.monotonic() - started,
             )
         except asyncio.CancelledError:
             await self._mark_cancelled(run_id, started)
         except BuilderEngineError as exc:
-            await self._mark_failed(run_id, exc, started)
+            if exc.error_code == "run_cancelled" or await self._cancelled(run_id):
+                await self._mark_cancelled(run_id, started)
+            else:
+                await self._mark_failed(run_id, exc, started)
         except Exception as exc:
             await self._mark_failed(
                 run_id,
@@ -146,10 +162,14 @@ class BuilderOrchestrator:
                 started,
             )
         finally:
+            cancel_task = self._cancel_tasks.get(run_id)
+            if cancel_task is not None and cancel_task is not asyncio.current_task():
+                await asyncio.gather(asyncio.shield(cancel_task), return_exceptions=True)
             try:
                 await engine.close()
             except Exception:
                 pass
+            self._cancel_tasks.pop(run_id, None)
             self._engines.pop(run_id, None)
             self._stages.pop(run_id, None)
 
@@ -157,21 +177,19 @@ class BuilderOrchestrator:
         snapshot = await self.store.snapshot(run_id)
         if snapshot.status in TERMINAL_STATUSES:
             return
-        await self.store.append_event(
-            run_id,
-            event_type="run.cancelled",
-            stage=self._stages.get(run_id),
-            status="cancelled",
-            message="Генерация отменена",
-            revision=snapshot.artifact.revision if snapshot.artifact else None,
-            error_code="run_cancelled",
-        )
-        await self.store.mark_terminal(
-            run_id,
-            RunStatus.CANCELLED,
-            error_code="run_cancelled",
-            elapsed_seconds=time.monotonic() - started,
-        )
+        try:
+            await self.store.finish(
+                run_id,
+                RunStatus.CANCELLED,
+                event_type="run.cancelled",
+                stage=self._stages.get(run_id),
+                message="Генерация отменена",
+                revision=snapshot.artifact.revision if snapshot.artifact else None,
+                error_code="run_cancelled",
+                elapsed_seconds=time.monotonic() - started,
+            )
+        except RunTerminal:
+            pass
 
     async def _mark_failed(
         self,
@@ -194,22 +212,20 @@ class BuilderOrchestrator:
                 error_code=error.error_code,
                 diagnostic=error.diagnostic,
             )
-        await self.store.append_event(
-            run_id,
-            event_type="run.failed",
-            stage=stage,
-            status="failed",
-            message=error.public_message,
-            revision=snapshot.artifact.revision if snapshot.artifact else None,
-            error_code=error.error_code,
-            diagnostic=error.diagnostic,
-        )
-        await self.store.mark_terminal(
-            run_id,
-            RunStatus.FAILED,
-            error_code=error.error_code,
-            elapsed_seconds=time.monotonic() - started,
-        )
+        try:
+            await self.store.finish(
+                run_id,
+                RunStatus.FAILED,
+                event_type="run.failed",
+                stage=stage,
+                message=error.public_message,
+                revision=snapshot.artifact.revision if snapshot.artifact else None,
+                error_code=error.error_code,
+                diagnostic=error.diagnostic,
+                elapsed_seconds=time.monotonic() - started,
+            )
+        except RunTerminal:
+            pass
 
     async def _run_direct(
         self,

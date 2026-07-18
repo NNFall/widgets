@@ -30,6 +30,10 @@ class RunTerminal(RuntimeError):
     pass
 
 
+class RunCapacityExceeded(RuntimeError):
+    pass
+
+
 class ArtifactNotFound(KeyError):
     pass
 
@@ -123,7 +127,8 @@ class RunStore:
         expired = [
             run_id
             for run_id, record in self._runs.items()
-            if now - record.updated_at >= self._ttl
+            if record.status in TERMINAL_STATUSES
+            and now - record.updated_at >= self._ttl
         ]
         for run_id in expired:
             del self._runs[run_id]
@@ -132,9 +137,17 @@ class RunStore:
     def _prune_capacity_locked(self, target: int) -> int:
         removed = 0
         while len(self._runs) > target:
-            terminal = [record for record in self._runs.values() if record.status in TERMINAL_STATUSES]
-            candidates = terminal or list(self._runs.values())
-            oldest = min(candidates, key=lambda record: (record.updated_at, record.created_at))
+            terminal = [
+                record
+                for record in self._runs.values()
+                if record.status in TERMINAL_STATUSES
+            ]
+            if not terminal:
+                break
+            oldest = min(
+                terminal,
+                key=lambda record: (record.updated_at, record.created_at),
+            )
             del self._runs[oldest.run_id]
             removed += 1
         return removed
@@ -144,6 +157,8 @@ class RunStore:
         async with self._changed:
             self._prune_expired_locked(now)
             self._prune_capacity_locked(self._max_runs - 1)
+            if len(self._runs) >= self._max_runs:
+                raise RunCapacityExceeded("all builder run slots are active")
             run_id = secrets.token_urlsafe(24)
             while run_id in self._runs:
                 run_id = secrets.token_urlsafe(24)
@@ -262,12 +277,46 @@ class RunStore:
     async def request_cancel(self, run_id: str) -> bool:
         async with self._changed:
             record = self._record(run_id)
-            if record.status in TERMINAL_STATUSES:
+            if record.status in TERMINAL_STATUSES or record.cancel_requested:
                 return False
             record.cancel_requested = True
             record.updated_at = datetime.now(timezone.utc)
             self._changed.notify_all()
             return True
+
+    async def finish(
+        self,
+        run_id: str,
+        status: RunStatus,
+        *,
+        event_type: str,
+        stage: Stage | None,
+        message: str,
+        revision: int | None = None,
+        error_code: str | None = None,
+        diagnostic: str | None = None,
+        elapsed_seconds: float = 0.0,
+    ) -> BuilderEvent:
+        if status not in TERMINAL_STATUSES:
+            raise ValueError("terminal status is required")
+        async with self._changed:
+            record = self._record(run_id)
+            if record.status in TERMINAL_STATUSES:
+                raise RunTerminal(run_id)
+            event = self._append_locked(
+                record,
+                event_type=event_type,
+                stage=stage,
+                status=status.value,
+                message=message,
+                revision=revision,
+                error_code=error_code,
+                diagnostic=diagnostic,
+            )
+            record.status = status
+            record.error_code = error_code
+            record.elapsed_seconds = max(0.0, elapsed_seconds)
+            return event
 
     async def mark_terminal(
         self,

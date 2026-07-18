@@ -159,6 +159,7 @@ class BuilderOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         )
         await asyncio.wait_for(engine.started.wait(), timeout=1)
         self.assertTrue(await orchestrator.cancel(run.run_id))
+        self.assertFalse(await orchestrator.cancel(run.run_id))
         await orchestrator.wait(run.run_id)
         snapshot = await self.store.snapshot(run.run_id)
         self.assertEqual(snapshot.status, RunStatus.CANCELLED)

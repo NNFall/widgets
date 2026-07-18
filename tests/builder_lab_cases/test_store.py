@@ -9,7 +9,13 @@ from builder_lab.models import (
     Stage,
     TokenUsage,
 )
-from builder_lab.store import ArtifactNotFound, RunNotFound, RunStore, RunTerminal
+from builder_lab.store import (
+    ArtifactNotFound,
+    RunCapacityExceeded,
+    RunNotFound,
+    RunStore,
+    RunTerminal,
+)
 from tests.builder_lab_cases.test_validation import artifact
 
 
@@ -91,6 +97,7 @@ class RunStoreTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancellation_and_terminal_state_are_sticky(self):
         run = await self.store.create(self.request)
         self.assertTrue(await self.store.request_cancel(run.run_id))
+        self.assertFalse(await self.store.request_cancel(run.run_id))
         self.assertTrue((await self.store.snapshot(run.run_id)).cancel_requested)
         await self.store.mark_terminal(run.run_id, RunStatus.CANCELLED, elapsed_seconds=0.5)
         self.assertFalse(await self.store.request_cancel(run.run_id))
@@ -113,16 +120,44 @@ class RunStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.artifact, committed)
         self.assertEqual(snapshot.error_code, "invalid_artifact")
 
-    async def test_ttl_and_capacity_pruning(self):
+    async def test_ttl_and_capacity_pruning_only_remove_terminal_runs(self):
         small = RunStore(ttl_seconds=1, max_runs=2)
         first = await small.create(self.request)
-        await small.create(self.request)
-        await small.create(self.request)
+        await small.mark_terminal(first.run_id, RunStatus.COMPLETED)
+        second = await small.create(self.request)
+        await small.mark_terminal(second.run_id, RunStatus.COMPLETED)
+        third = await small.create(self.request)
         with self.assertRaises(RunNotFound):
             await small.snapshot(first.run_id)
         future = datetime.now(timezone.utc) + timedelta(seconds=2)
         removed = await small.prune(now=future)
-        self.assertEqual(removed, 2)
+        self.assertEqual(removed, 1)
+        self.assertEqual((await small.snapshot(third.run_id)).status, RunStatus.CREATED)
+
+    async def test_capacity_rejects_new_run_without_evicting_active_work(self):
+        small = RunStore(ttl_seconds=1, max_runs=1)
+        active = await small.create(self.request)
+        with self.assertRaises(RunCapacityExceeded):
+            await small.create(self.request)
+        future = datetime.now(timezone.utc) + timedelta(seconds=2)
+        self.assertEqual(await small.prune(now=future), 0)
+        self.assertEqual((await small.snapshot(active.run_id)).status, RunStatus.CREATED)
+
+    async def test_terminal_event_and_status_are_committed_atomically(self):
+        run = await self.store.create(self.request)
+        await self.store.finish(
+            run.run_id,
+            RunStatus.COMPLETED,
+            event_type="run.completed",
+            stage=Stage.MOTION_POLISH,
+            message="done",
+            revision=5,
+            elapsed_seconds=1.0,
+        )
+        snapshot = await self.store.snapshot(run.run_id)
+        events = await self.store.events_after(run.run_id, 0)
+        self.assertEqual(snapshot.status, RunStatus.COMPLETED)
+        self.assertEqual(events[-1].event_type, "run.completed")
 
 
 if __name__ == "__main__":

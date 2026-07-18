@@ -11,7 +11,7 @@ from .engines.base import BuilderEngineError
 from .models import BuilderRequest, EngineName, RunStatus
 from .orchestrator import BuilderOrchestrator
 from .preview import PREVIEW_CSP, build_preview_document
-from .store import ArtifactNotFound, RunNotFound, RunStore
+from .store import ArtifactNotFound, RunCapacityExceeded, RunNotFound, RunStore
 from .ui import render_builder_page
 
 
@@ -68,6 +68,12 @@ async def create_run(request: web.Request) -> web.Response:
         )
     except BuilderEngineError as exc:
         return _error(exc.error_code, exc.public_message, status=503)
+    except RunCapacityExceeded:
+        return _error(
+            "run_capacity",
+            "Все слоты генерации заняты; повторите запрос позже",
+            status=429,
+        )
     return web.json_response(snapshot.to_dict(), status=202)
 
 

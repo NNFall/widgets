@@ -94,6 +94,24 @@ class BuilderLabWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(unknown.status, 404)
         self.assertEqual((await unknown.json())["error"]["code"], "run_not_found")
 
+    async def test_capacity_returns_retryable_public_error(self):
+        small_store = RunStore(max_runs=1)
+        app = create_builder_lab_app(
+            store=small_store,
+            orchestrator=FakeOrchestrator(small_store),
+            enabled_engines=(EngineName.DIRECT,),
+        )
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            payload = {"engine": "direct", "brief": "First active run"}
+            self.assertEqual((await client.post("/api/runs", json=payload)).status, 202)
+            response = await client.post("/api/runs", json=payload)
+            self.assertEqual(response.status, 429)
+            self.assertEqual((await response.json())["error"]["code"], "run_capacity")
+        finally:
+            await client.close()
+
     async def test_preview_requires_committed_artifact_then_returns_csp_document(self):
         created = await self.create_run()
         run_id = created["run_id"]
