@@ -1,0 +1,335 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Mapping
+
+
+class EngineName(str, Enum):
+    DIRECT = "direct"
+    ANTIGRAVITY = "antigravity"
+
+
+class Stage(str, Enum):
+    ART_DIRECTION = "art_direction"
+    FOUNDATION = "foundation"
+    IDENTITY = "identity"
+    CONVERSATION = "conversation"
+    MOTION_POLISH = "motion_polish"
+    VALIDATION = "validation"
+    AGENT_BUILD = "agent_build"
+
+
+class RunStatus(str, Enum):
+    CREATED = "created"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+PUBLIC_ERROR_CODES = frozenset(
+    {
+        "missing_api_key",
+        "provider_unavailable",
+        "model_unavailable",
+        "agent_unavailable",
+        "quota_exceeded",
+        "generation_timeout",
+        "invalid_artifact",
+        "snapshot_download_failed",
+        "snapshot_rejected",
+        "run_cancelled",
+        "internal_error",
+    }
+)
+
+
+def _enum(enum_type: type[Enum], value: Any, field_name: str):
+    try:
+        return enum_type(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Unsupported {field_name}: {value!r}") from exc
+
+
+@dataclass(frozen=True)
+class BuilderRequest:
+    engine: EngineName
+    brief: str
+    locale: str = "ru"
+    creativity: float = 0.9
+    viewport_targets: tuple[str, ...] = ("desktop", "mobile")
+    max_repairs: int = 2
+
+    def __post_init__(self) -> None:
+        brief = self.brief.strip()
+        locale = self.locale.strip().lower()
+        if not brief:
+            raise ValueError("brief must not be empty")
+        if len(brief) > 12_000:
+            raise ValueError("brief is too large")
+        if not locale or len(locale) > 16:
+            raise ValueError("locale is invalid")
+        if not 0 <= self.creativity <= 2:
+            raise ValueError("creativity must be between 0 and 2")
+        if not 0 <= self.max_repairs <= 2:
+            raise ValueError("max_repairs must be between 0 and 2")
+        if not self.viewport_targets or any(
+            viewport not in {"desktop", "mobile"}
+            for viewport in self.viewport_targets
+        ):
+            raise ValueError("viewport_targets contains an unsupported viewport")
+        object.__setattr__(self, "brief", brief)
+        object.__setattr__(self, "locale", locale)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "BuilderRequest":
+        return cls(
+            engine=_enum(EngineName, payload.get("engine", "direct"), "engine"),
+            brief=str(payload.get("brief", "")),
+            locale=str(payload.get("locale", "ru")),
+            creativity=float(payload.get("creativity", 0.9)),
+            viewport_targets=tuple(payload.get("viewport_targets", ("desktop", "mobile"))),
+            max_repairs=int(payload.get("max_repairs", 2)),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "engine": self.engine.value,
+            "brief": self.brief,
+            "locale": self.locale,
+            "creativity": self.creativity,
+            "viewport_targets": list(self.viewport_targets),
+            "max_repairs": self.max_repairs,
+        }
+
+
+@dataclass(frozen=True)
+class TokenUsage:
+    prompt_tokens: int = 0
+    output_tokens: int = 0
+    thinking_tokens: int = 0
+
+    def __post_init__(self) -> None:
+        if min(self.prompt_tokens, self.output_tokens, self.thinking_tokens) < 0:
+            raise ValueError("token counts must not be negative")
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.output_tokens + self.thinking_tokens
+
+    def __add__(self, other: "TokenUsage") -> "TokenUsage":
+        if not isinstance(other, TokenUsage):
+            return NotImplemented
+        return TokenUsage(
+            prompt_tokens=self.prompt_tokens + other.prompt_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+            thinking_tokens=self.thinking_tokens + other.thinking_tokens,
+        )
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any] | None) -> "TokenUsage":
+        payload = payload or {}
+        return cls(
+            prompt_tokens=int(payload.get("prompt_tokens", 0)),
+            output_tokens=int(payload.get("output_tokens", 0)),
+            thinking_tokens=int(payload.get("thinking_tokens", 0)),
+        )
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "prompt_tokens": self.prompt_tokens,
+            "output_tokens": self.output_tokens,
+            "thinking_tokens": self.thinking_tokens,
+            "total_tokens": self.total_tokens,
+        }
+
+
+@dataclass(frozen=True)
+class ValidationIssue:
+    code: str
+    field: str
+    message: str
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ValidationIssue":
+        return cls(
+            code=str(payload["code"]),
+            field=str(payload["field"]),
+            message=str(payload["message"]),
+        )
+
+    def to_dict(self) -> dict[str, str]:
+        return {"code": self.code, "field": self.field, "message": self.message}
+
+
+@dataclass(frozen=True)
+class WidgetArtifact:
+    schema_version: str
+    revision: int
+    stage: Stage
+    art_direction: str
+    body_html: str
+    css: str
+    theme_tokens: dict[str, str] = field(default_factory=dict)
+    suggested_actions: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.revision < 1:
+            raise ValueError("revision must be positive")
+        if not self.schema_version:
+            raise ValueError("schema_version must not be empty")
+        object.__setattr__(self, "theme_tokens", dict(self.theme_tokens))
+        object.__setattr__(self, "suggested_actions", tuple(self.suggested_actions))
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "WidgetArtifact":
+        return cls(
+            schema_version=str(payload.get("schema_version", "")),
+            revision=int(payload.get("revision", 0)),
+            stage=_enum(Stage, payload.get("stage"), "stage"),
+            art_direction=str(payload.get("art_direction", "")),
+            body_html=str(payload.get("body_html", "")),
+            css=str(payload.get("css", "")),
+            theme_tokens={
+                str(key): str(value)
+                for key, value in dict(payload.get("theme_tokens", {})).items()
+            },
+            suggested_actions=tuple(
+                str(value) for value in payload.get("suggested_actions", ())
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "revision": self.revision,
+            "stage": self.stage.value,
+            "art_direction": self.art_direction,
+            "body_html": self.body_html,
+            "css": self.css,
+            "theme_tokens": dict(self.theme_tokens),
+            "suggested_actions": list(self.suggested_actions),
+        }
+
+
+@dataclass(frozen=True)
+class BuilderEvent:
+    run_id: str
+    sequence: int
+    timestamp: datetime
+    event_type: str
+    stage: Stage | None
+    status: str
+    message: str
+    revision: int | None = None
+    usage: TokenUsage = field(default_factory=TokenUsage)
+    issues: tuple[ValidationIssue, ...] = ()
+    error_code: str | None = None
+    diagnostic: str | None = field(default=None, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.sequence < 1:
+            raise ValueError("sequence must be positive")
+        if self.error_code is not None and self.error_code not in PUBLIC_ERROR_CODES:
+            raise ValueError("unsupported public error code")
+        object.__setattr__(self, "issues", tuple(self.issues))
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        run_id: str,
+        sequence: int,
+        event_type: str,
+        stage: Stage | None,
+        status: str,
+        message: str,
+        revision: int | None = None,
+        usage: TokenUsage | None = None,
+        issues: tuple[ValidationIssue, ...] = (),
+        error_code: str | None = None,
+        diagnostic: str | None = None,
+    ) -> "BuilderEvent":
+        return cls(
+            run_id=run_id,
+            sequence=sequence,
+            timestamp=datetime.now(timezone.utc),
+            event_type=event_type,
+            stage=stage,
+            status=status,
+            message=message,
+            revision=revision,
+            usage=usage or TokenUsage(),
+            issues=issues,
+            error_code=error_code,
+            diagnostic=diagnostic,
+        )
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "BuilderEvent":
+        return cls(
+            run_id=str(payload["run_id"]),
+            sequence=int(payload["sequence"]),
+            timestamp=datetime.fromisoformat(str(payload["timestamp"])),
+            event_type=str(payload["type"]),
+            stage=(
+                _enum(Stage, payload["stage"], "stage")
+                if payload.get("stage") is not None
+                else None
+            ),
+            status=str(payload["status"]),
+            message=str(payload["message"]),
+            revision=(int(payload["revision"]) if payload.get("revision") is not None else None),
+            usage=TokenUsage.from_dict(payload.get("usage")),
+            issues=tuple(
+                ValidationIssue.from_dict(issue) for issue in payload.get("issues", ())
+            ),
+            error_code=(str(payload["error_code"]) if payload.get("error_code") else None),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "sequence": self.sequence,
+            "timestamp": self.timestamp.isoformat(),
+            "type": self.event_type,
+            "stage": self.stage.value if self.stage else None,
+            "status": self.status,
+            "message": self.message,
+            "revision": self.revision,
+            "usage": self.usage.to_dict(),
+            "issues": [issue.to_dict() for issue in self.issues],
+            "error_code": self.error_code,
+        }
+
+
+@dataclass(frozen=True)
+class BuilderRunSnapshot:
+    run_id: str
+    request: BuilderRequest
+    status: RunStatus
+    created_at: datetime
+    updated_at: datetime
+    latest_sequence: int
+    artifact: WidgetArtifact | None = None
+    usage: TokenUsage = field(default_factory=TokenUsage)
+    elapsed_seconds: float = 0.0
+    error_code: str | None = None
+    cancel_requested: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "request": self.request.to_dict(),
+            "status": self.status.value,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "latest_sequence": self.latest_sequence,
+            "artifact": self.artifact.to_dict() if self.artifact else None,
+            "usage": self.usage.to_dict(),
+            "elapsed_seconds": self.elapsed_seconds,
+            "error_code": self.error_code,
+            "cancel_requested": self.cancel_requested,
+        }

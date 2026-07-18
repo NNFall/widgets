@@ -1,5 +1,6 @@
 ﻿# requirements.txt
 openai
+google-genai>=2.0.0,<3.0.0
 telethon
 python-dotenv
 aiosqlite
