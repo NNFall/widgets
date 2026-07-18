@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from builder_lab.demo import DemoUnavailable, load_demo, save_demo
+from builder_lab.demo import DemoUnavailable, load_demo, render_demo_page, save_demo
 from builder_lab.models import BuilderRequest, EngineName
 from tests.builder_lab_cases.test_validation import artifact
 
@@ -74,6 +74,19 @@ class BuilderDemoTests(unittest.TestCase):
             path.write_text("not json", encoding="utf-8")
             with self.assertRaises(DemoUnavailable):
                 load_demo(path)
+
+    def test_rendered_preview_stretches_its_iframe_to_the_canvas(self):
+        with tempfile.TemporaryDirectory() as directory:
+            demo = save_demo(
+                Path(directory) / "latest.json",
+                completed_snapshot(),
+                model="gemini-3.5-flash",
+            )
+            page = render_demo_page(demo)
+
+        self.assertIn("display:flex; align-items:stretch; justify-content:center", page)
+        self.assertIn("align-self:stretch", page)
+        self.assertNotIn("place-items:center", page)
 
 
 if __name__ == "__main__":

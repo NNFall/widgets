@@ -167,10 +167,10 @@ def render_demo_page(demo: BuilderDemo) -> str:
     .toggle {{ display:flex; gap:3px; padding:3px; border:1px solid var(--line); border-radius:11px; background:#191814; }}
     button {{ min-height:31px; border:0; border-radius:7px; padding:0 11px; color:#918a80; background:transparent; cursor:pointer; }}
     button.active {{ color:var(--text); background:#312e27; }}
-    .canvas {{ min-height:0; display:grid; place-items:center; overflow:hidden; border-radius:22px; background:linear-gradient(135deg,#ede7dc,#d6cdc0); }}
-    .viewport {{ width:100%; height:100%; min-height:680px; transition:width .35s ease,height .35s ease,border-radius .35s ease; }}
-    .viewport.mobile {{ width:min(390px,calc(100% - 28px)); height:calc(100% - 28px); min-height:620px; overflow:hidden; border:8px solid #28251f; border-radius:32px; }}
-    iframe {{ display:block; width:100%; height:100%; min-height:inherit; border:0; }}
+    .canvas {{ min-height:680px; display:flex; align-items:stretch; justify-content:center; overflow:hidden; border-radius:22px; background:linear-gradient(135deg,#ede7dc,#d6cdc0); }}
+    .viewport {{ width:100%; min-height:680px; align-self:stretch; display:flex; transition:width .35s ease,border-radius .35s ease; }}
+    .viewport.mobile {{ flex:0 1 min(390px,calc(100% - 28px)); width:min(390px,calc(100% - 28px)); min-height:620px; margin:14px 0; overflow:hidden; border:8px solid #28251f; border-radius:32px; }}
+    iframe {{ display:block; flex:1 1 auto; width:100%; min-height:0; border:0; }}
     @media (max-width:900px) {{ main {{ grid-template-columns:1fr; padding:10px; }} .stage {{ min-height:720px; }} }}
     @media (max-width:520px) {{ aside {{ padding:20px; }} dl {{ grid-template-columns:1fr; }} .stage {{ padding:9px; border-radius:22px; }} .stage-head {{ align-items:flex-start; flex-direction:column; }} }}
     @media (prefers-reduced-motion:reduce) {{ * {{ transition:none!important; }} }}
