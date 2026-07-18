@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from typing import Any
 
 import httpx
@@ -173,6 +172,7 @@ class AntigravityEngine:
             timeout=httpx.Timeout(180.0)
         )
         self._interaction_id: str | None = None
+        self._creation_task: asyncio.Task[Any] | None = None
         self._environment_id: str | None = None
 
     def _environment(self, request: BuilderRequest, revision: int) -> dict[str, Any]:
@@ -189,12 +189,7 @@ class AntigravityEngine:
         }
 
     async def _wait_for_completion(self, interaction: Any) -> Any:
-        started = time.monotonic()
-        while _status(interaction) in {"in_progress", "requires_action"}:
-            if time.monotonic() - started >= self.timeout_seconds:
-                raise BuilderEngineError(
-                    "generation_timeout", "Antigravity не завершил сборку вовремя"
-                )
+        while _status(interaction) == "in_progress":
             await asyncio.sleep(self.poll_interval)
             try:
                 interaction = await self._client.aio.interactions.get(
@@ -262,7 +257,23 @@ class AntigravityEngine:
         if stage is not Stage.AGENT_BUILD:
             raise ValueError("Antigravity supports only the agent_build stage")
         try:
-            interaction = await self._client.aio.interactions.create(
+            async with asyncio.timeout(self.timeout_seconds):
+                return await self._generate_with_deadline(request, revision)
+        except asyncio.CancelledError:
+            raise
+        except (TimeoutError, asyncio.TimeoutError) as exc:
+            await self._cancel_remote_best_effort()
+            raise BuilderEngineError(
+                "generation_timeout", "Antigravity не завершил сборку вовремя"
+            ) from exc
+
+    async def _generate_with_deadline(
+        self,
+        request: BuilderRequest,
+        revision: int,
+    ) -> EngineResult:
+        self._creation_task = asyncio.create_task(
+            self._client.aio.interactions.create(
                 agent=self.agent,
                 input=_agent_instruction(request, revision),
                 background=True,
@@ -273,11 +284,17 @@ class AntigravityEngine:
                     "max_total_tokens": self.max_total_tokens,
                 },
                 labels={"application": "kaigo-builder-lab"},
-            )
+            ),
+            name="kaigo-antigravity-create",
+        )
+        try:
+            interaction = await asyncio.shield(self._creation_task)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            self._creation_task = None
             raise _agent_provider_error(exc) from exc
+        self._creation_task = None
         self._interaction_id = getattr(interaction, "id", None)
         if not self._interaction_id:
             raise BuilderEngineError(
@@ -316,12 +333,32 @@ class AntigravityEngine:
         )
 
     async def cancel(self) -> None:
+        if not self._interaction_id and self._creation_task is not None:
+            try:
+                interaction = await asyncio.wait_for(
+                    asyncio.shield(self._creation_task),
+                    timeout=min(5.0, self.timeout_seconds),
+                )
+            except asyncio.CancelledError:
+                raise
+            except (Exception, TimeoutError, asyncio.TimeoutError):
+                return
+            finally:
+                if self._creation_task is not None and self._creation_task.done():
+                    self._creation_task = None
+            self._interaction_id = getattr(interaction, "id", None)
         if not self._interaction_id:
             return
         try:
             await self._client.aio.interactions.cancel(id=self._interaction_id)
         except Exception as exc:
             raise _agent_provider_error(exc) from exc
+
+    async def _cancel_remote_best_effort(self) -> None:
+        try:
+            await self.cancel()
+        except (BuilderEngineError, TimeoutError, asyncio.TimeoutError):
+            pass
 
     async def close(self) -> None:
         if self._owned_download_client:

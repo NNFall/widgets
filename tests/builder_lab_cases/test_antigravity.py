@@ -35,6 +35,19 @@ class FakeInteractions:
         return std_types.SimpleNamespace(id=id, status="cancelled")
 
 
+class BlockingCreateInteractions(FakeInteractions):
+    def __init__(self):
+        super().__init__([])
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def create(self, **kwargs):
+        self.create_calls.append(kwargs)
+        self.started.set()
+        await self.release.wait()
+        return interaction("in_progress", identifier="late-interaction", environment_id=None)
+
+
 class FakeClient:
     def __init__(self, interactions):
         self.aio = std_types.SimpleNamespace(interactions=interactions)
@@ -214,6 +227,28 @@ class AntigravityEngineTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(BuilderEngineError) as timeout:
             await waiting.generate(request=self.request, stage=Stage.AGENT_BUILD, revision=1)
         self.assertEqual(timeout.exception.error_code, "generation_timeout")
+        self.assertEqual(waiting._client.aio.interactions.cancel_calls[0][0], "interaction-1")
+
+    async def test_cancellation_during_create_recovers_id_and_cancels_remote_job(self):
+        interactions = BlockingCreateInteractions()
+        engine = AntigravityEngine(
+            api_key="secret",
+            client=FakeClient(interactions),
+            download_client=FakeHTTPClient(valid_archive()),
+            timeout_seconds=5,
+            poll_interval=0,
+        )
+        generation = asyncio.create_task(
+            engine.generate(request=self.request, stage=Stage.AGENT_BUILD, revision=1)
+        )
+        await interactions.started.wait()
+        generation.cancel()
+        remote_cancel = asyncio.create_task(engine.cancel())
+        interactions.release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await generation
+        await remote_cancel
+        self.assertEqual(interactions.cancel_calls[0][0], "late-interaction")
 
     async def test_requires_agent_stage_and_api_key(self):
         with self.assertRaises(BuilderEngineError) as caught:
