@@ -1,11 +1,18 @@
 import asyncio
+import json
+import re
+import subprocess
+import sys
+import tempfile
 import types as std_types
 import unittest
+from pathlib import Path
 
-from builder_lab.engines.antigravity import AntigravityEngine
+from builder_lab.engines.antigravity import AntigravityEngine, VALIDATE_OUTPUT_PY
 from builder_lab.engines.base import BuilderEngineError
 from builder_lab.models import BuilderRequest, EngineName, Stage
 from tests.builder_lab_cases.test_snapshots import valid_archive
+from tests.builder_lab_cases.test_validation import artifact
 
 
 class FakeInteractions:
@@ -164,6 +171,33 @@ class AntigravityEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["headers"]["x-goog-api-key"], "secret")
         self.assertNotIn("Authorization", kwargs["headers"])
         self.assertTrue(kwargs["follow_redirects"])
+
+    def test_sandbox_validator_rejects_missing_regions_and_infinite_motion(self):
+        candidate = artifact(revision=1, stage=Stage.AGENT_BUILD).to_dict()
+        candidate["body_html"] = re.sub(
+            r'\sdata-region="[^"]+"', "", candidate["body_html"]
+        )
+        candidate["css"] += """
+.kaigo-widget .ambient { animation: agent-glow 1s infinite; }
+@keyframes agent-glow { from { opacity: .5; } to { opacity: 1; } }
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "out").mkdir()
+            (root / "out/widget-artifact.json").write_text(
+                json.dumps(candidate, ensure_ascii=False), encoding="utf-8"
+            )
+            script = root / "validate_output.py"
+            script.write_text(VALIDATE_OUTPUT_PY, encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(script)],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse((root / "out/build-report.json").exists())
 
     async def test_reuses_environment_without_remounting_sources(self):
         interactions = FakeInteractions(

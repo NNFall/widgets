@@ -22,12 +22,59 @@ Create exactly `out/widget-artifact.json` and `out/build-report.json`, then run
 Russian-language, responsive, and coherent. Do not add JavaScript, external URLs,
 network calls, package dependencies, scripts, iframes, forms, or global CSS. Every
 CSS selector must be scoped under `.kaigo-widget`. Never treat your final prose as
-the deliverable: the declared files are the deliverable.
+the deliverable: the declared files are the deliverable. Use each exact
+`data-region` value once or more: root, launcher, panel, header, messages,
+suggestions, composer. Give launcher and composer an `aria-label`. Never use
+inline style or event attributes. Every animation must be finite (never
+`infinite`), use at most 12 iterations, and include a
+`prefers-reduced-motion: reduce` rule that disables animation and transition.
 """
 
 VALIDATE_OUTPUT_PY = r'''from __future__ import annotations
 import json
+import re
+from html.parser import HTMLParser
 from pathlib import Path
+
+REQUIRED_REGIONS = {
+    "root", "launcher", "panel", "header", "messages", "suggestions", "composer"
+}
+COMMON_ATTRIBUTES = {
+    "class", "id", "role", "title", "type", "tabindex", "placeholder", "value",
+    "disabled", "readonly", "maxlength", "viewbox", "width", "height", "fill",
+    "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "d", "cx",
+    "cy", "r", "rx", "ry", "x", "y", "x1", "x2", "y1", "y2", "points",
+    "offset", "stop-color", "stop-opacity", "preserveaspectratio", "href", "src",
+    "alt", "data-region", "data-action", "data-suggestion", "data-state"
+}
+
+
+class ContractParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.regions = set()
+        self.labelled_regions = set()
+        self.errors = []
+
+    def handle_starttag(self, tag, attrs):
+        seen = set()
+        values = {}
+        for raw_name, raw_value in attrs:
+            name = raw_name.lower()
+            value = raw_value or ""
+            if name in seen:
+                self.errors.append("duplicate attribute: " + name)
+            seen.add(name)
+            values[name] = value
+            if name.startswith("on") or not (
+                name in COMMON_ATTRIBUTES or name.startswith("aria-")
+            ):
+                self.errors.append("forbidden attribute: " + name)
+        region = values.get("data-region")
+        if region:
+            self.regions.add(region)
+            if values.get("aria-label") or values.get("title"):
+                self.labelled_regions.add(region)
 
 artifact_path = Path("out/widget-artifact.json")
 report_path = Path("out/build-report.json")
@@ -45,6 +92,17 @@ if artifact["schema_version"] != "1.0" or artifact["stage"] != "agent_build":
     raise SystemExit("schema_version or stage is invalid")
 html = artifact["body_html"].lower()
 css = artifact["css"].lower()
+parser = ContractParser()
+parser.feed(artifact["body_html"])
+parser.close()
+missing_regions = sorted(REQUIRED_REGIONS - parser.regions)
+if missing_regions:
+    raise SystemExit("missing data-region values: " + ", ".join(missing_regions))
+missing_labels = sorted({"launcher", "composer"} - parser.labelled_regions)
+if missing_labels:
+    raise SystemExit("missing aria-label for regions: " + ", ".join(missing_labels))
+if parser.errors:
+    raise SystemExit("; ".join(parser.errors))
 for forbidden in ("<script", "<iframe", "<form", "javascript:", "http://", "https://"):
     if forbidden in html:
         raise SystemExit("forbidden HTML token: " + forbidden)
@@ -53,6 +111,24 @@ for forbidden in ("@import", "url(", "javascript:"):
         raise SystemExit("forbidden CSS token: " + forbidden)
 if ".kaigo-widget" not in css:
     raise SystemExit("CSS is not scoped")
+animation_values = re.findall(
+    r"animation(?:-duration|-iteration-count)?\s*:\s*([^;}]+)", css
+)
+if "@keyframes" in css or animation_values:
+    if "prefers-reduced-motion" not in css or not re.search(
+        r"prefers-reduced-motion\s*:\s*reduce", css
+    ):
+        raise SystemExit("motion requires prefers-reduced-motion: reduce")
+for value in animation_values:
+    if "infinite" in value:
+        raise SystemExit("infinite animation is forbidden")
+    for number in re.findall(r"(?<![-\w.])(\d+)(?![\w.%])", value):
+        if int(number) > 12:
+            raise SystemExit("animation iteration count exceeds 12")
+    for number, unit in re.findall(r"(?<![-\w.])(\d+(?:\.\d+)?)(ms|s)\b", value):
+        seconds = float(number) / 1000 if unit == "ms" else float(number)
+        if seconds > 20:
+            raise SystemExit("animation duration exceeds 20 seconds")
 report_path.parent.mkdir(parents=True, exist_ok=True)
 report_path.write_text(json.dumps({
     "validator": "passed",
