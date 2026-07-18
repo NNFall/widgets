@@ -109,6 +109,8 @@ def build_stage_prompt(
   анимации — не более 20 секунд;
 - любая анимация обязательно имеет `@media (prefers-reduced-motion: reduce)` с
   отключением animation и transition;
+- SVG path использует только простые M/L/H/V/C/S/Q/T/Z-команды без A/a arc;
+  для окружностей и дуг используй безопасные элементы circle или ellipse;
 - текущая revision строго {revision}, stage строго {stage.value}.
 
 Этап: {stage.value}

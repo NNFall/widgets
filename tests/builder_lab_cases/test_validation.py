@@ -73,6 +73,15 @@ class ArtifactValidationTests(unittest.TestCase):
         self.assertIn("forbidden_element", codes)
         self.assertIn("forbidden_attribute", codes)
 
+    def test_rejects_svg_arc_paths_that_can_fail_in_the_browser(self):
+        candidate = artifact(
+            body_html=GOOD_HTML.replace(
+                "</section>",
+                '<svg viewBox="0 0 24 24"><path d="M0 0 A9 9 0 009 9"></path></svg></section>',
+            )
+        )
+        self.assertIn("unsafe_svg_path", self.codes(candidate))
+
     def test_rejects_duplicate_attributes_before_url_validation(self):
         candidate = artifact(
             body_html=GOOD_HTML.replace(

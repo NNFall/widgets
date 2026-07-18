@@ -28,6 +28,8 @@ suggestions, composer. Give launcher and composer an `aria-label`. Never use
 inline style or event attributes. Every animation must be finite (never
 `infinite`), use at most 12 iterations, and include a
 `prefers-reduced-motion: reduce` rule that disables animation and transition.
+SVG path data must use only M/L/H/V/C/S/Q/T/Z commands; never use A/a arc
+commands. Use circle or ellipse elements for round geometry.
 """
 
 VALIDATE_OUTPUT_PY = r'''from __future__ import annotations
@@ -75,6 +77,14 @@ class ContractParser(HTMLParser):
             self.regions.add(region)
             if values.get("aria-label") or values.get("title"):
                 self.labelled_regions.add(region)
+        if tag.lower() == "path":
+            path_data = values.get("d", "").strip()
+            if (
+                not path_data
+                or re.search(r"[Aa]", path_data)
+                or not re.fullmatch(r"[MmLlHhVvCcSsQqTtZz0-9eE+.,\s-]+", path_data)
+            ):
+                self.errors.append("unsafe SVG path data")
 
 artifact_path = Path("out/widget-artifact.json")
 report_path = Path("out/build-report.json")

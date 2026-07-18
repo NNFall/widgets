@@ -163,6 +163,20 @@ class _ArtifactHTMLParser(HTMLParser):
                 self._add(_issue("forbidden_attribute", "body_html", f"Attribute {name} is not allowed"))
             if name in URL_ATTRIBUTES:
                 self._validate_url(name, value)
+        if tag == "path":
+            path_data = attributes.get("d", "").strip()
+            if (
+                not path_data
+                or re.search(r"[Aa]", path_data)
+                or not re.fullmatch(r"[MmLlHhVvCcSsQqTtZz0-9eE+.,\s-]+", path_data)
+            ):
+                self._add(
+                    _issue(
+                        "unsafe_svg_path",
+                        "body_html",
+                        "SVG path must use conservative non-arc commands",
+                    )
+                )
         if tag not in VOID_ELEMENTS:
             self.stack.append(tag)
 
