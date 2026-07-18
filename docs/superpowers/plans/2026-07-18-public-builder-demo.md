@@ -17,10 +17,10 @@
 - Изменить: `builder_lab/ui.py`
 - Изменить: `tests/builder_lab_cases/test_web.py`
 
-- [ ] Добавить тест, который запрещает литералы `'/api/` и `` `/api/ `` в HTML и требует `api/runs` для `fetch`, `EventSource` и preview iframe.
-- [ ] Запустить `python -m unittest tests.builder_lab_cases.test_web -v` и получить падение на абсолютных адресах.
-- [ ] Добавить JS-функцию `labUrl(path)`, которая строит адрес через `new URL(path, document.baseURI)`, и перевести все обращения на относительные `api/...`.
-- [ ] Повторно запустить тесты и закоммитить изменение сообщением `fix: support builder reverse proxy prefix`.
+- [x] Добавить тест, который запрещает литералы `'/api/` и `` `/api/ `` в HTML и требует `api/runs` для `fetch`, `EventSource` и preview iframe.
+- [x] Запустить `python -m unittest tests.builder_lab_cases.test_web -v` и получить падение на абсолютных адресах.
+- [x] Добавить JS-функцию `labUrl(path)`, которая строит адрес через `new URL(path, document.baseURI)`, и перевести все обращения на относительные `api/...`.
+- [x] Повторно запустить тесты и закоммитить изменение сообщением `fix: support builder reverse proxy prefix`.
 
 ## Задача 2. Безопасное постоянное демо
 
@@ -34,13 +34,13 @@
 - Изменить: `tests/builder_lab_cases/test_web.py`
 - Изменить: `tests/builder_lab_cases/test_runner.py`
 
-- [ ] Тестами определить JSON-контракт `BuilderDemo`: версия, время создания, модель, request, usage, elapsed_seconds и финальный `WidgetArtifact`.
-- [ ] Проверить, что `save_demo(path, snapshot, model)` отказывается сохранять незавершённый run, отсутствие артефакта и невалидный артефакт; запись должна идти через временный файл и `os.replace`.
-- [ ] Проверить, что `load_demo(path)` повторно валидирует артефакт, а повреждённый JSON или неизвестная версия возвращают безопасную ошибку без provider diagnostics.
-- [ ] Реализовать `render_demo_page(demo)` с экранированием prompt/метаданных и iframe `src="preview"`; добавить `/demo` и `/demo/preview` с CSP и `no-store`.
-- [ ] Добавить `KAIGO_BUILDER_DEMO_PATH` в конфигурацию runner и передавать путь в `create_builder_lab_app`; при отсутствии файла `/demo` возвращает русскую страницу состояния 503.
-- [ ] Добавить smoke-параметры `--demo-output` и `--model`; вызывать `save_demo` только после `validate_smoke_evidence` и проверки preview.
-- [ ] Запустить целевые и полные тесты, затем закоммитить сообщением `feat: persist public builder demo`.
+- [x] Тестами определить JSON-контракт `BuilderDemo`: версия, время создания, модель, request, usage, elapsed_seconds и финальный `WidgetArtifact`.
+- [x] Проверить, что `save_demo(path, snapshot, model)` отказывается сохранять незавершённый run, отсутствие артефакта и невалидный артефакт; запись должна идти через временный файл и `os.replace`.
+- [x] Проверить, что `load_demo(path)` повторно валидирует артефакт, а повреждённый JSON или неизвестная версия возвращают безопасную ошибку без provider diagnostics.
+- [x] Реализовать `render_demo_page(demo)` с экранированием prompt/метаданных и iframe `src="preview"`; добавить `/demo` и `/demo/preview` с CSP и `no-store`.
+- [x] Добавить `KAIGO_BUILDER_DEMO_PATH` в конфигурацию runner и передавать путь в `create_builder_lab_app`; при отсутствии файла `/demo` возвращает русскую страницу состояния 503.
+- [x] Добавить smoke-параметры `--demo-output` и `--model`; вызывать `save_demo` только после `validate_smoke_evidence` и проверки preview.
+- [x] Запустить целевые и полные тесты, затем закоммитить сообщением `feat: persist public builder demo`.
 
 ## Задача 3. Упаковка и русская документация
 
@@ -53,11 +53,11 @@
 - Изменить: `README.md`
 - Изменить: `tests/builder_lab_cases/test_packaging.py`
 
-- [ ] Добавить тест на `KAIGO_BUILDER_DEMO_PATH=/app/data/builder-demo/latest.json` и bind mount `./data/builder-demo:/app/data/builder-demo` только у `builder-lab`.
-- [ ] Проверить падение packaging-теста, затем добавить конфигурацию Compose и `.env.example`.
-- [ ] Полностью изложить назначение, запуск, публичные маршруты, защиту, генерацию демо, откат и проверку на русском языке. Английские названия оставить только для кода, API и официальных технических терминов.
-- [ ] Переписать прежний англоязычный implementation plan как русскую фактическую историю архитектуры, этапов и live-доказательств.
-- [ ] Запустить полный набор тестов, `compileall`, `pip check`, `docker compose config --quiet` и `git diff --check`; закоммитить сообщением `docs: publish Russian builder operations`.
+- [x] Добавить тест на `KAIGO_BUILDER_DEMO_PATH=/app/data/builder-demo/latest.json` и bind mount `./data/builder-demo:/app/data/builder-demo` только у `builder-lab`.
+- [x] Проверить падение packaging-теста, затем добавить конфигурацию Compose и `.env.example`.
+- [x] Полностью изложить назначение, запуск, публичные маршруты, защиту, генерацию демо, откат и проверку на русском языке. Английские названия оставить только для кода, API и официальных технических терминов.
+- [x] Переписать прежний англоязычный implementation plan как русскую фактическую историю архитектуры, этапов и live-доказательств.
+- [x] Запустить полный набор тестов, `compileall`, `pip check`, `docker compose config --quiet` и `git diff --check`; закоммитить сообщением `docs: publish Russian builder operations`.
 
 ## Задача 4. Публикация и реальный демо-артефакт
 
@@ -67,16 +67,30 @@
 - Создать: `/etc/nginx/.htpasswd-kaigo-builder`
 - Создать через bind mount: `/root/ai_project/data/builder-demo/latest.json`
 
-- [ ] Push feature-ветки и `git pull --ff-only` в чистом `/root/ai_project`.
-- [ ] Собрать и перезапустить только `builder-lab`; убедиться, что production app и db не пересозданы.
-- [ ] Сгенерировать криптографически случайный пароль, сохранить crypt-хеш в htpasswd-файле с правами `640` и не записывать пароль в Git или shell history.
-- [ ] Создать timestamped backup nginx-конфига. Добавить exact redirect `/builder-demo`, read-only demo locations и защищённый prefix `/builder/`; проверить `nginx -t` до reload.
-- [ ] Запустить реальный direct Gemini smoke с утверждённым архитектурным brief и `--demo-output /app/data/builder-demo/latest.json`.
-- [ ] Отдельно запустить один bounded Antigravity smoke с тем же brief и
+- [x] Push feature-ветки и `git pull --ff-only` в чистом `/root/ai_project`.
+- [x] Собрать и перезапустить только `builder-lab`; убедиться, что production app и db не пересозданы.
+- [x] Сгенерировать криптографически случайный пароль, сохранить crypt-хеш в htpasswd-файле с правами `640` и не записывать пароль в Git или shell history.
+- [x] Создать timestamped backup nginx-конфига. Добавить exact redirect `/builder-demo`, read-only demo locations и защищённый prefix `/builder/`; проверить `nginx -t` до reload.
+- [x] Запустить реальный direct Gemini smoke с утверждённым архитектурным brief и `--demo-output /app/data/builder-demo/latest.json`.
+- [x] Отдельно запустить один bounded Antigravity smoke с тем же brief и
   существующим серверным API-ключом. Не сохранять его вместо рабочего direct
   demo; зафиксировать успешный attested artifact либо точную безопасную ошибку
   доступности агента.
-- [ ] Проверить публичный demo без авторизации, `401` для полного Builder без авторизации и `200` с авторизацией.
-- [ ] Через Playwright проверить открытие/закрытие launcher, desktop/mobile, prompt и метаданные демо, запуск Builder UI, SSE-ready состояние и нулевую browser console.
-- [ ] Повторно проверить `https://kaigo.space/`, `/w/demka`, `https://kaigo.online/`, состояние app/db, loopback `8091` и отсутствие новых ошибок.
-- [ ] Зафиксировать обезличенные live-доказательства по-русски, push финального docs-коммита и оставить feature-ветку без слияния в `main`.
+- [x] Проверить публичный demo без авторизации, `401` для полного Builder без авторизации и `200` с авторизацией.
+- [x] Через Playwright проверить открытие/закрытие launcher, desktop/mobile, prompt и метаданные демо, запуск Builder UI, SSE-ready состояние и нулевую browser console.
+- [x] Повторно проверить `https://kaigo.space/`, `/w/demka`, `https://kaigo.online/`, состояние app/db, loopback `8091` и отсутствие новых ошибок.
+- [x] Зафиксировать обезличенные live-доказательства по-русски, push финального docs-коммита и оставить feature-ветку без слияния в `main`.
+
+## Итог выполнения
+
+- Публичное read-only демо: `https://kaigo.space/builder-demo/`.
+- Защищённый конструктор: `https://kaigo.space/builder/`.
+- Резервная копия nginx:
+  `/etc/nginx/sites-available/kaigo.space.bak-20260718-220225-builder`.
+- Direct: пять ревизий, `motion_polish`, 301,260 секунды, 122 363 токена.
+- Antigravity: `agent_build`, 268,846 секунды, 419 578 токенов; результат не
+  подменял direct-демо.
+- Playwright подтвердил desktop/mobile, close/reopen, suggestion/composer и
+  защищённый Builder; browser console — 0 ошибок и 0 предупреждений.
+- После обнаруженных браузером исправлений проходят 103 теста.
+- Feature-ветка оставлена развёрнутой без слияния в `main`.
