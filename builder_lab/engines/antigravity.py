@@ -29,7 +29,9 @@ inline style or event attributes. Every animation must be finite (never
 `infinite`), use at most 12 iterations, and include a
 `prefers-reduced-motion: reduce` rule that disables animation and transition.
 SVG path data must use only M/L/H/V/C/S/Q/T/Z commands; never use A/a arc
-commands. Use circle or ellipse elements for round geometry.
+commands. Use circle or ellipse elements for round geometry. Safe native control
+attributes such as `for`, `name`, `checked`, `open`, `selected`, `autocomplete`,
+`inputmode`, `rows`, `cols`, `min`, `max`, and `step` are allowed.
 """
 
 VALIDATE_OUTPUT_PY = r'''from __future__ import annotations
@@ -43,8 +45,11 @@ REQUIRED_REGIONS = {
 }
 COMMON_ATTRIBUTES = {
     "class", "id", "role", "title", "type", "tabindex", "placeholder", "value",
-    "disabled", "readonly", "maxlength", "viewbox", "width", "height", "fill",
-    "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "d", "cx",
+    "disabled", "readonly", "checked", "open", "selected", "for", "name",
+    "autocomplete", "inputmode", "rows", "cols", "min", "max", "step",
+    "maxlength", "viewbox", "width", "height", "fill", "stroke",
+    "stroke-width", "stroke-linecap", "stroke-linejoin", "stroke-dasharray",
+    "stroke-dashoffset", "d", "cx",
     "cy", "r", "rx", "ry", "x", "y", "x1", "x2", "y1", "y2", "points",
     "offset", "stop-color", "stop-opacity", "preserveaspectratio", "href", "src",
     "alt", "data-region", "data-action", "data-suggestion", "data-state"

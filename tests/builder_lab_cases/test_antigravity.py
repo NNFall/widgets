@@ -199,6 +199,33 @@ class AntigravityEngineTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse((root / "out/build-report.json").exists())
 
+    def test_sandbox_validator_accepts_safe_native_control_attributes(self):
+        candidate = artifact(revision=1, stage=Stage.AGENT_BUILD).to_dict()
+        candidate["body_html"] = candidate["body_html"].replace(
+            "</section>",
+            '<label for="kaigo-opt">Опция</label>'
+            '<input id="kaigo-opt" name="option" type="checkbox" checked>'
+            '<svg viewBox="0 0 24 24"><line x1="2" y1="12" x2="22" y2="12" '
+            'stroke-dasharray="4 2" stroke-dashoffset="1"></line></svg>'
+            "</section>",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "out").mkdir()
+            (root / "out/widget-artifact.json").write_text(
+                json.dumps(candidate, ensure_ascii=False), encoding="utf-8"
+            )
+            script = root / "validate_output.py"
+            script.write_text(VALIDATE_OUTPUT_PY, encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(script)],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     async def test_reuses_environment_without_remounting_sources(self):
         interactions = FakeInteractions(
             [interaction("completed", identifier="one"), interaction("completed", identifier="two")]

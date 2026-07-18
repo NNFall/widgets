@@ -49,6 +49,20 @@ class ArtifactValidationTests(unittest.TestCase):
     def test_accepts_safe_complete_artifact(self):
         self.assertEqual(validate_artifact(artifact(), previous_revision=1), ())
 
+    def test_accepts_safe_native_controls_and_svg_presentation_attributes(self):
+        native_controls = """
+        <details class="kaigo-widget__details" open>
+          <summary class="kaigo-widget__summary">Параметры проекта</summary>
+          <label class="kaigo-widget__label" for="kaigo-email">Почта</label>
+          <input id="kaigo-email" name="email" type="checkbox" checked autocomplete="off">
+          <svg viewBox="0 0 24 24"><line x1="2" y1="12" x2="22" y2="12" stroke-dasharray="4 2" stroke-dashoffset="1"></line></svg>
+        </details>
+        """
+        candidate = artifact(
+            body_html=GOOD_HTML.replace("</section>", native_controls + "</section>")
+        )
+        self.assertEqual(validate_artifact(candidate, previous_revision=1), ())
+
     def test_rejects_schema_and_non_monotonic_revision(self):
         self.assertIn("unsupported_schema", self.codes(artifact(schema_version="2.0")))
         self.assertIn("non_monotonic_revision", self.codes(artifact(revision=1)))
