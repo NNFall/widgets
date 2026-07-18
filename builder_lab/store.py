@@ -30,6 +30,10 @@ class RunTerminal(RuntimeError):
     pass
 
 
+class ArtifactNotFound(KeyError):
+    pass
+
+
 @dataclass
 class _RunRecord:
     run_id: str
@@ -39,6 +43,7 @@ class _RunRecord:
     updated_at: datetime
     events: list[BuilderEvent] = field(default_factory=list)
     artifact: WidgetArtifact | None = None
+    artifacts: dict[int, WidgetArtifact] = field(default_factory=dict)
     usage: TokenUsage = field(default_factory=TokenUsage)
     elapsed_seconds: float = 0.0
     error_code: str | None = None
@@ -208,8 +213,22 @@ class RunStore:
             if record.artifact and artifact.revision <= record.artifact.revision:
                 raise ValueError("artifact revision must increase monotonically")
             record.artifact = _copy_artifact(artifact)
+            record.artifacts[artifact.revision] = _copy_artifact(artifact)
             record.updated_at = datetime.now(timezone.utc)
             self._changed.notify_all()
+
+    async def artifact(
+        self, run_id: str, revision: int | None = None
+    ) -> WidgetArtifact:
+        async with self._lock:
+            record = self._record(run_id)
+            if revision is None:
+                candidate = record.artifact
+            else:
+                candidate = record.artifacts.get(revision)
+            if candidate is None:
+                raise ArtifactNotFound((run_id, revision))
+            return _copy_artifact(candidate)
 
     async def events_after(self, run_id: str, sequence: int) -> tuple[BuilderEvent, ...]:
         async with self._lock:

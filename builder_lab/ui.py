@@ -1,0 +1,280 @@
+from __future__ import annotations
+
+from html import escape
+
+from .models import EngineName
+from .preview import preview_iframe_attributes
+
+
+DEFAULT_BRIEF = """Создай премиального AI-сотрудника для архитектурного бюро.
+
+Он должен встречать посетителя как спокойный куратор проекта: понимать задачу,
+помогать выбрать формат работы и предлагать следующий конкретный шаг. Нужна
+выразительная визуальная метафора, связанная с чертежами, материалами и светом,
+русский текст, сильная типографическая иерархия и аккуратное движение.
+
+Виджет должен ощущаться частью дорогого сайта, а не стандартным чат-пузырём."""
+
+
+def render_builder_page(enabled_engines: tuple[EngineName, ...]) -> str:
+    options = "".join(
+        f'<option value="{escape(engine.value)}">'
+        + ("Gemini staged" if engine is EngineName.DIRECT else "Antigravity agent")
+        + "</option>"
+        for engine in enabled_engines
+    )
+    iframe = preview_iframe_attributes()
+    return f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Kaigo Builder Lab</title>
+  <style>
+    :root {{ color-scheme: dark; --bg:#171714; --surface:#211f1b; --line:#3b3832; --muted:#a49f95; --text:#f4f0e8; --accent:#d88360; --accent-dark:#9c5035; --danger:#d36e67; }}
+    * {{ box-sizing:border-box; }}
+    html {{ background:var(--bg); }}
+    body {{ margin:0; min-width:320px; min-height:100dvh; color:var(--text); background:radial-gradient(circle at 77% 12%,rgba(216,131,96,.08),transparent 34%),var(--bg); font-family:Geist,"Segoe UI",Arial,sans-serif; }}
+    button,input,select,textarea {{ font:inherit; }}
+    button {{ color:inherit; }}
+    .shell {{ width:min(1680px,100%); min-height:100dvh; margin:0 auto; padding:18px; display:grid; grid-template-columns:minmax(330px,.78fr) minmax(520px,1.45fr); gap:18px; }}
+    .rail,.stage {{ min-width:0; border:1px solid var(--line); background:rgba(33,31,27,.91); box-shadow:inset 0 1px rgba(255,255,255,.035),0 24px 60px rgba(9,8,6,.22); }}
+    .rail {{ border-radius:26px; padding:24px; display:flex; flex-direction:column; gap:24px; overflow:auto; }}
+    .stage {{ border-radius:34px; padding:20px; display:grid; grid-template-rows:auto minmax(520px,1fr); gap:16px; overflow:hidden; }}
+    .eyebrow {{ margin:0 0 10px; color:var(--accent); font:600 11px/1.2 "Cascadia Mono",monospace; letter-spacing:.15em; text-transform:uppercase; }}
+    h1 {{ margin:0; max-width:13ch; font-size:clamp(30px,3.1vw,52px); line-height:.98; letter-spacing:-.052em; font-weight:650; }}
+    .lede {{ margin:15px 0 0; max-width:44ch; color:var(--muted); font-size:14px; line-height:1.55; }}
+    .control-grid {{ display:grid; grid-template-columns:1fr 112px; gap:12px; }}
+    .field {{ display:grid; gap:8px; }}
+    .field-wide {{ grid-column:1/-1; }}
+    label {{ color:#d9d4ca; font-size:12px; font-weight:600; }}
+    select,input,textarea {{ width:100%; border:1px solid var(--line); border-radius:13px; color:var(--text); background:#191814; outline:none; transition:border-color .22s ease,transform .22s ease; }}
+    select,input {{ min-height:42px; padding:0 12px; }}
+    textarea {{ min-height:220px; resize:vertical; padding:13px; line-height:1.5; }}
+    select:focus,input:focus,textarea:focus {{ border-color:var(--accent); }}
+    .helper {{ margin:0; color:#837f77; font-size:11px; line-height:1.45; }}
+    .actions {{ display:grid; grid-template-columns:1fr auto auto; gap:9px; }}
+    .button {{ min-height:43px; border:1px solid var(--line); border-radius:13px; padding:0 15px; background:#292721; cursor:pointer; transition:transform .2s cubic-bezier(.16,1,.3,1),background .2s ease,border-color .2s ease; }}
+    .button:hover {{ border-color:#625e55; background:#302e28; }}
+    .button:active {{ transform:translateY(1px) scale(.985); }}
+    .button-primary {{ color:#211712; border-color:transparent; background:var(--accent); font-weight:700; }}
+    .button-primary:hover {{ border-color:transparent; background:#e09472; }}
+    .button:disabled {{ opacity:.45; cursor:not-allowed; transform:none; }}
+    .error {{ display:none; padding:11px 13px; border-left:2px solid var(--danger); color:#e8b4af; background:rgba(211,110,103,.08); font-size:12px; line-height:1.45; }}
+    .error.visible {{ display:block; }}
+    .telemetry {{ display:grid; grid-template-columns:repeat(3,1fr); border-top:1px solid var(--line); border-bottom:1px solid var(--line); }}
+    .metric {{ padding:13px 10px 13px 0; }}
+    .metric+.metric {{ padding-left:12px; border-left:1px solid var(--line); }}
+    .metric-label {{ display:block; color:#837f77; font:500 9px/1.3 "Cascadia Mono",monospace; letter-spacing:.11em; text-transform:uppercase; }}
+    .metric-value {{ display:block; margin-top:5px; font:600 14px/1.2 "Cascadia Mono",monospace; }}
+    .timeline-head {{ display:flex; align-items:center; justify-content:space-between; gap:16px; }}
+    .timeline-head h2 {{ margin:0; font-size:13px; letter-spacing:-.01em; }}
+    .pulse {{ width:7px; height:7px; border-radius:50%; background:#67635b; }}
+    .pulse.running {{ background:var(--accent); animation:pulse 1.8s ease-in-out 6; }}
+    @keyframes pulse {{ 50% {{ opacity:.35; transform:scale(.82); }} }}
+    .timeline {{ min-height:132px; max-height:280px; overflow:auto; display:grid; align-content:start; gap:0; border-top:1px solid var(--line); }}
+    .empty {{ padding:28px 0; color:#77736c; font-size:12px; line-height:1.55; }}
+    .event {{ position:relative; padding:11px 0 11px 22px; border-bottom:1px solid rgba(59,56,50,.72); animation:arrive .36s cubic-bezier(.16,1,.3,1) both; }}
+    .event::before {{ content:""; position:absolute; left:1px; top:16px; width:6px; height:6px; border:1px solid #77736c; border-radius:50%; background:var(--surface); }}
+    .event[data-status="completed"]::before {{ border-color:var(--accent); background:var(--accent); }}
+    .event[data-status="failed"]::before {{ border-color:var(--danger); background:var(--danger); }}
+    .event-meta {{ display:flex; justify-content:space-between; gap:12px; color:#8c877e; font:500 9px/1.3 "Cascadia Mono",monospace; letter-spacing:.06em; text-transform:uppercase; }}
+    .event-message {{ margin-top:4px; color:#d6d1c7; font-size:12px; line-height:1.4; }}
+    @keyframes arrive {{ from {{ opacity:0; transform:translateY(7px); }} to {{ opacity:1; transform:translateY(0); }} }}
+    .stage-head {{ display:grid; grid-template-columns:1fr auto; gap:18px; align-items:center; padding:3px 4px 1px; }}
+    .stage-title {{ display:flex; align-items:center; gap:12px; min-width:0; }}
+    .stage-title h2 {{ margin:0; font-size:14px; white-space:nowrap; }}
+    .status {{ max-width:34ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted); font:500 10px/1.2 "Cascadia Mono",monospace; }}
+    .view-toggle {{ display:flex; padding:3px; border:1px solid var(--line); border-radius:12px; background:#191814; }}
+    .view-toggle button {{ min-height:32px; border:0; border-radius:8px; padding:0 12px; color:#8d887f; background:transparent; cursor:pointer; font-size:11px; }}
+    .view-toggle button.active {{ color:var(--text); background:#302e28; }}
+    .canvas {{ position:relative; min-height:0; overflow:hidden; border:1px solid #34312c; border-radius:24px; background:linear-gradient(135deg,#ede8de,#d7d0c4); display:grid; place-items:center; }}
+    .canvas::before {{ content:""; position:absolute; inset:0; pointer-events:none; opacity:.28; background-image:linear-gradient(rgba(33,31,27,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(33,31,27,.055) 1px,transparent 1px); background-size:32px 32px; }}
+    .viewport {{ position:relative; width:100%; height:100%; min-height:520px; transition:width .45s cubic-bezier(.16,1,.3,1),border-radius .45s ease; }}
+    .viewport.mobile {{ width:min(390px,calc(100% - 32px)); height:calc(100% - 32px); min-height:600px; border:9px solid #282622; border-radius:34px; overflow:hidden; box-shadow:0 20px 50px rgba(27,23,18,.2); }}
+    iframe {{ display:block; width:100%; height:100%; min-height:inherit; border:0; background:transparent; }}
+    .preview-empty {{ position:absolute; z-index:1; width:min(380px,calc(100% - 48px)); padding:26px 0; border-top:1px solid rgba(33,31,27,.25); border-bottom:1px solid rgba(33,31,27,.25); color:#5d574f; }}
+    .preview-empty strong {{ display:block; color:#2e2a25; font-size:18px; letter-spacing:-.025em; }}
+    .preview-empty span {{ display:block; margin-top:8px; font-size:13px; line-height:1.55; }}
+    .preview-empty.hidden {{ display:none; }}
+    .draft-flag {{ position:absolute; z-index:2; top:14px; right:14px; padding:7px 9px; border:1px solid rgba(33,31,27,.22); border-radius:9px; color:#5a5148; background:rgba(242,237,228,.82); backdrop-filter:blur(10px); font:600 9px/1 "Cascadia Mono",monospace; letter-spacing:.08em; text-transform:uppercase; }}
+    @media (prefers-reduced-motion:reduce) {{ *,*::before,*::after {{ animation:none!important; transition:none!important; }} }}
+    @media (max-width:900px) {{ .shell {{ grid-template-columns:1fr; padding:10px; }} .rail,.stage {{ border-radius:20px; }} .stage {{ min-height:760px; }} }}
+    @media (max-width:560px) {{ .rail {{ padding:18px; }} .stage {{ padding:10px; grid-template-rows:auto minmax(620px,1fr); }} .control-grid {{ grid-template-columns:1fr; }} .field-wide {{ grid-column:auto; }} .actions {{ grid-template-columns:1fr 1fr; }} .button-primary {{ grid-column:1/-1; }} .stage-head {{ grid-template-columns:1fr; }} .view-toggle {{ width:max-content; }} .telemetry {{ grid-template-columns:1fr; }} .metric+.metric {{ padding-left:0; border-left:0; border-top:1px solid var(--line); }} }}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="rail" aria-label="Настройки генерации">
+      <header>
+        <p class="eyebrow">Kaigo / controlled experiment</p>
+        <h1>AI-сотрудник собирается на глазах.</h1>
+        <p class="lede">Каждая смена preview — завершённая моделью и проверенная Kaigo ревизия. Никаких нарисованных стадий.</p>
+      </header>
+      <div class="control-grid">
+        <div class="field">
+          <label for="engine">Движок</label>
+          <select id="engine">{options}</select>
+          <p class="helper">Staged — быстрый управляемый цикл. Agent — автономная сборка в remote environment.</p>
+        </div>
+        <div class="field" id="creativity-field">
+          <label for="creativity">Творчество</label>
+          <input id="creativity" type="number" min="0" max="2" step="0.05" value="0.9">
+          <p class="helper">0–2</p>
+        </div>
+        <div class="field field-wide">
+          <label for="brief">Что должен создать AI</label>
+          <textarea id="brief" spellcheck="true">{escape(DEFAULT_BRIEF)}</textarea>
+          <p class="helper">Опишите бизнес, роль сотрудника, характер и желаемое впечатление. Модель сама выберет цельную визуальную метафору.</p>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="button button-primary" id="generate" type="button">Собрать виджет</button>
+        <button class="button" id="cancel" type="button" disabled>Отмена</button>
+        <button class="button" id="retry" type="button" disabled>Повторить</button>
+      </div>
+      <div class="error" id="error" role="alert"></div>
+      <div class="telemetry" aria-label="Метрики запуска">
+        <div class="metric"><span class="metric-label">Ревизия</span><span class="metric-value" id="revision">—</span></div>
+        <div class="metric"><span class="metric-label">Токены</span><span class="metric-value" id="tokens">—</span></div>
+        <div class="metric"><span class="metric-label">Время</span><span class="metric-value" id="elapsed">—</span></div>
+      </div>
+      <section>
+        <div class="timeline-head"><h2>Реальный журнал стадий</h2><span class="pulse" id="pulse"></span></div>
+        <div class="timeline" id="timeline"><div class="empty">Здесь появятся запросы модели, проверка и зафиксированные preview-ревизии.</div></div>
+      </section>
+    </section>
+
+    <section class="stage" aria-label="Предпросмотр виджета">
+      <header class="stage-head">
+        <div class="stage-title"><h2>Live preview</h2><span class="status" id="status">Ожидает запуска</span></div>
+        <div class="view-toggle" aria-label="Размер предпросмотра">
+          <button type="button" class="active" data-view="desktop">Desktop</button>
+          <button type="button" data-view="mobile">Mobile</button>
+        </div>
+      </header>
+      <div class="canvas">
+        <div class="draft-flag">Экспериментальный черновик</div>
+        <div class="preview-empty" id="preview-empty"><strong>Пока здесь чистый лист.</strong><span>После первой проверенной стадии появится рабочий виджет. Следующие части будут меняться без перезагрузки страницы.</span></div>
+        <div class="viewport" id="viewport">
+          <iframe id="preview" sandbox="{escape(iframe['sandbox'])}" referrerpolicy="{escape(iframe['referrerpolicy'])}" title="{escape(iframe['title'])}"></iframe>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script>
+  (() => {{
+    'use strict';
+    const elements = Object.fromEntries(['engine','creativity','creativity-field','brief','generate','cancel','retry','error','revision','tokens','elapsed','timeline','pulse','status','preview','preview-empty','viewport'].map(id => [id, document.getElementById(id)]));
+    let currentRun = null;
+    let stream = null;
+    let terminal = false;
+    let snapshotTimer = null;
+
+    const showError = (message) => {{ elements.error.textContent = message || ''; elements.error.classList.toggle('visible', Boolean(message)); }};
+    const setRunning = (running) => {{ elements.generate.disabled = running; elements.cancel.disabled = !running; elements.pulse.classList.toggle('running', running); }};
+    const formatNumber = value => new Intl.NumberFormat('ru-RU').format(value || 0);
+
+    async function requestJSON(url, options = {{}}) {{
+      const response = await fetch(url, {{ ...options, headers: {{ 'Content-Type':'application/json', ...(options.headers || {{}}) }} }});
+      const payload = await response.json().catch(() => ({{}}));
+      if (!response.ok) throw new Error(payload.error?.message || `HTTP ${{response.status}}`);
+      return payload;
+    }}
+
+    function resetTimeline() {{
+      elements.timeline.replaceChildren();
+      const skeleton = document.createElement('div');
+      skeleton.className = 'empty';
+      skeleton.textContent = 'Gemini получает бриф и начинает первую реальную стадию…';
+      elements.timeline.append(skeleton);
+    }}
+
+    function appendEvent(event) {{
+      if (elements.timeline.firstElementChild?.classList.contains('empty')) elements.timeline.replaceChildren();
+      const row = document.createElement('article');
+      row.className = 'event';
+      row.dataset.status = event.status || '';
+      const meta = document.createElement('div');
+      meta.className = 'event-meta';
+      const type = document.createElement('span');
+      type.textContent = event.type || 'event';
+      const stage = document.createElement('span');
+      stage.textContent = event.stage || `#${{event.sequence}}`;
+      meta.append(type, stage);
+      const message = document.createElement('div');
+      message.className = 'event-message';
+      message.textContent = event.message || '';
+      row.append(meta, message);
+      elements.timeline.append(row);
+      elements.timeline.scrollTop = elements.timeline.scrollHeight;
+      elements.status.textContent = `${{event.stage || 'run'}} · ${{event.status || ''}}`;
+      if (event.type === 'artifact.committed' && event.revision) {{
+        elements.preview.src = `/api/runs/${{currentRun}}/preview?revision=${{event.revision}}`;
+        elements['preview-empty'].classList.add('hidden');
+      }}
+      if (event.type === 'run.failed' || event.type === 'run.cancelled') showError(event.message);
+      scheduleSnapshot();
+    }}
+
+    function scheduleSnapshot() {{
+      clearTimeout(snapshotTimer);
+      snapshotTimer = setTimeout(refreshSnapshot, 80);
+    }}
+
+    async function refreshSnapshot() {{
+      if (!currentRun) return;
+      try {{
+        const snapshot = await requestJSON(`/api/runs/${{currentRun}}`);
+        const usage = snapshot.usage || {{}};
+        elements.revision.textContent = snapshot.artifact?.revision ?? '—';
+        elements.tokens.textContent = formatNumber(usage.total_tokens);
+        elements.elapsed.textContent = snapshot.elapsed_seconds ? `${{snapshot.elapsed_seconds.toFixed(1)}} с` : 'в процессе';
+        terminal = ['completed','failed','cancelled'].includes(snapshot.status);
+        if (terminal) {{
+          setRunning(false);
+          elements.retry.disabled = snapshot.status === 'completed';
+          elements.status.textContent = snapshot.status === 'completed' ? 'Готово · артефакт проверен' : `Остановлено · ${{snapshot.error_code || snapshot.status}}`;
+        }}
+      }} catch (error) {{ showError(error.message); }}
+    }}
+
+    function connectEvents(runId) {{
+      if (stream) stream.close();
+      stream = new EventSource(`/api/runs/${{runId}}/events`);
+      stream.onmessage = message => {{
+        try {{ appendEvent(JSON.parse(message.data)); }} catch (_) {{ showError('Получено повреждённое событие'); }}
+      }};
+      stream.onerror = () => {{ if (terminal && stream) stream.close(); }};
+    }}
+
+    async function generate() {{
+      showError('');
+      const brief = elements.brief.value.trim();
+      if (!brief) {{ showError('Сначала опишите будущего AI-сотрудника.'); return; }}
+      setRunning(true);
+      elements.retry.disabled = true;
+      elements.status.textContent = 'Создаём запуск';
+      resetTimeline();
+      try {{
+        const run = await requestJSON('/api/runs', {{ method:'POST', body:JSON.stringify({{ engine:elements.engine.value, brief, creativity:Number(elements.creativity.value), locale:'ru' }}) }});
+        currentRun = run.run_id;
+        terminal = false;
+        connectEvents(currentRun);
+        await refreshSnapshot();
+      }} catch (error) {{ setRunning(false); showError(error.message); }}
+    }}
+
+    elements.generate.addEventListener('click', generate);
+    elements.cancel.addEventListener('click', async () => {{ if (!currentRun) return; try {{ await requestJSON(`/api/runs/${{currentRun}}/cancel`, {{ method:'POST', body:'{{}}' }}); }} catch (error) {{ showError(error.message); }} }});
+    elements.retry.addEventListener('click', async () => {{ if (!currentRun) return; showError(''); setRunning(true); resetTimeline(); try {{ const run = await requestJSON(`/api/runs/${{currentRun}}/retry`, {{ method:'POST', body:'{{}}' }}); currentRun=run.run_id; terminal=false; connectEvents(currentRun); }} catch (error) {{ setRunning(false); showError(error.message); }} }});
+    elements.engine.addEventListener('change', () => {{ elements['creativity-field'].style.opacity = elements.engine.value === 'direct' ? '1' : '.42'; elements.creativity.disabled = elements.engine.value !== 'direct'; }});
+    document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {{ document.querySelectorAll('[data-view]').forEach(item => item.classList.toggle('active', item === button)); elements.viewport.classList.toggle('mobile', button.dataset.view === 'mobile'); }}));
+    window.addEventListener('message', event => {{
+      if (event.source !== elements.preview.contentWindow || !event.data || event.data.source !== 'kaigo-builder-preview' || event.data.version !== 1) return;
+      if (event.data.type === 'rendered') elements.status.textContent = `Ревизия ${{event.data.revision}} отрисована`;
+    }});
+  }})();
+  </script>
+</body>
+</html>"""

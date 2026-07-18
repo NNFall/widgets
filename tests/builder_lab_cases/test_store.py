@@ -9,7 +9,7 @@ from builder_lab.models import (
     Stage,
     TokenUsage,
 )
-from builder_lab.store import RunNotFound, RunStore, RunTerminal
+from builder_lab.store import ArtifactNotFound, RunNotFound, RunStore, RunTerminal
 from tests.builder_lab_cases.test_validation import artifact
 
 
@@ -58,6 +58,17 @@ class RunStoreTests(unittest.IsolatedAsyncioTestCase):
         snapshot.artifact.theme_tokens["accent"] = "changed"
         fresh = await self.store.snapshot(run.run_id)
         self.assertNotEqual(fresh.artifact.theme_tokens["accent"], "changed")
+
+    async def test_keeps_each_valid_revision_for_event_replay_preview(self):
+        run = await self.store.create(self.request)
+        first = artifact(revision=1, stage=Stage.ART_DIRECTION)
+        second = artifact(revision=2, stage=Stage.FOUNDATION)
+        await self.store.commit_artifact(run.run_id, first)
+        await self.store.commit_artifact(run.run_id, second)
+        self.assertEqual((await self.store.artifact(run.run_id, 1)).stage, Stage.ART_DIRECTION)
+        self.assertEqual((await self.store.artifact(run.run_id, 2)).stage, Stage.FOUNDATION)
+        with self.assertRaises(ArtifactNotFound):
+            await self.store.artifact(run.run_id, 3)
 
     async def test_waiter_wakes_for_new_events(self):
         run = await self.store.create(self.request)
