@@ -70,6 +70,13 @@ class BuilderLabConfigTests(unittest.TestCase):
         config = self.load(GOOGLE_AI_API_KEY="existing-key")
         self.assertEqual(config.gemini_api_key, "existing-key")
 
+    def test_blank_high_priority_key_does_not_mask_valid_alias(self):
+        config = self.load(
+            GEMINI_API_KEY="   ",
+            GOOGLE_AI_API_KEY="existing-key",
+        )
+        self.assertEqual(config.gemini_api_key, "existing-key")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -48,6 +48,14 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
+def _first_nonblank(*names: str) -> str | None:
+    for name in names:
+        value = os.getenv(name)
+        if value and value.strip():
+            return value.strip()
+    return None
+
+
 @dataclass(frozen=True)
 class BuilderLabConfig:
     host: str
@@ -81,10 +89,10 @@ class BuilderLabConfig:
             )
         except ValueError as exc:
             raise ValueError("KAIGO_BUILDER_DEFAULT_ENGINE is unsupported") from exc
-        api_key = (
-            os.getenv("GEMINI_API_KEY")
-            or os.getenv("GOOGLE_AI_API_KEY")
-            or os.getenv("GOOGLE_API_KEY")
+        api_key = _first_nonblank(
+            "GEMINI_API_KEY",
+            "GOOGLE_AI_API_KEY",
+            "GOOGLE_API_KEY",
         )
         return cls(
             host=host,
@@ -95,7 +103,7 @@ class BuilderLabConfig:
             temperature=_float("GEMINI_BUILDER_TEMPERATURE", 0.9, 0, 2),
             max_repairs=_int("GEMINI_BUILDER_MAX_REPAIRS", 2, 0, 2),
             enable_antigravity=_bool("KAIGO_BUILDER_ENABLE_ANTIGRAVITY", True),
-            gemini_api_key=api_key.strip() if api_key and api_key.strip() else None,
+            gemini_api_key=api_key,
             gemini_base_url=os.getenv(
                 "GOOGLE_AI_NATIVE_BASE_URL",
                 "https://generativelanguage.googleapis.com",
