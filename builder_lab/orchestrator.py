@@ -50,7 +50,14 @@ class BuilderOrchestrator:
                 f"Режим {request.engine.value} не настроен в этом запуске",
             )
         engine = factory()
-        snapshot = await self.store.create(request)
+        try:
+            snapshot = await self.store.create(request)
+        except Exception:
+            try:
+                await engine.close()
+            except Exception:
+                pass
+            raise
         self._engines[snapshot.run_id] = engine
         self._stages[snapshot.run_id] = None
         task = asyncio.create_task(

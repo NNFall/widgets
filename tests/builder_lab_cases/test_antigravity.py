@@ -250,6 +250,30 @@ class AntigravityEngineTests(unittest.IsolatedAsyncioTestCase):
         await remote_cancel
         self.assertEqual(interactions.cancel_calls[0][0], "late-interaction")
 
+    async def test_late_create_is_watched_and_cancelled_before_close(self):
+        interactions = BlockingCreateInteractions()
+        engine = AntigravityEngine(
+            api_key="secret",
+            client=FakeClient(interactions),
+            download_client=FakeHTTPClient(valid_archive()),
+            timeout_seconds=5,
+            poll_interval=0,
+            creation_cancel_grace_seconds=0.01,
+        )
+        generation = asyncio.create_task(
+            engine.generate(request=self.request, stage=Stage.AGENT_BUILD, revision=1)
+        )
+        await interactions.started.wait()
+        generation.cancel()
+        await asyncio.wait_for(engine.cancel(), timeout=0.2)
+        self.assertEqual(interactions.cancel_calls, [])
+        close = asyncio.create_task(engine.close())
+        interactions.release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await generation
+        await asyncio.wait_for(close, timeout=1)
+        self.assertEqual(interactions.cancel_calls[0][0], "late-interaction")
+
     async def test_requires_agent_stage_and_api_key(self):
         with self.assertRaises(BuilderEngineError) as caught:
             AntigravityEngine(api_key=None)

@@ -148,12 +148,18 @@ class AntigravityEngine:
         poll_interval: float = 2,
         max_snapshot_bytes: int = 10 * 1024 * 1024,
         max_total_tokens: int = 400_000,
+        creation_cancel_grace_seconds: float = 5.0,
     ) -> None:
         if not api_key or not api_key.strip():
             raise BuilderEngineError(
                 "missing_api_key", "Для Antigravity не настроен ключ Gemini"
             )
-        if timeout_seconds <= 0 or poll_interval < 0 or max_snapshot_bytes < 1:
+        if (
+            timeout_seconds <= 0
+            or poll_interval < 0
+            or max_snapshot_bytes < 1
+            or creation_cancel_grace_seconds <= 0
+        ):
             raise ValueError("Antigravity limits are invalid")
         self._api_key = api_key.strip()
         self.agent = agent
@@ -161,6 +167,7 @@ class AntigravityEngine:
         self.poll_interval = poll_interval
         self.max_snapshot_bytes = max_snapshot_bytes
         self.max_total_tokens = max_total_tokens
+        self.creation_cancel_grace_seconds = creation_cancel_grace_seconds
         self._http_options = build_http_options(base_url)
         self._owned_client = client is None
         self._client = client or genai.Client(
@@ -173,6 +180,7 @@ class AntigravityEngine:
         )
         self._interaction_id: str | None = None
         self._creation_task: asyncio.Task[Any] | None = None
+        self._late_cleanup_task: asyncio.Task[None] | None = None
         self._environment_id: str | None = None
 
     def _environment(self, request: BuilderRequest, revision: int) -> dict[str, Any]:
@@ -337,11 +345,17 @@ class AntigravityEngine:
             try:
                 interaction = await asyncio.wait_for(
                     asyncio.shield(self._creation_task),
-                    timeout=min(5.0, self.timeout_seconds),
+                    timeout=min(
+                        self.creation_cancel_grace_seconds,
+                        self.timeout_seconds,
+                    ),
                 )
             except asyncio.CancelledError:
                 raise
-            except (Exception, TimeoutError, asyncio.TimeoutError):
+            except (TimeoutError, asyncio.TimeoutError):
+                self._ensure_late_cleanup()
+                return
+            except Exception:
                 return
             finally:
                 if self._creation_task is not None and self._creation_task.done():
@@ -354,6 +368,34 @@ class AntigravityEngine:
         except Exception as exc:
             raise _agent_provider_error(exc) from exc
 
+    def _ensure_late_cleanup(self) -> None:
+        if self._creation_task is None:
+            return
+        if self._late_cleanup_task is not None and not self._late_cleanup_task.done():
+            return
+        creation_task = self._creation_task
+        self._late_cleanup_task = asyncio.create_task(
+            self._cancel_late_creation(creation_task),
+            name="kaigo-antigravity-late-cancel",
+        )
+
+    async def _cancel_late_creation(self, creation_task: asyncio.Task[Any]) -> None:
+        try:
+            interaction = await creation_task
+        except (Exception, asyncio.CancelledError):
+            return
+        finally:
+            if self._creation_task is creation_task and creation_task.done():
+                self._creation_task = None
+        interaction_id = getattr(interaction, "id", None)
+        if not interaction_id:
+            return
+        self._interaction_id = str(interaction_id)
+        try:
+            await self._client.aio.interactions.cancel(id=self._interaction_id)
+        except Exception:
+            pass
+
     async def _cancel_remote_best_effort(self) -> None:
         try:
             await self.cancel()
@@ -361,6 +403,27 @@ class AntigravityEngine:
             pass
 
     async def close(self) -> None:
+        if self._creation_task is not None and not self._creation_task.done():
+            self._ensure_late_cleanup()
+        if self._late_cleanup_task is not None:
+            cleanup_timeout = min(
+                30.0,
+                max(1.0, self.creation_cancel_grace_seconds * 2),
+            )
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(self._late_cleanup_task),
+                    timeout=cleanup_timeout,
+                )
+            except (TimeoutError, asyncio.TimeoutError):
+                if self._creation_task is not None:
+                    self._creation_task.cancel()
+                self._late_cleanup_task.cancel()
+                await asyncio.gather(
+                    self._late_cleanup_task,
+                    return_exceptions=True,
+                )
+            self._late_cleanup_task = None
         if self._owned_download_client:
             await self._download_client.aclose()
         if self._owned_client:

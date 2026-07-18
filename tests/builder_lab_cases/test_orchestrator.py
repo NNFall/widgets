@@ -10,7 +10,7 @@ from builder_lab.models import (
     TokenUsage,
 )
 from builder_lab.orchestrator import BuilderOrchestrator, DIRECT_STAGES
-from builder_lab.store import RunStore
+from builder_lab.store import RunCapacityExceeded, RunStore
 from tests.builder_lab_cases.test_validation import artifact
 
 
@@ -203,6 +203,20 @@ class BuilderOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         await orchestrator.wait(second.run_id)
         self.assertNotEqual(first.run_id, second.run_id)
         self.assertEqual((await self.store.snapshot(second.run_id)).status, RunStatus.COMPLETED)
+
+    async def test_capacity_rejection_closes_unadmitted_engine(self):
+        store = RunStore(max_runs=1)
+        await store.create(BuilderRequest(engine=EngineName.DIRECT, brief="active"))
+        engine = ScriptedEngine()
+        orchestrator = BuilderOrchestrator(
+            store=store,
+            engine_factories={EngineName.DIRECT: lambda: engine},
+        )
+        with self.assertRaises(RunCapacityExceeded):
+            await orchestrator.start(
+                BuilderRequest(engine=EngineName.DIRECT, brief="rejected")
+            )
+        self.assertTrue(engine.closed)
 
 
 if __name__ == "__main__":
