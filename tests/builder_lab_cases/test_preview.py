@@ -27,6 +27,12 @@ class PreviewDocumentTests(unittest.TestCase):
         self.assertIn("event.source", document)
         self.assertNotIn("generated_javascript", document)
 
+    def test_fixed_runtime_synchronizes_css_checkbox_toggles(self):
+        document = build_preview_document(artifact(revision=10))
+        self.assertIn("input[type=\"checkbox\"]", document)
+        self.assertIn("toggle.checked = Boolean(open)", document)
+        self.assertIn("toggle.addEventListener('change'", document)
+
     def test_metadata_is_escaped(self):
         document = build_preview_document(
             artifact(art_direction='</script><script id="escape">bad()</script>')

@@ -60,18 +60,23 @@ def build_preview_document(artifact: WidgetArtifact) -> str:
   const panel = document.querySelector('[data-region="panel"]');
   const composer = document.querySelector('[data-region="composer"]');
   const input = composer && composer.querySelector('input, textarea');
+  const toggle = root && root.querySelector('.kaigo-toggle, [data-action="toggle"], input[type="checkbox"]');
 
   const setOpen = (open) => {{
     if (!root) return;
     root.classList.toggle('kaigo-preview-open', Boolean(open));
     root.dataset.state = open ? 'open' : 'closed';
+    if (toggle) toggle.checked = Boolean(open);
     if (launcher) launcher.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (panel) panel.setAttribute('aria-hidden', open ? 'false' : 'true');
   }};
 
-  if (launcher) launcher.addEventListener('click', () => {{
+  if (launcher) launcher.addEventListener('click', (event) => {{
+    if (toggle && event.target === toggle) return;
     setOpen(!root || root.dataset.state !== 'open');
   }});
+
+  if (toggle) toggle.addEventListener('change', () => setOpen(toggle.checked));
 
   document.addEventListener('click', (event) => {{
     const suggestion = event.target.closest('[data-suggestion], [data-region="suggestions"] button');
