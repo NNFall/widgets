@@ -8,6 +8,16 @@
 
 **Tech Stack:** Python 3.11+, aiohttp, google-genai, dataclasses, asyncio, standard-library HTML/tar/JSON tooling, unittest, Docker Compose, Gemini GenerateContent and Interactions APIs.
 
+## Execution status (2026-07-18)
+
+- Tasks 1–11 are implemented on `codex/gemini-technical-foundation` through
+  commit `0a56c24`.
+- Verification: 90 tests, `compileall`, isolated `pip check`, Compose config,
+  desktop/mobile Playwright review, and zero browser console warnings/errors.
+- Task 12 (GitHub push, live Gemini evidence, loopback server deployment, and
+  production regression smoke) remains in progress until remote evidence is
+  recorded below.
+
 ---
 
 ## Execution rules
