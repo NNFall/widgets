@@ -60,7 +60,7 @@ class BuilderRequest:
     locale: str = "ru"
     creativity: float = 0.9
     viewport_targets: tuple[str, ...] = ("desktop", "mobile")
-    max_repairs: int = 2
+    max_repairs: int = 3
 
     def __post_init__(self) -> None:
         brief = self.brief.strip()
@@ -73,8 +73,8 @@ class BuilderRequest:
             raise ValueError("locale is invalid")
         if not 0 <= self.creativity <= 2:
             raise ValueError("creativity must be between 0 and 2")
-        if not 0 <= self.max_repairs <= 2:
-            raise ValueError("max_repairs must be between 0 and 2")
+        if not 0 <= self.max_repairs <= 4:
+            raise ValueError("max_repairs must be between 0 and 4")
         if not self.viewport_targets or any(
             viewport not in {"desktop", "mobile"}
             for viewport in self.viewport_targets
@@ -91,7 +91,7 @@ class BuilderRequest:
             locale=str(payload.get("locale", "ru")),
             creativity=float(payload.get("creativity", 0.9)),
             viewport_targets=tuple(payload.get("viewport_targets", ("desktop", "mobile"))),
-            max_repairs=int(payload.get("max_repairs", 2)),
+            max_repairs=int(payload.get("max_repairs", 3)),
         )
 
     def to_dict(self) -> dict[str, Any]:

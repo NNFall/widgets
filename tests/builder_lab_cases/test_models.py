@@ -24,9 +24,15 @@ class BuilderModelsTests(unittest.TestCase):
         self.assertEqual(request.brief, "Создайте премиального AI-консультанта")
         self.assertEqual(request.locale, "ru")
         self.assertEqual(request.creativity, 0.9)
-        self.assertEqual(request.max_repairs, 2)
+        self.assertEqual(request.max_repairs, 3)
         self.assertEqual(request.viewport_targets, ("desktop", "mobile"))
         self.assertEqual(BuilderRequest.from_dict(request.to_dict()), request)
+
+    def test_request_allows_a_bounded_fourth_repair(self):
+        request = BuilderRequest.from_dict(
+            {"engine": "direct", "brief": "x", "max_repairs": 4}
+        )
+        self.assertEqual(request.max_repairs, 4)
 
     def test_request_rejects_invalid_inputs(self):
         invalid = [

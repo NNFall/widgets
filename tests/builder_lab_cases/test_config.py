@@ -30,7 +30,7 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertEqual(config.port, 8091)
         self.assertEqual(config.direct_model, "gemini-3.5-flash")
         self.assertEqual(config.temperature, 0.9)
-        self.assertEqual(config.max_repairs, 2)
+        self.assertEqual(config.max_repairs, 3)
         self.assertIsNone(config.gemini_api_key)
 
     def test_accepts_configured_values(self):

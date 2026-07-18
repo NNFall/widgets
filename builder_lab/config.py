@@ -102,7 +102,7 @@ class BuilderLabConfig:
             default_engine=default_engine,
             direct_model=os.getenv("GEMINI_BUILDER_MODEL", "gemini-3.5-flash").strip(),
             temperature=_float("GEMINI_BUILDER_TEMPERATURE", 0.9, 0, 2),
-            max_repairs=_int("GEMINI_BUILDER_MAX_REPAIRS", 2, 0, 2),
+            max_repairs=_int("GEMINI_BUILDER_MAX_REPAIRS", 3, 0, 4),
             enable_antigravity=_bool("KAIGO_BUILDER_ENABLE_ANTIGRAVITY", True),
             gemini_api_key=api_key,
             gemini_base_url=os.getenv(

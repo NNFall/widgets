@@ -21,7 +21,7 @@ def render_builder_page(
     *,
     default_engine: EngineName = EngineName.DIRECT,
     default_temperature: float = 0.9,
-    default_max_repairs: int = 2,
+    default_max_repairs: int = 3,
 ) -> str:
     if default_engine not in enabled_engines:
         default_engine = enabled_engines[0]
