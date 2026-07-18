@@ -10,13 +10,20 @@
 
 ## Execution status (2026-07-18)
 
-- Tasks 1–11 are implemented on `codex/gemini-technical-foundation` through
-  commit `0a56c24`.
-- Verification: 90 tests, `compileall`, isolated `pip check`, Compose config,
-  desktop/mobile Playwright review, and zero browser console warnings/errors.
-- Task 12 (GitHub push, live Gemini evidence, loopback server deployment, and
-  production regression smoke) remains in progress until remote evidence is
-  recorded below.
+- Tasks 1-11 and the direct-engine deployment path in Task 12 are implemented
+  on `codex/gemini-technical-foundation` through commit `96aecc5` and pushed to
+  GitHub.
+- Local verification: 91 tests, `compileall`, isolated `pip check`, Compose
+  config, desktop/mobile Playwright review, and zero browser console
+  warnings/errors.
+- Server verification: the exact branch commit is deployed as a standalone
+  `builder-lab` container on `127.0.0.1:8091`; nginx and the static site are
+  unchanged; the production app, database, and existing public widget remain
+  running.
+- Live Gemini verification completed through the protected US route with five
+  validated committed revisions and nonzero usage. The direct staged engine is
+  the verified live path; the Antigravity adapter is implemented and covered by
+  deterministic tests but was not promoted to a live deployment requirement.
 
 ---
 
@@ -305,5 +312,35 @@
 - [ ] If any live gate fails, stop only the lab service, preserve diagnostics, and leave production untouched. If all gates pass, keep the lab loopback-only and update the operations evidence in a final commit/push only when it contains no secret or transient identifier.
 
 ## Completion gate
+
+### Sanitized live evidence (2026-07-18)
+
+- Deployment checkout: clean `codex/gemini-technical-foundation` at
+  `96aecc53bbec0cdca041a0067667c66cc68ad9f3` before this evidence-only update.
+- Runtime isolation: `ai_project_builder_lab` is running on
+  `127.0.0.1:8091`; nginx contains no `8091` mapping. The existing app and
+  database containers remain running, the database health check is healthy,
+  the production root returns HTTP 200, and the existing `/w/demka` widget
+  returns HTTP 200. The static site was not modified.
+- Live engine: direct staged `gemini-3.5-flash` through the configured protected
+  Gemini route. The smoke run reached `run.completed` in 407.736 seconds with
+  five committed revisions, ending at `motion_polish`.
+- Live validation: every stage eventually passed the deterministic boundary.
+  Repair cycles were exercised in the real run: art direction 1, foundation 2,
+  identity 1, conversation 1, and motion/polish 1.
+- Live usage: 73,852 prompt tokens, 78,787 output tokens, 37,365 thinking
+  tokens, and 190,004 total tokens. This validates the orchestration but also
+  establishes a required production optimization target for latency and token
+  volume.
+- Browser evidence: the SSH-forwarded lab and final generated preview rendered
+  successfully with zero console warnings/errors. Desktop, mobile, launcher,
+  and opened-widget screenshots were captured outside committed source.
+- Final preview regression: six preview-focused tests pass inside the deployed
+  container, including case-insensitive style terminator escaping and generated
+  CSS toggle synchronization.
+- Antigravity status: the bounded adapter, artifact attestation, cancellation,
+  cleanup, and failure mapping are implemented and deterministically tested.
+  No live Antigravity job was started in this deployment; only the direct Gemini
+  engine is claimed as live-verified.
 
 The branch is complete only when the automated suite, compile check, isolated `pip check`, Compose validation, browser sandbox inspection, real direct Gemini run, server loopback check, and existing production regression checks all have fresh passing evidence. Antigravity availability is reported independently and never blocks the working direct Gemini path unless the user explicitly promotes it to a required engine.
