@@ -1,13 +1,17 @@
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from aiohttp.test_utils import TestClient, TestServer
 
 from builder_lab.models import BuilderRequest, EngineName, RunStatus, Stage
+from builder_lab.demo import save_demo
 from builder_lab.store import RunStore
 from builder_lab.ui import render_builder_page
 from builder_lab.web import create_builder_lab_app
 from tests.builder_lab_cases.test_validation import artifact
+from tests.builder_lab_cases.test_demo import completed_snapshot
 
 
 class FakeOrchestrator:
@@ -178,6 +182,49 @@ class BuilderLabWebTests(unittest.IsolatedAsyncioTestCase):
         payload_line = next(line for line in body.splitlines() if line.startswith("data: "))
         payload = json.loads(payload_line[6:])
         self.assertEqual(payload["type"], "run.failed")
+
+    async def test_demo_page_and_preview_render_saved_valid_artifact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            demo_path = Path(directory) / "latest.json"
+            save_demo(demo_path, completed_snapshot(), model="gemini-3.5-flash")
+            app = create_builder_lab_app(
+                store=RunStore(),
+                orchestrator=FakeOrchestrator(RunStore()),
+                enabled_engines=(EngineName.DIRECT,),
+                demo_path=demo_path,
+            )
+            client = TestClient(TestServer(app))
+            await client.start_server()
+            try:
+                page = await client.get("/demo")
+                body = await page.text()
+                self.assertEqual(page.status, 200)
+                self.assertIn("Премиальный AI-куратор", body)
+                self.assertIn("gemini-3.5-flash", body)
+                self.assertIn('src="preview"', body)
+                preview = await client.get("/demo/preview")
+                self.assertEqual(preview.status, 200)
+                self.assertIn("kaigo-builder-preview", await preview.text())
+            finally:
+                await client.close()
+
+    async def test_demo_routes_fail_closed_when_file_is_unavailable(self):
+        app = create_builder_lab_app(
+            store=RunStore(),
+            orchestrator=FakeOrchestrator(RunStore()),
+            enabled_engines=(EngineName.DIRECT,),
+            demo_path=Path("missing-builder-demo.json"),
+        )
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            page = await client.get("/demo")
+            self.assertEqual(page.status, 503)
+            self.assertIn("Демонстрация пока готовится", await page.text())
+            preview = await client.get("/demo/preview")
+            self.assertEqual(preview.status, 503)
+        finally:
+            await client.close()
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -10,6 +11,8 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import httpx
+
+from builder_lab.demo import DemoUnavailable, save_demo
 
 
 DEFAULT_BRIEF = (
@@ -24,6 +27,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--engine", choices=("direct", "antigravity"), default="direct")
     parser.add_argument("--brief", default=DEFAULT_BRIEF)
     parser.add_argument("--timeout", type=float, default=900)
+    parser.add_argument("--demo-output", type=Path)
+    parser.add_argument(
+        "--model", default=os.getenv("GEMINI_BUILDER_MODEL", "gemini-3.5-flash")
+    )
     return parser.parse_args()
 
 
@@ -92,6 +99,8 @@ async def run_smoke(args: argparse.Namespace) -> int:
             preview.raise_for_status()
             if "kaigo-builder-preview" not in preview.text:
                 raise RuntimeError("preview acknowledgement runtime is missing")
+            if args.demo_output:
+                save_demo(args.demo_output, snapshot, model=args.model)
             print(
                 json.dumps(
                     {
@@ -117,7 +126,7 @@ def main() -> int:
     except TimeoutError:
         print("builder-lab smoke timed out", file=sys.stderr)
         return 2
-    except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+    except (httpx.HTTPError, RuntimeError, ValueError, DemoUnavailable) as exc:
         print(str(exc), file=sys.stderr)
         return 1
 

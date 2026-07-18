@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 from aiohttp import web
 
 from .engines.base import BuilderEngineError
+from .demo import DemoUnavailable, load_demo, render_demo_page, render_demo_unavailable
 from .models import BuilderRequest, EngineName, RunStatus
 from .orchestrator import BuilderOrchestrator
 from .preview import PREVIEW_CSP, build_preview_document
@@ -24,6 +26,7 @@ STORE_KEY = web.AppKey("builder_store", RunStore)
 ORCHESTRATOR_KEY = web.AppKey("builder_orchestrator", BuilderOrchestrator)
 ENGINES_KEY = web.AppKey("builder_enabled_engines", tuple)
 UI_DEFAULTS_KEY = web.AppKey("builder_ui_defaults", tuple)
+DEMO_PATH_KEY = web.AppKey("builder_demo_path", object)
 
 
 def _error(code: str, message: str, *, status: int) -> web.Response:
@@ -57,6 +60,42 @@ async def page(request: web.Request) -> web.Response:
             default_temperature=default_temperature,
             default_max_repairs=default_max_repairs,
         ),
+        content_type="text/html",
+        charset="utf-8",
+    )
+
+
+def _configured_demo(request: web.Request):
+    path = request.app[DEMO_PATH_KEY]
+    if path is None:
+        raise DemoUnavailable("demo path is not configured")
+    return load_demo(path)
+
+
+async def demo_page(request: web.Request) -> web.Response:
+    try:
+        demo = _configured_demo(request)
+    except DemoUnavailable:
+        return web.Response(
+            text=render_demo_unavailable(),
+            status=503,
+            content_type="text/html",
+            charset="utf-8",
+        )
+    return web.Response(
+        text=render_demo_page(demo), content_type="text/html", charset="utf-8"
+    )
+
+
+async def demo_preview(request: web.Request) -> web.Response:
+    try:
+        demo = _configured_demo(request)
+    except DemoUnavailable:
+        return _error(
+            "preview_not_ready", "Демонстрационный виджет пока не готов", status=503
+        )
+    return web.Response(
+        text=build_preview_document(demo.artifact),
         content_type="text/html",
         charset="utf-8",
     )
@@ -212,6 +251,7 @@ def create_builder_lab_app(
     default_engine: EngineName = EngineName.DIRECT,
     default_temperature: float = 0.9,
     default_max_repairs: int = 2,
+    demo_path: Path | None = None,
 ) -> web.Application:
     engines = tuple(enabled_engines)
     if not engines:
@@ -225,7 +265,10 @@ def create_builder_lab_app(
         default_temperature,
         default_max_repairs,
     )
+    app[DEMO_PATH_KEY] = demo_path
     app.router.add_get("/", page)
+    app.router.add_get("/demo", demo_page)
+    app.router.add_get("/demo/preview", demo_preview)
     app.router.add_post("/api/runs", create_run)
     app.router.add_get("/api/runs/{run_id}", get_run)
     app.router.add_get("/api/runs/{run_id}/events", event_stream)

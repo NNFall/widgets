@@ -3,6 +3,7 @@ import inspect
 import os
 import sys
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from builder_lab.config import BuilderLabConfig
@@ -47,6 +48,13 @@ class BuilderLabRunnerTests(unittest.TestCase):
         source = inspect.getsource(run_builder_lab)
         self.assertNotIn("app.server", source)
         self.assertNotIn("app.server", sys.modules)
+
+    def test_demo_path_is_configurable_and_passed_to_web_app(self):
+        config = self.config(KAIGO_BUILDER_DEMO_PATH="data/builder-demo/latest.json")
+        self.assertEqual(config.demo_path, "data/builder-demo/latest.json")
+        app = run_builder_lab.build_app(config)
+        self.assertEqual(app[run_builder_lab.DEMO_PATH_KEY], Path(config.demo_path))
+        asyncio.run(app.cleanup())
 
 
 if __name__ == "__main__":

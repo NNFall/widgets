@@ -71,6 +71,7 @@ class BuilderLabConfig:
     antigravity_agent: str
     antigravity_timeout_seconds: int
     antigravity_max_snapshot_bytes: int
+    demo_path: str | None
     run_ttl_seconds: int
     max_runs: int
 
@@ -120,6 +121,7 @@ class BuilderLabConfig:
                 1024,
                 100 * 1024 * 1024,
             ),
+            demo_path=_first_nonblank("KAIGO_BUILDER_DEMO_PATH"),
             run_ttl_seconds=_int("KAIGO_BUILDER_RUN_TTL_SECONDS", 3600, 60, 86400),
             max_runs=_int("KAIGO_BUILDER_MAX_RUNS", 100, 1, 1000),
         )

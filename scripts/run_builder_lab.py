@@ -16,7 +16,7 @@ from builder_lab.engines.gemini_direct import GeminiDirectEngine
 from builder_lab.models import EngineName
 from builder_lab.orchestrator import BuilderOrchestrator
 from builder_lab.store import RunStore
-from builder_lab.web import create_builder_lab_app
+from builder_lab.web import DEMO_PATH_KEY, create_builder_lab_app
 
 
 def make_engine_factories(config: BuilderLabConfig):
@@ -59,6 +59,7 @@ def build_app(config: BuilderLabConfig) -> web.Application:
         default_engine=config.default_engine,
         default_temperature=config.temperature,
         default_max_repairs=config.max_repairs,
+        demo_path=Path(config.demo_path) if config.demo_path else None,
     )
 
 
