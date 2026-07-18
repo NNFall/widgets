@@ -86,6 +86,9 @@ class BuilderDemoTests(unittest.TestCase):
 
         self.assertIn("display:flex; align-items:stretch; justify-content:center", page)
         self.assertIn("align-self:stretch", page)
+        self.assertIn("height:calc(100dvh - 36px)", page)
+        self.assertIn("position:sticky; top:18px", page)
+        self.assertIn("position:static; height:760px", page)
         self.assertNotIn("place-items:center", page)
 
 

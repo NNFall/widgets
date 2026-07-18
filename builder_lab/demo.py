@@ -152,7 +152,7 @@ def render_demo_page(demo: BuilderDemo) -> str:
     main {{ width:min(1500px,100%); min-height:100dvh; margin:auto; padding:18px; display:grid; grid-template-columns:minmax(300px,.62fr) minmax(520px,1.38fr); gap:18px; }}
     aside,.stage {{ border:1px solid var(--line); background:rgba(33,31,26,.94); box-shadow:0 24px 70px rgba(0,0,0,.22); }}
     aside {{ padding:27px; border-radius:25px; overflow:auto; }}
-    .stage {{ min-height:760px; padding:14px; border-radius:31px; display:grid; grid-template-rows:auto 1fr; gap:12px; }}
+    .stage {{ position:sticky; top:18px; align-self:start; height:calc(100dvh - 36px); min-height:760px; padding:14px; border-radius:31px; display:grid; grid-template-rows:auto 1fr; gap:12px; }}
     .eyebrow {{ margin:0 0 11px; color:var(--accent); font:700 10px/1.2 ui-monospace,monospace; letter-spacing:.14em; text-transform:uppercase; }}
     h1 {{ margin:0; max-width:11ch; font-size:clamp(32px,4vw,58px); line-height:.96; letter-spacing:-.052em; }}
     .lead {{ margin:16px 0 25px; color:var(--muted); line-height:1.55; }}
@@ -171,7 +171,7 @@ def render_demo_page(demo: BuilderDemo) -> str:
     .viewport {{ width:100%; min-height:680px; align-self:stretch; display:flex; transition:width .35s ease,border-radius .35s ease; }}
     .viewport.mobile {{ flex:0 1 min(390px,calc(100% - 28px)); width:min(390px,calc(100% - 28px)); min-height:620px; margin:14px 0; overflow:hidden; border:8px solid #28251f; border-radius:32px; }}
     iframe {{ display:block; flex:1 1 auto; width:100%; min-height:0; border:0; }}
-    @media (max-width:900px) {{ main {{ grid-template-columns:1fr; padding:10px; }} .stage {{ min-height:720px; }} }}
+    @media (max-width:900px) {{ main {{ grid-template-columns:1fr; padding:10px; }} .stage {{ position:static; height:760px; min-height:760px; }} }}
     @media (max-width:520px) {{ aside {{ padding:20px; }} dl {{ grid-template-columns:1fr; }} .stage {{ padding:9px; border-radius:22px; }} .stage-head {{ align-items:flex-start; flex-direction:column; }} }}
     @media (prefers-reduced-motion:reduce) {{ * {{ transition:none!important; }} }}
   </style>
