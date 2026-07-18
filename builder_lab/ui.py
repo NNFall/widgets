@@ -193,6 +193,7 @@ def render_builder_page(
     let terminal = false;
     let snapshotTimer = null;
 
+    const labUrl = path => new URL(path, document.baseURI).toString();
     const showError = (message) => {{ elements.error.textContent = message || ''; elements.error.classList.toggle('visible', Boolean(message)); }};
     const setRunning = (running) => {{ elements.generate.disabled = running; elements.cancel.disabled = !running; elements.pulse.classList.toggle('running', running); }};
     const formatNumber = value => new Intl.NumberFormat('ru-RU').format(value || 0);
@@ -235,7 +236,7 @@ def render_builder_page(
       elements.timeline.scrollTop = elements.timeline.scrollHeight;
       elements.status.textContent = `${{event.stage || 'run'}} · ${{event.status || ''}}`;
       if (event.type === 'artifact.committed' && event.revision) {{
-        elements.preview.src = `/api/runs/${{currentRun}}/preview?revision=${{event.revision}}`;
+        elements.preview.src = labUrl(`api/runs/${{currentRun}}/preview?revision=${{event.revision}}`);
         elements['preview-empty'].classList.add('hidden');
       }}
       if (event.type === 'artifact.validated') {{
@@ -255,7 +256,7 @@ def render_builder_page(
     async function refreshSnapshot() {{
       if (!currentRun) return;
       try {{
-        const snapshot = await requestJSON(`/api/runs/${{currentRun}}`);
+        const snapshot = await requestJSON(labUrl(`api/runs/${{currentRun}}`));
         const usage = snapshot.usage || {{}};
         elements.revision.textContent = snapshot.artifact?.revision ?? '—';
         elements['art-direction'].textContent = snapshot.artifact?.art_direction || 'Пока нет валидной арт-дирекции';
@@ -272,7 +273,7 @@ def render_builder_page(
 
     function connectEvents(runId) {{
       if (stream) stream.close();
-      stream = new EventSource(`/api/runs/${{runId}}/events`);
+      stream = new EventSource(labUrl(`api/runs/${{runId}}/events`));
       stream.onmessage = message => {{
         try {{ appendEvent(JSON.parse(message.data)); }} catch (_) {{ showError('Получено повреждённое событие'); }}
       }};
@@ -288,7 +289,7 @@ def render_builder_page(
       elements.status.textContent = 'Создаём запуск';
       resetTimeline();
       try {{
-        const run = await requestJSON('/api/runs', {{ method:'POST', body:JSON.stringify({{ engine:elements.engine.value, brief, creativity:Number(elements.creativity.value), max_repairs:defaultMaxRepairs, locale:'ru' }}) }});
+        const run = await requestJSON(labUrl('api/runs'), {{ method:'POST', body:JSON.stringify({{ engine:elements.engine.value, brief, creativity:Number(elements.creativity.value), max_repairs:defaultMaxRepairs, locale:'ru' }}) }});
         currentRun = run.run_id;
         terminal = false;
         connectEvents(currentRun);
@@ -297,8 +298,8 @@ def render_builder_page(
     }}
 
     elements.generate.addEventListener('click', generate);
-    elements.cancel.addEventListener('click', async () => {{ if (!currentRun) return; try {{ await requestJSON(`/api/runs/${{currentRun}}/cancel`, {{ method:'POST', body:'{{}}' }}); }} catch (error) {{ showError(error.message); }} }});
-    elements.retry.addEventListener('click', async () => {{ if (!currentRun) return; showError(''); setRunning(true); resetTimeline(); try {{ const run = await requestJSON(`/api/runs/${{currentRun}}/retry`, {{ method:'POST', body:'{{}}' }}); currentRun=run.run_id; terminal=false; connectEvents(currentRun); }} catch (error) {{ setRunning(false); showError(error.message); }} }});
+    elements.cancel.addEventListener('click', async () => {{ if (!currentRun) return; try {{ await requestJSON(labUrl(`api/runs/${{currentRun}}/cancel`), {{ method:'POST', body:'{{}}' }}); }} catch (error) {{ showError(error.message); }} }});
+    elements.retry.addEventListener('click', async () => {{ if (!currentRun) return; showError(''); setRunning(true); resetTimeline(); try {{ const run = await requestJSON(labUrl(`api/runs/${{currentRun}}/retry`), {{ method:'POST', body:'{{}}' }}); currentRun=run.run_id; terminal=false; connectEvents(currentRun); }} catch (error) {{ setRunning(false); showError(error.message); }} }});
     elements.engine.addEventListener('change', () => {{ elements['creativity-field'].style.opacity = elements.engine.value === 'direct' ? '1' : '.42'; elements.creativity.disabled = elements.engine.value !== 'direct'; }});
     document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {{ document.querySelectorAll('[data-view]').forEach(item => item.classList.toggle('active', item === button)); elements.viewport.classList.toggle('mobile', button.dataset.view === 'mobile'); }}));
     window.addEventListener('message', event => {{
