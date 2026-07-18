@@ -108,7 +108,7 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("полный", prompt.lower())
 
     async def test_repair_prompt_contains_only_concrete_issues_and_candidate(self):
-        client = FakeClient(response=fake_response(artifact(revision=4, stage=Stage.VALIDATION)))
+        client = FakeClient(response=fake_response(artifact(revision=4, stage=Stage.IDENTITY)))
         engine = GeminiDirectEngine(api_key="secret", client=client)
         issues = (
             ValidationIssue("unscoped_css", "css", "Every selector must be scoped"),
@@ -116,7 +116,7 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         )
         await engine.generate(
             request=self.request,
-            stage=Stage.VALIDATION,
+            stage=Stage.IDENTITY,
             revision=4,
             previous_artifact=artifact(revision=3),
             repair_issues=issues,
@@ -125,6 +125,8 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("unscoped_css", prompt)
         self.assertIn("missing_region", prompt)
         self.assertIn('"revision":3', prompt)
+        self.assertIn("Режим: repair", prompt)
+        self.assertIn("stage строго identity", prompt)
 
     async def test_provider_errors_are_sanitized(self):
         cases = (

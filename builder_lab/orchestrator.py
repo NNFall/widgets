@@ -309,7 +309,7 @@ class BuilderOrchestrator:
             )
             result = await engine.generate(
                 request=request,
-                stage=Stage.VALIDATION,
+                stage=candidate.stage,
                 revision=candidate.revision,
                 previous_artifact=candidate,
                 repair_issues=issues,

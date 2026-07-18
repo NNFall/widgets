@@ -91,7 +91,7 @@ class BuilderOrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_stage_is_repaired_and_only_valid_candidate_commits(self):
         def handler(kwargs, _):
-            if kwargs["stage"] is Stage.FOUNDATION:
+            if kwargs["stage"] is Stage.FOUNDATION and not kwargs.get("repair_issues"):
                 return EngineResult(
                     artifact=artifact(
                         revision=kwargs["revision"],
@@ -105,10 +105,15 @@ class BuilderOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         _, snapshot = await self.run_direct(engine)
         self.assertEqual(snapshot.status, RunStatus.COMPLETED)
         stages = [call["stage"] for call in engine.calls]
-        self.assertEqual(stages[:3], [Stage.ART_DIRECTION, Stage.FOUNDATION, Stage.VALIDATION])
+        self.assertEqual(stages[:3], [Stage.ART_DIRECTION, Stage.FOUNDATION, Stage.FOUNDATION])
         repair = engine.calls[2]
         self.assertTrue(repair["repair_issues"])
         self.assertEqual(repair["revision"], 2)
+        self.assertEqual(repair["stage"], Stage.FOUNDATION)
+        self.assertEqual(
+            (await self.store.artifact(snapshot.run_id, 2)).stage,
+            Stage.FOUNDATION,
+        )
         events = await self.store.events_after(snapshot.run_id, 0)
         self.assertIn("repair.started", [event.event_type for event in events])
         self.assertIn("repair.completed", [event.event_type for event in events])
@@ -133,7 +138,7 @@ class BuilderOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([call["stage"] for call in engine.calls], [
             Stage.ART_DIRECTION,
             Stage.FOUNDATION,
-            Stage.VALIDATION,
+            Stage.FOUNDATION,
         ])
 
     async def test_provider_error_becomes_stable_failed_run(self):

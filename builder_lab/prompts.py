@@ -82,6 +82,12 @@ def build_stage_prompt(
         else "null"
     )
     issue_payload = [issue.to_dict() for issue in repair_issues]
+    mode = "repair" if repair_issues else "generation"
+    guidance = (
+        STAGE_GUIDANCE[Stage.VALIDATION]
+        if repair_issues
+        else STAGE_GUIDANCE[stage]
+    )
     return f"""Ты — ведущий digital art director и frontend-дизайнер Kaigo.
 
 Создай премиальный, индивидуальный AI-виджет на русском языке. Он должен выглядеть
@@ -101,7 +107,8 @@ def build_stage_prompt(
 - текущая revision строго {revision}, stage строго {stage.value}.
 
 Этап: {stage.value}
-Задача этапа: {STAGE_GUIDANCE[stage]}
+Режим: {mode}
+Задача этапа: {guidance}
 Локаль: {request.locale}
 Viewport: {', '.join(request.viewport_targets)}
 Бриф пользователя:
