@@ -104,6 +104,11 @@ def build_stage_prompt(
 - обязательны data-region: root, launcher, panel, header, messages, suggestions, composer;
 - launcher и composer имеют понятный aria-label;
 - используются только системные шрифты и inline CSS-графика;
+- бесконечные анимации запрещены на любом этапе: не используй `infinite`;
+- `animation-iteration-count` допускает не более 12 повторов, длительность одной
+  анимации — не более 20 секунд;
+- любая анимация обязательно имеет `@media (prefers-reduced-motion: reduce)` с
+  отключением animation и transition;
 - текущая revision строго {revision}, stage строго {stage.value}.
 
 Этап: {stage.value}

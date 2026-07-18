@@ -106,6 +106,10 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("фиолет", prompt.lower())
         self.assertIn("javascript", prompt.lower())
         self.assertIn("полный", prompt.lower())
+        self.assertIn("бесконечные анимации запрещены", prompt.lower())
+        self.assertIn("animation-iteration-count", prompt)
+        self.assertIn("prefers-reduced-motion", prompt)
+        self.assertIn("не более 12 повторов", prompt.lower())
 
     async def test_repair_prompt_contains_only_concrete_issues_and_candidate(self):
         client = FakeClient(response=fake_response(artifact(revision=4, stage=Stage.IDENTITY)))
