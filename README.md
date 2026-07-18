@@ -232,9 +232,9 @@ cp data/dialogs.sqlite3 dialogs.sqlite3.backup
 
 ## Gemini Builder Lab
 
-В репозитории есть отдельная loopback-only лаборатория для поэтапной генерации
-виджетов через `gemini-3.5-flash` и сравнения с Antigravity Managed Agent. Она не
-подключена к production routes, nginx, базе виджетов или статическому сайту.
+В репозитории есть отдельная лаборатория для поэтапной генерации виджетов через
+`gemini-3.5-flash` и сравнения с Antigravity Managed Agent. Она не подключена к
+production-базе виджетов и не умеет публиковать embed-код.
 
 Локальный запуск:
 
@@ -249,5 +249,13 @@ Docker-сервис включается только явно через profil
 docker compose --profile builder-lab up -d --build builder-lab
 ```
 
-Инструкции по SSH-forward, Gemini-only маршруту, журналу стадий и безопасной
-остановке: [docs/KAIGO_BUILDER_LAB_OPERATIONS.md](docs/KAIGO_BUILDER_LAB_OPERATIONS.md).
+На рабочем сервере порт остаётся loopback-only. Nginx открывает два безопасных
+маршрута:
+
+- `https://kaigo.space/builder-demo/` — публичный сохранённый результат без
+  возможности вызвать модель;
+- `https://kaigo.space/builder/` — полный Builder, защищённый browser-паролем.
+
+Русские инструкции по Gemini-only маршруту, сохранению демо, журналу стадий,
+nginx и откату:
+[docs/KAIGO_BUILDER_LAB_OPERATIONS.md](docs/KAIGO_BUILDER_LAB_OPERATIONS.md).

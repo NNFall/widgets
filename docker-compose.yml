@@ -42,9 +42,12 @@ services:
       KAIGO_BUILDER_LAB_HOST: 0.0.0.0
       KAIGO_BUILDER_LAB_PORT: 8091
       KAIGO_BUILDER_LAB_ALLOW_REMOTE: "true"
+      KAIGO_BUILDER_DEMO_PATH: /app/data/builder-demo/latest.json
     command: ["python", "scripts/run_builder_lab.py"]
     ports:
       - "127.0.0.1:8091:8091"
+    volumes:
+      - ./data/builder-demo:/app/data/builder-demo
     dns:
       - 1.1.1.1
       - 8.8.8.8

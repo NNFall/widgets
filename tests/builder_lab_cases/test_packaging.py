@@ -16,6 +16,10 @@ class BuilderLabPackagingTests(unittest.TestCase):
         self.assertIn("GOOGLE_AI_API_KEY:", builder)
         self.assertIn("GOOGLE_AI_NATIVE_BASE_URL:", builder)
         self.assertIn("KAIGO_BUILDER_DEFAULT_ENGINE:", builder)
+        self.assertIn(
+            "KAIGO_BUILDER_DEMO_PATH: /app/data/builder-demo/latest.json", builder
+        )
+        self.assertIn("./data/builder-demo:/app/data/builder-demo", builder)
         self.assertNotIn("MESSAGE_DATABASE_URL", builder)
         self.assertNotIn("POSTGRES_", builder)
 

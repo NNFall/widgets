@@ -72,6 +72,10 @@
 - [ ] Сгенерировать криптографически случайный пароль, сохранить crypt-хеш в htpasswd-файле с правами `640` и не записывать пароль в Git или shell history.
 - [ ] Создать timestamped backup nginx-конфига. Добавить exact redirect `/builder-demo`, read-only demo locations и защищённый prefix `/builder/`; проверить `nginx -t` до reload.
 - [ ] Запустить реальный direct Gemini smoke с утверждённым архитектурным brief и `--demo-output /app/data/builder-demo/latest.json`.
+- [ ] Отдельно запустить один bounded Antigravity smoke с тем же brief и
+  существующим серверным API-ключом. Не сохранять его вместо рабочего direct
+  demo; зафиксировать успешный attested artifact либо точную безопасную ошибку
+  доступности агента.
 - [ ] Проверить публичный demo без авторизации, `401` для полного Builder без авторизации и `200` с авторизацией.
 - [ ] Через Playwright проверить открытие/закрытие launcher, desktop/mobile, prompt и метаданные демо, запуск Builder UI, SSE-ready состояние и нулевую browser console.
 - [ ] Повторно проверить `https://kaigo.space/`, `/w/demka`, `https://kaigo.online/`, состояние app/db, loopback `8091` и отсутствие новых ошибок.

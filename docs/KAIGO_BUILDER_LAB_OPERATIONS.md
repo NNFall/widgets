@@ -1,20 +1,36 @@
-# Kaigo Gemini Builder Lab: эксплуатация
+# Эксплуатация Kaigo Gemini Builder Lab
 
-Builder Lab — изолированный эксперимент для сравнения двух способов создания
-виджета:
+## Назначение
 
-- `Gemini staged`: пять последовательных вызовов `gemini-3.5-flash` с JSON-схемой;
-- `Antigravity agent`: автономная сборка в Google remote environment с последующим
-  скачиванием и независимой проверкой tar snapshot.
+Builder Lab — отдельная экспериментальная среда, которая по текстовому заданию
+собирает виджет через Gemini, показывает реальные промежуточные ревизии и
+пропускает каждую из них через детерминированную проверку Kaigo.
 
-Lab не зарегистрирован в production aiohttp-приложении, не подключён к nginx, не
-имеет publish-маршрута и не читает/не изменяет таблицы `widgets` и
-`widget_assets`. Все запуски и валидные ревизии хранятся только в памяти и
-исчезают после перезапуска.
+Доступны два режима:
 
-## Переменные окружения
+- `Gemini staged` — последовательная сборка: арт-дирекция, каркас,
+  идентичность, диалог, движение и полировка;
+- `Antigravity agent` — автономная сборка в удалённой среде Google с загрузкой
+  и независимой проверкой итогового архива.
 
-Для модели нужен один из ключей в порядке приоритета:
+Lab не импортирует production-сервер, не подключается к PostgreSQL, не изменяет
+таблицы виджетов и не умеет публиковать embed-код. Запуски хранятся в памяти.
+Отдельно может сохраняться один финальный проверенный демо-артефакт.
+
+## Публичный доступ
+
+- `https://kaigo.space/builder-demo/` — открытый сохранённый пример. Модель с
+  этой страницы запустить нельзя.
+- `https://kaigo.space/builder/` — полный Builder Lab. Доступ закрыт логином и
+  паролем nginx, чтобы посторонние не расходовали Gemini-баланс.
+
+Порт процесса не открыт наружу: Docker публикует его только как
+`127.0.0.1:8091`. Nginx проксирует строго перечисленные маршруты. Статический
+`kaigo.online` и корневые production-маршруты не меняются.
+
+## Настройки
+
+Для Gemini нужен один из ключей, в порядке приоритета:
 
 ```text
 GEMINI_API_KEY
@@ -22,113 +38,154 @@ GOOGLE_AI_API_KEY
 GOOGLE_API_KEY
 ```
 
-Ключ нельзя передавать в URL, коммитить или копировать в логи. Основные настройки:
+Основные параметры:
 
 ```env
-KAIGO_BUILDER_LAB_HOST=127.0.0.1
-KAIGO_BUILDER_LAB_PORT=8091
-KAIGO_BUILDER_ENABLE_ANTIGRAVITY=true
+GOOGLE_AI_NATIVE_BASE_URL=https://generativelanguage.googleapis.com/v1beta
 GEMINI_BUILDER_MODEL=gemini-3.5-flash
 GEMINI_BUILDER_TEMPERATURE=0.9
 GEMINI_BUILDER_MAX_REPAIRS=2
-GEMINI_ANTIGRAVITY_AGENT=antigravity-preview-05-2026
-GEMINI_ANTIGRAVITY_TIMEOUT_SECONDS=900
-GEMINI_ANTIGRAVITY_MAX_SNAPSHOT_BYTES=10485760
+KAIGO_BUILDER_DEFAULT_ENGINE=direct
+KAIGO_BUILDER_ENABLE_ANTIGRAVITY=true
+KAIGO_BUILDER_RUN_TTL_SECONDS=3600
+KAIGO_BUILDER_MAX_RUNS=100
+KAIGO_BUILDER_DEMO_PATH=/app/data/builder-demo/latest.json
 ```
 
-`GOOGLE_AI_NATIVE_BASE_URL` может указывать на официальный Google endpoint или
-на существующий защищённый Gemini-only маршрут через американский сервер. SDK
-нормализует финальный `/v1beta`, поэтому оба варианта допустимы:
-
-```text
-https://generativelanguage.googleapis.com
-https://generativelanguage.googleapis.com/v1beta
-http://host-gateway:PORT/PROTECTED_PREFIX/v1beta
-```
-
-Не используйте Builder Lab как универсальный прокси. Его клиенты обращаются
-только к Gemini GenerateContent, Interactions и Files API.
+Ключи нельзя передавать в URL, записывать в Git или выводить в логи. На рабочем
+сервере `GOOGLE_AI_NATIVE_BASE_URL` может указывать на защищённый Gemini-only
+маршрут через американский сервер.
 
 ## Локальный запуск
 
-Из корня репозитория:
-
 ```powershell
-$env:GEMINI_API_KEY = "значение-из-секретного-хранилища"
+$env:GEMINI_API_KEY = "значение-из-хранилища-секретов"
 python scripts/run_builder_lab.py
 ```
 
-Откройте `http://127.0.0.1:8091`. Не задавайте `0.0.0.0` на рабочей машине.
+Открыть `http://127.0.0.1:8091`.
+
 Проверка без браузера:
 
 ```powershell
 python scripts/smoke_builder_lab.py --engine direct
 ```
 
-Smoke выводит только sequence, stage, status, usage и elapsed time. В нём нет
-ключа, полного prompt, provider URL или содержимого виджета.
+Сохранение постоянного демо после успешного реального прогона:
 
-## Запуск в Docker на сервере
+```powershell
+python scripts/smoke_builder_lab.py `
+  --engine direct `
+  --demo-output data/builder-demo/latest.json `
+  --model gemini-3.5-flash
+```
 
-Сервис находится в отдельном Compose profile и не стартует при обычном
-`docker compose up -d`:
+Файл содержит только исходный запрос, модель, длительность, расход токенов и
+финальный артефакт. Ключи, provider diagnostics и полная история ответов туда не
+попадают. Перед каждым показом файл и артефакт проверяются заново.
+
+## Docker на сервере
 
 ```bash
+mkdir -p data/builder-demo
 docker compose --profile builder-lab build builder-lab
-docker compose --profile builder-lab up -d builder-lab
+docker compose --profile builder-lab up -d --no-deps builder-lab
 docker compose --profile builder-lab logs -f --tail=200 builder-lab
 ```
 
-Внутри контейнера процесс слушает `0.0.0.0:8091`, но Docker публикует его
-исключительно на host loopback `127.0.0.1:8091`. У сервиса нет nginx labels,
-public domain route и зависимости от PostgreSQL.
-
-Обязательная проверка после запуска:
+Проверка изоляции:
 
 ```bash
 docker compose --profile builder-lab ps
 ss -lntp | grep 8091
 curl -I http://127.0.0.1:8091/
+curl -I http://127.0.0.1:8091/demo
 ```
 
-В `ss` должен присутствовать только `127.0.0.1:8091`, а не `0.0.0.0:8091` на
-хосте.
+В `ss` должен быть только `127.0.0.1:8091`, а не внешний `0.0.0.0:8091`.
 
-## Доступ через SSH
+## Маршруты nginx
 
-Создайте локальный port forward в отдельном терминале:
+Полный Builder требует Basic Auth и удаляет `/builder/` перед передачей во
+внутренний сервис:
+
+```nginx
+location = /builder {
+    return 301 /builder/;
+}
+
+location ^~ /builder/ {
+    auth_basic "Kaigo Builder";
+    auth_basic_user_file /etc/nginx/.htpasswd-kaigo-builder;
+    proxy_pass http://127.0.0.1:8091/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;
+    proxy_read_timeout 900s;
+}
+```
+
+Открытое демо проксируется только на read-only обработчики:
+
+```nginx
+location = /builder-demo {
+    return 301 /builder-demo/;
+}
+
+location = /builder-demo/ {
+    proxy_pass http://127.0.0.1:8091/demo;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location = /builder-demo/preview {
+    proxy_pass http://127.0.0.1:8091/demo/preview;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+Перед изменением нужно сделать timestamped backup, затем выполнить:
 
 ```bash
-ssh -L 8091:127.0.0.1:8091 root@SERVER_IP
+nginx -t
+systemctl reload nginx
 ```
 
-После подключения откройте локально `http://127.0.0.1:8091`. Не добавляйте для
-этого эксперимента location в nginx и не переключайте домен.
+## Как читать журнал стадий
 
-## Как читать журнал
-
-Preview обновляется только после пары событий:
+Preview обновляется только после последовательности:
 
 ```text
 artifact.validated  status=completed
 artifact.committed  status=completed
 ```
 
-`stage.completed` означает лишь, что модель закончила ответ. Если после него
-валидатор нашёл проблему, текущий preview сохраняется, а в журнале появляются
-`repair.started` и `repair.completed`. Повторяющийся fingerprint ошибки или две
-неудачные repair-попытки завершают run с `invalid_artifact`.
+Окончание ответа модели само по себе не означает, что артефакт принят. Если
+валидатор нашёл проблему, предыдущий preview сохраняется, а Gemini получает
+структурированный список ошибок. Максимум выполняются две repair-попытки.
 
-В direct-режиме нормальный результат содержит пять committed revisions:
+Нормальный direct-прогон содержит пять зафиксированных ревизий:
 
 ```text
 art_direction -> foundation -> identity -> conversation -> motion_polish
 ```
 
-Antigravity считается успешным только после скачивания
-`environment-<environment_id>`, безопасного чтения
-`out/widget-artifact.json`/`out/build-report.json` и независимой Kaigo-валидации.
-Финальный текст агента не является артефактом.
+## Проверка после публикации
+
+```bash
+curl -fsS https://kaigo.space/builder-demo/ >/dev/null
+curl -sS -o /dev/null -w '%{http_code}\n' https://kaigo.space/builder/
+curl -fsS https://kaigo.space/ >/dev/null
+curl -fsS https://kaigo.space/w/demka >/dev/null
+curl -fsS https://kaigo.online/ >/dev/null
+```
+
+Без авторизации `/builder/` должен отвечать `401`. С авторизацией — `200`.
+Дополнительно проверяются app/db контейнеры, loopback-порт и browser console.
 
 ## Остановка и откат
 
@@ -139,20 +196,18 @@ docker compose --profile builder-lab stop builder-lab
 docker compose --profile builder-lab rm -f builder-lab
 ```
 
-Это не останавливает `app`, `db`, nginx или статический сайт. После live-smoke
-дополнительно проверьте неизменность production:
+Для отключения публичного доступа восстановить резервную копию
+`/etc/nginx/sites-available/kaigo.space`, проверить `nginx -t` и выполнить
+`systemctl reload nginx`. Production app, db и статический сайт при этом не
+перезапускаются.
 
-```bash
-curl -fsS http://127.0.0.1:8080/api/health
-curl -fsS http://127.0.0.1:8080/w/demka >/dev/null
-```
+## Текущие ограничения
 
-## Ограничения
-
-- Antigravity находится в Public Preview и может быть недоступен проекту.
-- У Antigravity более высокий и менее предсказуемый расход токенов; один bounded
-  запуск используйте как сравнение, а не как автоматический fallback.
-- Lab не выполняет website crawl, не публикует embed-код, не списывает баланс и
-  не хранит результат после restart.
-- Для публичного доступа потребуется отдельная спецификация аутентификации,
-  tenant isolation, durable jobs и production preview origin.
+- Один полный пятиэтапный прогон может быть медленным и дорогим; перед
+  коммерческим запуском нужно уменьшить повторную передачу полного артефакта и
+  объём repair-контекста.
+- Текущий публичный полный Builder рассчитан на владельца проекта, а не на
+  нескольких арендаторов: нет аккаунтов, биллинга, очереди durable jobs и
+  автоматической публикации embed-кода.
+- Antigravity остаётся сравнительным экспериментом и не является fallback для
+  рабочего direct-режима.
