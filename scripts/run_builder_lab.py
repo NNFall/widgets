@@ -56,6 +56,9 @@ def build_app(config: BuilderLabConfig) -> web.Application:
         store=store,
         orchestrator=orchestrator,
         enabled_engines=tuple(factories),
+        default_engine=config.default_engine,
+        default_temperature=config.temperature,
+        default_max_repairs=config.max_repairs,
     )
 
 

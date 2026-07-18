@@ -23,6 +23,7 @@ PARENT_CSP = (
 STORE_KEY = web.AppKey("builder_store", RunStore)
 ORCHESTRATOR_KEY = web.AppKey("builder_orchestrator", BuilderOrchestrator)
 ENGINES_KEY = web.AppKey("builder_enabled_engines", tuple)
+UI_DEFAULTS_KEY = web.AppKey("builder_ui_defaults", tuple)
 
 
 def _error(code: str, message: str, *, status: int) -> web.Response:
@@ -46,8 +47,16 @@ async def security_headers(
 
 
 async def page(request: web.Request) -> web.Response:
+    default_engine, default_temperature, default_max_repairs = request.app[
+        UI_DEFAULTS_KEY
+    ]
     return web.Response(
-        text=render_builder_page(request.app[ENGINES_KEY]),
+        text=render_builder_page(
+            request.app[ENGINES_KEY],
+            default_engine=default_engine,
+            default_temperature=default_temperature,
+            default_max_repairs=default_max_repairs,
+        ),
         content_type="text/html",
         charset="utf-8",
     )
@@ -200,6 +209,9 @@ def create_builder_lab_app(
     store: RunStore,
     orchestrator: BuilderOrchestrator,
     enabled_engines: Iterable[EngineName],
+    default_engine: EngineName = EngineName.DIRECT,
+    default_temperature: float = 0.9,
+    default_max_repairs: int = 2,
 ) -> web.Application:
     engines = tuple(enabled_engines)
     if not engines:
@@ -208,6 +220,11 @@ def create_builder_lab_app(
     app[STORE_KEY] = store
     app[ORCHESTRATOR_KEY] = orchestrator
     app[ENGINES_KEY] = engines
+    app[UI_DEFAULTS_KEY] = (
+        default_engine if default_engine in engines else engines[0],
+        default_temperature,
+        default_max_repairs,
+    )
     app.router.add_get("/", page)
     app.router.add_post("/api/runs", create_run)
     app.router.add_get("/api/runs/{run_id}", get_run)

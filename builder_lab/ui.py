@@ -16,13 +16,24 @@ DEFAULT_BRIEF = """Создай премиального AI-сотрудника
 Виджет должен ощущаться частью дорогого сайта, а не стандартным чат-пузырём."""
 
 
-def render_builder_page(enabled_engines: tuple[EngineName, ...]) -> str:
+def render_builder_page(
+    enabled_engines: tuple[EngineName, ...],
+    *,
+    default_engine: EngineName = EngineName.DIRECT,
+    default_temperature: float = 0.9,
+    default_max_repairs: int = 2,
+) -> str:
+    if default_engine not in enabled_engines:
+        default_engine = enabled_engines[0]
     options = "".join(
-        f'<option value="{escape(engine.value)}">'
+        f'<option value="{escape(engine.value)}"'
+        + (" selected" if engine is default_engine else "")
+        + ">"
         + ("Gemini staged" if engine is EngineName.DIRECT else "Antigravity agent")
         + "</option>"
         for engine in enabled_engines
     )
+    temperature = f"{default_temperature:.2f}".rstrip("0").rstrip(".")
     iframe = preview_iframe_attributes()
     return f"""<!doctype html>
 <html lang="ru">
@@ -40,7 +51,7 @@ def render_builder_page(enabled_engines: tuple[EngineName, ...]) -> str:
     .shell {{ width:min(1680px,100%); min-height:100dvh; margin:0 auto; padding:18px; display:grid; grid-template-columns:minmax(330px,.78fr) minmax(520px,1.45fr); gap:18px; }}
     .rail,.stage {{ min-width:0; border:1px solid var(--line); background:rgba(33,31,27,.91); box-shadow:inset 0 1px rgba(255,255,255,.035),0 24px 60px rgba(9,8,6,.22); }}
     .rail {{ border-radius:26px; padding:24px; display:flex; flex-direction:column; gap:24px; overflow:auto; }}
-    .stage {{ border-radius:34px; padding:20px; display:grid; grid-template-rows:auto minmax(520px,1fr); gap:16px; overflow:hidden; }}
+    .stage {{ border-radius:34px; padding:20px; display:grid; grid-template-rows:auto auto minmax(520px,1fr); gap:14px; overflow:hidden; }}
     .eyebrow {{ margin:0 0 10px; color:var(--accent); font:600 11px/1.2 "Cascadia Mono",monospace; letter-spacing:.15em; text-transform:uppercase; }}
     h1 {{ margin:0; max-width:13ch; font-size:clamp(30px,3.1vw,52px); line-height:.98; letter-spacing:-.052em; font-weight:650; }}
     .lede {{ margin:15px 0 0; max-width:44ch; color:var(--muted); font-size:14px; line-height:1.55; }}
@@ -88,6 +99,12 @@ def render_builder_page(enabled_engines: tuple[EngineName, ...]) -> str:
     .view-toggle {{ display:flex; padding:3px; border:1px solid var(--line); border-radius:12px; background:#191814; }}
     .view-toggle button {{ min-height:32px; border:0; border-radius:8px; padding:0 12px; color:#8d887f; background:transparent; cursor:pointer; font-size:11px; }}
     .view-toggle button.active {{ color:var(--text); background:#302e28; }}
+    .artifact-meta {{ min-width:0; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:18px; padding:11px 13px; border:1px solid var(--line); border-radius:14px; background:#191814; }}
+    .artifact-label {{ display:block; color:#77736c; font:600 9px/1.2 "Cascadia Mono",monospace; letter-spacing:.11em; text-transform:uppercase; }}
+    .art-direction {{ margin:4px 0 0; overflow:hidden; color:#cfc9bf; font-size:11px; line-height:1.35; text-overflow:ellipsis; white-space:nowrap; }}
+    .validation-badge {{ padding:7px 9px; border:1px solid #514d45; border-radius:9px; color:#8f8a81; font:600 9px/1 "Cascadia Mono",monospace; letter-spacing:.07em; text-transform:uppercase; }}
+    .validation-badge.valid {{ border-color:rgba(216,131,96,.65); color:#edb199; background:rgba(216,131,96,.08); }}
+    .validation-badge.invalid {{ border-color:rgba(211,110,103,.65); color:#e5a39e; background:rgba(211,110,103,.08); }}
     .canvas {{ position:relative; min-height:0; overflow:hidden; border:1px solid #34312c; border-radius:24px; background:linear-gradient(135deg,#ede8de,#d7d0c4); display:grid; place-items:center; }}
     .canvas::before {{ content:""; position:absolute; inset:0; pointer-events:none; opacity:.28; background-image:linear-gradient(rgba(33,31,27,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(33,31,27,.055) 1px,transparent 1px); background-size:32px 32px; }}
     .viewport {{ position:relative; width:100%; height:100%; min-height:520px; transition:width .45s cubic-bezier(.16,1,.3,1),border-radius .45s ease; }}
@@ -100,7 +117,7 @@ def render_builder_page(enabled_engines: tuple[EngineName, ...]) -> str:
     .draft-flag {{ position:absolute; z-index:2; top:14px; right:14px; padding:7px 9px; border:1px solid rgba(33,31,27,.22); border-radius:9px; color:#5a5148; background:rgba(242,237,228,.82); backdrop-filter:blur(10px); font:600 9px/1 "Cascadia Mono",monospace; letter-spacing:.08em; text-transform:uppercase; }}
     @media (prefers-reduced-motion:reduce) {{ *,*::before,*::after {{ animation:none!important; transition:none!important; }} }}
     @media (max-width:900px) {{ .shell {{ grid-template-columns:1fr; padding:10px; }} .rail,.stage {{ border-radius:20px; }} .stage {{ min-height:760px; }} }}
-    @media (max-width:560px) {{ .rail {{ padding:18px; }} .stage {{ padding:10px; grid-template-rows:auto minmax(620px,1fr); }} .control-grid {{ grid-template-columns:1fr; }} .field-wide {{ grid-column:auto; }} .actions {{ grid-template-columns:1fr 1fr; }} .button-primary {{ grid-column:1/-1; }} .stage-head {{ grid-template-columns:1fr; }} .view-toggle {{ width:max-content; }} .telemetry {{ grid-template-columns:1fr; }} .metric+.metric {{ padding-left:0; border-left:0; border-top:1px solid var(--line); }} }}
+    @media (max-width:560px) {{ .rail {{ padding:18px; }} .stage {{ padding:10px; grid-template-rows:auto auto minmax(620px,1fr); }} .control-grid {{ grid-template-columns:1fr; }} .field-wide {{ grid-column:auto; }} .actions {{ grid-template-columns:1fr 1fr; }} .button-primary {{ grid-column:1/-1; }} .stage-head {{ grid-template-columns:1fr; }} .view-toggle {{ width:max-content; }} .artifact-meta {{ grid-template-columns:1fr; gap:9px; }} .validation-badge {{ width:max-content; }} .telemetry {{ grid-template-columns:1fr; }} .metric+.metric {{ padding-left:0; border-left:0; border-top:1px solid var(--line); }} }}
   </style>
 </head>
 <body>
@@ -119,7 +136,7 @@ def render_builder_page(enabled_engines: tuple[EngineName, ...]) -> str:
         </div>
         <div class="field" id="creativity-field">
           <label for="creativity">Творчество</label>
-          <input id="creativity" type="number" min="0" max="2" step="0.05" value="0.9">
+          <input id="creativity" type="number" min="0" max="2" step="0.05" value="{temperature}">
           <p class="helper">0–2</p>
         </div>
         <div class="field field-wide">
@@ -153,6 +170,10 @@ def render_builder_page(enabled_engines: tuple[EngineName, ...]) -> str:
           <button type="button" data-view="mobile">Mobile</button>
         </div>
       </header>
+      <div class="artifact-meta" aria-live="polite">
+        <div><span class="artifact-label">Art direction</span><p class="art-direction" id="art-direction">Появится после первой валидной ревизии</p></div>
+        <span class="validation-badge" id="validation-badge">Не проверено</span>
+      </div>
       <div class="canvas">
         <div class="draft-flag">Экспериментальный черновик</div>
         <div class="viewport" id="viewport">
@@ -165,7 +186,8 @@ def render_builder_page(enabled_engines: tuple[EngineName, ...]) -> str:
   <script>
   (() => {{
     'use strict';
-    const elements = Object.fromEntries(['engine','creativity','creativity-field','brief','generate','cancel','retry','error','revision','tokens','elapsed','timeline','pulse','status','preview','preview-empty','viewport'].map(id => [id, document.getElementById(id)]));
+    const elements = Object.fromEntries(['engine','creativity','creativity-field','brief','generate','cancel','retry','error','revision','tokens','elapsed','timeline','pulse','status','preview','preview-empty','viewport','art-direction','validation-badge'].map(id => [id, document.getElementById(id)]));
+    const defaultMaxRepairs = {int(default_max_repairs)};
     let currentRun = null;
     let stream = null;
     let terminal = false;
@@ -188,6 +210,9 @@ def render_builder_page(enabled_engines: tuple[EngineName, ...]) -> str:
       skeleton.className = 'empty';
       skeleton.textContent = 'Gemini получает бриф и начинает первую реальную стадию…';
       elements.timeline.append(skeleton);
+      elements['art-direction'].textContent = 'Появится после первой валидной ревизии';
+      elements['validation-badge'].textContent = 'Не проверено';
+      elements['validation-badge'].className = 'validation-badge';
     }}
 
     function appendEvent(event) {{
@@ -213,6 +238,11 @@ def render_builder_page(enabled_engines: tuple[EngineName, ...]) -> str:
         elements.preview.src = `/api/runs/${{currentRun}}/preview?revision=${{event.revision}}`;
         elements['preview-empty'].classList.add('hidden');
       }}
+      if (event.type === 'artifact.validated') {{
+        const valid = event.status === 'completed';
+        elements['validation-badge'].textContent = valid ? 'Проверено' : 'Требует repair';
+        elements['validation-badge'].className = `validation-badge ${{valid ? 'valid' : 'invalid'}}`;
+      }}
       if (event.type === 'run.failed' || event.type === 'run.cancelled') showError(event.message);
       scheduleSnapshot();
     }}
@@ -228,6 +258,7 @@ def render_builder_page(enabled_engines: tuple[EngineName, ...]) -> str:
         const snapshot = await requestJSON(`/api/runs/${{currentRun}}`);
         const usage = snapshot.usage || {{}};
         elements.revision.textContent = snapshot.artifact?.revision ?? '—';
+        elements['art-direction'].textContent = snapshot.artifact?.art_direction || 'Пока нет валидной арт-дирекции';
         elements.tokens.textContent = formatNumber(usage.total_tokens);
         elements.elapsed.textContent = snapshot.elapsed_seconds ? `${{snapshot.elapsed_seconds.toFixed(1)}} с` : 'в процессе';
         terminal = ['completed','failed','cancelled'].includes(snapshot.status);
@@ -257,7 +288,7 @@ def render_builder_page(enabled_engines: tuple[EngineName, ...]) -> str:
       elements.status.textContent = 'Создаём запуск';
       resetTimeline();
       try {{
-        const run = await requestJSON('/api/runs', {{ method:'POST', body:JSON.stringify({{ engine:elements.engine.value, brief, creativity:Number(elements.creativity.value), locale:'ru' }}) }});
+        const run = await requestJSON('/api/runs', {{ method:'POST', body:JSON.stringify({{ engine:elements.engine.value, brief, creativity:Number(elements.creativity.value), max_repairs:defaultMaxRepairs, locale:'ru' }}) }});
         currentRun = run.run_id;
         terminal = false;
         connectEvents(currentRun);

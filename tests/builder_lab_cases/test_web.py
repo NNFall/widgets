@@ -5,6 +5,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from builder_lab.models import BuilderRequest, EngineName, RunStatus, Stage
 from builder_lab.store import RunStore
+from builder_lab.ui import render_builder_page
 from builder_lab.web import create_builder_lab_app
 from tests.builder_lab_cases.test_validation import artifact
 
@@ -60,6 +61,8 @@ class BuilderLabWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('sandbox="allow-scripts"', body)
         self.assertNotIn("allow-same-origin", body)
         self.assertIn("new EventSource", body)
+        self.assertIn('id="art-direction"', body)
+        self.assertIn('id="validation-badge"', body)
         self.assertIn("event.source", body)
         self.assertIn("Экспериментальный черновик", body)
         viewport_index = body.index('class="viewport"')
@@ -69,6 +72,17 @@ class BuilderLabWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(empty_index, iframe_index)
         self.assertEqual(response.headers["Cache-Control"], "no-store")
         self.assertIn("default-src 'none'", response.headers["Content-Security-Policy"])
+
+    def test_page_uses_configured_request_defaults(self):
+        body = render_builder_page(
+            (EngineName.DIRECT, EngineName.ANTIGRAVITY),
+            default_engine=EngineName.ANTIGRAVITY,
+            default_temperature=1.25,
+            default_max_repairs=1,
+        )
+        self.assertIn('<option value="antigravity" selected>', body)
+        self.assertIn('id="creativity" type="number" min="0" max="2" step="0.05" value="1.25"', body)
+        self.assertIn("const defaultMaxRepairs = 1;", body)
 
     async def test_create_snapshot_cancel_and_retry_routes(self):
         created = await self.create_run()
