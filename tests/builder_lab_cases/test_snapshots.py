@@ -38,10 +38,15 @@ def tar_bytes(entries):
 
 
 def valid_archive(extra=()):
+    report = {
+        "validator": "passed",
+        "schema_version": "1.0",
+        "artifact_revision": 1,
+    }
     return tar_bytes(
         [
             ("out/widget-artifact.json", json.dumps(ARTIFACT)),
-            ("out/build-report.json", json.dumps({"validator": "passed"})),
+            ("out/build-report.json", json.dumps(report)),
             *extra,
         ]
     )
@@ -53,7 +58,27 @@ class SnapshotCollectionTests(unittest.TestCase):
             valid_archive((("workspace/source.js", "diagnostic only"),))
         )
         self.assertEqual(artifact.revision, 1)
-        self.assertEqual(report, {"validator": "passed"})
+        self.assertEqual(
+            report,
+            {"validator": "passed", "schema_version": "1.0", "artifact_revision": 1},
+        )
+
+    def test_rejects_untrusted_or_mismatched_build_report(self):
+        for report in (
+            {"validator": "failed", "schema_version": "1.0", "artifact_revision": 1},
+            {"validator": "passed", "schema_version": "2.0", "artifact_revision": 1},
+            {"validator": "passed", "schema_version": "1.0", "artifact_revision": 2},
+        ):
+            archive = tar_bytes(
+                (
+                    ("out/widget-artifact.json", json.dumps(ARTIFACT)),
+                    ("out/build-report.json", json.dumps(report)),
+                )
+            )
+            with self.subTest(report=report), self.assertRaisesRegex(
+                SnapshotRejected, "build report"
+            ):
+                collect_declared_snapshot(archive)
 
     def test_rejects_traversal_absolute_and_drive_paths(self):
         for path in ("../out/widget-artifact.json", "/etc/passwd", "C:/Windows/system.ini"):

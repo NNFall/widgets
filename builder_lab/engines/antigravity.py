@@ -227,8 +227,9 @@ class AntigravityEngine:
             async with self._download_client.stream(
                 "GET",
                 url,
-                headers={"Authorization": f"Bearer {self._api_key}"},
+                headers={"x-goog-api-key": self._api_key},
                 params={"alt": "media"},
+                follow_redirects=True,
                 timeout=self.timeout_seconds,
             ) as response:
                 response.raise_for_status()

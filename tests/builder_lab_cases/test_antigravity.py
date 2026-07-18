@@ -147,7 +147,9 @@ class AntigravityEngineTests(unittest.IsolatedAsyncioTestCase):
             "https://proxy.test/protected/v1beta/files/environment-env-123:download",
         )
         self.assertEqual(kwargs["params"], {"alt": "media"})
-        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer secret")
+        self.assertEqual(kwargs["headers"]["x-goog-api-key"], "secret")
+        self.assertNotIn("Authorization", kwargs["headers"])
+        self.assertTrue(kwargs["follow_redirects"])
 
     async def test_reuses_environment_without_remounting_sources(self):
         interactions = FakeInteractions(

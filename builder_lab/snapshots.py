@@ -102,4 +102,10 @@ def collect_declared_snapshot(
         artifact = WidgetArtifact.from_dict(artifact_payload)
     except (KeyError, TypeError, ValueError) as exc:
         raise SnapshotRejected("widget artifact does not match the Kaigo contract") from exc
+    if (
+        report.get("validator") != "passed"
+        or report.get("schema_version") != artifact.schema_version
+        or report.get("artifact_revision") != artifact.revision
+    ):
+        raise SnapshotRejected("build report does not attest the imported artifact")
     return artifact, report
