@@ -291,7 +291,6 @@ class AntigravityEngine:
                     "type": "antigravity",
                     "max_total_tokens": self.max_total_tokens,
                 },
-                labels={"application": "kaigo-builder-lab"},
             ),
             name="kaigo-antigravity-create",
         )

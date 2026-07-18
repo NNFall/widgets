@@ -145,6 +145,7 @@ class AntigravityEngineTests(unittest.IsolatedAsyncioTestCase):
         call = interactions.create_calls[0]
         self.assertEqual(call["agent"], "antigravity-preview-05-2026")
         self.assertTrue(call["background"])
+        self.assertNotIn("labels", call)
         self.assertEqual(call["environment"]["type"], "remote")
         self.assertEqual(call["environment"]["network"], "disabled")
         targets = {source["target"] for source in call["environment"]["sources"]}
