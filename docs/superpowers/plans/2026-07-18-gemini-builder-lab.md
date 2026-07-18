@@ -28,9 +28,9 @@
 - Create: `builder_lab/models.py`
 - Create: `builder_lab/config.py`
 - Create: `tests/__init__.py`
-- Create: `tests/builder_lab/__init__.py`
-- Create: `tests/builder_lab/test_models.py`
-- Create: `tests/builder_lab/test_config.py`
+- Create: `tests/builder_lab_cases/__init__.py`
+- Create: `tests/builder_lab_cases/test_models.py`
+- Create: `tests/builder_lab_cases/test_config.py`
 
 - [ ] Create the external virtual environment and install the existing requirements plus the current supported `google-genai` package:
 
@@ -45,7 +45,7 @@
 - [ ] Run the tests and verify they fail because the package does not exist:
 
   ```powershell
-  & "D:\papka for all\work\kaigo.widgets\.venvs\gemini-builder-lab\Scripts\python.exe" -m unittest tests.builder_lab.test_models tests.builder_lab.test_config -v
+  & "D:\papka for all\work\kaigo.widgets\.venvs\gemini-builder-lab\Scripts\python.exe" -m unittest tests.builder_lab_cases.test_models tests.builder_lab_cases.test_config -v
   ```
 
 - [ ] Implement frozen enums and dataclasses for `EngineName`, `Stage`, `RunStatus`, `BuilderRequest`, `TokenUsage`, `ValidationIssue`, `WidgetArtifact`, `BuilderEvent`, and `BuilderRunSnapshot`. Each type must expose explicit `to_dict`/`from_dict` methods; provider exceptions must map to the stable public error categories from the design.
@@ -63,14 +63,14 @@
 **Files:**
 
 - Create: `builder_lab/validation.py`
-- Create: `tests/builder_lab/test_validation.py`
+- Create: `tests/builder_lab_cases/test_validation.py`
 
 - [ ] Write tests for a known-good artifact and rejection of: unsupported schema versions, non-monotonic revisions, missing semantic regions, malformed or oversized HTML, excessive DOM nodes, forbidden elements, inline event handlers, external links/forms, unsafe `data:` values, unscoped CSS, `@import`, `url()`, excessive stylesheet size, excessive animation count/duration/iterations, and motion without `prefers-reduced-motion`.
 - [ ] Assert that validation returns stable issue codes and field paths, not provider prose, and that identical issue sets have an identical fingerprint.
 - [ ] Run the focused test and observe import/test failures:
 
   ```powershell
-  & "D:\papka for all\work\kaigo.widgets\.venvs\gemini-builder-lab\Scripts\python.exe" -m unittest tests.builder_lab.test_validation -v
+  & "D:\papka for all\work\kaigo.widgets\.venvs\gemini-builder-lab\Scripts\python.exe" -m unittest tests.builder_lab_cases.test_validation -v
   ```
 
 - [ ] Implement a standard-library `HTMLParser` validator with fixed element/attribute allowlists, URL checks, DOM limits, required `data-region` values, accessible launcher/composer labels, and balanced-tag checks.
@@ -79,7 +79,7 @@
 - [ ] Rerun focused and current full suites, then commit:
 
   ```powershell
-  git add builder_lab/validation.py tests/builder_lab/test_validation.py
+  git add builder_lab/validation.py tests/builder_lab_cases/test_validation.py
   git commit -m "feat: validate generated widget artifacts"
   ```
 
@@ -88,7 +88,7 @@
 **Files:**
 
 - Create: `builder_lab/snapshots.py`
-- Create: `tests/builder_lab/test_snapshots.py`
+- Create: `tests/builder_lab_cases/test_snapshots.py`
 
 - [ ] Write in-memory tar tests proving acceptance of exactly `out/widget-artifact.json` and `out/build-report.json`, and rejection of traversal paths, absolute paths, drive-qualified paths, symlinks, hard links, devices, undeclared imported paths, duplicate declared paths, excessive member counts, excessive individual files, excessive total bytes, and invalid JSON.
 - [ ] Run the focused test and observe the missing implementation failure.
@@ -96,7 +96,7 @@
 - [ ] Rerun focused and full suites, then commit:
 
   ```powershell
-  git add builder_lab/snapshots.py tests/builder_lab/test_snapshots.py
+  git add builder_lab/snapshots.py tests/builder_lab_cases/test_snapshots.py
   git commit -m "feat: safely import agent snapshots"
   ```
 
@@ -105,7 +105,7 @@
 **Files:**
 
 - Create: `builder_lab/store.py`
-- Create: `tests/builder_lab/test_store.py`
+- Create: `tests/builder_lab_cases/test_store.py`
 
 - [ ] Write async tests for unguessable run IDs, append-only strictly increasing event sequences, snapshot isolation, artifact revision monotonicity, replay after a sequence, waiter wake-up, cancellation flags, terminal-state immutability, TTL pruning, maximum-run pruning, and preservation of the last valid artifact after a failure.
 - [ ] Run the focused test and observe failure.
@@ -113,7 +113,7 @@
 - [ ] Rerun focused and full suites, then commit:
 
   ```powershell
-  git add builder_lab/store.py tests/builder_lab/test_store.py
+  git add builder_lab/store.py tests/builder_lab_cases/test_store.py
   git commit -m "feat: add builder run event store"
   ```
 
@@ -122,7 +122,7 @@
 **Files:**
 
 - Create: `builder_lab/preview.py`
-- Create: `tests/builder_lab/test_preview.py`
+- Create: `tests/builder_lab_cases/test_preview.py`
 
 - [ ] Write tests proving the preview document includes the exact restrictive CSP, only the validated body/CSS, a fixed versioned Kaigo runtime, no generated JavaScript slot, no secrets, escaped metadata, and a render acknowledgement message. Test that the parent iframe contract is `sandbox="allow-scripts"` and never adds `allow-same-origin`.
 - [ ] Run the focused test and observe failure.
@@ -130,7 +130,7 @@
 - [ ] Rerun focused and full suites, then commit:
 
   ```powershell
-  git add builder_lab/preview.py tests/builder_lab/test_preview.py
+  git add builder_lab/preview.py tests/builder_lab_cases/test_preview.py
   git commit -m "feat: add sandboxed widget preview"
   ```
 
@@ -142,7 +142,7 @@
 - Create: `builder_lab/engines/base.py`
 - Create: `builder_lab/prompts.py`
 - Create: `builder_lab/engines/gemini_direct.py`
-- Create: `tests/builder_lab/test_gemini_direct.py`
+- Create: `tests/builder_lab_cases/test_gemini_direct.py`
 
 - [ ] Write fake-client tests proving the six-stage order, complete previous-artifact handoff, premium anti-generic art-direction prompt, Russian locale, schema-constrained JSON request, model/temperature/top-p propagation, repair issue injection, response parsing, usage extraction including thinking tokens, cancellation propagation, custom API base URL support, and sanitization of quota/model/provider failures.
 - [ ] Run the focused test and observe failure.
@@ -153,7 +153,7 @@
 - [ ] Rerun focused and full suites, then commit:
 
   ```powershell
-  git add builder_lab/engines builder_lab/prompts.py tests/builder_lab/test_gemini_direct.py
+  git add builder_lab/engines builder_lab/prompts.py tests/builder_lab_cases/test_gemini_direct.py
   git commit -m "feat: generate staged widgets with Gemini"
   ```
 
@@ -162,7 +162,7 @@
 **Files:**
 
 - Create: `builder_lab/engines/antigravity.py`
-- Create: `tests/builder_lab/test_antigravity.py`
+- Create: `tests/builder_lab_cases/test_antigravity.py`
 
 - [ ] Write fake Interactions API and fake HTTP download tests for inline starter sources, strict environment network policy, background creation, bounded polling, progress diagnostics, cancellation, environment ID capture/reuse, official Files snapshot URL construction, maximum download size, safe snapshot collection, build-report recording, and precise unavailable/timeout/download/rejected errors.
 - [ ] Run the focused test and observe failure.
@@ -172,7 +172,7 @@
 - [ ] Rerun focused and full suites, then commit:
 
   ```powershell
-  git add builder_lab/engines/antigravity.py tests/builder_lab/test_antigravity.py
+  git add builder_lab/engines/antigravity.py tests/builder_lab_cases/test_antigravity.py
   git commit -m "feat: add Antigravity builder adapter"
   ```
 
@@ -181,7 +181,7 @@
 **Files:**
 
 - Create: `builder_lab/orchestrator.py`
-- Create: `tests/builder_lab/test_orchestrator.py`
+- Create: `tests/builder_lab_cases/test_orchestrator.py`
 
 - [ ] Write fake-engine tests for real event order, direct stage order, preview commits only after successful validation, monotonic revisions, usage accumulation, at least four intermediate commits, bounded repair, repeated-issue fingerprint stopping, preservation of the previous artifact on failure, engine exception mapping, cancellation before/during a stage, Antigravity single-build behavior, retry creation from a failed request, and terminal cleanup.
 - [ ] Run the focused test and observe failure.
@@ -190,7 +190,7 @@
 - [ ] Rerun focused and full suites, then commit:
 
   ```powershell
-  git add builder_lab/orchestrator.py tests/builder_lab/test_orchestrator.py
+  git add builder_lab/orchestrator.py tests/builder_lab_cases/test_orchestrator.py
   git commit -m "feat: orchestrate builder generation runs"
   ```
 
@@ -200,7 +200,7 @@
 
 - Create: `builder_lab/ui.py`
 - Create: `builder_lab/web.py`
-- Create: `tests/builder_lab/test_web.py`
+- Create: `tests/builder_lab_cases/test_web.py`
 
 - [ ] Write aiohttp test-client tests for `GET /`, `POST /api/runs`, `GET /api/runs/{id}`, `GET /api/runs/{id}/events`, `POST /api/runs/{id}/cancel`, `POST /api/runs/{id}/retry`, and `GET /api/runs/{id}/preview`. Cover JSON/content types, validation errors, unknown IDs, no-cache headers, security headers, SSE event IDs/replay/heartbeats/terminal close, and preview CSP.
 - [ ] Run the focused test and observe failure.
@@ -210,7 +210,7 @@
 - [ ] Rerun focused and full suites, then commit:
 
   ```powershell
-  git add builder_lab/ui.py builder_lab/web.py tests/builder_lab/test_web.py
+  git add builder_lab/ui.py builder_lab/web.py tests/builder_lab_cases/test_web.py
   git commit -m "feat: add builder lab web interface"
   ```
 
@@ -224,7 +224,7 @@
 - Modify: `docker-compose.yml`
 - Modify: `README.md`
 - Create: `docs/KAIGO_BUILDER_LAB_OPERATIONS.md`
-- Create: `tests/builder_lab/test_runner.py`
+- Create: `tests/builder_lab_cases/test_runner.py`
 
 - [ ] Write runner/config tests proving loopback is the default, non-loopback fails closed, no production `app.server` routes are imported, direct engine is registered only when a key is configured, and Antigravity remains an optional mode.
 - [ ] Run the focused test and observe failure.
@@ -235,7 +235,7 @@
 - [ ] Commit:
 
   ```powershell
-  git add scripts/run_builder_lab.py scripts/smoke_builder_lab.py .env.example docker-compose.yml README.md docs/KAIGO_BUILDER_LAB_OPERATIONS.md tests/builder_lab/test_runner.py
+  git add scripts/run_builder_lab.py scripts/smoke_builder_lab.py .env.example docker-compose.yml README.md docs/KAIGO_BUILDER_LAB_OPERATIONS.md tests/builder_lab_cases/test_runner.py
   git commit -m "feat: package standalone Gemini builder lab"
   ```
 
