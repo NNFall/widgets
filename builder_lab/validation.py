@@ -265,6 +265,43 @@ def _css_rules(css: str) -> tuple[list[str], list[str], bool]:
     return selectors, at_rules, malformed
 
 
+def _selector_is_scoped(selector: str) -> bool:
+    candidate = selector.strip()
+    root = re.match(r"^\.kaigo-widget(?![-_A-Za-z0-9])", candidate)
+    if root is None:
+        return False
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    cursor = root.end()
+    while cursor < len(candidate):
+        character = candidate[cursor]
+        if escaped:
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif quote:
+            if character == quote:
+                quote = None
+        elif character in {"'", '"'}:
+            quote = character
+        elif character in "([":
+            depth += 1
+        elif character in ")]" and depth:
+            depth -= 1
+        elif depth == 0 and character in "+~":
+            return False
+        elif depth == 0 and character == ">":
+            return True
+        elif depth == 0 and character.isspace():
+            remainder = candidate[cursor:].lstrip()
+            if not remainder:
+                return True
+            return remainder[0] not in "+~"
+        cursor += 1
+    return True
+
+
 def _validate_css(css: str) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
 
@@ -293,7 +330,9 @@ def _validate_css(css: str) -> list[ValidationIssue]:
         if at_rule not in {"@media", "@supports", "@container", "@keyframes", "@-webkit-keyframes"}:
             add("unsafe_css_at_rule", f"CSS at-rule {at_rule} is not allowed")
     for selector in selectors:
-        if ".kaigo-widget" not in selector or re.search(r"(^|[\s>+~])(html|body|:root)([\s>+~.#:]|$)", selector, re.I):
+        if not _selector_is_scoped(selector) or re.search(
+            r"(^|[\s>+~])(html|body|:root)([\s>+~.#:]|$)", selector, re.I
+        ):
             add("unscoped_css", "Every selector must be scoped under .kaigo-widget")
             break
 

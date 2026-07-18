@@ -113,6 +113,22 @@ class ArtifactValidationTests(unittest.TestCase):
         self.assertIn("unsafe_css_at_rule", codes)
         self.assertIn("external_css_resource", codes)
 
+    def test_rejects_selectors_that_only_mention_widget_without_targeting_it(self):
+        for selector in (
+            ":not(.kaigo-widget)",
+            "*:has(.kaigo-widget)",
+            ".outside .kaigo-widget",
+            ".kaigo-widget + .outside",
+            ".kaigo-widget ~ .outside",
+        ):
+            css = (
+                f"{selector} {{ color: red; }}\n"
+                "@media (prefers-reduced-motion: reduce) { "
+                ".kaigo-widget * { animation: none; } }"
+            )
+            with self.subTest(selector=selector):
+                self.assertIn("unscoped_css", self.codes(artifact(css=css)))
+
     def test_rejects_case_insensitive_style_terminator(self):
         unsafe = GOOD_CSS + '\n.kaigo-widget::before { content: "</StYlE><script>bad()</script>"; }'
         self.assertIn("unsafe_style_terminator", self.codes(artifact(css=unsafe)))
