@@ -73,6 +73,7 @@ def build_preview_document(artifact: WidgetArtifact) -> str:
 
   if (launcher) launcher.addEventListener('click', (event) => {{
     if (toggle && event.target === toggle) return;
+    event.preventDefault();
     setOpen(!root || root.dataset.state !== 'open');
   }});
 

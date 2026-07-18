@@ -32,6 +32,7 @@ class PreviewDocumentTests(unittest.TestCase):
         self.assertIn("input[type=\"checkbox\"]", document)
         self.assertIn("toggle.checked = Boolean(open)", document)
         self.assertIn("toggle.addEventListener('change'", document)
+        self.assertIn("event.preventDefault()", document)
 
     def test_metadata_is_escaped(self):
         document = build_preview_document(
