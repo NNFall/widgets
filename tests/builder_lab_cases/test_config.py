@@ -16,6 +16,7 @@ class BuilderLabConfigTests(unittest.TestCase):
             "GEMINI_BUILDER_TEMPERATURE": None,
             "GEMINI_BUILDER_MAX_REPAIRS": None,
             "GEMINI_API_KEY": None,
+            "GOOGLE_AI_API_KEY": None,
             "GOOGLE_AI_NATIVE_BASE_URL": None,
         }
         base.update(values)
@@ -64,6 +65,10 @@ class BuilderLabConfigTests(unittest.TestCase):
         ):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 self.load(**{name: value})
+
+    def test_existing_google_ai_key_alias_is_supported(self):
+        config = self.load(GOOGLE_AI_API_KEY="existing-key")
+        self.assertEqual(config.gemini_api_key, "existing-key")
 
 
 if __name__ == "__main__":

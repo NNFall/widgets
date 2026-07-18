@@ -57,6 +57,7 @@ class BuilderLabConfig:
     direct_model: str
     temperature: float
     max_repairs: int
+    enable_antigravity: bool
     gemini_api_key: str | None
     gemini_base_url: str
     antigravity_agent: str
@@ -80,7 +81,11 @@ class BuilderLabConfig:
             )
         except ValueError as exc:
             raise ValueError("KAIGO_BUILDER_DEFAULT_ENGINE is unsupported") from exc
-        api_key = os.getenv("GEMINI_API_KEY")
+        api_key = (
+            os.getenv("GEMINI_API_KEY")
+            or os.getenv("GOOGLE_AI_API_KEY")
+            or os.getenv("GOOGLE_API_KEY")
+        )
         return cls(
             host=host,
             port=_int("KAIGO_BUILDER_LAB_PORT", 8091, 1, 65535),
@@ -89,6 +94,7 @@ class BuilderLabConfig:
             direct_model=os.getenv("GEMINI_BUILDER_MODEL", "gemini-3.5-flash").strip(),
             temperature=_float("GEMINI_BUILDER_TEMPERATURE", 0.9, 0, 2),
             max_repairs=_int("GEMINI_BUILDER_MAX_REPAIRS", 2, 0, 2),
+            enable_antigravity=_bool("KAIGO_BUILDER_ENABLE_ANTIGRAVITY", True),
             gemini_api_key=api_key.strip() if api_key and api_key.strip() else None,
             gemini_base_url=os.getenv(
                 "GOOGLE_AI_NATIVE_BASE_URL",

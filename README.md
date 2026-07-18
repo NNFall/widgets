@@ -229,3 +229,25 @@ docker exec ai_project_db pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > backup.sq
 ```bash
 cp data/dialogs.sqlite3 dialogs.sqlite3.backup
 ```
+
+## Gemini Builder Lab
+
+В репозитории есть отдельная loopback-only лаборатория для поэтапной генерации
+виджетов через `gemini-3.5-flash` и сравнения с Antigravity Managed Agent. Она не
+подключена к production routes, nginx, базе виджетов или статическому сайту.
+
+Локальный запуск:
+
+```bash
+python scripts/run_builder_lab.py
+python scripts/smoke_builder_lab.py --engine direct
+```
+
+Docker-сервис включается только явно через profile:
+
+```bash
+docker compose --profile builder-lab up -d --build builder-lab
+```
+
+Инструкции по SSH-forward, Gemini-only маршруту, журналу стадий и безопасной
+остановке: [docs/KAIGO_BUILDER_LAB_OPERATIONS.md](docs/KAIGO_BUILDER_LAB_OPERATIONS.md).

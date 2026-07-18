@@ -18,6 +18,25 @@ services:
       - 1.1.1.1
       - 8.8.8.8
 
+  builder-lab:
+    profiles:
+      - builder-lab
+    build: .
+    container_name: ai_project_builder_lab
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      KAIGO_BUILDER_LAB_HOST: 0.0.0.0
+      KAIGO_BUILDER_LAB_PORT: 8091
+      KAIGO_BUILDER_LAB_ALLOW_REMOTE: "true"
+    command: ["python", "scripts/run_builder_lab.py"]
+    ports:
+      - "127.0.0.1:8091:8091"
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+
   db:
     image: postgres:15-alpine
     container_name: ai_project_db
