@@ -40,6 +40,75 @@
 статусы. Ответы должны опираться только на зафиксированный публичный контекст.
 Если факта нет, AI прямо говорит, что требуется уточнение у бюро.
 
+### 2.1 Visual Site Research Agent
+
+Один `fullPage` screenshot не считается анализом сайта. Сайты используют
+lazy-loaded изображения, scroll reveal, sticky-секции, client-side rendering и
+анимации, поэтому reference collector является отдельным bounded browser-agent.
+
+Основа, которую не нужно писать заново:
+
+- [Crawlee for Python](https://github.com/apify/crawlee-python) — очередь URL,
+  retries, sessions, robots, link discovery и `PlaywrightCrawler` с
+  `infinite_scroll`; проект развивается и подходит существующему Python-стеку;
+- [Playwright](https://playwright.dev/docs/screenshots) — точные viewport,
+  screenshot, browser events, computed DOM и воспроизводимый Chromium;
+- [axe-core](https://github.com/dequelabs/axe-core) — дополнительный
+  deterministic accessibility scan;
+- [Stagehand](https://github.com/browserbase/stagehand) или
+  [Browser Use](https://github.com/browser-use/browser-use) — только opt-in
+  fallback для незнакомых cookie/reveal/accordion interactions, а не основной
+  screenshot oracle;
+- [BackstopJS](https://github.com/garris/BackstopJS) — полезен позже для visual
+  regression уже опубликованных версий, но не заменяет brand research;
+- [SiteOne Crawler](https://github.com/janreges/siteone-crawler) — возможный
+  companion для SEO/security/site-wide отчётов, но не источник visual grammar.
+
+Firecrawl умеет wait/scroll/screenshot и полезен для быстрого text/markdown
+контекста, однако его core AGPL-3.0 и отдельная инфраструктура не нужны первому
+Kaigo slice. Для управляемости и изоляции выбирается self-hosted
+`Crawlee Python + Playwright`.
+
+Обязательный deterministic lifecycle одной страницы:
+
+1. проверить URL, DNS и каждый redirect; разрешены только публичные `http/https`
+   адреса и порты 80/443;
+2. открыть страницу и дождаться `domcontentloaded`, затем `load` в пределах
+   timeout, `document.fonts.ready` и загрузки видимых изображений;
+3. выдержать configurable post-load warm-up, по умолчанию 5 секунд;
+4. прокручивать вниз шагами около 70% viewport с configurable паузой,
+   по умолчанию 750 ms (допустимый профиль 600–1200 ms), чтобы сработали
+   lazy-load и reveal; остановиться после двух неизменившихся
+   `scrollHeight` или по жёсткому лимиту steps/time/height;
+5. по пути зафиксировать top/middle/bottom viewport tiles и наблюдаемые
+   animation/transition properties;
+6. вернуть страницу наверх, дождаться 1.5 секунды стабильного layout и снять
+   стабильные tiles/full-page evidence; для reproducible QA finite CSS motion
+   fast-forward-ится, но только после scroll warm-up;
+7. извлечь не весь DOM, а bounded semantic/style sample: headings, body, nav,
+   links/buttons, surfaces, borders, radii, shadows, spacing, dominant colors,
+   fonts, images/aspect ratios и fixed/sticky controls;
+8. сохранить screenshot hashes, console/network failures, final URL, timings и
+   причины пропуска элементов; Playwright trace хранить только для failed run с
+   коротким TTL.
+
+На MVP crawler выбирает не более пяти ключевых страниц через sitemap и видимую
+навигацию: главная, услуги/цены, портфолио/каталог, FAQ и контакты. Desktop
+снимается для всех, mobile — минимум для главной и одной содержательной страницы.
+Длинные страницы режутся на viewport tiles: отправлять Gemini один сверхдлинный
+PNG нельзя, потому что мелкие детали станут неразборчивыми.
+
+Безопасность обязательна: robots-by-default, понятный user-agent, concurrency 1
+на домен, page/byte/time limits, блокировка private/link-local/metadata IP,
+повторная DNS-проверка после redirect, отсутствие пользовательских cookies и
+запрет произвольных кликов/форм. Agent fallback получает allowlist безопасных
+действий (`scroll`, `dismiss`, `expand`) и никогда не логинится, не отправляет
+формы и не обходит CAPTCHA.
+
+Firecrawl Branding Format v2 отдельно прогоняется как benchmark над RAW BUREAU.
+Сравниваются logo/color/typography/spacing/component tokens, но cloud-ответ не
+становится единственным source of truth и не входит в обязательный runtime.
+
 ## 3. Выбранное направление
 
 Независимый судья выбрал направление **«плавающая проектная заметка»**.
