@@ -86,8 +86,10 @@ Docker Compose, nginx, встроенный Browser skill Codex.
 1. Написать failing tests на три независимых роли, blind judge, агрегирование
    usage и событие `direction.judged` до `art_direction`.
 2. Написать failing tests на строгие `ScreenshotEvidence`, `LayoutEvidence`,
-   `VisualFinding`, `VisualCritique`: enum, bounds, unique IDs, pass без
-   blocker/major, stable fingerprint.
+   `VisualFinding`, `VisualCritique`: enum, bounds, normalized region, unique IDs,
+   pass без repair-qualifying blocker/major (`confidence >= 0.75`), stable
+   fingerprint. Layout-контракт отдельно поддерживает `after_turn_1` без
+   обязательного седьмого screenshot.
 3. Расширить prompt обязательными правилами выбранного направления: `372px`,
    `68dvh`, mobile `70dvh`, no fullscreen, closed default, runtime message
    classes, не более двух first-open suggestions, отсутствие fake actions.
