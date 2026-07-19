@@ -253,16 +253,29 @@ class ReferencePageEvidence:
             raise ValueError("reset_strategy is invalid")
         if self.coverage_status not in {"complete", "partial", "not_captured"}:
             raise ValueError("coverage_status is invalid")
-        positions = {item.position for item in self.screenshots}
-        if self.coverage_status == "complete" and "bottom" not in positions:
-            raise ValueError("complete coverage requires a bottom screenshot")
+        positions = [item.position for item in self.screenshots]
+        if len(positions) != len(set(positions)):
+            raise ValueError("duplicate screenshot position")
+        screenshot_shapes = {
+            (item.viewport, item.width, item.height) for item in self.screenshots
+        }
+        if len(screenshot_shapes) > 1:
+            raise ValueError("page screenshots must share one viewport and dimensions")
+        position_set = set(positions)
+        if self.coverage_status == "complete":
+            if not {"top", "bottom"}.issubset(position_set):
+                raise ValueError("complete coverage requires top and bottom screenshots")
+            if "last_observed" in position_set:
+                raise ValueError("complete coverage forbids last_observed")
         if self.coverage_status == "partial":
-            if "last_observed" not in positions or "bottom" in positions:
+            if not {"top", "last_observed"}.issubset(position_set) or "bottom" in position_set:
                 raise ValueError(
-                    "partial coverage requires last_observed and forbids bottom"
+                    "partial coverage requires top and last_observed and forbids bottom"
                 )
             if not self.skipped_reasons:
                 raise ValueError("partial coverage requires a skipped reason")
+        if self.coverage_status == "not_captured" and self.screenshots:
+            raise ValueError("not_captured coverage forbids screenshots")
         if len(self.timings_ms) > 32 or any(
             not isinstance(value, (int, float)) or value < 0
             for value in self.timings_ms.values()
@@ -333,11 +346,38 @@ class ReferenceCrawlResult:
             raise ValueError("non-failed crawls cannot contain failure trace metadata")
         if self.status == "failed" and self.failure is None:
             raise ValueError("failed crawls require a failure")
+        if self.status == "succeeded" and (
+            not self.pages
+            or any(page.coverage_status != "complete" for page in self.pages)
+        ):
+            raise ValueError(
+                "succeeded crawls require nonempty complete page evidence"
+            )
+        if self.status == "partial" and (
+            not self.pages
+            or all(page.coverage_status == "complete" for page in self.pages)
+        ):
+            raise ValueError(
+                "partial crawls require nonempty incomplete page evidence"
+            )
         if len(self.pages) > 7:  # five desktop plus two mobile captures
             raise ValueError("crawl result exceeds the page evidence cap")
-        page_keys = [(item.page_id, tuple(s.viewport for s in item.screenshots)) for item in self.pages]
+        page_keys = [
+            (
+                item.page_id,
+                item.screenshots[0].viewport if item.screenshots else None,
+            )
+            for item in self.pages
+        ]
         if len(page_keys) != len(set(page_keys)):
             raise ValueError("duplicate page evidence")
+        screenshot_ids = [
+            screenshot.screenshot_id
+            for page in self.pages
+            for screenshot in page.screenshots
+        ]
+        if len(screenshot_ids) != len(set(screenshot_ids)):
+            raise ValueError("duplicate screenshot_id across crawl result")
         object.__setattr__(self, "pages", tuple(self.pages))
 
     @classmethod

@@ -10,9 +10,12 @@ import tempfile
 import time
 import uuid
 import xml.etree.ElementTree as ET
+import zlib
 from collections import Counter
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 from urllib.parse import urljoin, urlsplit, urlunsplit
@@ -547,6 +550,10 @@ class CrawlByteBudget:
                 f"crawl byte limit exceeded while accounting {source}"
             )
 
+    @property
+    def remaining_bytes(self) -> int:
+        return max(0, self.max_bytes - self.used_bytes)
+
 
 class CrawlAccumulator:
     """Idempotent crawl state committed only after child enqueue succeeds."""
@@ -613,6 +620,7 @@ class CaptureTelemetry:
     request_failures: list[str] = field(default_factory=list)
     policy_blocks: list[str] = field(default_factory=list)
     response_bytes: int = 0
+    decoded_response_bytes: int = 0
     declared_oversize: asyncio.Event = field(default_factory=asyncio.Event)
     transfer_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
     _policy_labels: set[str] = field(default_factory=set)
@@ -621,6 +629,7 @@ class CaptureTelemetry:
     accounted: bool = False
     _charge_sequence: int = 0
     byte_limit_error: str | None = None
+    http_client: Any | None = field(default=None, repr=False)
 
     @staticmethod
     def _append_unique(target: list[str], value: str) -> None:
@@ -650,6 +659,15 @@ class CaptureTelemetry:
                 source="screenshot",
                 charge_id=f"{self.attempt_id}:screenshot:{screenshot_id}",
             )
+
+    @property
+    def decoded_remaining_bytes(self) -> int:
+        return max(0, self.max_page_bytes - self.decoded_response_bytes)
+
+    def record_decoded_bytes(self, amount: int) -> None:
+        self.decoded_response_bytes += amount
+        if self.decoded_response_bytes > self.max_page_bytes:
+            raise ReferenceCaptureError("decoded page byte limit exceeded")
 
     def attach_context(self, context: Any) -> None:
         if self._attached_context:
@@ -703,6 +721,171 @@ class CaptureTelemetry:
         if self.declared_oversize.is_set() or self.response_bytes > self.max_page_bytes:
             raise ReferenceCaptureError("page byte limit exceeded")
 
+    async def close_http_client(self) -> None:
+        client = self.http_client
+        self.http_client = None
+        if client is not None and not client.is_closed:
+            await client.aclose()
+
+
+@dataclass(frozen=True)
+class _BufferedHttpResponse:
+    status: int
+    headers: Mapping[str, str]
+    body: bytes
+
+
+_HOP_BY_HOP_REQUEST_HEADERS = frozenset(
+    {
+        "accept-encoding",
+        "connection",
+        "content-length",
+        "cookie",
+        "host",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+    }
+)
+_SENSITIVE_CROSS_ORIGIN_HEADERS = frozenset(
+    {"authorization", "cookie", "proxy-authorization", "referer"}
+)
+
+
+def _new_streaming_client() -> Any:
+    import httpx
+
+    return httpx.AsyncClient(
+        follow_redirects=False,
+        timeout=45,
+        trust_env=False,
+    )
+
+
+async def _bounded_stream_fetch(
+    client: Any,
+    *,
+    method: str,
+    url: str,
+    request_headers: Mapping[str, str],
+    telemetry: CaptureTelemetry,
+) -> _BufferedHttpResponse:
+    """Fetch one hop while bounding memory and wire bytes before buffering."""
+    headers = {
+        name: value
+        for name, value in request_headers.items()
+        if name.casefold() not in _HOP_BY_HOP_REQUEST_HEADERS
+    }
+    # Buffering compressed bytes and asking route.fulfill to decode them is not
+    # reliable, while decoding an attacker-controlled compression bomb would
+    # defeat the hard memory cap. Request an identity representation and fail
+    # closed if the origin ignores it.
+    headers["Accept-Encoding"] = "identity"
+    async with client.stream(method, url, headers=headers) as response:
+        response_headers = dict(response.headers.items())
+        header_bytes = sum(
+            len(str(name).encode("utf-8"))
+            + len(str(value).encode("utf-8"))
+            + 4
+            for name, value in response.headers.multi_items()
+        )
+        telemetry.record_network_bytes(header_bytes)
+        declared = int(response.headers.get("content-length", "0") or "0")
+        page_remaining = max(0, telemetry.max_page_bytes - telemetry.response_bytes)
+        total_remaining = (
+            telemetry.total_budget.remaining_bytes
+            if telemetry.total_budget is not None
+            else page_remaining
+        )
+        if declared > min(page_remaining, total_remaining):
+            telemetry.declared_oversize.set()
+            raise ReferenceCaptureError("page byte limit exceeded")
+        if method == "HEAD" or 300 <= response.status_code < 400:
+            return _BufferedHttpResponse(
+                status=response.status_code,
+                headers=response_headers,
+                body=b"",
+            )
+        content_encoding = response.headers.get("content-encoding", "identity")
+        normalized_encoding = content_encoding.casefold().strip()
+        if normalized_encoding in {"", "identity"}:
+            decoder = None
+        elif normalized_encoding == "gzip":
+            decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        elif normalized_encoding == "deflate":
+            decoder = zlib.decompressobj()
+        else:
+            raise ValueError("unsupported content encoding")
+        body = bytearray()
+        async for chunk in response.aiter_raw(chunk_size=64 * 1024):
+            telemetry.record_network_bytes(len(chunk))
+            if decoder is None:
+                telemetry.record_decoded_bytes(len(chunk))
+                body.extend(chunk)
+                continue
+            pending = chunk
+            while pending:
+                remaining = telemetry.decoded_remaining_bytes
+                if remaining <= 0:
+                    raise ReferenceCaptureError("decoded page byte limit exceeded")
+                decoded = decoder.decompress(pending, remaining + 1)
+                if len(decoded) > remaining:
+                    raise ReferenceCaptureError("decoded page byte limit exceeded")
+                telemetry.record_decoded_bytes(len(decoded))
+                body.extend(decoded)
+                pending = decoder.unconsumed_tail
+            if decoder.unused_data:
+                raise ValueError("concatenated encoded response is unsupported")
+        if decoder is not None:
+            remaining = telemetry.decoded_remaining_bytes
+            decoded = decoder.flush(max(1, remaining + 1))
+            if len(decoded) > remaining:
+                raise ReferenceCaptureError("decoded page byte limit exceeded")
+            telemetry.record_decoded_bytes(len(decoded))
+            body.extend(decoded)
+        return _BufferedHttpResponse(
+            status=response.status_code,
+            headers=response_headers,
+            body=bytes(body),
+        )
+
+
+def _sync_browser_cookies(
+    client: Any, url: str, request_headers: Mapping[str, str]
+) -> None:
+    raw_cookie = next(
+        (
+            value
+            for name, value in request_headers.items()
+            if name.casefold() == "cookie"
+        ),
+        "",
+    )
+    host = urlsplit(url).hostname
+    if not raw_cookie or not host:
+        return
+    parsed = SimpleCookie()
+    try:
+        parsed.load(raw_cookie)
+    except Exception:
+        return
+    for name, morsel in parsed.items():
+        client.cookies.set(name, morsel.value, domain=host, path="/")
+
+
+def _redirect_chain(request: Any) -> tuple[str, ...]:
+    chain: list[str] = []
+    previous = request.redirected_from
+    while previous is not None and len(chain) <= 9:
+        chain.append(_without_fragment(previous.url))
+        previous = previous.redirected_from
+    chain.reverse()
+    return tuple(chain)
+
 
 async def _guarded_context_route(
     route: Any,
@@ -752,78 +935,122 @@ async def _guarded_context_route(
             except (RobotsDenied, UnsafeReferenceUrl):
                 await block("robots policy blocked document")
                 return
-    current = request.url
-    seen: set[str] = set()
-    for hop in range(9):
-        if current in seen:
-            await block("resource redirect loop blocked", current)
-            return
-        seen.add(current)
-        if guard is not None:
-            try:
-                await asyncio.to_thread(guard.validate_redirect, current)
-            except UnsafeReferenceUrl:
-                await block("unsafe destination blocked", current)
+    current = _without_fragment(request.url)
+    chain = _redirect_chain(request)
+    if len(chain) >= 8:
+        await block("resource redirect hop limit blocked", current)
+        return
+    if current in chain:
+        await block("resource redirect loop blocked", current)
+        return
+    request_headers = await request.all_headers()
+    _sync_browser_cookies(telemetry.http_client, current, request_headers)
+    seen = set(chain)
+    original_is_cross_origin = _origin_key(current) != allowed_document_origin
+    async with AsyncExitStack() as isolated_clients:
+        current_client = telemetry.http_client
+        for _hop in range(max(0, 9 - len(chain))):
+            if current in seen:
+                await block("resource redirect loop blocked", current)
                 return
-        try:
-            response = await route.fetch(
-                url=None if hop == 0 else current,
-                max_redirects=0,
-            )
-            declared = int(response.headers.get("content-length", "0") or "0")
-            if declared > telemetry.max_page_bytes:
-                telemetry.declared_oversize.set()
-                telemetry.byte_limit_error = "page byte limit exceeded"
+            seen.add(current)
+            if guard is not None:
+                try:
+                    await asyncio.to_thread(guard.validate_redirect, current)
+                except UnsafeReferenceUrl:
+                    await block("unsafe destination blocked", current)
+                    return
+            try:
+                response = await _bounded_stream_fetch(
+                    current_client,
+                    method=request.method.upper(),
+                    url=current,
+                    request_headers=request_headers,
+                    telemetry=telemetry,
+                )
+            except ReferenceCaptureError as exc:
+                telemetry.byte_limit_error = _sanitize_text(str(exc))
                 await block("response byte limit blocked", current)
                 return
-            body = await response.body()
-            header_bytes = sum(
-                len(str(name).encode("utf-8"))
-                + len(str(value).encode("utf-8"))
-                + 4
-                for name, value in response.headers.items()
-            )
-            telemetry.record_network_bytes(len(body) + header_bytes)
-        except ReferenceCaptureError as exc:
-            telemetry.byte_limit_error = _sanitize_text(str(exc))
-            await block("response byte limit blocked", current)
-            return
-        except Exception:
-            await block("resource fetch failed closed", current)
-            return
-        if not 300 <= response.status < 400:
-            headers = {
+            except Exception:
+                await block("resource fetch failed closed", current)
+                return
+            response_headers = {
                 name: value
                 for name, value in response.headers.items()
                 if name.casefold()
-                not in {"content-encoding", "content-length", "transfer-encoding"}
+                not in {
+                    "connection",
+                    "content-encoding",
+                    "content-length",
+                    "transfer-encoding",
+                }
             }
-            await route.fulfill(status=response.status, headers=headers, body=body)
-            return
-        location = response.headers.get("location")
-        if not location:
-            await block("resource redirect without location blocked", current)
-            return
-        next_url = _without_fragment(urljoin(current, location))
-        if is_document:
+            if not 300 <= response.status < 400:
+                await route.fulfill(
+                    status=response.status,
+                    headers=response_headers,
+                    body=response.body,
+                )
+                return
+            location = response.headers.get("location")
+            if not location:
+                await block("resource redirect without location blocked", current)
+                return
+            next_url = _without_fragment(urljoin(current, location))
             if guard is not None:
                 try:
                     await asyncio.to_thread(guard.validate_redirect, next_url)
                 except UnsafeReferenceUrl:
-                    await block("unsafe document redirect blocked", next_url)
+                    await block("unsafe destination blocked", next_url)
                     return
             try:
+                current_origin = _origin_key(current)
                 next_origin = _origin_key(next_url)
             except ValueError:
-                await block("malformed document redirect blocked", next_url)
+                await block("malformed redirect blocked", next_url)
                 return
-            if next_origin != allowed_document_origin:
-                await block("cross-origin document redirect blocked", next_url)
-            else:
-                await block("unexpected document redirect blocked", next_url)
-            return
-        current = next_url
-    await block("resource redirect hop limit blocked", current)
+            if is_document:
+                if next_origin != allowed_document_origin:
+                    await block("cross-origin document redirect blocked", next_url)
+                else:
+                    await block("unexpected document redirect blocked", next_url)
+                return
+            if next_origin != current_origin:
+                source_origin = urlunsplit(
+                    (urlsplit(current).scheme, urlsplit(current).netloc, "", "", "")
+                )
+                destination_origin = urlunsplit(
+                    (
+                        urlsplit(next_url).scheme,
+                        urlsplit(next_url).netloc,
+                        "",
+                        "",
+                        "",
+                    )
+                )
+                if not original_is_cross_origin:
+                    # A same-origin browser URL fulfilled with cross-origin bytes
+                    # would become script-readable and bypass native CORS.
+                    await block(
+                        "cross-origin resource redirect blocked "
+                        f"({source_origin} -> {destination_origin})",
+                        next_url,
+                    )
+                    return
+                # The browser URL was already cross-origin relative to the page,
+                # so fulfilling final bytes cannot gain same-origin privilege.
+                # A fresh client and stripped headers prevent credential leakage.
+                request_headers = {
+                    name: value
+                    for name, value in request_headers.items()
+                    if name.casefold() not in _SENSITIVE_CROSS_ORIGIN_HEADERS
+                }
+                current_client = await isolated_clients.enter_async_context(
+                    _new_streaming_client()
+                )
+            current = next_url
+        await block("resource redirect hop limit blocked", current)
 
 
 async def _install_context_policy(
@@ -836,6 +1063,15 @@ async def _install_context_policy(
     telemetry: CaptureTelemetry,
 ) -> None:
     telemetry.attach_context(context)
+    telemetry.http_client = _new_streaming_client()
+
+    def close_transport(*_args: Any) -> None:
+        try:
+            asyncio.get_running_loop().create_task(telemetry.close_http_client())
+        except RuntimeError:
+            pass
+
+    context.on("close", close_transport)
     await context.route(
         "**/*",
         lambda route, request: _guarded_context_route(
@@ -937,6 +1173,11 @@ _SCROLL_STATE_SCRIPT = r"""() => {
       if (visible.length >= 20) break;
     }
   }
+  const rootOverflow = `${getComputedStyle(document.documentElement).overflowY}|${getComputedStyle(document.body).overflowY}`;
+  const potentialVirtual = /(hidden|clip)/.test(rootOverflow) && nodes.some((el) => {
+    const s = getComputedStyle(el);
+    return (s.willChange || '').includes('transform') || (s.transform && s.transform !== 'none');
+  });
   return {
     kind: scroller === root ? 'document' : 'element',
     top: scroller === root ? (scrollY || root.scrollTop || 0) : scroller.scrollTop,
@@ -945,6 +1186,8 @@ _SCROLL_STATE_SCRIPT = r"""() => {
     rect,
     transformSignature: transformNodes.map((el) => `${el.tagName}:${getComputedStyle(el).transform}`).join('|'),
     visibleSignature: visible.join('|'),
+    potentialVirtual,
+    endProven: document.documentElement.dataset.kaigoScrollEnd === 'true' || document.body.dataset.kaigoScrollEnd === 'true',
     visible
   };
 }"""
@@ -1230,7 +1473,9 @@ async def _capture_loaded_page(
     fallback_used = False
     stable_steps = 0
     progressed = False
-    virtual = False
+    virtual = bool(state.get("potentialVirtual"))
+    if virtual:
+        modes.add("virtual")
     exhausted = True
     coverage_complete = False
     for step_index in range(settings.max_scroll_steps):
@@ -1262,6 +1507,9 @@ async def _capture_loaded_page(
             stable_steps = 0
         else:
             stable_steps += 1
+        if state.get("potentialVirtual"):
+            virtual = True
+            modes.add("virtual")
         if not top_changed and (transform_changed or visible_changed):
             virtual = True
             modes.add("virtual")
@@ -1299,7 +1547,7 @@ async def _capture_loaded_page(
                 telemetry=telemetry,
             )
         if virtual:
-            if progressed and stable_steps >= 2:
+            if state.get("endProven"):
                 exhausted = False
                 coverage_complete = True
                 break
@@ -1489,6 +1737,7 @@ async def capture_reference_page(
             await context.tracing.stop()
             return evidence
         finally:
+            await telemetry.close_http_client()
             await context.close()
             await browser.close()
 
@@ -1683,6 +1932,12 @@ class VisualReferenceCrawler:
         attempt_by_request: dict[str, tuple[CaptureTelemetry, Any, int]] = {}
         trace_active: set[int] = set()
         document_origin = _origin_key(home_url)
+
+        async def close_all_http_clients() -> None:
+            await asyncio.gather(
+                *(item.close_http_client() for item in telemetry_by_page.values()),
+                return_exceptions=True,
+            )
 
         async def stop_success_trace(context: Any) -> None:
             key = id(context.page)
@@ -1972,6 +2227,7 @@ class VisualReferenceCrawler:
         except Exception as exc:
             if isinstance(exc, ReferenceCaptureError) and exc.trace is not None:
                 failure_trace = exc.trace
+            await close_all_http_clients()
             return ReferenceCrawlResult.failed(
                 source_url=home_url,
                 failure=CrawlFailure(
@@ -1981,6 +2237,7 @@ class VisualReferenceCrawler:
                 pages=accumulator.pages,
                 started_at=started_at,
             )
+        await close_all_http_clients()
         if any(
             page.coverage_status != "complete" for page in accumulator.pages
         ):

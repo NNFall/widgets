@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Kaigo reference evidence TTL cleanup hourly
+
+[Timer]
+OnBootSec=5m
+OnUnitActiveSec=1h
+Persistent=true
+RandomizedDelaySec=2m
+Unit=kaigo-reference-cleanup.service
+
+[Install]
+WantedBy=timers.target

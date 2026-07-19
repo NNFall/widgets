@@ -246,8 +246,12 @@ Builder подключён только к сети `kaigo_builder_research` с 
 sudo bash scripts/apply_builder_egress_guard.sh
 ```
 
-Скрипт атомарно очищает и пересобирает выделенные цепочки в `DOCKER-USER` и
-`INPUT`, привязанные к стабильному bridge, а не к меняющемуся IP контейнера. Для
+Скрипт сначала собирает неизменяемые generation-цепочки вне активного пути,
+проверяет каждое правило, затем одной транзакцией `iptables-restore --noflush`
+переключает оба hook. Активная цепочка никогда не очищается на месте. Та же
+транзакция удаляет дубли, старые generation-цепочки и source-IP правила ранней
+версии guard. Правила привязаны к стабильному bridge, а не к меняющемуся IP
+контейнера. Для
 новых соединений блокируются private, link-local, loopback, multicast, reserved
 и metadata IPv4-диапазоны; established-ответы nginx не затрагиваются. После
 перезагрузки хоста правила нужно восстановить до запуска контейнера — поэтому у
@@ -264,39 +268,36 @@ sudo bash scripts/apply_builder_egress_guard.sh
 
 ## Автономная очистка private evidence
 
-Очистка не зависит от следующего запуска crawler:
+Репозиторий содержит готовые unit-файлы:
+
+- `deploy/systemd/kaigo-reference-cleanup.service`;
+- `deploy/systemd/kaigo-reference-cleanup.timer`.
+
+Они используют реальный server checkout `/root/ai_project` и evidence root
+`/root/ai_project/data/reference-evidence`. Guarded deploy устанавливает unit-файлы,
+сразу выполняет первую очистку, включает timer и проверяет состояния `enabled` и
+`active` до запуска builder-контейнера. Ручная установка:
 
 ```bash
-python scripts/cleanup_reference_evidence.py /var/lib/kaigo/reference-evidence
+cd /root/ai_project
+sudo bash scripts/install_reference_cleanup_timer.sh
+systemctl status kaigo-reference-cleanup.timer --no-pager
 ```
 
-Пример `/etc/systemd/system/kaigo-reference-cleanup.service`:
-
-```ini
-[Service]
-Type=oneshot
-User=kaigo
-WorkingDirectory=/opt/kaigo
-ExecStart=/opt/kaigo/.venv/bin/python scripts/cleanup_reference_evidence.py /var/lib/kaigo/reference-evidence
-```
-
-Пример `/etc/systemd/system/kaigo-reference-cleanup.timer`:
-
-```ini
-[Timer]
-OnBootSec=5m
-OnUnitActiveSec=15m
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-```
-
-После установки: `systemctl enable --now kaigo-reference-cleanup.timer`.
 Cleanup удаляет только каталоги с валидным Kaigo expiry-marker; свежие и
 посторонние каталоги не затрагиваются.
 
 ## Текущие ограничения
+
+- Если browser URL subresource был same-origin относительно страницы, его
+  redirect на другой origin блокируется до обращения к target и записывается в
+  `policy_blocks` с source/destination origin. Иначе ручной proxy сделал бы
+  cross-origin bytes читаемыми как same-origin и обошёл CORS. Если исходный
+  browser URL уже cross-origin, публичные redirect hops разрешены после
+  повторной SSRF-проверки, но каждый переход получает новый cookie-less client и
+  теряет `Cookie`, `Authorization`, `Proxy-Authorization` и `Referer`. Это
+  сознательное ограничение: полностью нативные redirect semantics потребуют
+  CDP/network proxy с доказанной per-hop interception.
 
 - Один полный пятиэтапный прогон может быть медленным и дорогим; перед
   коммерческим запуском нужно уменьшить повторную передачу полного артефакта и

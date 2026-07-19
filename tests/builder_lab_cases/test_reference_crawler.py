@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import gzip
 import json
 import os
 import subprocess
@@ -365,6 +366,26 @@ class LazyFixtureHandler(BaseHTTPRequestHandler):
             <h1>Lazy image fixture</h1><div class='spacer'></div><img id='late' loading='lazy' alt='late'><div class='tail'></div>
             <script>addEventListener('wheel',()=>{if(!late.src)late.src='/lazy.png'},{passive:true})</script>"""
             content_type = "text/html; charset=utf-8"
+        elif path == "/virtual-delayed":
+            body = b"""<!doctype html><meta charset='utf-8'>
+            <style>
+              html,body{margin:0;height:100%;overflow:hidden;background:white}
+              #scene{will-change:transform}.tail{height:900px;background:#ddd}
+            </style>
+            <main id='scene'><h1>Delayed virtual layout</h1>
+              <section id='real' hidden><h2>Real virtual end</h2></section>
+              <div class='tail'>Tail</div></main>
+            <script>
+              let wheels=0; const scene=document.querySelector('#scene');
+              addEventListener('wheel',()=>{
+                wheels += 1;
+                if(wheels >= 4) {
+                  real.hidden=false;
+                  scene.style.transform='translateY(-500px)';
+                }
+              },{passive:true});
+            </script>"""
+            content_type = "text/html; charset=utf-8"
         elif path.startswith("/virtual"):
             body = b"""<!doctype html><meta charset='utf-8'>
             <style>
@@ -382,6 +403,7 @@ class LazyFixtureHandler(BaseHTTPRequestHandler):
                 offset=Math.min(1200,offset+Math.max(0,event.deltaY));
                 scene.style.transform=`translateY(${-offset}px)`;
                 if(offset>400) document.querySelector('.reveal').classList.add('seen');
+                if(offset>=1200) document.body.dataset.kaigoScrollEnd='true';
               },{passive:true});
             </script>"""
             content_type = "text/html; charset=utf-8"
@@ -440,6 +462,167 @@ class HitOnlyHandler(BaseHTTPRequestHandler):
         pass
 
 
+class ChunkedBudgetHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    chunk_size = 16 * 1024
+    total_size = 8 * 1024 * 1024
+    bytes_sent = 0
+    disconnected = False
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
+    def do_GET(self):
+        if self.path == "/robots.txt":
+            body = b"User-agent: *\nAllow: /\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        type(self).bytes_sent = 0
+        type(self).disconnected = False
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Transfer-Encoding", "chunked")
+        if self.path == "/gzip-bomb":
+            self.send_header("Content-Encoding", "gzip")
+        self.end_headers()
+        payload = (
+            gzip.compress(b"x" * (2 * 1024 * 1024), compresslevel=9)
+            if self.path == "/gzip-bomb"
+            else b"x" * self.total_size
+        )
+        try:
+            for offset in range(0, len(payload), self.chunk_size):
+                chunk = payload[offset : offset + self.chunk_size]
+                self.wfile.write(f"{len(chunk):x}\r\n".encode("ascii"))
+                self.wfile.write(chunk)
+                self.wfile.write(b"\r\n")
+                self.wfile.flush()
+                type(self).bytes_sent += len(chunk)
+                time.sleep(0.004)
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            type(self).disconnected = True
+
+    def log_message(self, _format, *_args):
+        pass
+
+
+class CrossOriginTargetHandler(BaseHTTPRequestHandler):
+    received_cookie = None
+    received_authorization = None
+    hits = 0
+
+    def do_GET(self):
+        type(self).hits += 1
+        type(self).received_cookie = self.headers.get("Cookie")
+        type(self).received_authorization = self.headers.get("Authorization")
+        body = b"cross-origin-secret"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format, *_args):
+        pass
+
+
+class CredentialRedirectSourceHandler(BaseHTTPRequestHandler):
+    target_url = ""
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
+    def do_GET(self):
+        if self.path == "/cors-start":
+            self.send_response(302)
+            self.send_header("Location", self.target_url)
+            self.end_headers()
+            return
+        body = b"""<!doctype html><meta charset='utf-8'>
+        <h1>Credential redirect fixture</h1><h2 id='cors'>CORS PENDING</h2>
+        <script>
+          fetch('/cors-start', {headers: {Authorization: 'Bearer source-secret'}})
+            .then(response => response.text())
+            .then(() => { cors.textContent = 'CORS READABLE'; })
+            .catch(() => { cors.textContent = 'CORS BLOCKED'; });
+        </script>"""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Set-Cookie", "source_secret=must-not-leak; Path=/")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format, *_args):
+        pass
+
+
+class CrossOriginCdnRedirectHandler(BaseHTTPRequestHandler):
+    target_url = ""
+
+    def do_GET(self):
+        self.send_response(302)
+        self.send_header("Location", self.target_url)
+        self.send_header("Set-Cookie", "cdn_secret=must-not-leak; Path=/")
+        self.end_headers()
+
+    def log_message(self, _format, *_args):
+        pass
+
+
+class CrossOriginCdnTargetHandler(BaseHTTPRequestHandler):
+    hits = 0
+    received_cookie = None
+    received_authorization = None
+    received_referer = None
+
+    def do_GET(self):
+        type(self).hits += 1
+        type(self).received_cookie = self.headers.get("Cookie")
+        type(self).received_authorization = self.headers.get("Authorization")
+        type(self).received_referer = self.headers.get("Referer")
+        body = b"document.querySelector('#cdn').textContent = 'CDN LOADED';"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/javascript")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format, *_args):
+        pass
+
+
+class CrossOriginAssetPageHandler(BaseHTTPRequestHandler):
+    asset_url = ""
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
+    def do_GET(self):
+        body = (
+            "<!doctype html><meta charset='utf-8'>"
+            "<h1>Cross origin CDN fixture</h1><h2 id='cdn'>CDN PENDING</h2>"
+            f"<script src={json.dumps(self.asset_url)}></script>"
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, _format, *_args):
+        pass
+
+
 class PermissiveLocalGuard:
     def validate(self, url):
         parsed = urlsplit(url)
@@ -466,6 +649,206 @@ class SelectiveLocalGuard(PermissiveLocalGuard):
 
 
 class BrowserLifecycleTests(unittest.TestCase):
+    def test_chunked_response_is_aborted_near_byte_cap_without_full_buffering(self):
+        reason = browser_unavailable_reason()
+        if reason:
+            self.skipTest(f"Playwright Chromium unavailable: {reason}")
+        ChunkedBudgetHandler.bytes_sent = 0
+        ChunkedBudgetHandler.disconnected = False
+        server = ThreadingHTTPServer(("127.0.0.1", 0), ChunkedBudgetHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        cap = 256 * 1024
+        budget = CrawlByteBudget(cap)
+        try:
+            with self.assertRaisesRegex(Exception, "byte limit"):
+                asyncio.run(
+                    capture_reference_page(
+                        f"http://127.0.0.1:{server.server_port}/chunked",
+                        page_id="chunked",
+                        category="home",
+                        viewport="desktop",
+                        settings=CaptureSettings(
+                            width=1440,
+                            height=900,
+                            warmup_ms=1000,
+                            scroll_delay_ms=600,
+                            final_settle_ms=500,
+                            max_scroll_steps=2,
+                            max_page_bytes=cap,
+                        ),
+                        guard=PermissiveLocalGuard(),
+                        byte_budget=budget,
+                    )
+                )
+            deadline = time.time() + 2
+            while not ChunkedBudgetHandler.disconnected and time.time() < deadline:
+                time.sleep(0.02)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+        self.assertLessEqual(budget.used_bytes, cap + 64 * 1024)
+        self.assertLess(ChunkedBudgetHandler.bytes_sent, 1024 * 1024)
+        self.assertTrue(ChunkedBudgetHandler.disconnected)
+
+    def test_compressed_response_cannot_expand_past_decoded_memory_cap(self):
+        reason = browser_unavailable_reason()
+        if reason:
+            self.skipTest(f"Playwright Chromium unavailable: {reason}")
+        server = ThreadingHTTPServer(("127.0.0.1", 0), ChunkedBudgetHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        cap = 256 * 1024
+        budget = CrawlByteBudget(cap)
+        try:
+            with self.assertRaisesRegex(Exception, "decoded page byte limit"):
+                asyncio.run(
+                    capture_reference_page(
+                        f"http://127.0.0.1:{server.server_port}/gzip-bomb",
+                        page_id="gzip-bomb",
+                        category="home",
+                        viewport="desktop",
+                        settings=CaptureSettings(
+                            width=1440,
+                            height=900,
+                            warmup_ms=1000,
+                            scroll_delay_ms=600,
+                            final_settle_ms=500,
+                            max_scroll_steps=2,
+                            max_page_bytes=cap,
+                        ),
+                        guard=PermissiveLocalGuard(),
+                        byte_budget=budget,
+                    )
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+        self.assertLess(budget.used_bytes, 64 * 1024)
+
+    def test_cross_origin_redirect_preserves_browser_credential_and_cors_semantics(self):
+        reason = browser_unavailable_reason()
+        if reason:
+            self.skipTest(f"Playwright Chromium unavailable: {reason}")
+        CrossOriginTargetHandler.hits = 0
+        CrossOriginTargetHandler.received_cookie = None
+        CrossOriginTargetHandler.received_authorization = None
+        target = ThreadingHTTPServer(("127.0.0.1", 0), CrossOriginTargetHandler)
+        source = ThreadingHTTPServer(("127.0.0.1", 0), CredentialRedirectSourceHandler)
+        CredentialRedirectSourceHandler.target_url = (
+            f"http://localhost:{target.server_port}/secret"
+        )
+        threads = [
+            threading.Thread(target=target.serve_forever, daemon=True),
+            threading.Thread(target=source.serve_forever, daemon=True),
+        ]
+        for thread in threads:
+            thread.start()
+        try:
+            evidence = asyncio.run(
+                capture_reference_page(
+                    f"http://127.0.0.1:{source.server_port}/",
+                    page_id="credentials",
+                    category="home",
+                    viewport="desktop",
+                    settings=CaptureSettings(
+                        width=1440,
+                        height=900,
+                        warmup_ms=1500,
+                        scroll_delay_ms=600,
+                        final_settle_ms=500,
+                        max_scroll_steps=2,
+                    ),
+                    guard=PermissiveLocalGuard(),
+                )
+            )
+        finally:
+            source.shutdown()
+            source.server_close()
+            target.shutdown()
+            target.server_close()
+            for thread in threads:
+                thread.join(timeout=2)
+        self.assertEqual(CrossOriginTargetHandler.hits, 0)
+        self.assertIsNone(CrossOriginTargetHandler.received_cookie)
+        self.assertIsNone(CrossOriginTargetHandler.received_authorization)
+        headings = tuple(evidence.semantic_sample.get("headings", ()))
+        self.assertIn("CORS BLOCKED", headings)
+        self.assertNotIn("CORS READABLE", headings)
+        redirect_blocks = [
+            item
+            for item in evidence.policy_blocks
+            if "cross-origin resource redirect blocked" in item
+        ]
+        self.assertEqual(len(redirect_blocks), 1)
+        self.assertIn(f"127.0.0.1:{source.server_port}", redirect_blocks[0])
+        self.assertIn(f"localhost:{target.server_port}", redirect_blocks[0])
+        self.assertNotIn("source-secret", redirect_blocks[0])
+
+    def test_already_cross_origin_asset_may_redirect_without_credentials(self):
+        reason = browser_unavailable_reason()
+        if reason:
+            self.skipTest(f"Playwright Chromium unavailable: {reason}")
+        final = ThreadingHTTPServer(("127.0.0.1", 0), CrossOriginCdnTargetHandler)
+        redirect = ThreadingHTTPServer(
+            ("127.0.0.1", 0), CrossOriginCdnRedirectHandler
+        )
+        source = ThreadingHTTPServer(("127.0.0.1", 0), CrossOriginAssetPageHandler)
+        CrossOriginCdnRedirectHandler.target_url = (
+            f"http://localhost:{final.server_port}/asset.js"
+        )
+        CrossOriginAssetPageHandler.asset_url = (
+            f"http://localhost:{redirect.server_port}/asset-start.js"
+        )
+        CrossOriginCdnTargetHandler.hits = 0
+        CrossOriginCdnTargetHandler.received_cookie = None
+        CrossOriginCdnTargetHandler.received_authorization = None
+        CrossOriginCdnTargetHandler.received_referer = None
+        servers = (source, redirect, final)
+        threads = [
+            threading.Thread(target=server.serve_forever, daemon=True)
+            for server in servers
+        ]
+        for thread in threads:
+            thread.start()
+        try:
+            evidence = asyncio.run(
+                capture_reference_page(
+                    f"http://127.0.0.1:{source.server_port}/",
+                    page_id="cdn",
+                    category="home",
+                    viewport="desktop",
+                    settings=CaptureSettings(
+                        width=1440,
+                        height=900,
+                        warmup_ms=1200,
+                        scroll_delay_ms=600,
+                        final_settle_ms=500,
+                        max_scroll_steps=2,
+                    ),
+                    guard=PermissiveLocalGuard(),
+                )
+            )
+        finally:
+            for server in servers:
+                server.shutdown()
+                server.server_close()
+            for thread in threads:
+                thread.join(timeout=2)
+        self.assertEqual(CrossOriginCdnTargetHandler.hits, 1)
+        self.assertIsNone(CrossOriginCdnTargetHandler.received_cookie)
+        self.assertIsNone(CrossOriginCdnTargetHandler.received_authorization)
+        self.assertIsNone(CrossOriginCdnTargetHandler.received_referer)
+        self.assertIn("CDN LOADED", evidence.semantic_sample["headings"])
+        self.assertFalse(
+            any(
+                "cross-origin resource redirect blocked" in item
+                for item in evidence.policy_blocks
+            )
+        )
+
     def test_required_home_incomplete_coverage_marks_top_level_partial(self):
         reason = browser_unavailable_reason()
         if reason:
@@ -865,6 +1248,40 @@ class BrowserLifecycleTests(unittest.TestCase):
         self.assertLess(abs(transforms["middle"]), abs(transforms["bottom"]))
         self.assertEqual(abs(transforms["bottom"]), 1200)
         self.assertEqual(evidence.scroll_strategy, "virtual")
+
+    def test_virtual_scroller_without_proven_end_never_synthesizes_bottom(self):
+        reason = browser_unavailable_reason()
+        if reason:
+            self.skipTest(f"Playwright Chromium unavailable: {reason}")
+        server = ThreadingHTTPServer(("127.0.0.1", 0), LazyFixtureHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            evidence = asyncio.run(
+                capture_reference_page(
+                    f"http://127.0.0.1:{server.server_port}/virtual-delayed",
+                    page_id="virtual-delayed",
+                    category="home",
+                    viewport="desktop",
+                    settings=CaptureSettings(
+                        width=1440,
+                        height=900,
+                        warmup_ms=1000,
+                        scroll_delay_ms=600,
+                        final_settle_ms=500,
+                        max_scroll_steps=6,
+                    ),
+                    guard=PermissiveLocalGuard(),
+                )
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+        self.assertEqual(evidence.coverage_status, "partial")
+        self.assertIn("last_observed", {shot.position for shot in evidence.screenshots})
+        self.assertNotIn("bottom", {shot.position for shot in evidence.screenshots})
+        self.assertIn("Real virtual end", evidence.semantic_sample["headings"])
 
     def test_off_center_nested_scroller_receives_real_wheel_event(self):
         reason = browser_unavailable_reason()

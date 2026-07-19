@@ -12,12 +12,20 @@ from builder_lab.reference_models import (
 
 
 class ReferenceModelsTests(unittest.TestCase):
-    def screenshot(self, *, payload: bytes = b"jpeg-bytes") -> ScreenshotEvidence:
+    def screenshot(
+        self,
+        *,
+        payload: bytes = b"jpeg-bytes",
+        screenshot_id: str = "home-desktop-bottom",
+        page_id: str = "home",
+        viewport: str = "desktop",
+        position: str = "bottom",
+    ) -> ScreenshotEvidence:
         return ScreenshotEvidence(
-            screenshot_id="home-desktop-bottom",
-            page_id="home",
-            viewport="desktop",
-            position="bottom",
+            screenshot_id=screenshot_id,
+            page_id=page_id,
+            viewport=viewport,
+            position=position,
             mime_type="image/jpeg",
             width=1440,
             height=900,
@@ -27,6 +35,11 @@ class ReferenceModelsTests(unittest.TestCase):
         )
 
     def test_public_serialization_excludes_raw_screenshot_bytes(self):
+        top = self.screenshot(
+            payload=b"top-bytes",
+            screenshot_id="home-desktop-top",
+            position="top",
+        )
         screenshot = self.screenshot()
         page = ReferencePageEvidence(
             page_id="home",
@@ -34,7 +47,7 @@ class ReferenceModelsTests(unittest.TestCase):
             requested_url="https://example.com/",
             final_url="https://example.com/",
             depth=0,
-            screenshots=(screenshot,),
+            screenshots=(top, screenshot),
             semantic_sample={"headings": ["Example"]},
             style_sample={"fonts": ["Inter"]},
             scroll_strategy="document",
@@ -49,7 +62,11 @@ class ReferenceModelsTests(unittest.TestCase):
 
         payload = result.to_dict()
 
-        public_screenshot = payload["pages"][0]["screenshots"][0]
+        public_screenshot = next(
+            item
+            for item in payload["pages"][0]["screenshots"]
+            if item["position"] == "bottom"
+        )
         self.assertNotIn("data", public_screenshot)
         self.assertEqual(public_screenshot["sha256"], screenshot.sha256)
         self.assertEqual(result.screenshot_bytes()[screenshot.screenshot_id], b"jpeg-bytes")
@@ -167,6 +184,183 @@ class ReferenceModelsTests(unittest.TestCase):
         self.assertEqual(tuple(page.semantic_sample["headings"]), ("Original",))
         self.assertEqual(public["requested_url"], "https://example.com/")
         self.assertEqual(public["final_url"], "https://example.com/final")
+
+    def test_page_coverage_requires_coherent_position_contract(self):
+        kwargs = {
+            "page_id": "home",
+            "category": "home",
+            "requested_url": "https://example.com/",
+            "final_url": "https://example.com/",
+            "depth": 0,
+            "scroll_strategy": "document",
+            "reset_strategy": "not-required-top-first",
+        }
+        top = self.screenshot(
+            payload=b"top",
+            screenshot_id="home-desktop-top",
+            position="top",
+        )
+        bottom = self.screenshot(payload=b"bottom")
+        last = self.screenshot(
+            payload=b"last",
+            screenshot_id="home-desktop-last",
+            position="last_observed",
+        )
+        mobile_bottom = self.screenshot(
+            payload=b"mobile",
+            screenshot_id="home-mobile-bottom",
+            viewport="mobile",
+        )
+
+        for changes in (
+            {"coverage_status": "complete", "screenshots": (bottom,)},
+            {
+                "coverage_status": "complete",
+                "screenshots": (top, mobile_bottom),
+            },
+            {
+                "coverage_status": "partial",
+                "screenshots": (last,),
+                "skipped_reasons": ("step cap",),
+            },
+            {"coverage_status": "not_captured", "screenshots": (top,)},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                ReferencePageEvidence(**kwargs, **changes)
+
+        partial = ReferencePageEvidence(
+            **kwargs,
+            coverage_status="partial",
+            screenshots=(top, last),
+            skipped_reasons=("step cap",),
+        )
+        self.assertEqual(partial.coverage_status, "partial")
+
+    def test_result_status_requires_nonempty_coherent_coverage(self):
+        now = datetime.now(timezone.utc)
+        top = self.screenshot(
+            payload=b"top",
+            screenshot_id="home-desktop-top",
+            position="top",
+        )
+        bottom = self.screenshot(payload=b"bottom")
+        last = self.screenshot(
+            payload=b"last",
+            screenshot_id="home-desktop-last",
+            position="last_observed",
+        )
+        complete = ReferencePageEvidence(
+            page_id="home",
+            category="home",
+            requested_url="https://example.com/",
+            final_url="https://example.com/",
+            depth=0,
+            screenshots=(top, bottom),
+            coverage_status="complete",
+            scroll_strategy="document",
+            reset_strategy="not-required-top-first",
+        )
+        partial = ReferencePageEvidence(
+            page_id="home",
+            category="home",
+            requested_url="https://example.com/",
+            final_url="https://example.com/",
+            depth=0,
+            screenshots=(top, last),
+            coverage_status="partial",
+            scroll_strategy="document",
+            reset_strategy="not-required-top-first",
+            skipped_reasons=("step cap",),
+        )
+
+        with self.assertRaises(ValueError):
+            ReferenceCrawlResult.succeeded(
+                source_url="https://example.com/", pages=(), started_at=now
+            )
+        with self.assertRaises(ValueError):
+            ReferenceCrawlResult.succeeded(
+                source_url="https://example.com/", pages=(partial,), started_at=now
+            )
+        with self.assertRaises(ValueError):
+            ReferenceCrawlResult.partial(
+                source_url="https://example.com/", pages=(complete,), started_at=now
+            )
+        with self.assertRaises(ValueError):
+            ReferenceCrawlResult.partial(
+                source_url="https://example.com/", pages=(), started_at=now
+            )
+
+    def test_result_rejects_same_page_and_viewport_with_different_shot_counts(self):
+        now = datetime.now(timezone.utc)
+        top = self.screenshot(
+            payload=b"top",
+            screenshot_id="home-desktop-top",
+            position="top",
+        )
+        middle = self.screenshot(
+            payload=b"middle",
+            screenshot_id="home-desktop-middle",
+            position="middle",
+        )
+        bottom = self.screenshot(payload=b"bottom")
+        base = {
+            "page_id": "home",
+            "category": "home",
+            "requested_url": "https://example.com/",
+            "final_url": "https://example.com/",
+            "depth": 0,
+            "coverage_status": "complete",
+            "scroll_strategy": "document",
+            "reset_strategy": "not-required-top-first",
+        }
+        two_shots = ReferencePageEvidence(**base, screenshots=(top, bottom))
+        three_shots = ReferencePageEvidence(
+            **base, screenshots=(top, middle, bottom)
+        )
+
+        with self.assertRaisesRegex(ValueError, "duplicate page evidence"):
+            ReferenceCrawlResult.succeeded(
+                source_url="https://example.com/",
+                pages=(two_shots, three_shots),
+                started_at=now,
+            )
+
+    def test_result_rejects_globally_duplicate_screenshot_ids(self):
+        now = datetime.now(timezone.utc)
+
+        def page(page_id: str, url: str) -> ReferencePageEvidence:
+            top = self.screenshot(
+                payload=f"{page_id}-top".encode(),
+                screenshot_id="shared-screenshot-id",
+                page_id=page_id,
+                position="top",
+            )
+            bottom = self.screenshot(
+                payload=f"{page_id}-bottom".encode(),
+                screenshot_id=f"{page_id}-desktop-bottom",
+                page_id=page_id,
+            )
+            return ReferencePageEvidence(
+                page_id=page_id,
+                category="general",
+                requested_url=url,
+                final_url=url,
+                depth=0,
+                screenshots=(top, bottom),
+                coverage_status="complete",
+                scroll_strategy="document",
+                reset_strategy="not-required-top-first",
+            )
+
+        with self.assertRaisesRegex(ValueError, "duplicate screenshot_id"):
+            ReferenceCrawlResult.succeeded(
+                source_url="https://example.com/",
+                pages=(
+                    page("home", "https://example.com/"),
+                    page("about", "https://example.com/about"),
+                ),
+                started_at=now,
+            )
 
 
 if __name__ == "__main__":

@@ -8,9 +8,13 @@ trap cleanup_on_error ERR
 
 docker compose --profile builder-lab build builder-lab
 docker compose --profile builder-lab create --force-recreate --no-deps builder-lab
+
+# The container remains stopped until both host safety controls are installed
+# and positively verified. There is no post-start policy installation window.
 sudo bash scripts/apply_builder_egress_guard.sh
+sudo bash scripts/install_reference_cleanup_timer.sh
+
 docker compose --profile builder-lab start builder-lab
-sudo bash scripts/apply_builder_egress_guard.sh
 
 trap - ERR
 docker compose --profile builder-lab ps builder-lab
