@@ -76,19 +76,27 @@ Kaigo slice. Для управляемости и изоляции выбира�
 2. открыть страницу и дождаться `domcontentloaded`, затем `load` в пределах
    timeout, `document.fonts.ready` и загрузки видимых изображений;
 3. выдержать configurable post-load warm-up, по умолчанию 5 секунд;
-4. прокручивать вниз шагами около 70% viewport с configurable паузой,
+4. прокручивать вниз шагами около 70% viewport с configurable паузой через
+   реальные wheel/touch-equivalent browser actions, а не одним `scrollTo`,
    по умолчанию 750 ms (допустимый профиль 600–1200 ms), чтобы сработали
    lazy-load и reveal; остановиться после двух неизменившихся
    `scrollHeight` или по жёсткому лимиту steps/time/height;
-5. по пути зафиксировать top/middle/bottom viewport tiles и наблюдаемые
-   animation/transition properties;
-6. вернуть страницу наверх, дождаться 1.5 секунды стабильного layout и снять
-   стабильные tiles/full-page evidence; для reproducible QA finite CSS motion
+5. обнаружить фактический scrolling element, вложенные overflow-контейнеры и
+   virtual-scroll через transform; если `window.scrollY` расходится с видимым
+   содержимым, продолжить проход по реальному контейнеру и пометить стратегию в
+   evidence;
+6. по пути зафиксировать top/middle/bottom viewport tiles и наблюдаемые
+   animation/transition properties; stitched `fullPage` остаётся только
+   best-effort приложением и никогда не является screenshot oracle;
+7. перед эталонным top tile вернуть реальный scrolling element наверх; если
+   custom/virtual scroll не сбрасывается надёжно, перезагрузить страницу, снова
+   выполнить warm-up и отдельно зафиксировать reset strategy; дождаться 1.5
+   секунды стабильного layout; для reproducible QA finite CSS motion
    fast-forward-ится, но только после scroll warm-up;
-7. извлечь не весь DOM, а bounded semantic/style sample: headings, body, nav,
+8. извлечь не весь DOM, а bounded semantic/style sample: headings, body, nav,
    links/buttons, surfaces, borders, radii, shadows, spacing, dominant colors,
    fonts, images/aspect ratios и fixed/sticky controls;
-8. сохранить screenshot hashes, console/network failures, final URL, timings и
+9. сохранить screenshot hashes, console/network failures, final URL, timings и
    причины пропуска элементов; Playwright trace хранить только для failed run с
    коротким TTL.
 
