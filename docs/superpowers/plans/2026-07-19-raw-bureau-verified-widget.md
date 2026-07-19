@@ -109,6 +109,7 @@ Docker Compose, nginx, встроенный Browser skill Codex.
 - изменить `builder_lab/preview.py`;
 - изменить `builder_lab/demo.py`;
 - изменить `builder_lab/web.py`;
+- изменить `builder_lab/ui.py`;
 - изменить `builder_lab/config.py`;
 - изменить `scripts/run_builder_lab.py`;
 - изменить `scripts/smoke_builder_lab.py`;
@@ -123,11 +124,14 @@ Docker Compose, nginx, встроенный Browser skill Codex.
    Enter/Shift+Enter/IME, Escape/focus и session-preserving close/open.
 2. Написать failing tests на `GeminiDemoChatService`: одна history на session,
    максимум 8 turns, 1000 символов, one in-flight, TTL/capacity, low thinking,
-   max 384 output tokens, no tools, provider errors без потери retry text.
+   max 384 output tokens, no tools, provider errors без потери retry text,
+   idempotent request id, per-session/IP rate limit и global provider cap.
 3. Добавить `/demo/chat` и `/api/runs/{run_id}/chat` с HttpOnly SameSite cookie,
    request IDs, JSON errors и server-side ключом.
 4. Parent bridge валидирует `event.source`, protocol, channel, request/revision,
    payload length; iframe сохраняет `connect-src 'none'`.
+   Sandboxed opaque origin не используется как trust signal; `ui.py` и public
+   demo используют один nonce-bound protocol v2.
 5. Переделать public demo shell: widget — основной интерактивный объект, evidence
    metadata свёрнута; убрать 760px/680px hard-coding и ложные формулировки.
 6. `BuilderDemo` хранит проверенный `source_url` и chat system prompt; старый v1
