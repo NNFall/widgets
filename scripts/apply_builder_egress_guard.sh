@@ -1,26 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Re-apply after every container recreate because its bridge address can change.
-# These rules mitigate private egress; they do not claim to pin DNS answers.
-container_id="$(docker compose --profile builder-lab ps -q builder-lab)"
-if [[ -z "${container_id}" ]]; then
-  echo "builder-lab container is not running" >&2
-  exit 1
-fi
+[[ "${EUID}" -eq 0 ]] || { echo "run as root" >&2; exit 1; }
+command -v iptables >/dev/null || { echo "iptables is required" >&2; exit 1; }
 
-builder_ip="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${container_id}")"
-if [[ -z "${builder_ip}" ]]; then
-  echo "builder-lab container has no bridge IPv4 address" >&2
-  exit 1
-fi
+BRIDGE="br-kaigo-build"
+SUBNET="172.30.240.0/28"
+FORWARD_CHAIN="KAIGO-BUILDER-EGRESS"
+HOST_CHAIN="KAIGO-BUILDER-HOST"
+IPT=(iptables -w 10)
 
-ensure_reject() {
-  local destination="$1"
-  if ! iptables -C DOCKER-USER -s "${builder_ip}" -d "${destination}" -j REJECT 2>/dev/null; then
-    iptables -I DOCKER-USER 1 -s "${builder_ip}" -d "${destination}" -j REJECT
-  fi
+ensure_chain() {
+  local chain="$1"
+  "${IPT[@]}" -N "${chain}" 2>/dev/null || true
+  "${IPT[@]}" -F "${chain}"
 }
+
+replace_hook() {
+  local parent="$1" bridge="$2" target="$3"
+  while "${IPT[@]}" -C "${parent}" -i "${bridge}" -j "${target}" 2>/dev/null; do
+    "${IPT[@]}" -D "${parent}" -i "${bridge}" -j "${target}"
+  done
+  "${IPT[@]}" -I "${parent}" 1 -i "${bridge}" -j "${target}"
+}
+
+ensure_chain "${FORWARD_CHAIN}"
+ensure_chain "${HOST_CHAIN}"
 
 for network in \
   0.0.0.0/8 \
@@ -29,11 +34,33 @@ for network in \
   127.0.0.0/8 \
   169.254.0.0/16 \
   172.16.0.0/12 \
+  192.0.0.0/24 \
+  192.0.2.0/24 \
+  192.88.99.0/24 \
   192.168.0.0/16 \
+  198.18.0.0/15 \
+  198.51.100.0/24 \
+  203.0.113.0/24 \
   224.0.0.0/4 \
   240.0.0.0/4
 do
-  ensure_reject "${network}"
+  "${IPT[@]}" -A "${FORWARD_CHAIN}" -s "${SUBNET}" -d "${network}" \
+    -m conntrack --ctstate NEW -j REJECT
 done
+"${IPT[@]}" -A "${FORWARD_CHAIN}" -j RETURN
 
-echo "DOCKER-USER private-egress guard installed for ${builder_ip}"
+# A new connection from the research bridge to any host-owned address is denied.
+# Replies for established nginx -> builder traffic do not match ctstate NEW.
+"${IPT[@]}" -A "${HOST_CHAIN}" -s "${SUBNET}" \
+  -m conntrack --ctstate NEW -j REJECT
+"${IPT[@]}" -A "${HOST_CHAIN}" -j RETURN
+
+replace_hook DOCKER-USER "${BRIDGE}" "${FORWARD_CHAIN}"
+replace_hook INPUT "${BRIDGE}" "${HOST_CHAIN}"
+
+"${IPT[@]}" -C DOCKER-USER -i "${BRIDGE}" -j "${FORWARD_CHAIN}"
+"${IPT[@]}" -C INPUT -i "${BRIDGE}" -j "${HOST_CHAIN}"
+"${IPT[@]}" -C "${FORWARD_CHAIN}" -s "${SUBNET}" -d 169.254.0.0/16 \
+  -m conntrack --ctstate NEW -j REJECT
+
+echo "stable Kaigo builder egress guard installed for ${BRIDGE} (${SUBNET})"

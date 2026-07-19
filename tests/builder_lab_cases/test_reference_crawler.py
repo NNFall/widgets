@@ -18,6 +18,7 @@ import builder_lab.reference_crawler as reference_crawler_module
 from builder_lab.reference_crawler import (
     CaptureSettings,
     CrawlAccumulator,
+    CrawlByteBudget,
     GuardedUrl,
     LinkCandidate,
     ReferenceCrawlLimits,
@@ -141,12 +142,31 @@ class SelectionTests(unittest.TestCase):
         self.assertTrue(limits.respect_robots)
         self.assertEqual(limits.max_pages, 5)
         self.assertEqual(limits.concurrency_per_host, 1)
+        self.assertEqual(limits.max_scroll_steps, 40)
+        self.assertEqual(limits.total_timeout_seconds, 300)
+        self.assertEqual(limits.max_page_bytes, 25 * 1024 * 1024)
+        self.assertEqual(limits.max_total_bytes, 100 * 1024 * 1024)
         with self.assertRaises(ValueError):
             ReferenceCrawlLimits(max_pages=6)
         with self.assertRaises(ValueError):
             ReferenceCrawlLimits(scroll_delay_ms=599)
         with self.assertRaises(ValueError):
             ReferenceCrawlLimits(scroll_delay_ms=1201)
+
+    def test_attempts_mobile_and_screenshots_share_one_monotonic_budget(self):
+        budget = CrawlByteBudget(100)
+        budget.consume(
+            55, source="failed-desktop-network", charge_id="attempt-1:response"
+        )
+        budget.consume(
+            55, source="duplicate-error-handler", charge_id="attempt-1:response"
+        )
+        budget.consume(30, source="mobile-network", charge_id="mobile:response")
+        with self.assertRaisesRegex(Exception, "crawl byte limit"):
+            budget.consume(
+                20, source="mobile-screenshot", charge_id="mobile:screenshot"
+            )
+        self.assertEqual(budget.used_bytes, 105)
 
     def test_retry_accumulator_commits_only_after_enqueue_succeeds(self):
         accumulator = CrawlAccumulator(
@@ -250,12 +270,44 @@ class LazyFixtureHandler(BaseHTTPRequestHandler):
     external_target = ""
     fail_services = False
 
+    def do_HEAD(self):
+        path = self.path.split("?", 1)[0]
+        self.hit_counts[path] = self.hit_counts.get(path, 0) + 1
+        redirects = {
+            "/doc-start": "/doc-second",
+            "/doc-second": self.external_target,
+            "/loop-a": "/loop-b",
+            "/loop-b": "/loop-a",
+        }
+        if path in redirects:
+            self.send_response(302)
+            self.send_header("Location", redirects[path])
+        else:
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         self.hit_counts[path] = self.hit_counts.get(path, 0) + 1
         if path == "/cross-redirect":
             self.send_response(302)
             self.send_header("Location", self.external_target)
+            self.end_headers()
+            return
+        redirects = {
+            "/doc-start": "/doc-second",
+            "/doc-second": self.external_target,
+            "/loop-a": "/loop-b",
+            "/loop-b": "/loop-a",
+            "/asset-safe-start": "/asset-safe-second",
+            "/asset-safe-second": "/lazy.png",
+            "/asset-private-start": "/asset-private-second",
+            "/asset-private-second": self.external_target,
+        }
+        if path in redirects:
+            self.send_response(302)
+            self.send_header("Location", redirects[path])
             self.end_headers()
             return
         if path == "/services" and self.fail_services:
@@ -284,6 +336,13 @@ class LazyFixtureHandler(BaseHTTPRequestHandler):
                 + json.dumps(self.external_target)
                 + ", '_blank')</script>"
             ).encode()
+            content_type = "text/html; charset=utf-8"
+        elif path == "/redirect-assets":
+            body = b"""<!doctype html><meta charset='utf-8'>
+            <style>img{width:100px;height:100px;display:block}</style>
+            <h1>Redirected assets</h1>
+            <img src='/asset-safe-start' alt='redirect-safe'>
+            <img src='/asset-private-start' alt='redirect-private'>"""
             content_type = "text/html; charset=utf-8"
         elif path == "/nested":
             body = b"""<!doctype html><meta charset='utf-8'>
@@ -371,6 +430,12 @@ class HitOnlyHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_HEAD(self):
+        type(self).hits += 1
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def log_message(self, _format, *_args):
         pass
 
@@ -388,7 +453,53 @@ class PermissiveLocalGuard:
     validate_redirect = validate
 
 
+class SelectiveLocalGuard(PermissiveLocalGuard):
+    def __init__(self, blocked_port):
+        self.blocked_port = blocked_port
+
+    def validate(self, url):
+        if urlsplit(url).port == self.blocked_port:
+            raise UnsafeReferenceUrl("all DNS answers must be public addresses")
+        return super().validate(url)
+
+    validate_redirect = validate
+
+
 class BrowserLifecycleTests(unittest.TestCase):
+    def test_required_home_incomplete_coverage_marks_top_level_partial(self):
+        reason = browser_unavailable_reason()
+        if reason:
+            self.skipTest(f"Playwright Chromium unavailable: {reason}")
+        server = ThreadingHTTPServer(("127.0.0.1", 0), LazyFixtureHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            result = asyncio.run(
+                VisualReferenceCrawler(
+                    guard=PermissiveLocalGuard(),
+                    limits=ReferenceCrawlLimits(
+                        max_pages=1,
+                        max_retries=0,
+                        warmup_ms=1000,
+                        scroll_delay_ms=600,
+                        final_settle_ms=500,
+                        max_scroll_steps=1,
+                        total_timeout_seconds=60,
+                        page_timeout_seconds=20,
+                        max_page_bytes=25 * 1024 * 1024,
+                        max_total_bytes=50 * 1024 * 1024,
+                    ),
+                ).crawl(f"http://127.0.0.1:{server.server_port}/")
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+        self.assertEqual(result.status, "partial")
+        home = next(page for page in result.pages if page.page_id == "home")
+        self.assertEqual(home.coverage_status, "partial")
+        self.assertTrue(any(page.page_id == "home-mobile" for page in result.pages))
+
     def test_non_home_failure_keeps_partial_evidence_and_mobile_home(self):
         reason = browser_unavailable_reason()
         if reason:
@@ -407,7 +518,7 @@ class BrowserLifecycleTests(unittest.TestCase):
                         warmup_ms=1000,
                         scroll_delay_ms=600,
                         final_settle_ms=500,
-                        max_scroll_steps=2,
+                        max_scroll_steps=8,
                         total_timeout_seconds=60,
                         page_timeout_seconds=20,
                         max_page_bytes=10 * 1024 * 1024,
@@ -420,7 +531,7 @@ class BrowserLifecycleTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
-        self.assertEqual(result.status, "succeeded", result.failure)
+        self.assertEqual(result.status, "partial", result.failure)
         self.assertTrue(any(page.page_id == "home-mobile" for page in result.pages))
         failed = next(page for page in result.pages if page.category == "services")
         self.assertFalse(failed.screenshots)
@@ -480,6 +591,169 @@ class BrowserLifecycleTests(unittest.TestCase):
             external_thread.join(timeout=2)
         self.assertEqual(HitOnlyHandler.hits, 0)
 
+    def test_two_hop_document_redirect_is_rejected_before_external_target(self):
+        reason = browser_unavailable_reason()
+        if reason:
+            self.skipTest(f"Playwright Chromium unavailable: {reason}")
+        HitOnlyHandler.hits = 0
+        external = ThreadingHTTPServer(("127.0.0.1", 0), HitOnlyHandler)
+        primary = ThreadingHTTPServer(("127.0.0.1", 0), LazyFixtureHandler)
+        threads = [
+            threading.Thread(target=external.serve_forever, daemon=True),
+            threading.Thread(target=primary.serve_forever, daemon=True),
+        ]
+        for thread in threads:
+            thread.start()
+        LazyFixtureHandler.external_target = (
+            f"http://127.0.0.1:{external.server_port}/never?token=secret"
+        )
+        try:
+            with self.assertRaisesRegex(Exception, "cross-origin"):
+                asyncio.run(
+                    capture_reference_page(
+                        f"http://127.0.0.1:{primary.server_port}/doc-start",
+                        page_id="redirect-chain",
+                        category="home",
+                        viewport="desktop",
+                        settings=CaptureSettings(
+                            width=1440,
+                            height=900,
+                            warmup_ms=1000,
+                            scroll_delay_ms=600,
+                            final_settle_ms=500,
+                            max_scroll_steps=2,
+                        ),
+                        guard=PermissiveLocalGuard(),
+                    )
+                )
+        finally:
+            primary.shutdown()
+            external.shutdown()
+            primary.server_close()
+            external.server_close()
+            for thread in threads:
+                thread.join(timeout=2)
+        self.assertEqual(HitOnlyHandler.hits, 0)
+
+    def test_two_hop_subresources_load_when_safe_and_block_external_target(self):
+        reason = browser_unavailable_reason()
+        if reason:
+            self.skipTest(f"Playwright Chromium unavailable: {reason}")
+        HitOnlyHandler.hits = 0
+        external = ThreadingHTTPServer(("127.0.0.1", 0), HitOnlyHandler)
+        primary = ThreadingHTTPServer(("127.0.0.1", 0), LazyFixtureHandler)
+        threads = [
+            threading.Thread(target=external.serve_forever, daemon=True),
+            threading.Thread(target=primary.serve_forever, daemon=True),
+        ]
+        for thread in threads:
+            thread.start()
+        LazyFixtureHandler.external_target = (
+            f"http://127.0.0.1:{external.server_port}/never-image"
+        )
+        try:
+            evidence = asyncio.run(
+                capture_reference_page(
+                    f"http://127.0.0.1:{primary.server_port}/redirect-assets",
+                    page_id="redirect-assets",
+                    category="home",
+                    viewport="desktop",
+                    settings=CaptureSettings(
+                        width=1440,
+                        height=900,
+                        warmup_ms=1000,
+                        scroll_delay_ms=600,
+                        final_settle_ms=500,
+                        max_scroll_steps=2,
+                    ),
+                    guard=SelectiveLocalGuard(external.server_port),
+                )
+            )
+        finally:
+            primary.shutdown()
+            external.shutdown()
+            primary.server_close()
+            external.server_close()
+            for thread in threads:
+                thread.join(timeout=2)
+        safe = next(
+            image
+            for image in evidence.style_sample["imageAspectRatios"]
+            if image["alt"] == "redirect-safe"
+        )
+        self.assertEqual(safe["width"], 1)
+        self.assertTrue(
+            any("unsafe destination" in item for item in evidence.policy_blocks)
+            or any("cross-origin" in item for item in evidence.policy_blocks)
+        )
+        self.assertEqual(HitOnlyHandler.hits, 0)
+
+    def test_document_redirect_loop_fails_closed_at_hop_limit(self):
+        reason = browser_unavailable_reason()
+        if reason:
+            self.skipTest(f"Playwright Chromium unavailable: {reason}")
+        server = ThreadingHTTPServer(("127.0.0.1", 0), LazyFixtureHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with self.assertRaisesRegex(Exception, "redirect"):
+                asyncio.run(
+                    capture_reference_page(
+                        f"http://127.0.0.1:{server.server_port}/loop-a",
+                        page_id="redirect-loop",
+                        category="home",
+                        viewport="desktop",
+                        settings=CaptureSettings(
+                            width=1440,
+                            height=900,
+                            warmup_ms=1000,
+                            scroll_delay_ms=600,
+                            final_settle_ms=500,
+                            max_scroll_steps=2,
+                        ),
+                        guard=PermissiveLocalGuard(),
+                    )
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_scroll_step_cap_marks_partial_and_never_calls_last_tile_bottom(self):
+        reason = browser_unavailable_reason()
+        if reason:
+            self.skipTest(f"Playwright Chromium unavailable: {reason}")
+        server = ThreadingHTTPServer(("127.0.0.1", 0), LazyFixtureHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            evidence = asyncio.run(
+                capture_reference_page(
+                    f"http://127.0.0.1:{server.server_port}/",
+                    page_id="partial",
+                    category="home",
+                    viewport="desktop",
+                    settings=CaptureSettings(
+                        width=1440,
+                        height=900,
+                        warmup_ms=1000,
+                        scroll_delay_ms=600,
+                        final_settle_ms=500,
+                        max_scroll_steps=1,
+                    ),
+                    guard=None,
+                )
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+        self.assertEqual(evidence.coverage_status, "partial")
+        self.assertIn("scroll_step_cap_reached", evidence.skipped_reasons)
+        positions = {shot.position for shot in evidence.screenshots}
+        self.assertIn("last_observed", positions)
+        self.assertNotIn("bottom", positions)
+
     def test_warmup_incremental_scroll_and_tiles_reveal_lazy_content(self):
         reason = browser_unavailable_reason()
         if reason:
@@ -533,7 +807,7 @@ class BrowserLifecycleTests(unittest.TestCase):
         self.assertTrue({"top", "middle", "bottom"}.issubset(positions))
         self.assertTrue(all(shot.data for shot in evidence.screenshots))
         self.assertEqual(captures[0], ("top", {"y": 0, "wheels": 0}))
-        self.assertEqual(evidence.reset_strategy, "none")
+        self.assertEqual(evidence.reset_strategy, "not-required-top-first")
         motion_text = " ".join(
             item.get("text", "") for item in evidence.style_sample["motionInventory"]
         )

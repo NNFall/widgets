@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import sys
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -134,6 +136,39 @@ class EvidenceStorageTests(unittest.TestCase):
             allow_workspace=True,
         )
         self.assertTrue(accepted.is_absolute())
+
+    def test_cleanup_command_removes_expired_and_keeps_fresh_without_capture(self):
+        now = datetime.now(timezone.utc)
+        workspace = Path(__file__).resolve().parents[2]
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            expired = root / "expired"
+            fresh = root / "fresh"
+            expired.mkdir()
+            fresh.mkdir()
+            write_evidence_expiry_marker(expired, now - timedelta(seconds=1))
+            write_evidence_expiry_marker(fresh, now + timedelta(hours=1))
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(workspace / "scripts" / "cleanup_reference_evidence.py"),
+                    str(root),
+                    "--now",
+                    now.isoformat(),
+                ],
+                cwd=workspace,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(payload["removed_count"], 1)
+            self.assertFalse(expired.exists())
+            self.assertTrue(fresh.exists())
 
 
 if __name__ == "__main__":

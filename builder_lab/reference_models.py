@@ -102,8 +102,10 @@ class ScreenshotEvidence:
         object.__setattr__(self, "page_id", _validated_id(self.page_id, "page_id"))
         if self.viewport not in {"desktop", "mobile"}:
             raise ValueError("viewport must be desktop or mobile")
-        if self.position not in {"top", "middle", "bottom"}:
-            raise ValueError("position must be top, middle, or bottom")
+        if self.position not in {"top", "middle", "bottom", "last_observed"}:
+            raise ValueError(
+                "position must be top, middle, bottom, or last_observed"
+            )
         if self.mime_type not in _SCREENSHOT_MIMES:
             raise ValueError("unsupported screenshot mime type")
         if self.width < 1 or self.height < 1:
@@ -200,6 +202,7 @@ class ReferencePageEvidence:
     scroll_strategy: str = "not_captured"
     reset_strategy: str = "none"
     skipped_reasons: tuple[str, ...] = ()
+    coverage_status: str = "not_captured"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "page_id", _validated_id(self.page_id, "page_id"))
@@ -242,8 +245,24 @@ class ReferencePageEvidence:
         }
         if self.scroll_strategy not in allowed_scroll:
             raise ValueError("scroll_strategy is invalid")
-        if self.reset_strategy not in {"none", "not_captured"}:
+        if self.reset_strategy not in {
+            "none",
+            "not_captured",
+            "not-required-top-first",
+        }:
             raise ValueError("reset_strategy is invalid")
+        if self.coverage_status not in {"complete", "partial", "not_captured"}:
+            raise ValueError("coverage_status is invalid")
+        positions = {item.position for item in self.screenshots}
+        if self.coverage_status == "complete" and "bottom" not in positions:
+            raise ValueError("complete coverage requires a bottom screenshot")
+        if self.coverage_status == "partial":
+            if "last_observed" not in positions or "bottom" in positions:
+                raise ValueError(
+                    "partial coverage requires last_observed and forbids bottom"
+                )
+            if not self.skipped_reasons:
+                raise ValueError("partial coverage requires a skipped reason")
         if len(self.timings_ms) > 32 or any(
             not isinstance(value, (int, float)) or value < 0
             for value in self.timings_ms.values()
@@ -286,6 +305,7 @@ class ReferencePageEvidence:
             "scroll_strategy": self.scroll_strategy,
             "reset_strategy": self.reset_strategy,
             "skipped_reasons": list(self.skipped_reasons),
+            "coverage_status": self.coverage_status,
         }
 
 
@@ -301,14 +321,16 @@ class ReferenceCrawlResult:
     user_agent: str = "KaigoVisualResearch/1.0 (+https://kaigo.space)"
 
     def __post_init__(self) -> None:
-        if self.status not in {"succeeded", "failed"}:
+        if self.status not in {"succeeded", "partial", "failed"}:
             raise ValueError("unsupported crawl status")
         if self.started_at.tzinfo is None or self.completed_at.tzinfo is None:
             raise ValueError("crawl timestamps must be timezone aware")
         if self.completed_at < self.started_at:
             raise ValueError("completed_at must not precede started_at")
-        if self.status == "succeeded" and (self.failure is not None or self.trace is not None):
-            raise ValueError("successful crawls cannot contain failure trace metadata")
+        if self.status in {"succeeded", "partial"} and (
+            self.failure is not None or self.trace is not None
+        ):
+            raise ValueError("non-failed crawls cannot contain failure trace metadata")
         if self.status == "failed" and self.failure is None:
             raise ValueError("failed crawls require a failure")
         if len(self.pages) > 7:  # five desktop plus two mobile captures
@@ -356,6 +378,23 @@ class ReferenceCrawlResult:
             trace=trace,
         )
 
+    @classmethod
+    def partial(
+        cls,
+        *,
+        source_url: str,
+        pages: tuple[ReferencePageEvidence, ...],
+        started_at: datetime,
+        completed_at: datetime | None = None,
+    ) -> "ReferenceCrawlResult":
+        return cls(
+            source_url=source_url,
+            status="partial",
+            started_at=started_at,
+            completed_at=completed_at or datetime.now(timezone.utc),
+            pages=pages,
+        )
+
     def screenshot_bytes(self) -> dict[str, bytes]:
         result: dict[str, bytes] = {}
         for page in self.pages:
@@ -365,9 +404,18 @@ class ReferenceCrawlResult:
         return result
 
     def to_dict(self) -> dict[str, Any]:
+        if self.pages and all(
+            page.coverage_status == "complete" for page in self.pages
+        ):
+            coverage_status = "complete"
+        elif self.pages:
+            coverage_status = "partial"
+        else:
+            coverage_status = "not_captured"
         return {
             "source_url": public_url(self.source_url),
             "status": self.status,
+            "coverage_status": coverage_status,
             "started_at": self.started_at.isoformat(),
             "completed_at": self.completed_at.isoformat(),
             "user_agent": self.user_agent,

@@ -89,6 +89,13 @@ class BuilderLabConfig:
     reference_trace_ttl_seconds: int
     reference_respect_robots: bool
 
+    def __post_init__(self) -> None:
+        if self.reference_max_page_bytes > self.reference_max_total_bytes:
+            raise ValueError(
+                "KAIGO_REFERENCE_MAX_PAGE_BYTES cannot exceed "
+                "KAIGO_REFERENCE_MAX_TOTAL_BYTES"
+            )
+
     @classmethod
     def from_env(cls) -> "BuilderLabConfig":
         host = os.getenv("KAIGO_BUILDER_LAB_HOST", "127.0.0.1").strip()
@@ -141,26 +148,26 @@ class BuilderLabConfig:
             reference_max_pages=_int("KAIGO_REFERENCE_MAX_PAGES", 5, 1, 5),
             reference_max_depth=_int("KAIGO_REFERENCE_MAX_DEPTH", 1, 0, 2),
             reference_timeout_seconds=_int(
-                "KAIGO_REFERENCE_TIMEOUT_SECONDS", 180, 15, 600
+                "KAIGO_REFERENCE_TIMEOUT_SECONDS", 300, 15, 600
             ),
             reference_page_timeout_seconds=_int(
                 "KAIGO_REFERENCE_PAGE_TIMEOUT_SECONDS", 45, 5, 120
             ),
             reference_max_total_bytes=_int(
                 "KAIGO_REFERENCE_MAX_TOTAL_BYTES",
-                40 * 1024 * 1024,
+                100 * 1024 * 1024,
                 1024 * 1024,
                 100 * 1024 * 1024,
             ),
             reference_max_page_bytes=_int(
                 "KAIGO_REFERENCE_MAX_PAGE_BYTES",
-                10 * 1024 * 1024,
+                25 * 1024 * 1024,
                 256 * 1024,
                 25 * 1024 * 1024,
             ),
             reference_max_retries=_int("KAIGO_REFERENCE_MAX_RETRIES", 1, 0, 2),
             reference_max_scroll_steps=_int(
-                "KAIGO_REFERENCE_MAX_SCROLL_STEPS", 24, 1, 60
+                "KAIGO_REFERENCE_MAX_SCROLL_STEPS", 40, 1, 60
             ),
             reference_scroll_delay_ms=_int(
                 "KAIGO_REFERENCE_SCROLL_DELAY_MS", 750, 600, 1200

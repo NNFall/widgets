@@ -25,6 +25,9 @@ class BuilderLabPackagingTests(unittest.TestCase):
         self.assertIn("dockerfile: Dockerfile.builder-lab", builder)
         self.assertIn("cap_drop:", builder)
         self.assertIn("no-new-privileges:true", builder)
+        self.assertIn("kaigo_builder_research", builder)
+        self.assertIn("enable_ipv6: false", compose)
+        self.assertIn("172.30.240.0/28", compose)
 
     def test_declared_sdk_floor_matches_interactions_contract(self):
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
@@ -65,9 +68,24 @@ class BuilderLabPackagingTests(unittest.TestCase):
         self.assertTrue(script.exists())
         body = script.read_text(encoding="utf-8")
         self.assertIn("DOCKER-USER", body)
+        self.assertIn("KAIGO-BUILDER-EGRESS", body)
+        self.assertIn("172.30.240.0/28", body)
+        self.assertIn("--ctstate NEW", body)
+        self.assertIn('-F "${chain}"', body)
         self.assertIn("169.254.0.0/16", body)
         self.assertIn("DNS TOCTOU", operations)
         self.assertIn("apply_builder_egress_guard.sh", operations)
+
+        deploy = (ROOT / "scripts" / "deploy_builder_lab.sh")
+        self.assertTrue(deploy.exists())
+        deploy_body = deploy.read_text(encoding="utf-8")
+        self.assertIn("apply_builder_egress_guard.sh", deploy_body)
+        self.assertIn("docker compose --profile builder-lab create", deploy_body)
+        self.assertIn("docker compose --profile builder-lab start", deploy_body)
+        self.assertLess(
+            deploy_body.index("apply_builder_egress_guard.sh"),
+            deploy_body.index("docker compose --profile builder-lab start"),
+        )
 
 
 if __name__ == "__main__":

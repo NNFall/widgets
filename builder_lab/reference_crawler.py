@@ -319,6 +319,54 @@ class GuardedRobotsPolicy:
             raise RobotsDenied(f"robots policy denies {sanitize_url_for_log(url)}")
 
 
+async def _canonicalize_document_url(
+    url: str,
+    *,
+    guard: UrlGuard,
+    robots: GuardedRobotsPolicy | None,
+    timeout_seconds: int,
+    max_redirects: int = 8,
+) -> str:
+    """Resolve only HEAD redirects; any later GET redirect is fail-closed."""
+    import httpx
+
+    current = _without_fragment(url)
+    allowed_origin = _origin_key(current)
+    seen: set[str] = set()
+    async with httpx.AsyncClient(
+        follow_redirects=False,
+        headers={"User-Agent": KAIGO_RESEARCH_USER_AGENT},
+        timeout=timeout_seconds,
+        trust_env=False,
+    ) as client:
+        for _hop in range(max_redirects + 1):
+            if current in seen:
+                raise ReferenceCaptureError("document redirect loop blocked")
+            seen.add(current)
+            await asyncio.to_thread(guard.validate_redirect, current)
+            if robots is not None:
+                await robots.require_allowed(current)
+            try:
+                response = await client.head(current)
+            except httpx.HTTPError as exc:
+                raise ReferenceCaptureError(
+                    "document canonicalization failed closed"
+                ) from exc
+            if not response.is_redirect:
+                return current
+            location = response.headers.get("location")
+            if not location:
+                raise ReferenceCaptureError(
+                    "document redirect without location blocked"
+                )
+            redirected = _without_fragment(urljoin(current, location))
+            await asyncio.to_thread(guard.validate_redirect, redirected)
+            if _origin_key(redirected) != allowed_origin:
+                raise ReferenceCaptureError("cross-origin document redirect blocked")
+            current = redirected
+    raise ReferenceCaptureError("document redirect hop limit exceeded")
+
+
 @dataclass(frozen=True)
 class LinkCandidate:
     url: str
@@ -410,12 +458,12 @@ def select_reference_pages(
 class ReferenceCrawlLimits:
     max_pages: int = 5
     max_depth: int = 1
-    total_timeout_seconds: int = 180
+    total_timeout_seconds: int = 300
     page_timeout_seconds: int = 45
-    max_total_bytes: int = 40 * 1024 * 1024
-    max_page_bytes: int = 10 * 1024 * 1024
+    max_total_bytes: int = 100 * 1024 * 1024
+    max_page_bytes: int = 25 * 1024 * 1024
     max_retries: int = 1
-    max_scroll_steps: int = 24
+    max_scroll_steps: int = 40
     scroll_delay_ms: int = 750
     warmup_ms: int = 5000
     final_settle_ms: int = 1500
@@ -456,10 +504,10 @@ class CaptureSettings:
     warmup_ms: int = 5000
     scroll_delay_ms: int = 750
     final_settle_ms: int = 1500
-    max_scroll_steps: int = 24
+    max_scroll_steps: int = 40
     max_scroll_height: int = 50_000
     page_timeout_seconds: int = 45
-    max_page_bytes: int = 10 * 1024 * 1024
+    max_page_bytes: int = 25 * 1024 * 1024
 
     def __post_init__(self) -> None:
         if not 320 <= self.width <= 2560 or not 480 <= self.height <= 1600:
@@ -472,8 +520,32 @@ class CaptureSettings:
             max_scroll_height=self.max_scroll_height,
             page_timeout_seconds=self.page_timeout_seconds,
             max_page_bytes=self.max_page_bytes,
-            max_total_bytes=max(self.max_page_bytes, 40 * 1024 * 1024),
+            max_total_bytes=max(self.max_page_bytes, 100 * 1024 * 1024),
         )
+
+
+class CrawlByteBudget:
+    """One monotonic byte ledger shared by retries, pages, and viewports."""
+
+    def __init__(self, max_bytes: int) -> None:
+        if max_bytes < 1:
+            raise ValueError("max_bytes must be positive")
+        self.max_bytes = max_bytes
+        self.used_bytes = 0
+        self._charges: set[str] = set()
+
+    def consume(self, amount: int, *, source: str, charge_id: str | None = None) -> None:
+        if amount < 0:
+            raise ValueError("byte charge must not be negative")
+        if charge_id is not None and charge_id in self._charges:
+            return
+        if charge_id is not None:
+            self._charges.add(charge_id)
+        self.used_bytes += amount
+        if self.used_bytes > self.max_bytes:
+            raise ReferenceCaptureError(
+                f"crawl byte limit exceeded while accounting {source}"
+            )
 
 
 class CrawlAccumulator:
@@ -534,6 +606,8 @@ class CrawlAccumulator:
 @dataclass
 class CaptureTelemetry:
     max_page_bytes: int
+    total_budget: CrawlByteBudget | None = None
+    attempt_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     console_failures: list[str] = field(default_factory=list)
     page_failures: list[str] = field(default_factory=list)
     request_failures: list[str] = field(default_factory=list)
@@ -545,6 +619,8 @@ class CaptureTelemetry:
     _attached_context: bool = False
     _attached_pages: set[int] = field(default_factory=set)
     accounted: bool = False
+    _charge_sequence: int = 0
+    byte_limit_error: str | None = None
 
     @staticmethod
     def _append_unique(target: list[str], value: str) -> None:
@@ -556,24 +632,29 @@ class CaptureTelemetry:
         self._policy_labels.add(label)
         self._append_unique(self.policy_blocks, f"{reason}: {label}")
 
+    def record_network_bytes(self, amount: int) -> None:
+        self.response_bytes += amount
+        self._charge_sequence += 1
+        if self.total_budget is not None:
+            self.total_budget.consume(
+                amount,
+                source="network response",
+                charge_id=f"{self.attempt_id}:network:{self._charge_sequence}",
+            )
+        self.raise_if_oversize()
+
+    def record_screenshot_bytes(self, screenshot_id: str, amount: int) -> None:
+        if self.total_budget is not None:
+            self.total_budget.consume(
+                amount,
+                source="screenshot",
+                charge_id=f"{self.attempt_id}:screenshot:{screenshot_id}",
+            )
+
     def attach_context(self, context: Any) -> None:
         if self._attached_context:
             return
         self._attached_context = True
-
-        async def collect_size(request: Any) -> None:
-            try:
-                sizes = await request.sizes()
-                self.response_bytes += max(
-                    0, int(sizes.get("responseBodySize", 0))
-                )
-            except Exception:
-                return
-
-        def on_request_finished(request: Any) -> None:
-            task = asyncio.create_task(collect_size(request))
-            self.transfer_tasks.add(task)
-            task.add_done_callback(self.transfer_tasks.discard)
 
         def on_response(response: Any) -> None:
             try:
@@ -592,7 +673,6 @@ class CaptureTelemetry:
                 self.request_failures, f"{request.method} {label}: {failure}"
             )
 
-        context.on("requestfinished", on_request_finished)
         context.on("response", on_response)
         context.on("requestfailed", on_request_failed)
 
@@ -634,8 +714,8 @@ async def _guarded_context_route(
     primary_page: dict[str, Any],
     telemetry: CaptureTelemetry,
 ) -> None:
-    async def block(reason: str) -> None:
-        telemetry.record_policy_block(reason, request.url)
+    async def block(reason: str, url: str | None = None) -> None:
+        telemetry.record_policy_block(reason, url or request.url)
         await route.abort("blockedbyclient")
 
     parsed = urlsplit(request.url)
@@ -648,13 +728,8 @@ async def _guarded_context_route(
     if request.resource_type in {"media", "eventsource"}:
         await block(f"{request.resource_type} blocked")
         return
-    if guard is not None:
-        try:
-            await asyncio.to_thread(guard.validate, request.url)
-        except UnsafeReferenceUrl:
-            await block("unsafe destination blocked")
-            return
-    if request.resource_type == "document":
+    is_document = request.resource_type == "document"
+    if is_document:
         try:
             request_origin = _origin_key(request.url)
         except ValueError:
@@ -677,32 +752,78 @@ async def _guarded_context_route(
             except (RobotsDenied, UnsafeReferenceUrl):
                 await block("robots policy blocked document")
                 return
-        # Chromium does not re-run route handlers for redirects followed by a
-        # continued request. Fetch exactly one hop ourselves, validate the
-        # Location before Chromium can connect, then fulfill that hop.
-        try:
-            response = await route.fetch(max_redirects=0)
-        except Exception:
-            await block("document fetch failed closed")
+    current = request.url
+    seen: set[str] = set()
+    for hop in range(9):
+        if current in seen:
+            await block("resource redirect loop blocked", current)
             return
-        if 300 <= response.status < 400:
-            location = response.headers.get("location")
-            if not location:
-                await block("document redirect without location blocked")
+        seen.add(current)
+        if guard is not None:
+            try:
+                await asyncio.to_thread(guard.validate_redirect, current)
+            except UnsafeReferenceUrl:
+                await block("unsafe destination blocked", current)
                 return
-            redirected = urljoin(request.url, location)
+        try:
+            response = await route.fetch(
+                url=None if hop == 0 else current,
+                max_redirects=0,
+            )
+            declared = int(response.headers.get("content-length", "0") or "0")
+            if declared > telemetry.max_page_bytes:
+                telemetry.declared_oversize.set()
+                telemetry.byte_limit_error = "page byte limit exceeded"
+                await block("response byte limit blocked", current)
+                return
+            body = await response.body()
+            header_bytes = sum(
+                len(str(name).encode("utf-8"))
+                + len(str(value).encode("utf-8"))
+                + 4
+                for name, value in response.headers.items()
+            )
+            telemetry.record_network_bytes(len(body) + header_bytes)
+        except ReferenceCaptureError as exc:
+            telemetry.byte_limit_error = _sanitize_text(str(exc))
+            await block("response byte limit blocked", current)
+            return
+        except Exception:
+            await block("resource fetch failed closed", current)
+            return
+        if not 300 <= response.status < 400:
+            headers = {
+                name: value
+                for name, value in response.headers.items()
+                if name.casefold()
+                not in {"content-encoding", "content-length", "transfer-encoding"}
+            }
+            await route.fulfill(status=response.status, headers=headers, body=body)
+            return
+        location = response.headers.get("location")
+        if not location:
+            await block("resource redirect without location blocked", current)
+            return
+        next_url = _without_fragment(urljoin(current, location))
+        if is_document:
             if guard is not None:
                 try:
-                    await asyncio.to_thread(guard.validate_redirect, redirected)
+                    await asyncio.to_thread(guard.validate_redirect, next_url)
                 except UnsafeReferenceUrl:
-                    await block("unsafe document redirect blocked")
+                    await block("unsafe document redirect blocked", next_url)
                     return
-            if _origin_key(redirected) != allowed_document_origin:
-                await block("cross-origin document blocked")
+            try:
+                next_origin = _origin_key(next_url)
+            except ValueError:
+                await block("malformed document redirect blocked", next_url)
                 return
-        await route.fulfill(response=response)
-        return
-    await route.continue_()
+            if next_origin != allowed_document_origin:
+                await block("cross-origin document redirect blocked", next_url)
+            else:
+                await block("unexpected document redirect blocked", next_url)
+            return
+        current = next_url
+    await block("resource redirect hop limit blocked", current)
 
 
 async def _install_context_policy(
@@ -774,7 +895,9 @@ async def _wait_for_fonts_and_visible_images(page: Any, timeout_ms: int) -> None
           });
           return images.every((img) =>
             !img.getAttribute('src') ||
-            (img.complete && img.naturalWidth > 0 && img.naturalHeight > 0)
+            (img.complete && (
+              (img.naturalWidth > 0 && img.naturalHeight > 0) || Boolean(img.currentSrc)
+            ))
           );
         }""",
         timeout=timeout_ms,
@@ -871,9 +994,10 @@ async def _take_screenshot(
     position: str,
     width: int,
     height: int,
+    telemetry: CaptureTelemetry | None = None,
 ) -> ScreenshotEvidence:
     data = await page.screenshot(type="jpeg", quality=82, full_page=False, animations="disabled")
-    return ScreenshotEvidence(
+    evidence = ScreenshotEvidence(
         screenshot_id=f"{page_id}-{viewport}-{position}",
         page_id=page_id,
         viewport=viewport,
@@ -885,6 +1009,9 @@ async def _take_screenshot(
         size_bytes=len(data),
         data=data,
     )
+    if telemetry is not None:
+        telemetry.record_screenshot_bytes(evidence.screenshot_id, evidence.size_bytes)
+    return evidence
 
 
 _SAMPLE_SCRIPT = r"""({initialHidden, observedTexts}) => {
@@ -1095,6 +1222,7 @@ async def _capture_loaded_page(
         position="top",
         width=settings.width,
         height=settings.height,
+        telemetry=telemetry,
     )
 
     step_px = max(1, int(settings.height * 0.7))
@@ -1104,6 +1232,7 @@ async def _capture_loaded_page(
     progressed = False
     virtual = False
     exhausted = True
+    coverage_complete = False
     for step_index in range(settings.max_scroll_steps):
         if int(state["height"]) > settings.max_scroll_height:
             skipped_reasons.append("scroll_height_cap_reached")
@@ -1167,29 +1296,35 @@ async def _capture_loaded_page(
                 position="middle",
                 width=settings.width,
                 height=settings.height,
+                telemetry=telemetry,
             )
         if virtual:
             if progressed and stable_steps >= 2:
                 exhausted = False
+                coverage_complete = True
                 break
         else:
             at_end = max_native_scroll == 0 or int(state["top"]) >= max_native_scroll - 2
             if ((progressed and at_end) or not progressed) and stable_steps >= 2:
                 exhausted = False
+                coverage_complete = True
                 break
     if exhausted:
         skipped_reasons.append("scroll_step_cap_reached")
     await page.wait_for_timeout(settings.final_settle_ms)
     observed_texts.extend(state.get("visible", ()))
-    screenshots["bottom"] = await _take_screenshot(
+    coverage_status = "complete" if coverage_complete else "partial"
+    final_position = "bottom" if coverage_status == "complete" else "last_observed"
+    screenshots[final_position] = await _take_screenshot(
         page,
         page_id=page_id,
         viewport=viewport,
-        position="bottom",
+        position=final_position,
         width=settings.width,
         height=settings.height,
+        telemetry=telemetry,
     )
-    if "middle" not in screenshots:
+    if "middle" not in screenshots and coverage_status == "complete":
         screenshots["middle"] = await _take_screenshot(
             page,
             page_id=page_id,
@@ -1197,6 +1332,7 @@ async def _capture_loaded_page(
             position="middle",
             width=settings.width,
             height=settings.height,
+            telemetry=telemetry,
         )
     sample = _merge_page_samples(samples)
     await telemetry.settle_transfers()
@@ -1219,7 +1355,11 @@ async def _capture_loaded_page(
         requested_url=requested_url,
         final_url=page.url,
         depth=0 if category == "home" else 1,
-        screenshots=tuple(screenshots[position] for position in ("top", "middle", "bottom")),
+        screenshots=tuple(
+            screenshots[position]
+            for position in ("top", "middle", final_position)
+            if position in screenshots
+        ),
         semantic_sample=sample["semantic"],
         style_sample=sample["style"],
         console_failures=tuple(telemetry.console_failures),
@@ -1229,8 +1369,9 @@ async def _capture_loaded_page(
         timings_ms={"total": round((time.monotonic() - started) * 1000, 1)},
         transferred_bytes=transferred_bytes,
         scroll_strategy=scroll_strategy,
-        reset_strategy="none",
+        reset_strategy="not-required-top-first",
         skipped_reasons=tuple(skipped_reasons),
+        coverage_status=coverage_status,
     )
 
 
@@ -1263,16 +1404,25 @@ async def capture_reference_page(
     settings: CaptureSettings,
     guard: UrlGuard | None = None,
     robots_policy: GuardedRobotsPolicy | None = None,
+    byte_budget: CrawlByteBudget | None = None,
     trace_ttl_seconds: int = 3600,
 ) -> ReferencePageEvidence:
     """Capture one explicitly supplied page without discovery or LLM calls."""
     from playwright.async_api import async_playwright
 
+    requested_url = url
     if guard is not None:
         await asyncio.to_thread(guard.validate, url)
         robots_policy = robots_policy or GuardedRobotsPolicy(guard=guard)
     if robots_policy is not None:
         await robots_policy.require_allowed(url)
+    if guard is not None:
+        url = await _canonicalize_document_url(
+            url,
+            guard=guard,
+            robots=robots_policy,
+            timeout_seconds=min(15, settings.page_timeout_seconds),
+        )
     document_origin = _origin_key(url)
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
@@ -1286,7 +1436,10 @@ async def capture_reference_page(
             service_workers="block",
         )
         await context.clear_cookies()
-        telemetry = CaptureTelemetry(max_page_bytes=settings.max_page_bytes)
+        telemetry = CaptureTelemetry(
+            max_page_bytes=settings.max_page_bytes,
+            total_budget=byte_budget,
+        )
         primary_page: dict[str, Any] = {"page": None}
         await _install_context_policy(
             context,
@@ -1308,7 +1461,7 @@ async def capture_reference_page(
             )
             evidence = await _capture_loaded_page(
                 page,
-                requested_url=url,
+                requested_url=requested_url,
                 page_id=page_id,
                 category=category,
                 viewport=viewport,
@@ -1322,11 +1475,15 @@ async def capture_reference_page(
                 (
                     item.split(":", 1)[0]
                     for item in telemetry.policy_blocks
-                    if "document blocked" in item
+                    if "document" in item and "blocked" in item
                 ),
                 None,
             )
-            message = policy_reason or _sanitize_text(str(exc))
+            message = (
+                telemetry.byte_limit_error
+                or policy_reason
+                or _sanitize_text(str(exc))
+            )
             raise ReferenceCaptureError(message, trace=trace) from exc
         else:
             await context.tracing.stop()
@@ -1488,6 +1645,15 @@ class VisualReferenceCrawler:
             await asyncio.wait_for(
                 robots.require_allowed(home_url), timeout=min(20, remaining_timeout())
             )
+            home_url = await asyncio.wait_for(
+                _canonicalize_document_url(
+                    home_url,
+                    guard=self.guard,
+                    robots=robots,
+                    timeout_seconds=min(15, self.limits.page_timeout_seconds),
+                ),
+                timeout=min(30, remaining_timeout()),
+            )
         except Exception as exc:
             return ReferenceCrawlResult.failed(
                 source_url=home_url,
@@ -1508,7 +1674,7 @@ class VisualReferenceCrawler:
         except (TimeoutError, OSError):
             sitemap = ()
         failure_trace: TraceEvidence | None = None
-        attempted_bytes = 0
+        byte_budget = CrawlByteBudget(self.limits.max_total_bytes)
         accumulator = CrawlAccumulator(
             max_total_bytes=self.limits.max_total_bytes,
             selected_urls={home_url},
@@ -1517,16 +1683,6 @@ class VisualReferenceCrawler:
         attempt_by_request: dict[str, tuple[CaptureTelemetry, Any, int]] = {}
         trace_active: set[int] = set()
         document_origin = _origin_key(home_url)
-
-        async def account_attempt(telemetry: CaptureTelemetry) -> None:
-            nonlocal attempted_bytes
-            await telemetry.settle_transfers()
-            if telemetry.accounted:
-                return
-            telemetry.accounted = True
-            attempted_bytes += telemetry.response_bytes
-            if attempted_bytes > self.limits.max_total_bytes:
-                raise ReferenceCaptureError("crawl byte limit exceeded")
 
         async def stop_success_trace(context: Any) -> None:
             key = id(context.page)
@@ -1599,7 +1755,10 @@ class VisualReferenceCrawler:
         async def guard_navigation(context: Any) -> None:
             await asyncio.to_thread(self.guard.validate, context.request.url)
             await robots.require_allowed(context.request.url)
-            telemetry = CaptureTelemetry(max_page_bytes=self.limits.max_page_bytes)
+            telemetry = CaptureTelemetry(
+                max_page_bytes=self.limits.max_page_bytes,
+                total_budget=byte_budget,
+            )
             primary_page: dict[str, Any] = {"page": context.page}
             await _install_context_policy(
                 context.page.context,
@@ -1637,7 +1796,6 @@ class VisualReferenceCrawler:
                 guard=self.guard,
                 telemetry=telemetry,
             )
-            await account_attempt(telemetry)
             requests: list[Any] = []
             child_urls: list[str] = []
             skipped: list[str] = []
@@ -1658,16 +1816,29 @@ class VisualReferenceCrawler:
                     if selected_page.url in accumulator.selected_urls:
                         continue
                     try:
-                        await robots.require_allowed(selected_page.url)
-                    except (RobotsDenied, UnsafeReferenceUrl) as exc:
+                        canonical_url = await _canonicalize_document_url(
+                            selected_page.url,
+                            guard=self.guard,
+                            robots=robots,
+                            timeout_seconds=min(
+                                15, self.limits.page_timeout_seconds
+                            ),
+                        )
+                    except (
+                        ReferenceCaptureError,
+                        RobotsDenied,
+                        UnsafeReferenceUrl,
+                    ):
                         skipped.append(
                             f"robots_denied: {sanitize_url_for_log(selected_page.url)}"
                         )
                         continue
-                    child_urls.append(selected_page.url)
+                    if canonical_url in accumulator.selected_urls:
+                        continue
+                    child_urls.append(canonical_url)
                     requests.append(
                         Request.from_url(
-                            selected_page.url,
+                            canonical_url,
                             user_data={
                                 "category": selected_page.category,
                                 "page_id": _page_id(selected_page.category, index),
@@ -1692,8 +1863,6 @@ class VisualReferenceCrawler:
             nonlocal failure_trace
             attempt = attempt_by_request.get(context.request.unique_key)
             telemetry = attempt[0] if attempt is not None else None
-            if telemetry is not None:
-                await account_attempt(telemetry)
             trace = await stop_failure_trace(context.request)
             if trace is not None:
                 failure_trace = trace
@@ -1706,8 +1875,6 @@ class VisualReferenceCrawler:
             nonlocal failure_trace
             attempt = attempt_by_request.get(context.request.unique_key)
             telemetry = attempt[0] if attempt is not None else None
-            if telemetry is not None:
-                await account_attempt(telemetry)
             trace = await stop_failure_trace(context.request)
             if trace is not None:
                 failure_trace = trace
@@ -1732,6 +1899,7 @@ class VisualReferenceCrawler:
                 scroll_strategy="not_captured",
                 reset_strategy="not_captured",
                 skipped_reasons=("capture_failed",),
+                coverage_status="not_captured",
             )
             await accumulator.commit_partial(partial)
 
@@ -1780,6 +1948,7 @@ class VisualReferenceCrawler:
                             settings=self._settings("mobile"),
                             guard=self.guard,
                             robots_policy=robots,
+                            byte_budget=byte_budget,
                             trace_ttl_seconds=self.limits.trace_ttl_seconds,
                         ),
                         timeout=remaining_timeout(),
@@ -1797,6 +1966,7 @@ class VisualReferenceCrawler:
                         scroll_strategy="not_captured",
                         reset_strategy="not_captured",
                         skipped_reasons=("mobile_capture_failed",),
+                        coverage_status="not_captured",
                     )
                 await accumulator.commit_partial(mobile)
         except Exception as exc:
@@ -1811,10 +1981,16 @@ class VisualReferenceCrawler:
                 pages=accumulator.pages,
                 started_at=started_at,
             )
+        if any(
+            page.coverage_status != "complete" for page in accumulator.pages
+        ):
+            return ReferenceCrawlResult.partial(
+                source_url=home_url,
+                pages=accumulator.pages,
+                started_at=started_at,
+            )
         return ReferenceCrawlResult.succeeded(
-            source_url=home_url,
-            pages=accumulator.pages,
-            started_at=started_at,
+            source_url=home_url, pages=accumulator.pages, started_at=started_at
         )
 
 

@@ -94,11 +94,6 @@ async def _run(url: str, output_dir: Path, *, allow_workspace: bool) -> int:
             output_dir.chmod(0o700)
         except OSError:
             pass
-        write_evidence_expiry_marker(
-            output_dir,
-            datetime.now(timezone.utc)
-            + timedelta(seconds=config.reference_trace_ttl_seconds),
-        )
     except (OSError, ValueError) as exc:
         _emit_json(
             {
@@ -128,6 +123,12 @@ async def _run(url: str, output_dir: Path, *, allow_workspace: bool) -> int:
         _emit_json(payload)
         return 1
 
+    expires_at = datetime.now(timezone.utc) + timedelta(
+        seconds=config.reference_trace_ttl_seconds
+    )
+    if result.trace is not None:
+        expires_at = min(expires_at, result.trace.expires_at)
+    write_evidence_expiry_marker(output_dir, expires_at)
     screenshots_dir = output_dir / "screenshots"
     screenshots_dir.mkdir(mode=0o700)
     try:

@@ -25,11 +25,14 @@ services:
       context: .
       dockerfile: Dockerfile.builder-lab
     container_name: ai_project_builder_lab
-    restart: unless-stopped
+    restart: "no"
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
+    sysctls:
+      net.ipv6.conf.all.disable_ipv6: "1"
+      net.ipv6.conf.default.disable_ipv6: "1"
     environment:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
@@ -54,6 +57,8 @@ services:
       - "127.0.0.1:8091:8091"
     volumes:
       - ./data/builder-demo:/app/data/builder-demo
+    networks:
+      - kaigo_builder_research
     dns:
       - 1.1.1.1
       - 8.8.8.8
@@ -76,3 +81,14 @@ services:
 
 volumes:
   postgres_data:
+
+networks:
+  kaigo_builder_research:
+    name: kaigo_builder_research
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-kaigo-build
+    enable_ipv6: false
+    ipam:
+      config:
+        - subnet: 172.30.240.0/28

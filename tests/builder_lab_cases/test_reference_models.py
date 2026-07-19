@@ -14,10 +14,10 @@ from builder_lab.reference_models import (
 class ReferenceModelsTests(unittest.TestCase):
     def screenshot(self, *, payload: bytes = b"jpeg-bytes") -> ScreenshotEvidence:
         return ScreenshotEvidence(
-            screenshot_id="home-desktop-top",
+            screenshot_id="home-desktop-bottom",
             page_id="home",
             viewport="desktop",
-            position="top",
+            position="bottom",
             mime_type="image/jpeg",
             width=1440,
             height=900,
@@ -38,7 +38,8 @@ class ReferenceModelsTests(unittest.TestCase):
             semantic_sample={"headings": ["Example"]},
             style_sample={"fonts": ["Inter"]},
             scroll_strategy="document",
-            reset_strategy="none",
+            reset_strategy="not-required-top-first",
+            coverage_status="complete",
         )
         result = ReferenceCrawlResult.succeeded(
             source_url="https://example.com/",
@@ -53,7 +54,10 @@ class ReferenceModelsTests(unittest.TestCase):
         self.assertEqual(public_screenshot["sha256"], screenshot.sha256)
         self.assertEqual(result.screenshot_bytes()[screenshot.screenshot_id], b"jpeg-bytes")
         self.assertEqual(payload["pages"][0]["scroll_strategy"], "document")
-        self.assertEqual(payload["pages"][0]["reset_strategy"], "none")
+        self.assertEqual(
+            payload["pages"][0]["reset_strategy"], "not-required-top-first"
+        )
+        self.assertEqual(payload["pages"][0]["coverage_status"], "complete")
         self.assertEqual(payload["pages"][0]["skipped_reasons"], [])
 
     def test_screenshot_validates_hash_dimensions_mime_and_size(self):
@@ -145,7 +149,8 @@ class ReferenceModelsTests(unittest.TestCase):
             style_sample={"fonts": ["Inter"]},
             timings_ms={"total": 10},
             scroll_strategy="nested",
-            reset_strategy="none",
+            reset_strategy="not-required-top-first",
+            coverage_status="not_captured",
             skipped_reasons=("lazy_image_timeout",),
         )
 

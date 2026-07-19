@@ -88,10 +88,13 @@ python scripts/smoke_builder_lab.py `
 
 ```bash
 mkdir -p data/builder-demo
-docker compose --profile builder-lab build builder-lab
-docker compose --profile builder-lab up -d --no-deps builder-lab
+bash scripts/deploy_builder_lab.sh
 docker compose --profile builder-lab logs -f --tail=200 builder-lab
 ```
+
+Wrapper сначала создаёт остановленный контейнер и выделенную сеть, затем
+устанавливает firewall и только после этого запускает `builder-lab`. Прямой
+`docker compose up` для этого сервиса на сервере не используется.
 
 Проверка изоляции:
 
@@ -234,24 +237,64 @@ docker compose --profile builder-lab rm -f builder-lab
 
 ## Ограничение исходящего трафика и DNS TOCTOU
 
-После каждого создания или пересоздания контейнера `builder-lab` нужно от root
-установить host-level запреты на доступ к приватным сетям:
+Builder подключён только к сети `kaigo_builder_research` с фиксированными
+`172.30.240.0/28` и Linux bridge `br-kaigo-build`; IPv6 в сети и контейнере
+отключён. Guarded deploy устанавливает правила автоматически до запуска. Для
+ручной проверки или восстановления правил:
 
 ```bash
 sudo bash scripts/apply_builder_egress_guard.sh
 ```
 
-Скрипт добавляет в `DOCKER-USER` правила, привязанные к текущему адресу
-контейнера, для private, link-local, loopback, multicast, reserved и metadata
-IPv4-диапазонов. После изменения адреса контейнера скрипт запускается повторно.
+Скрипт атомарно очищает и пересобирает выделенные цепочки в `DOCKER-USER` и
+`INPUT`, привязанные к стабильному bridge, а не к меняющемуся IP контейнера. Для
+новых соединений блокируются private, link-local, loopback, multicast, reserved
+и metadata IPv4-диапазоны; established-ответы nginx не затрагиваются. После
+перезагрузки хоста правила нужно восстановить до запуска контейнера — поэтому у
+`builder-lab` нет автоматической restart-policy, запуск выполняет только wrapper
+или эквивалентный systemd unit с `ExecStartPre` на этот firewall-скрипт.
 Приложение дополнительно заново разрешает DNS и проверяет каждый URL и redirect
 непосредственно перед использованием.
 
 Это эшелонированная защита, а не DNS pinning. Между проверкой в приложении и
 соединением Chromium остаётся интервал DNS TOCTOU. Firewall предотвращает
 перепривязку к приватным IPv4-адресам, но не доказывает использование ровно того
-публичного адреса, который проверило приложение. В production нужна
-эквивалентная IPv6-политика и, желательно, контролируемый outbound proxy.
+публичного адреса, который проверило приложение. Для полной защиты от подмены
+между публичными адресами всё ещё нужен контролируемый outbound proxy.
+
+## Автономная очистка private evidence
+
+Очистка не зависит от следующего запуска crawler:
+
+```bash
+python scripts/cleanup_reference_evidence.py /var/lib/kaigo/reference-evidence
+```
+
+Пример `/etc/systemd/system/kaigo-reference-cleanup.service`:
+
+```ini
+[Service]
+Type=oneshot
+User=kaigo
+WorkingDirectory=/opt/kaigo
+ExecStart=/opt/kaigo/.venv/bin/python scripts/cleanup_reference_evidence.py /var/lib/kaigo/reference-evidence
+```
+
+Пример `/etc/systemd/system/kaigo-reference-cleanup.timer`:
+
+```ini
+[Timer]
+OnBootSec=5m
+OnUnitActiveSec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+После установки: `systemctl enable --now kaigo-reference-cleanup.timer`.
+Cleanup удаляет только каталоги с валидным Kaigo expiry-marker; свежие и
+посторонние каталоги не затрагиваются.
 
 ## Текущие ограничения
 

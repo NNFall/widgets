@@ -246,8 +246,12 @@ python scripts/smoke_builder_lab.py --engine direct
 Docker-сервис включается только явно через profile:
 
 ```bash
-docker compose --profile builder-lab up -d --build builder-lab
+bash scripts/deploy_builder_lab.sh
 ```
+
+Guarded wrapper создаёт выделенную IPv4-only сеть, применяет стабильный egress
+firewall до старта контейнера и затем проверяет его повторно. Прямой `compose up`
+на рабочем сервере не используется.
 
 На рабочем сервере порт остаётся loopback-only. Nginx открывает два безопасных
 маршрута:
