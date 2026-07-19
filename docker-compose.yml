@@ -21,9 +21,15 @@ services:
   builder-lab:
     profiles:
       - builder-lab
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.builder-lab
     container_name: ai_project_builder_lab
     restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     environment:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}

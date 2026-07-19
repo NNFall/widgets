@@ -37,6 +37,8 @@ class ReferenceModelsTests(unittest.TestCase):
             screenshots=(screenshot,),
             semantic_sample={"headings": ["Example"]},
             style_sample={"fonts": ["Inter"]},
+            scroll_strategy="document",
+            reset_strategy="none",
         )
         result = ReferenceCrawlResult.succeeded(
             source_url="https://example.com/",
@@ -50,6 +52,9 @@ class ReferenceModelsTests(unittest.TestCase):
         self.assertNotIn("data", public_screenshot)
         self.assertEqual(public_screenshot["sha256"], screenshot.sha256)
         self.assertEqual(result.screenshot_bytes()[screenshot.screenshot_id], b"jpeg-bytes")
+        self.assertEqual(payload["pages"][0]["scroll_strategy"], "document")
+        self.assertEqual(payload["pages"][0]["reset_strategy"], "none")
+        self.assertEqual(payload["pages"][0]["skipped_reasons"], [])
 
     def test_screenshot_validates_hash_dimensions_mime_and_size(self):
         with self.assertRaisesRegex(ValueError, "sha256"):
@@ -126,6 +131,37 @@ class ReferenceModelsTests(unittest.TestCase):
             ReferencePageEvidence(**kwargs, semantic_sample={"raw": b"not-public"})
         with self.assertRaisesRegex(ValueError, "byte limit"):
             ReferencePageEvidence(**kwargs, style_sample={"css": "x" * (513 * 1024)})
+
+    def test_nested_evidence_is_deeply_frozen_and_serialization_is_detached(self):
+        headings = ["Original"]
+        source = {"headings": headings, "nested": {"value": [1, 2]}}
+        page = ReferencePageEvidence(
+            page_id="home",
+            category="home",
+            requested_url="https://example.com/?token=secret#fragment",
+            final_url="https://example.com/final?key=secret",
+            depth=0,
+            semantic_sample=source,
+            style_sample={"fonts": ["Inter"]},
+            timings_ms={"total": 10},
+            scroll_strategy="nested",
+            reset_strategy="none",
+            skipped_reasons=("lazy_image_timeout",),
+        )
+
+        headings.append("Mutated source")
+        source["nested"]["value"].append(3)
+        self.assertEqual(tuple(page.semantic_sample["headings"]), ("Original",))
+        with self.assertRaises(TypeError):
+            page.semantic_sample["other"] = "x"
+        with self.assertRaises(AttributeError):
+            page.semantic_sample["headings"].append("x")
+
+        public = page.to_dict()
+        public["semantic_sample"]["headings"].append("Serialized mutation")
+        self.assertEqual(tuple(page.semantic_sample["headings"]), ("Original",))
+        self.assertEqual(public["requested_url"], "https://example.com/")
+        self.assertEqual(public["final_url"], "https://example.com/final")
 
 
 if __name__ == "__main__":

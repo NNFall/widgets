@@ -22,6 +22,9 @@ class BuilderLabPackagingTests(unittest.TestCase):
         self.assertIn("./data/builder-demo:/app/data/builder-demo", builder)
         self.assertNotIn("MESSAGE_DATABASE_URL", builder)
         self.assertNotIn("POSTGRES_", builder)
+        self.assertIn("dockerfile: Dockerfile.builder-lab", builder)
+        self.assertIn("cap_drop:", builder)
+        self.assertIn("no-new-privileges:true", builder)
 
     def test_declared_sdk_floor_matches_interactions_contract(self):
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
@@ -48,9 +51,23 @@ class BuilderLabPackagingTests(unittest.TestCase):
 
         self.assertNotIn("crawlee[playwright]", requirements)
         self.assertIn("crawlee[playwright]", builder_requirements)
+        self.assertIn("python-dotenv", builder_requirements)
         self.assertIn("playwright install --with-deps chromium", builder_dockerfile)
         self.assertIn("scripts/capture_reference_site.py", builder_dockerfile)
+        self.assertRegex(builder_dockerfile, r"(?m)^USER kaigo$")
         self.assertNotIn("playwright install", production_dockerfile)
+
+    def test_egress_guard_runbook_is_server_operable_and_does_not_claim_dns_pinning(self):
+        operations = (ROOT / "docs" / "KAIGO_BUILDER_LAB_OPERATIONS.md").read_text(
+            encoding="utf-8"
+        )
+        script = ROOT / "scripts" / "apply_builder_egress_guard.sh"
+        self.assertTrue(script.exists())
+        body = script.read_text(encoding="utf-8")
+        self.assertIn("DOCKER-USER", body)
+        self.assertIn("169.254.0.0/16", body)
+        self.assertIn("DNS TOCTOU", operations)
+        self.assertIn("apply_builder_egress_guard.sh", operations)
 
 
 if __name__ == "__main__":

@@ -2,3 +2,4 @@ aiohttp
 crawlee[playwright]>=1.8.2,<2.0.0
 google-genai>=2.12.1,<3.0.0
 httpx
+python-dotenv

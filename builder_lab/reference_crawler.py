@@ -4,12 +4,14 @@ import asyncio
 import hashlib
 import ipaddress
 import json
+import re
 import socket
 import tempfile
 import time
 import uuid
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -21,10 +23,12 @@ from .reference_models import (
     ReferencePageEvidence,
     ScreenshotEvidence,
     TraceEvidence,
+    public_url,
 )
 
 
 KAIGO_RESEARCH_USER_AGENT = "KaigoVisualResearch/1.0 (+https://kaigo.space)"
+KAIGO_RESEARCH_ROBOTS_AGENT = "KaigoVisualResearch"
 _METADATA_HOSTS = frozenset(
     {
         "metadata.google.internal",
@@ -81,6 +85,10 @@ _CATEGORY_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 
 class UnsafeReferenceUrl(ValueError):
+    pass
+
+
+class RobotsDenied(RuntimeError):
     pass
 
 
@@ -174,6 +182,141 @@ class UrlGuard:
 
     def validate_redirect(self, url: str) -> GuardedUrl:
         return self.validate(url)
+
+
+def sanitize_url_for_log(url: str) -> str:
+    return public_url(url)
+
+
+def _sanitize_text(value: str) -> str:
+    return re.sub(
+        r"https?://[^\s\"'<>]+",
+        lambda match: sanitize_url_for_log(match.group(0)),
+        value,
+    )[:1000]
+
+
+def _exception_text(exc: BaseException) -> str:
+    current = exc
+    seen: set[int] = set()
+    parts: list[str] = []
+    while id(current) not in seen:
+        seen.add(id(current))
+        message = _sanitize_text(str(current))
+        if message and message not in parts:
+            parts.append(message)
+        next_error = current.__cause__ or current.__context__
+        if next_error is None:
+            break
+        current = next_error
+    return " caused by ".join(parts)[:1000] or "unknown crawl failure"
+
+
+def _origin_url(url: str) -> str:
+    parsed = urlsplit(url)
+    port = parsed.port
+    default_port = 443 if parsed.scheme.lower() == "https" else 80
+    suffix = f":{port}" if port is not None and port != default_port else ""
+    return urlunsplit(
+        (parsed.scheme.lower(), f"{(parsed.hostname or '').lower()}{suffix}", "", "", "")
+    )
+
+
+class GuardedRobotsPolicy:
+    """Per-origin robots policy loaded only through the Kaigo URL guard."""
+
+    def __init__(
+        self,
+        *,
+        guard: UrlGuard,
+        transport: Any | None = None,
+        respect_robots: bool = True,
+        timeout_seconds: int = 15,
+        max_bytes: int = 256 * 1024,
+    ) -> None:
+        self.guard = guard
+        self.transport = transport
+        self.respect_robots = respect_robots
+        self.timeout_seconds = timeout_seconds
+        self.max_bytes = max_bytes
+        self._cache: dict[str, Any] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    async def _load(self, origin: str) -> Any:
+        import httpx
+        from crawlee._utils.robots import RobotsTxtFile
+
+        current = f"{origin}/robots.txt"
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            headers={"User-Agent": KAIGO_RESEARCH_USER_AGENT},
+            timeout=self.timeout_seconds,
+            trust_env=False,
+            transport=self.transport,
+        ) as client:
+            for _ in range(4):
+                await asyncio.to_thread(self.guard.validate_redirect, current)
+                try:
+                    async with client.stream("GET", current) as response:
+                        if response.is_redirect:
+                            location = response.headers.get("location")
+                            if not location:
+                                raise RobotsDenied("robots redirect has no location")
+                            redirected = urljoin(current, location)
+                            await asyncio.to_thread(
+                                self.guard.validate_redirect, redirected
+                            )
+                            if _origin_url(redirected) != origin:
+                                raise RobotsDenied(
+                                    "cross-origin robots redirects are denied"
+                                )
+                            current = redirected
+                            continue
+                        if response.status_code in {404, 410}:
+                            return True
+                        if response.status_code != 200:
+                            raise RobotsDenied(
+                                f"robots request failed with HTTP {response.status_code}"
+                            )
+                        chunks: list[bytes] = []
+                        size = 0
+                        async for chunk in response.aiter_bytes():
+                            size += len(chunk)
+                            if size > self.max_bytes:
+                                raise RobotsDenied("robots response exceeds byte cap")
+                            chunks.append(chunk)
+                        content = b"".join(chunks).decode(
+                            response.encoding or "utf-8", errors="replace"
+                        )
+                        return await RobotsTxtFile.from_content(current, content)
+                except RobotsDenied:
+                    raise
+                except httpx.HTTPError as exc:
+                    raise RobotsDenied("robots request failed closed") from exc
+        raise RobotsDenied("robots redirect limit exceeded")
+
+    async def _policy(self, url: str) -> Any:
+        await asyncio.to_thread(self.guard.validate, url)
+        if not self.respect_robots:
+            return True
+        origin = _origin_url(url)
+        if origin in self._cache:
+            return self._cache[origin]
+        lock = self._locks.setdefault(origin, asyncio.Lock())
+        async with lock:
+            if origin not in self._cache:
+                self._cache[origin] = await self._load(origin)
+        return self._cache[origin]
+
+    async def is_allowed(self, url: str) -> bool:
+        policy = await self._policy(url)
+        if policy is True:
+            return True
+        return bool(policy.is_allowed(url, user_agent=KAIGO_RESEARCH_ROBOTS_AGENT))
+
+    async def require_allowed(self, url: str) -> None:
+        if not await self.is_allowed(url):
+            raise RobotsDenied(f"robots policy denies {sanitize_url_for_log(url)}")
 
 
 @dataclass(frozen=True)
@@ -333,6 +476,276 @@ class CaptureSettings:
         )
 
 
+class CrawlAccumulator:
+    """Idempotent crawl state committed only after child enqueue succeeds."""
+
+    def __init__(self, *, max_total_bytes: int, selected_urls: set[str]) -> None:
+        self.max_total_bytes = max_total_bytes
+        self._selected_urls = set(selected_urls)
+        self._pages: dict[tuple[str, str], ReferencePageEvidence] = {}
+        self._total_bytes = 0
+
+    @staticmethod
+    def _key(evidence: ReferencePageEvidence) -> tuple[str, str]:
+        viewport = (
+            evidence.screenshots[0].viewport if evidence.screenshots else "not_captured"
+        )
+        return evidence.page_id, viewport
+
+    @property
+    def pages(self) -> tuple[ReferencePageEvidence, ...]:
+        return tuple(self._pages.values())
+
+    @property
+    def selected_urls(self) -> frozenset[str]:
+        return frozenset(self._selected_urls)
+
+    @property
+    def total_bytes(self) -> int:
+        return self._total_bytes
+
+    async def commit(
+        self,
+        *,
+        evidence: ReferencePageEvidence,
+        child_urls: Sequence[str],
+        enqueue: Callable[[], Any],
+    ) -> None:
+        key = self._key(evidence)
+        if key in self._pages:
+            return
+        projected = self._total_bytes + evidence.transferred_bytes
+        if projected > self.max_total_bytes:
+            raise ReferenceCaptureError("crawl byte limit exceeded")
+        result = enqueue()
+        if hasattr(result, "__await__"):
+            await result
+        self._pages[key] = evidence
+        self._total_bytes = projected
+        self._selected_urls.update(child_urls)
+
+    async def commit_partial(self, evidence: ReferencePageEvidence) -> None:
+        async def no_enqueue() -> None:
+            return None
+
+        await self.commit(evidence=evidence, child_urls=(), enqueue=no_enqueue)
+
+
+@dataclass
+class CaptureTelemetry:
+    max_page_bytes: int
+    console_failures: list[str] = field(default_factory=list)
+    page_failures: list[str] = field(default_factory=list)
+    request_failures: list[str] = field(default_factory=list)
+    policy_blocks: list[str] = field(default_factory=list)
+    response_bytes: int = 0
+    declared_oversize: asyncio.Event = field(default_factory=asyncio.Event)
+    transfer_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
+    _policy_labels: set[str] = field(default_factory=set)
+    _attached_context: bool = False
+    _attached_pages: set[int] = field(default_factory=set)
+    accounted: bool = False
+
+    @staticmethod
+    def _append_unique(target: list[str], value: str) -> None:
+        if value not in target and len(target) < 100:
+            target.append(value[:1000])
+
+    def record_policy_block(self, reason: str, url: str) -> None:
+        label = sanitize_url_for_log(url)
+        self._policy_labels.add(label)
+        self._append_unique(self.policy_blocks, f"{reason}: {label}")
+
+    def attach_context(self, context: Any) -> None:
+        if self._attached_context:
+            return
+        self._attached_context = True
+
+        async def collect_size(request: Any) -> None:
+            try:
+                sizes = await request.sizes()
+                self.response_bytes += max(
+                    0, int(sizes.get("responseBodySize", 0))
+                )
+            except Exception:
+                return
+
+        def on_request_finished(request: Any) -> None:
+            task = asyncio.create_task(collect_size(request))
+            self.transfer_tasks.add(task)
+            task.add_done_callback(self.transfer_tasks.discard)
+
+        def on_response(response: Any) -> None:
+            try:
+                size = int(response.headers.get("content-length", "0"))
+            except (TypeError, ValueError):
+                size = 0
+            if size > self.max_page_bytes:
+                self.declared_oversize.set()
+
+        def on_request_failed(request: Any) -> None:
+            label = sanitize_url_for_log(request.url)
+            if label in self._policy_labels:
+                return
+            failure = _sanitize_text(str(request.failure or "request failed"))
+            self._append_unique(
+                self.request_failures, f"{request.method} {label}: {failure}"
+            )
+
+        context.on("requestfinished", on_request_finished)
+        context.on("response", on_response)
+        context.on("requestfailed", on_request_failed)
+
+    def attach_page(self, page: Any) -> None:
+        key = id(page)
+        if key in self._attached_pages:
+            return
+        self._attached_pages.add(key)
+
+        def on_console(message: Any) -> None:
+            if message.type in {"error", "warning"}:
+                self._append_unique(
+                    self.console_failures,
+                    _sanitize_text(f"{message.type}: {message.text}"),
+                )
+
+        def on_page_error(error: Exception) -> None:
+            self._append_unique(self.page_failures, _sanitize_text(str(error)))
+
+        page.on("console", on_console)
+        page.on("pageerror", on_page_error)
+
+    async def settle_transfers(self) -> None:
+        if self.transfer_tasks:
+            await asyncio.gather(*tuple(self.transfer_tasks), return_exceptions=True)
+
+    def raise_if_oversize(self) -> None:
+        if self.declared_oversize.is_set() or self.response_bytes > self.max_page_bytes:
+            raise ReferenceCaptureError("page byte limit exceeded")
+
+
+async def _guarded_context_route(
+    route: Any,
+    request: Any,
+    *,
+    guard: UrlGuard | None,
+    robots: GuardedRobotsPolicy | None,
+    allowed_document_origin: tuple[str, str, int],
+    primary_page: dict[str, Any],
+    telemetry: CaptureTelemetry,
+) -> None:
+    async def block(reason: str) -> None:
+        telemetry.record_policy_block(reason, request.url)
+        await route.abort("blockedbyclient")
+
+    parsed = urlsplit(request.url)
+    if parsed.scheme not in {"http", "https"}:
+        await block("non-http scheme blocked")
+        return
+    if request.method.upper() not in {"GET", "HEAD"}:
+        await block("non-read request blocked")
+        return
+    if request.resource_type in {"media", "eventsource"}:
+        await block(f"{request.resource_type} blocked")
+        return
+    if guard is not None:
+        try:
+            await asyncio.to_thread(guard.validate, request.url)
+        except UnsafeReferenceUrl:
+            await block("unsafe destination blocked")
+            return
+    if request.resource_type == "document":
+        try:
+            request_origin = _origin_key(request.url)
+        except ValueError:
+            await block("malformed document URL blocked")
+            return
+        try:
+            request_page = request.frame.page
+        except Exception:
+            request_page = None
+        expected_page = primary_page.get("page")
+        if expected_page is not None and request_page is not expected_page:
+            await block("popup document blocked")
+            return
+        if request_origin != allowed_document_origin:
+            await block("cross-origin document blocked")
+            return
+        if robots is not None:
+            try:
+                await robots.require_allowed(request.url)
+            except (RobotsDenied, UnsafeReferenceUrl):
+                await block("robots policy blocked document")
+                return
+        # Chromium does not re-run route handlers for redirects followed by a
+        # continued request. Fetch exactly one hop ourselves, validate the
+        # Location before Chromium can connect, then fulfill that hop.
+        try:
+            response = await route.fetch(max_redirects=0)
+        except Exception:
+            await block("document fetch failed closed")
+            return
+        if 300 <= response.status < 400:
+            location = response.headers.get("location")
+            if not location:
+                await block("document redirect without location blocked")
+                return
+            redirected = urljoin(request.url, location)
+            if guard is not None:
+                try:
+                    await asyncio.to_thread(guard.validate_redirect, redirected)
+                except UnsafeReferenceUrl:
+                    await block("unsafe document redirect blocked")
+                    return
+            if _origin_key(redirected) != allowed_document_origin:
+                await block("cross-origin document blocked")
+                return
+        await route.fulfill(response=response)
+        return
+    await route.continue_()
+
+
+async def _install_context_policy(
+    context: Any,
+    *,
+    primary_page: dict[str, Any],
+    guard: UrlGuard | None,
+    robots: GuardedRobotsPolicy | None,
+    allowed_document_origin: tuple[str, str, int],
+    telemetry: CaptureTelemetry,
+) -> None:
+    telemetry.attach_context(context)
+    await context.route(
+        "**/*",
+        lambda route, request: _guarded_context_route(
+            route,
+            request,
+            guard=guard,
+            robots=robots,
+            allowed_document_origin=allowed_document_origin,
+            primary_page=primary_page,
+            telemetry=telemetry,
+        ),
+    )
+    await context.route_web_socket(
+        "**/*",
+        lambda websocket: (
+            telemetry.record_policy_block("websocket blocked", websocket.url),
+            websocket.close(code=1008, reason="blocked"),
+        )[1],
+    )
+
+    async def close_popup(page: Any) -> None:
+        if primary_page.get("page") is None:
+            primary_page["page"] = page
+            return
+        if page is not primary_page.get("page"):
+            telemetry.record_policy_block("popup page closed", page.url)
+            await page.close()
+
+    context.on("page", close_popup)
+
+
 def browser_unavailable_reason() -> str | None:
     try:
         from playwright.sync_api import sync_playwright
@@ -349,15 +762,20 @@ def browser_unavailable_reason() -> str | None:
 
 
 async def _wait_for_fonts_and_visible_images(page: Any, timeout_ms: int) -> None:
+    await page.evaluate(
+        "() => document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()"
+    )
     await page.wait_for_function(
-        """async () => {
-          if (document.fonts && document.fonts.ready) await document.fonts.ready;
+        """() => {
           const images = [...document.images].slice(0, 500).filter((img) => {
             const r = img.getBoundingClientRect();
             const s = getComputedStyle(img);
             return r.width > 1 && r.height > 1 && s.display !== 'none' && s.visibility !== 'hidden';
           });
-          return images.every((img) => img.complete);
+          return images.every((img) =>
+            !img.getAttribute('src') ||
+            (img.complete && img.naturalWidth > 0 && img.naturalHeight > 0)
+          );
         }""",
         timeout=timeout_ms,
     )
@@ -379,6 +797,15 @@ _SCROLL_STATE_SCRIPT = r"""() => {
     const t = getComputedStyle(el).transform;
     return t && t !== 'none';
   }).slice(0, 40);
+  const rawRect = scroller === root
+    ? {left: 0, top: 0, right: innerWidth, bottom: innerHeight}
+    : scroller.getBoundingClientRect();
+  const rect = {
+    x: Math.max(0, rawRect.left),
+    y: Math.max(0, rawRect.top),
+    width: Math.max(1, Math.min(innerWidth, rawRect.right) - Math.max(0, rawRect.left)),
+    height: Math.max(1, Math.min(innerHeight, rawRect.bottom) - Math.max(0, rawRect.top))
+  };
   const visible = [];
   for (let y = 40; y < innerHeight; y += Math.max(80, Math.floor(innerHeight / 8))) {
     for (const el of document.elementsFromPoint(innerWidth / 2, y)) {
@@ -392,6 +819,7 @@ _SCROLL_STATE_SCRIPT = r"""() => {
     top: scroller === root ? (scrollY || root.scrollTop || 0) : scroller.scrollTop,
     height: scroller.scrollHeight,
     client: scroller === root ? innerHeight : scroller.clientHeight,
+    rect,
     transformSignature: transformNodes.map((el) => `${el.tagName}:${getComputedStyle(el).transform}`).join('|'),
     visibleSignature: visible.join('|'),
     visible
@@ -399,13 +827,19 @@ _SCROLL_STATE_SCRIPT = r"""() => {
 }"""
 
 
-async def _scroll_once(page: Any, state: Mapping[str, Any], step: int) -> None:
-    viewport = await page.evaluate("() => ({width: innerWidth, height: innerHeight})")
-    await page.mouse.move(0.5 * viewport["width"], 0.5 * viewport["height"])
+async def _scroll_once(page: Any, state: Mapping[str, Any], step: int) -> str:
+    rect = state["rect"]
+    target_x = float(rect["x"]) + float(rect["width"]) / 2
+    target_y = float(rect["y"]) + float(rect["height"]) / 2
+    await page.mouse.move(target_x, target_y)
     await page.mouse.wheel(0, step)
     await page.wait_for_timeout(50)
     after = await page.evaluate(_SCROLL_STATE_SCRIPT)
-    if int(after["top"]) <= int(state["top"]) and after["transformSignature"] == state["transformSignature"]:
+    if (
+        int(after["top"]) <= int(state["top"])
+        and after["transformSignature"] == state["transformSignature"]
+        and after["visibleSignature"] == state["visibleSignature"]
+    ):
         await page.evaluate(
             """(dy) => {
               const marked = document.querySelector('[data-kaigo-scroll-id="active"]');
@@ -417,6 +851,16 @@ async def _scroll_once(page: Any, state: Mapping[str, Any], step: int) -> None:
             }""",
             step,
         )
+        await page.wait_for_timeout(50)
+        fallback_after = await page.evaluate(_SCROLL_STATE_SCRIPT)
+        if (
+            int(fallback_after["top"]) > int(after["top"])
+            or fallback_after["transformSignature"] != after["transformSignature"]
+            or fallback_after["visibleSignature"] != after["visibleSignature"]
+        ):
+            return "script_fallback"
+        return "stalled"
+    return "wheel"
 
 
 async def _take_screenshot(
@@ -467,7 +911,14 @@ _SAMPLE_SCRIPT = r"""({initialHidden, observedTexts}) => {
   for (const value of colors.filter((v) => v && v !== 'rgba(0, 0, 0, 0)')) colorCounts[value]=(colorCounts[value]||0)+1;
   const images = [...document.images].slice(0,30).map((img) => ({width:img.naturalWidth,height:img.naturalHeight,aspectRatio:img.naturalHeight ? +(img.naturalWidth/img.naturalHeight).toFixed(3) : null,alt:(img.alt||'').slice(0,160)}));
   const fixedSticky = nodes.filter((el) => ['fixed','sticky'].includes(getComputedStyle(el).position)).slice(0,20).map((el) => ({tag:el.tagName.toLowerCase(),text:text(el).slice(0,100),position:getComputedStyle(el).position}));
-  const moving = descriptors.filter((item) => item.transition !== 'all 0s ease 0s' || item.animation !== 'none').slice(0,30);
+  const moving = nodes.filter((el) => {
+    const s=getComputedStyle(el);
+    return (s.transitionDuration && s.transitionDuration !== '0s') || (s.animationName && s.animationName !== 'none');
+  }).slice(0,60).map((el) => {
+    const s=getComputedStyle(el);
+    return {tag:el.tagName.toLowerCase(),text:text(el).slice(0,120),transition:s.transition,
+      animation:s.animationName === 'none' ? 'none' : `${s.animationName} ${s.animationDuration}`};
+  });
   const visibleReveal = nodes.filter((el) => /reveal|animate|visible|shown|seen/i.test(el.className || '') && parseFloat(getComputedStyle(el).opacity || '1') > 0).length;
   return {
     semantic: {
@@ -495,6 +946,102 @@ _SAMPLE_SCRIPT = r"""({initialHidden, observedTexts}) => {
 }"""
 
 
+def _ordered_union(values: Iterable[Any], *, limit: int) -> list[Any]:
+    result: list[Any] = []
+    fingerprints: set[str] = set()
+    for value in values:
+        fingerprint = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        if fingerprint in fingerprints:
+            continue
+        fingerprints.add(fingerprint)
+        result.append(value)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _merge_page_samples(samples: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    first = samples[0]
+    semantic: dict[str, Any] = {
+        "title": first["semantic"].get("title", ""),
+        "lang": first["semantic"].get("lang", ""),
+        "initial_hidden_reveal_count": first["semantic"].get(
+            "initial_hidden_reveal_count", 0
+        ),
+        "reveal_observed": any(
+            sample["semantic"].get("reveal_observed", False) for sample in samples
+        ),
+    }
+    for field_name, limit in (
+        ("headings", 30),
+        ("body", 30),
+        ("navigation", 30),
+        ("controls", 40),
+        ("observed_viewport_texts", 80),
+    ):
+        semantic[field_name] = _ordered_union(
+            (
+                item
+                for sample in samples
+                for item in sample["semantic"].get(field_name, ())
+            ),
+            limit=limit,
+        )
+    colors: Counter[str] = Counter()
+    for sample in samples:
+        for item in sample["style"].get("dominantColors", ()):
+            colors[str(item.get("value", ""))] += int(item.get("count", 0))
+    images_by_alt: dict[str, Any] = {}
+    for page_sample in samples:
+        for item in page_sample["style"].get("imageAspectRatios", ()):
+            key = str(item.get("alt", ""))
+            current = images_by_alt.get(key)
+            if current is None or (
+                current.get("aspectRatio") is None
+                and item.get("aspectRatio") is not None
+            ):
+                images_by_alt[key] = item
+    style = {
+        "body": dict(first["style"].get("body", {})),
+        "fonts": _ordered_union(
+            (font for sample in samples for font in sample["style"].get("fonts", ())),
+            limit=20,
+        ),
+        "dominantColors": [
+            {"value": value, "count": count}
+            for value, count in colors.most_common(16)
+            if value
+        ],
+        "cssVariables": dict(first["style"].get("cssVariables", {})),
+        "elements": _ordered_union(
+            (
+                item
+                for sample in samples
+                for item in sample["style"].get("elements", ())
+            ),
+            limit=80,
+        ),
+        "imageAspectRatios": list(images_by_alt.values())[:30],
+        "fixedSticky": _ordered_union(
+            (
+                item
+                for sample in samples
+                for item in sample["style"].get("fixedSticky", ())
+            ),
+            limit=20,
+        ),
+        "motionInventory": _ordered_union(
+            (
+                item
+                for sample in samples
+                for item in sample["style"].get("motionInventory", ())
+            ),
+            limit=30,
+        ),
+    }
+    return {"semantic": semantic, "style": style}
+
+
 async def _capture_loaded_page(
     page: Any,
     *,
@@ -504,69 +1051,27 @@ async def _capture_loaded_page(
     viewport: str,
     settings: CaptureSettings,
     guard: UrlGuard | None,
+    telemetry: CaptureTelemetry,
 ) -> ReferencePageEvidence:
     started = time.monotonic()
-    console_failures: list[str] = []
-    page_failures: list[str] = []
-    request_failures: list[str] = []
     observed_texts: list[str] = []
-    response_bytes = 0
-    declared_bytes = 0
-    budget_exceeded = asyncio.Event()
-    transfer_tasks: set[asyncio.Task[Any]] = set()
-
-    def on_console(message: Any) -> None:
-        if message.type in {"error", "warning"} and len(console_failures) < 100:
-            console_failures.append(f"{message.type}: {message.text}"[:1000])
-
-    def on_page_error(error: Exception) -> None:
-        if len(page_failures) < 100:
-            page_failures.append(str(error)[:1000])
-
-    def on_request_failed(request: Any) -> None:
-        if len(request_failures) < 100:
-            request_failures.append(f"{request.method} {request.url}: {request.failure}"[:1000])
-
-    async def collect_size(request: Any) -> None:
-        nonlocal response_bytes
-        try:
-            sizes = await request.sizes()
-            response_bytes += max(0, int(sizes.get("responseBodySize", 0)))
-        except Exception:
-            return
-
-    def on_request_finished(request: Any) -> None:
-        task = asyncio.create_task(collect_size(request))
-        transfer_tasks.add(task)
-        task.add_done_callback(transfer_tasks.discard)
-
-    def on_response(response: Any) -> None:
-        nonlocal declared_bytes
-        try:
-            size = int(response.headers.get("content-length", "0"))
-        except (TypeError, ValueError):
-            size = 0
-        declared_bytes += max(0, size)
-        if declared_bytes > settings.max_page_bytes:
-            budget_exceeded.set()
-
-    page.on("console", on_console)
-    page.on("pageerror", on_page_error)
-    page.on("requestfailed", on_request_failed)
-    page.on("requestfinished", on_request_finished)
-    page.on("response", on_response)
+    skipped_reasons: list[str] = []
+    samples: list[Mapping[str, Any]] = []
 
     timeout_ms = settings.page_timeout_seconds * 1000
     await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
     await page.wait_for_load_state("load", timeout=timeout_ms)
-    if budget_exceeded.is_set():
-        raise ReferenceCaptureError("page byte limit exceeded")
+    if any(
+        item.startswith("cross-origin document blocked:")
+        for item in telemetry.policy_blocks
+    ):
+        raise ReferenceCaptureError("cross-origin document blocked")
+    telemetry.raise_if_oversize()
     if guard is not None:
         await asyncio.to_thread(guard.validate_redirect, page.url)
     await _wait_for_fonts_and_visible_images(page, timeout_ms)
     await page.wait_for_timeout(settings.warmup_ms)
-    if budget_exceeded.is_set():
-        raise ReferenceCaptureError("page byte limit exceeded")
+    telemetry.raise_if_oversize()
     initial_hidden = await page.evaluate(
         """() => [...document.querySelectorAll('body *')].slice(0, 5000).filter((el) => {
           const s=getComputedStyle(el); const r=el.getBoundingClientRect();
@@ -576,90 +1081,138 @@ async def _capture_loaded_page(
 
     screenshots: dict[str, ScreenshotEvidence] = {}
     state = await page.evaluate(_SCROLL_STATE_SCRIPT)
-    last_height = int(state["height"])
-    stable_height_at_end = 0
-    stable_visible = 0
-    previous_visible = ""
+    observed_texts.extend(state.get("visible", ()))
+    samples.append(
+        await page.evaluate(
+            _SAMPLE_SCRIPT,
+            {"initialHidden": int(initial_hidden), "observedTexts": observed_texts},
+        )
+    )
+    screenshots["top"] = await _take_screenshot(
+        page,
+        page_id=page_id,
+        viewport=viewport,
+        position="top",
+        width=settings.width,
+        height=settings.height,
+    )
+
     step_px = max(1, int(settings.height * 0.7))
+    modes: set[str] = set()
+    fallback_used = False
+    stable_steps = 0
+    progressed = False
+    virtual = False
+    exhausted = True
     for step_index in range(settings.max_scroll_steps):
-        observed_texts.extend(state.get("visible", ()))
-        if state.get("visibleSignature") == previous_visible:
-            stable_visible += 1
+        if int(state["height"]) > settings.max_scroll_height:
+            skipped_reasons.append("scroll_height_cap_reached")
+            exhausted = False
+            break
+        previous = state
+        scroll_result = await _scroll_once(page, previous, step_px)
+        fallback_used = fallback_used or scroll_result == "script_fallback"
+        await page.wait_for_timeout(settings.scroll_delay_ms)
+        try:
+            await _wait_for_fonts_and_visible_images(page, 2500)
+        except Exception:
+            if "lazy_image_settle_timeout" not in skipped_reasons:
+                skipped_reasons.append("lazy_image_settle_timeout")
+        telemetry.raise_if_oversize()
+        state = await page.evaluate(_SCROLL_STATE_SCRIPT)
+        top_changed = int(state["top"]) != int(previous["top"])
+        transform_changed = (
+            state.get("transformSignature") != previous.get("transformSignature")
+        )
+        visible_changed = (
+            state.get("visibleSignature") != previous.get("visibleSignature")
+        )
+        meaningful_change = top_changed or transform_changed or visible_changed
+        if meaningful_change:
+            progressed = True
+            stable_steps = 0
         else:
-            stable_visible = 0
-            previous_visible = str(state.get("visibleSignature", ""))
-        progress = min(1.0, (int(state["top"]) + int(state["client"])) / max(1, int(state["height"])))
-        if (
-            progress >= 0.38
-            and "middle" not in screenshots
-            and (int(state["height"]) > int(state["client"]) or step_index > 0)
+            stable_steps += 1
+        if not top_changed and (transform_changed or visible_changed):
+            virtual = True
+            modes.add("virtual")
+        elif top_changed and state.get("kind") == "element":
+            modes.add("nested")
+        elif top_changed:
+            modes.add("document")
+        observed_texts.extend(state.get("visible", ()))
+        samples.append(
+            await page.evaluate(
+                _SAMPLE_SCRIPT,
+                {
+                    "initialHidden": int(initial_hidden),
+                    "observedTexts": observed_texts[:160],
+                },
+            )
+        )
+        max_native_scroll = max(0, int(state["height"]) - int(state["client"]))
+        native_progress = (
+            min(1.0, int(state["top"]) / max(1, max_native_scroll))
+            if max_native_scroll
+            else 0.0
+        )
+        if "middle" not in screenshots and (
+            (virtual and meaningful_change)
+            or (not virtual and native_progress >= 0.45)
         ):
             screenshots["middle"] = await _take_screenshot(
-                page, page_id=page_id, viewport=viewport, position="middle",
-                width=settings.width, height=settings.height,
+                page,
+                page_id=page_id,
+                viewport=viewport,
+                position="middle",
+                width=settings.width,
+                height=settings.height,
             )
-        at_end = progress >= 0.985
-        if at_end and int(state["height"]) == last_height:
-            stable_height_at_end += 1
+        if virtual:
+            if progressed and stable_steps >= 2:
+                exhausted = False
+                break
         else:
-            stable_height_at_end = 0
-        if at_end and stable_height_at_end >= 2:
-            break
-        if int(state["height"]) > settings.max_scroll_height:
-            page_failures.append("scroll height cap reached")
-            break
-        await _scroll_once(page, state, step_px)
-        await page.wait_for_timeout(settings.scroll_delay_ms)
-        if budget_exceeded.is_set():
-            raise ReferenceCaptureError("page byte limit exceeded")
-        next_state = await page.evaluate(_SCROLL_STATE_SCRIPT)
-        if (
-            int(next_state["top"]) == int(state["top"])
-            and next_state.get("transformSignature") == state.get("transformSignature")
-            and stable_visible >= 2
-        ):
-            state = next_state
-            break
-        last_height = int(state["height"])
-        state = next_state
+            at_end = max_native_scroll == 0 or int(state["top"]) >= max_native_scroll - 2
+            if ((progressed and at_end) or not progressed) and stable_steps >= 2:
+                exhausted = False
+                break
+    if exhausted:
+        skipped_reasons.append("scroll_step_cap_reached")
+    await page.wait_for_timeout(settings.final_settle_ms)
     observed_texts.extend(state.get("visible", ()))
     screenshots["bottom"] = await _take_screenshot(
-        page, page_id=page_id, viewport=viewport, position="bottom",
-        width=settings.width, height=settings.height,
+        page,
+        page_id=page_id,
+        viewport=viewport,
+        position="bottom",
+        width=settings.width,
+        height=settings.height,
     )
     if "middle" not in screenshots:
         screenshots["middle"] = await _take_screenshot(
-            page, page_id=page_id, viewport=viewport, position="middle",
-            width=settings.width, height=settings.height,
+            page,
+            page_id=page_id,
+            viewport=viewport,
+            position="middle",
+            width=settings.width,
+            height=settings.height,
         )
-
-    sample = await page.evaluate(
-        _SAMPLE_SCRIPT,
-        {"initialHidden": int(initial_hidden), "observedTexts": observed_texts[:160]},
-    )
-
-    # A reload is deliberately used for stable top evidence. On virtual/smooth
-    # scroll sites, scrollY and bounding boxes can report a logical top while a
-    # transformed scene remains elsewhere. Full-page stitching is never used as
-    # the sole oracle.
-    await page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
-    await page.wait_for_load_state("load", timeout=timeout_ms)
-    if budget_exceeded.is_set():
-        raise ReferenceCaptureError("page byte limit exceeded")
-    if guard is not None:
-        await asyncio.to_thread(guard.validate_redirect, page.url)
-    await _wait_for_fonts_and_visible_images(page, timeout_ms)
-    await page.wait_for_timeout(settings.final_settle_ms)
-    screenshots["top"] = await _take_screenshot(
-        page, page_id=page_id, viewport=viewport, position="top",
-        width=settings.width, height=settings.height,
-    )
-    if transfer_tasks:
-        await asyncio.gather(*tuple(transfer_tasks), return_exceptions=True)
+    sample = _merge_page_samples(samples)
+    await telemetry.settle_transfers()
+    telemetry.raise_if_oversize()
     screenshot_bytes = sum(item.size_bytes for item in screenshots.values())
-    transferred_bytes = response_bytes + screenshot_bytes
+    transferred_bytes = telemetry.response_bytes + screenshot_bytes
     if transferred_bytes > settings.max_page_bytes:
         raise ReferenceCaptureError("page byte limit exceeded")
+    if not progressed:
+        scroll_strategy = "static"
+    elif len(modes) == 1:
+        scroll_strategy = next(iter(modes))
+    else:
+        scroll_strategy = "mixed"
+    if fallback_used:
+        scroll_strategy = f"{scroll_strategy}+script_fallback"
     return ReferencePageEvidence(
         page_id=page_id,
         category=category,
@@ -669,32 +1222,16 @@ async def _capture_loaded_page(
         screenshots=tuple(screenshots[position] for position in ("top", "middle", "bottom")),
         semantic_sample=sample["semantic"],
         style_sample=sample["style"],
-        console_failures=tuple(console_failures),
-        page_failures=tuple(page_failures),
-        request_failures=tuple(request_failures),
+        console_failures=tuple(telemetry.console_failures),
+        page_failures=tuple(telemetry.page_failures),
+        request_failures=tuple(telemetry.request_failures),
+        policy_blocks=tuple(telemetry.policy_blocks),
         timings_ms={"total": round((time.monotonic() - started) * 1000, 1)},
         transferred_bytes=transferred_bytes,
+        scroll_strategy=scroll_strategy,
+        reset_strategy="none",
+        skipped_reasons=tuple(skipped_reasons),
     )
-
-
-async def _route_with_guard(route: Any, request: Any, guard: UrlGuard | None) -> None:
-    parsed = urlsplit(request.url)
-    if parsed.scheme not in {"http", "https"}:
-        await route.abort("blockedbyclient")
-        return
-    if request.method.upper() not in {"GET", "HEAD"}:
-        await route.abort("blockedbyclient")
-        return
-    if request.resource_type in {"media", "eventsource"}:
-        await route.abort("blockedbyclient")
-        return
-    if guard is not None:
-        try:
-            await asyncio.to_thread(guard.validate, request.url)
-        except UnsafeReferenceUrl:
-            await route.abort("blockedbyclient")
-            return
-    await route.continue_()
 
 
 async def _trace_failure(context: Any, ttl_seconds: int) -> TraceEvidence | None:
@@ -725,6 +1262,7 @@ async def capture_reference_page(
     viewport: str,
     settings: CaptureSettings,
     guard: UrlGuard | None = None,
+    robots_policy: GuardedRobotsPolicy | None = None,
     trace_ttl_seconds: int = 3600,
 ) -> ReferencePageEvidence:
     """Capture one explicitly supplied page without discovery or LLM calls."""
@@ -732,6 +1270,10 @@ async def capture_reference_page(
 
     if guard is not None:
         await asyncio.to_thread(guard.validate, url)
+        robots_policy = robots_policy or GuardedRobotsPolicy(guard=guard)
+    if robots_policy is not None:
+        await robots_policy.require_allowed(url)
+    document_origin = _origin_key(url)
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
         context = await browser.new_context(
@@ -744,13 +1286,19 @@ async def capture_reference_page(
             service_workers="block",
         )
         await context.clear_cookies()
+        telemetry = CaptureTelemetry(max_page_bytes=settings.max_page_bytes)
+        primary_page: dict[str, Any] = {"page": None}
+        await _install_context_policy(
+            context,
+            primary_page=primary_page,
+            guard=guard,
+            robots=robots_policy,
+            allowed_document_origin=document_origin,
+            telemetry=telemetry,
+        )
         page = await context.new_page()
-        await page.route(
-            "**/*", lambda route, request: _route_with_guard(route, request, guard)
-        )
-        await page.route_web_socket(
-            "**/*", lambda route: route.close(code=1008, reason="blocked")
-        )
+        primary_page["page"] = page
+        telemetry.attach_page(page)
         await context.tracing.start(screenshots=True, snapshots=True, sources=False)
         try:
             await page.goto(
@@ -766,10 +1314,20 @@ async def capture_reference_page(
                 viewport=viewport,
                 settings=settings,
                 guard=guard,
+                telemetry=telemetry,
             )
         except Exception as exc:
             trace = await _trace_failure(context, trace_ttl_seconds)
-            raise ReferenceCaptureError(str(exc), trace=trace) from exc
+            policy_reason = next(
+                (
+                    item.split(":", 1)[0]
+                    for item in telemetry.policy_blocks
+                    if "document blocked" in item
+                ),
+                None,
+            )
+            message = policy_reason or _sanitize_text(str(exc))
+            raise ReferenceCaptureError(message, trace=trace) from exc
         else:
             await context.tracing.stop()
             return evidence
@@ -921,6 +1479,23 @@ class VisualReferenceCrawler:
             timeout=min(10, remaining_timeout()),
         )
         home_url = _without_fragment(guarded.url)
+        robots = GuardedRobotsPolicy(
+            guard=self.guard,
+            respect_robots=self.limits.respect_robots,
+            timeout_seconds=min(15, self.limits.page_timeout_seconds),
+        )
+        try:
+            await asyncio.wait_for(
+                robots.require_allowed(home_url), timeout=min(20, remaining_timeout())
+            )
+        except Exception as exc:
+            return ReferenceCrawlResult.failed(
+                source_url=home_url,
+                failure=CrawlFailure(
+                    code="robots_denied", message=_sanitize_text(str(exc))
+                ),
+                started_at=started_at,
+            )
         try:
             sitemap = await asyncio.wait_for(
                 _sitemap_candidates(
@@ -932,10 +1507,44 @@ class VisualReferenceCrawler:
             )
         except (TimeoutError, OSError):
             sitemap = ()
-        pages: list[ReferencePageEvidence] = []
         failure_trace: TraceEvidence | None = None
-        total_bytes = 0
-        selected_urls: set[str] = {home_url}
+        attempted_bytes = 0
+        accumulator = CrawlAccumulator(
+            max_total_bytes=self.limits.max_total_bytes,
+            selected_urls={home_url},
+        )
+        telemetry_by_page: dict[int, CaptureTelemetry] = {}
+        attempt_by_request: dict[str, tuple[CaptureTelemetry, Any, int]] = {}
+        trace_active: set[int] = set()
+        document_origin = _origin_key(home_url)
+
+        async def account_attempt(telemetry: CaptureTelemetry) -> None:
+            nonlocal attempted_bytes
+            await telemetry.settle_transfers()
+            if telemetry.accounted:
+                return
+            telemetry.accounted = True
+            attempted_bytes += telemetry.response_bytes
+            if attempted_bytes > self.limits.max_total_bytes:
+                raise ReferenceCaptureError("crawl byte limit exceeded")
+
+        async def stop_success_trace(context: Any) -> None:
+            key = id(context.page)
+            if key in trace_active:
+                await context.page.context.tracing.stop()
+                trace_active.discard(key)
+
+        async def stop_failure_trace(request: Any) -> TraceEvidence | None:
+            attempt = attempt_by_request.get(request.unique_key)
+            if attempt is None:
+                return None
+            _telemetry, browser_context, key = attempt
+            if key not in trace_active:
+                return None
+            trace_active.discard(key)
+            return await _trace_failure(
+                browser_context, self.limits.trace_ttl_seconds
+            )
 
         storage_client = MemoryStorageClient()
         request_queue = await RequestQueue.open(
@@ -977,8 +1586,10 @@ class VisualReferenceCrawler:
             max_crawl_depth=self.limits.max_depth,
             use_session_pool=False,
             retry_on_blocked=False,
-            respect_robots_txt_file=self.limits.respect_robots,
-            abort_on_error=True,
+            # Crawlee's automatic fetch bypasses Kaigo's redirect-by-redirect
+            # SSRF guard. Robots are therefore enforced by GuardedRobotsPolicy.
+            respect_robots_txt_file=False,
+            abort_on_error=False,
             concurrency_settings=ConcurrencySettings(
                 min_concurrency=1, max_concurrency=1, desired_concurrency=1
             ),
@@ -987,85 +1598,142 @@ class VisualReferenceCrawler:
         @crawler.pre_navigation_hook
         async def guard_navigation(context: Any) -> None:
             await asyncio.to_thread(self.guard.validate, context.request.url)
-            await context.page.route(
-                "**/*",
-                lambda route, request: _route_with_guard(route, request, self.guard),
+            await robots.require_allowed(context.request.url)
+            telemetry = CaptureTelemetry(max_page_bytes=self.limits.max_page_bytes)
+            primary_page: dict[str, Any] = {"page": context.page}
+            await _install_context_policy(
+                context.page.context,
+                primary_page=primary_page,
+                guard=self.guard,
+                robots=robots,
+                allowed_document_origin=document_origin,
+                telemetry=telemetry,
             )
-            await context.page.route_web_socket(
-                "**/*",
-                lambda route: route.close(code=1008, reason="blocked"),
+            telemetry.attach_page(context.page)
+            telemetry_by_page[id(context.page)] = telemetry
+            attempt_by_request[context.request.unique_key] = (
+                telemetry,
+                context.page.context,
+                id(context.page),
             )
-
-        @crawler.post_navigation_hook
-        async def guard_redirects(context: Any) -> None:
-            request = context.response.request
-            chain: list[str] = []
-            while request is not None:
-                chain.append(request.url)
-                request = request.redirected_from
-            for redirected_url in reversed(chain):
-                await asyncio.to_thread(self.guard.validate_redirect, redirected_url)
-
-        @crawler.router.default_handler
-        async def handler(context: PlaywrightCrawlingContext) -> None:
-            nonlocal total_bytes, failure_trace
-            user_data = context.request.user_data
-            category = str(user_data.get("category", "other"))
-            page_id = str(user_data.get("page_id", "home"))
             await context.page.context.tracing.start(
                 screenshots=True, snapshots=True, sources=False
             )
-            try:
-                evidence = await _capture_loaded_page(
-                    context.page,
-                    requested_url=context.request.url,
-                    page_id=page_id,
-                    category=category,
-                    viewport="desktop",
-                    settings=self._settings("desktop"),
-                    guard=self.guard,
+            trace_active.add(id(context.page))
+
+        @crawler.router.default_handler
+        async def handler(context: PlaywrightCrawlingContext) -> None:
+            user_data = context.request.user_data
+            category = str(user_data.get("category", "other"))
+            page_id = str(user_data.get("page_id", "home"))
+            telemetry = telemetry_by_page[id(context.page)]
+            evidence = await _capture_loaded_page(
+                context.page,
+                requested_url=context.request.url,
+                page_id=page_id,
+                category=category,
+                viewport="desktop",
+                settings=self._settings("desktop"),
+                guard=self.guard,
+                telemetry=telemetry,
+            )
+            await account_attempt(telemetry)
+            requests: list[Any] = []
+            child_urls: list[str] = []
+            skipped: list[str] = []
+            if category == "home" and self.limits.max_pages > 1:
+                nav_links = await context.page.locator("a[href]").evaluate_all(
+                    """(links) => links.slice(0,500).map((a) => ({
+                      url: a.href, text: (a.innerText || a.textContent || '').trim().slice(0,300)
+                    }))"""
                 )
-                total_bytes += evidence.transferred_bytes
-                if total_bytes > self.limits.max_total_bytes:
-                    raise ReferenceCaptureError("crawl byte limit exceeded")
-                pages.append(evidence)
-                if category == "home" and self.limits.max_pages > 1:
-                    nav_links = await context.page.locator("a[href]").evaluate_all(
-                        """(links) => links.slice(0,500).map((a) => ({
-                          url: a.href, text: (a.innerText || a.textContent || '').trim().slice(0,300)
-                        }))"""
-                    )
-                    candidates = list(sitemap) + [
-                        LinkCandidate(item["url"], item["text"], "navigation")
-                        for item in nav_links
-                    ]
-                    selected = select_reference_pages(
-                        evidence.final_url, candidates, max_pages=self.limits.max_pages
-                    )
-                    requests = []
-                    for index, selected_page in enumerate(selected[1:], start=1):
-                        if selected_page.url in selected_urls:
-                            continue
-                        selected_urls.add(selected_page.url)
-                        requests.append(
-                            Request.from_url(
-                                selected_page.url,
-                                user_data={
-                                    "category": selected_page.category,
-                                    "page_id": _page_id(selected_page.category, index),
-                                },
-                                max_retries=self.limits.max_retries,
-                            )
+                candidates = list(sitemap) + [
+                    LinkCandidate(item["url"], item["text"], "navigation")
+                    for item in nav_links
+                ]
+                selected = select_reference_pages(
+                    evidence.final_url, candidates, max_pages=self.limits.max_pages
+                )
+                for index, selected_page in enumerate(selected[1:], start=1):
+                    if selected_page.url in accumulator.selected_urls:
+                        continue
+                    try:
+                        await robots.require_allowed(selected_page.url)
+                    except (RobotsDenied, UnsafeReferenceUrl) as exc:
+                        skipped.append(
+                            f"robots_denied: {sanitize_url_for_log(selected_page.url)}"
                         )
-                    if requests:
-                        await context.add_requests(requests)
-            except Exception as exc:
-                failure_trace = await _trace_failure(
-                    context.page.context, self.limits.trace_ttl_seconds
+                        continue
+                    child_urls.append(selected_page.url)
+                    requests.append(
+                        Request.from_url(
+                            selected_page.url,
+                            user_data={
+                                "category": selected_page.category,
+                                "page_id": _page_id(selected_page.category, index),
+                            },
+                            max_retries=self.limits.max_retries,
+                        )
+                    )
+            if skipped:
+                evidence = replace(
+                    evidence,
+                    skipped_reasons=evidence.skipped_reasons + tuple(skipped),
                 )
-                raise ReferenceCaptureError(str(exc), trace=failure_trace) from exc
-            else:
-                await context.page.context.tracing.stop()
+            await accumulator.commit(
+                evidence=evidence,
+                child_urls=child_urls,
+                enqueue=lambda: context.add_requests(requests) if requests else None,
+            )
+            await stop_success_trace(context)
+
+        @crawler.error_handler
+        async def on_retry(context: Any, _error: Exception) -> None:
+            nonlocal failure_trace
+            attempt = attempt_by_request.get(context.request.unique_key)
+            telemetry = attempt[0] if attempt is not None else None
+            if telemetry is not None:
+                await account_attempt(telemetry)
+            trace = await stop_failure_trace(context.request)
+            if trace is not None:
+                failure_trace = trace
+            return None
+
+        @crawler.failed_request_handler
+        async def on_failed(
+            context: Any, error: Exception
+        ) -> None:
+            nonlocal failure_trace
+            attempt = attempt_by_request.get(context.request.unique_key)
+            telemetry = attempt[0] if attempt is not None else None
+            if telemetry is not None:
+                await account_attempt(telemetry)
+            trace = await stop_failure_trace(context.request)
+            if trace is not None:
+                failure_trace = trace
+            user_data = context.request.user_data
+            category = str(user_data.get("category", "other"))
+            page_id = str(user_data.get("page_id", "page-failed"))
+            message = _sanitize_text(str(error))
+            partial = ReferencePageEvidence(
+                page_id=page_id,
+                category=category,
+                requested_url=context.request.url,
+                final_url=context.request.url,
+                depth=0 if category == "home" else 1,
+                page_failures=(message,),
+                request_failures=(
+                    tuple(telemetry.request_failures) if telemetry is not None else ()
+                ),
+                policy_blocks=(
+                    tuple(telemetry.policy_blocks) if telemetry is not None else ()
+                ),
+                transferred_bytes=(telemetry.response_bytes if telemetry else 0),
+                scroll_strategy="not_captured",
+                reset_strategy="not_captured",
+                skipped_reasons=("capture_failed",),
+            )
+            await accumulator.commit_partial(partial)
 
         initial = Request.from_url(
             home_url,
@@ -1074,49 +1742,78 @@ class VisualReferenceCrawler:
         )
         try:
             await asyncio.wait_for(crawler.run([initial]), timeout=remaining_timeout())
-            desktop_pages = tuple(pages)
-            if not desktop_pages:
+            desktop_pages = accumulator.pages
+            desktop_home = next(
+                (
+                    page
+                    for page in desktop_pages
+                    if page.page_id == "home" and bool(page.screenshots)
+                ),
+                None,
+            )
+            if desktop_home is None:
                 raise ReferenceCaptureError(
                     "no pages captured; robots policy or navigation rejected the site"
                 )
-            content_page = next((page for page in desktop_pages if page.category != "home"), None)
-            mobile_targets = [
-                ("home", "home", desktop_pages[0].final_url)
-            ]
+            content_page = next(
+                (
+                    page
+                    for page in desktop_pages
+                    if page.category != "home" and bool(page.screenshots)
+                ),
+                None,
+            )
+            mobile_targets = [("home", "home", desktop_home.final_url)]
             if content_page is not None:
                 mobile_targets.append(
                     (content_page.page_id, content_page.category, content_page.final_url)
                 )
             for page_id, category, target_url in mobile_targets:
-                mobile = await asyncio.wait_for(
-                    capture_reference_page(
-                        target_url,
-                        page_id=f"{page_id}-mobile",
+                mobile_id = f"{page_id}-mobile"
+                try:
+                    mobile = await asyncio.wait_for(
+                        capture_reference_page(
+                            target_url,
+                            page_id=mobile_id,
+                            category=category,
+                            viewport="mobile",
+                            settings=self._settings("mobile"),
+                            guard=self.guard,
+                            robots_policy=robots,
+                            trace_ttl_seconds=self.limits.trace_ttl_seconds,
+                        ),
+                        timeout=remaining_timeout(),
+                    )
+                except Exception as exc:
+                    if page_id == "home":
+                        raise
+                    mobile = ReferencePageEvidence(
+                        page_id=mobile_id,
                         category=category,
-                        viewport="mobile",
-                        settings=self._settings("mobile"),
-                        guard=self.guard,
-                        trace_ttl_seconds=self.limits.trace_ttl_seconds,
-                    ),
-                    timeout=remaining_timeout(),
-                )
-                total_bytes += mobile.transferred_bytes
-                if total_bytes > self.limits.max_total_bytes:
-                    raise ReferenceCaptureError("crawl byte limit exceeded")
-                pages.append(mobile)
+                        requested_url=target_url,
+                        final_url=target_url,
+                        depth=1,
+                        page_failures=(_sanitize_text(str(exc)),),
+                        scroll_strategy="not_captured",
+                        reset_strategy="not_captured",
+                        skipped_reasons=("mobile_capture_failed",),
+                    )
+                await accumulator.commit_partial(mobile)
         except Exception as exc:
             if isinstance(exc, ReferenceCaptureError) and exc.trace is not None:
                 failure_trace = exc.trace
             return ReferenceCrawlResult.failed(
                 source_url=home_url,
-                failure=CrawlFailure(code="crawl_failed", message=str(exc)[:1000]),
+                failure=CrawlFailure(
+                    code="crawl_failed", message=_exception_text(exc)
+                ),
                 trace=failure_trace,
-                pages=tuple(pages),
+                pages=accumulator.pages,
                 started_at=started_at,
             )
         return ReferenceCrawlResult.succeeded(
             source_url=home_url,
-            pages=tuple(pages),
+            pages=accumulator.pages,
             started_at=started_at,
         )
 

@@ -5,12 +5,15 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Any, Mapping
+from urllib.parse import urlsplit, urlunsplit
 
 
 _ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,95}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _SCREENSHOT_MIMES = frozenset({"image/jpeg", "image/png", "image/webp"})
+_TOKEN_SEGMENT = re.compile(r"^[A-Za-z0-9._~-]{24,}$")
 
 
 def _validated_id(value: str, field_name: str) -> str:
@@ -27,9 +30,40 @@ def _validated_sha256(value: str) -> str:
     return normalized
 
 
+def public_url(value: str) -> str:
+    """Return a stable URL label without credentials, query, fragment, or tokens."""
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname or ""
+        port = f":{parsed.port}" if parsed.port is not None else ""
+    except ValueError:
+        return "[redacted-url]"
+    path_segments = []
+    for segment in (parsed.path or "/").split("/"):
+        path_segments.append("[redacted]" if _TOKEN_SEGMENT.fullmatch(segment) else segment)
+    path = "/".join(path_segments) or "/"
+    return urlunsplit((parsed.scheme.lower(), f"{host.lower()}{port}", path, "", ""))
+
+
+def _freeze_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(key): _freeze_json(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_json(item) for item in value)
+    return value
+
+
+def _thaw_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _thaw_json(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_json(item) for item in value]
+    return value
+
+
 def _bounded_json_mapping(
     value: Mapping[str, Any], field_name: str, max_bytes: int
-) -> dict[str, Any]:
+) -> Mapping[str, Any]:
     result = dict(value)
     if len(result) > 32:
         raise ValueError(f"{field_name} contains too many fields")
@@ -41,7 +75,7 @@ def _bounded_json_mapping(
         raise ValueError(f"{field_name} must contain JSON-safe values") from exc
     if len(encoded) > max_bytes:
         raise ValueError(f"{field_name} exceeds its byte limit")
-    return result
+    return _freeze_json(result)
 
 
 @dataclass(frozen=True)
@@ -160,8 +194,12 @@ class ReferencePageEvidence:
     console_failures: tuple[str, ...] = ()
     page_failures: tuple[str, ...] = ()
     request_failures: tuple[str, ...] = ()
+    policy_blocks: tuple[str, ...] = ()
     timings_ms: Mapping[str, int | float] = field(default_factory=dict)
     transferred_bytes: int = 0
+    scroll_strategy: str = "not_captured"
+    reset_strategy: str = "none"
+    skipped_reasons: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "page_id", _validated_id(self.page_id, "page_id"))
@@ -181,6 +219,8 @@ class ReferencePageEvidence:
             self.console_failures,
             self.page_failures,
             self.request_failures,
+            self.policy_blocks,
+            self.skipped_reasons,
         ):
             if len(failures) > 100:
                 raise ValueError("too many recorded failures")
@@ -188,6 +228,22 @@ class ReferencePageEvidence:
                 raise ValueError("recorded failure is too long")
         if self.transferred_bytes < 0:
             raise ValueError("transferred_bytes must not be negative")
+        allowed_scroll = {
+            "not_captured",
+            "static",
+            "document",
+            "nested",
+            "virtual",
+            "mixed",
+            "document+script_fallback",
+            "nested+script_fallback",
+            "virtual+script_fallback",
+            "mixed+script_fallback",
+        }
+        if self.scroll_strategy not in allowed_scroll:
+            raise ValueError("scroll_strategy is invalid")
+        if self.reset_strategy not in {"none", "not_captured"}:
+            raise ValueError("reset_strategy is invalid")
         if len(self.timings_ms) > 32 or any(
             not isinstance(value, (int, float)) or value < 0
             for value in self.timings_ms.values()
@@ -207,23 +263,29 @@ class ReferencePageEvidence:
         object.__setattr__(self, "console_failures", tuple(self.console_failures))
         object.__setattr__(self, "page_failures", tuple(self.page_failures))
         object.__setattr__(self, "request_failures", tuple(self.request_failures))
-        object.__setattr__(self, "timings_ms", dict(self.timings_ms))
+        object.__setattr__(self, "policy_blocks", tuple(self.policy_blocks))
+        object.__setattr__(self, "skipped_reasons", tuple(self.skipped_reasons))
+        object.__setattr__(self, "timings_ms", _freeze_json(dict(self.timings_ms)))
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "page_id": self.page_id,
             "category": self.category,
-            "requested_url": self.requested_url,
-            "final_url": self.final_url,
+            "requested_url": public_url(self.requested_url),
+            "final_url": public_url(self.final_url),
             "depth": self.depth,
             "screenshots": [item.to_dict() for item in self.screenshots],
-            "semantic_sample": dict(self.semantic_sample),
-            "style_sample": dict(self.style_sample),
+            "semantic_sample": _thaw_json(self.semantic_sample),
+            "style_sample": _thaw_json(self.style_sample),
             "console_failures": list(self.console_failures),
             "page_failures": list(self.page_failures),
             "request_failures": list(self.request_failures),
-            "timings_ms": dict(self.timings_ms),
+            "policy_blocks": list(self.policy_blocks),
+            "timings_ms": _thaw_json(self.timings_ms),
             "transferred_bytes": self.transferred_bytes,
+            "scroll_strategy": self.scroll_strategy,
+            "reset_strategy": self.reset_strategy,
+            "skipped_reasons": list(self.skipped_reasons),
         }
 
 
@@ -304,7 +366,7 @@ class ReferenceCrawlResult:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "source_url": self.source_url,
+            "source_url": public_url(self.source_url),
             "status": self.status,
             "started_at": self.started_at.isoformat(),
             "completed_at": self.completed_at.isoformat(),
