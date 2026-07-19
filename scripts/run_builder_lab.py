@@ -11,12 +11,14 @@ from aiohttp import web
 from dotenv import load_dotenv
 
 from builder_lab.config import BuilderLabConfig
+from builder_lab.browser_audit import BrowserAudit
 from builder_lab.chat import GeminiDemoChatService
 from builder_lab.engines.antigravity import AntigravityEngine
 from builder_lab.engines.gemini_direct import GeminiDirectEngine
 from builder_lab.models import EngineName
 from builder_lab.orchestrator import BuilderOrchestrator
 from builder_lab.store import RunStore
+from builder_lab.visual_critic import GeminiVisualCritic
 from builder_lab.web import (
     CHAT_SECURE_COOKIE_KEY,
     CHAT_SERVICE_KEY,
@@ -61,6 +63,16 @@ def build_app(config: BuilderLabConfig) -> web.Application:
     orchestrator = BuilderOrchestrator(
         store=store,
         engine_factories=factories,
+        visual_audit_factory=lambda: BrowserAudit(
+            timeout_ms=config.browser_audit_timeout_ms,
+            total_timeout_seconds=config.browser_audit_total_timeout_seconds,
+        ),
+        visual_critic_factory=lambda: GeminiVisualCritic(
+            api_key=config.gemini_api_key,
+            model=config.visual_critic_model,
+            base_url=config.gemini_base_url,
+            timeout_seconds=config.visual_critic_timeout_seconds,
+        ),
     )
     chat_service = GeminiDemoChatService(
         api_key=config.gemini_api_key,

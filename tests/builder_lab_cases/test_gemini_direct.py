@@ -14,6 +14,12 @@ from builder_lab.models import (
     ValidationIssue,
 )
 from tests.builder_lab_cases.test_validation import artifact
+from builder_lab.visual_models import (
+    NormalizedRegion,
+    VisualCategory,
+    VisualFinding,
+    VisualSeverity,
+)
 
 
 class FakeModels:
@@ -135,6 +141,38 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"revision":3', prompt)
         self.assertIn("Режим: repair", prompt)
         self.assertIn("stage строго identity", prompt)
+
+    async def test_visual_repair_prompt_is_separate_untrusted_and_low_creativity(self):
+        client = FakeClient(
+            response=fake_response(artifact(revision=5, stage=Stage.MOTION_POLISH))
+        )
+        engine = GeminiDirectEngine(api_key="secret", client=client)
+        visual = VisualFinding(
+            finding_id="major-1",
+            severity=VisualSeverity.MAJOR,
+            category=VisualCategory.PAGE_SUBORDINATION,
+            screenshot_id="desktop.open_initial",
+            evidence="Panel covers the primary page heading.",
+            region=NormalizedRegion(x=0.6, y=0.1, width=0.3, height=0.4),
+            artifact_fields=("css",),
+            repair_instruction="Reduce the panel footprint while preserving direction.",
+            confidence=0.91,
+        )
+
+        await engine.generate(
+            request=self.request,
+            stage=Stage.MOTION_POLISH,
+            revision=5,
+            previous_artifact=artifact(revision=5, stage=Stage.MOTION_POLISH),
+            visual_findings=(visual,),
+        )
+
+        call = client.models.calls[0]
+        self.assertEqual(call["config"].temperature, 0.35)
+        self.assertIn("visual_repair", call["contents"])
+        self.assertIn("НЕДОВЕРЕННЫЕ", call["contents"])
+        self.assertIn("major-1", call["contents"])
+        self.assertIn('"revision":5', call["contents"])
 
     async def test_direction_proposal_uses_bounded_structured_output(self):
         payload = {

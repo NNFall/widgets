@@ -24,6 +24,7 @@ from .models import (
 )
 from .store import RunStore, RunTerminal, TERMINAL_STATUSES
 from .validation import issue_fingerprint, validate_artifact
+from .visual_gate import VisualRepairGate
 
 
 DIRECT_STAGES = (
@@ -41,13 +42,26 @@ class BuilderOrchestrator:
         *,
         store: RunStore,
         engine_factories: dict[EngineName, Callable[[], BuilderEngine]],
+        visual_audit_factory: Callable[[], Any] | None = None,
+        visual_critic_factory: Callable[[], Any] | None = None,
     ) -> None:
+        if (visual_audit_factory is None) != (visual_critic_factory is None):
+            raise ValueError("visual audit and critic factories must be configured together")
         self.store = store
         self._factories = dict(engine_factories)
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._cancel_tasks: dict[str, asyncio.Task[None]] = {}
         self._engines: dict[str, BuilderEngine] = {}
         self._stages: dict[str, Stage | None] = {}
+        self._visual_gate = (
+            VisualRepairGate(
+                store=store,
+                audit_factory=visual_audit_factory,
+                critic_factory=visual_critic_factory,
+            )
+            if visual_audit_factory is not None and visual_critic_factory is not None
+            else None
+        )
 
     async def start(self, request: BuilderRequest) -> BuilderRunSnapshot:
         factory = self._factories.get(request.engine)
@@ -165,6 +179,11 @@ class BuilderOrchestrator:
                 await self._mark_cancelled(run_id, started)
             else:
                 await self._mark_failed(run_id, exc, started)
+        except RunTerminal:
+            if await self._cancelled(run_id):
+                await self._mark_cancelled(run_id, started)
+            else:
+                raise
         except Exception as exc:
             await self._mark_failed(
                 run_id,
@@ -318,15 +337,36 @@ class BuilderOrchestrator:
                 previous=previous,
                 selected_direction=selected_direction,
             )
-            await self.store.commit_artifact(run_id, candidate)
-            await self.store.append_event(
-                run_id,
-                event_type="artifact.committed",
-                stage=candidate.stage,
-                status="completed",
-                message="Валидная ревизия передана в preview",
-                revision=candidate.revision,
-            )
+            self._stages[run_id] = stage
+            commit_event_recorded = False
+            if stage is Stage.MOTION_POLISH and self._visual_gate is not None:
+                if previous is None:
+                    raise BuilderEngineError(
+                        "visual_quality_failed",
+                        "Финальная визуальная проверка не может быть запущена",
+                        diagnostic="missing revision 4",
+                    )
+                candidate = await self._visual_gate.evaluate(
+                    run_id=run_id,
+                    request=request,
+                    engine=direct_engine,
+                    candidate=candidate,
+                    previous=previous,
+                    selected_direction=selected_direction,
+                )
+                await self.store.commit_visual_candidate(run_id)
+                commit_event_recorded = True
+            else:
+                await self.store.commit_artifact(run_id, candidate)
+            if not commit_event_recorded:
+                await self.store.append_event(
+                    run_id,
+                    event_type="artifact.committed",
+                    stage=candidate.stage,
+                    status="completed",
+                    message="Валидная ревизия передана в preview",
+                    revision=candidate.revision,
+                )
             previous = candidate
 
     async def _validate_and_repair(

@@ -8,6 +8,7 @@ import httpx
 from google import genai
 
 from ..models import BuilderRequest, Stage, TokenUsage, ValidationIssue, WidgetArtifact
+from ..visual_models import VisualFinding
 from ..prompts import ARTIFACT_JSON_SCHEMA
 from ..snapshots import SnapshotRejected, collect_declared_snapshot
 from .base import BuilderEngineError, EngineResult
@@ -351,8 +352,9 @@ class AntigravityEngine:
         revision: int,
         previous_artifact: WidgetArtifact | None = None,
         repair_issues: tuple[ValidationIssue, ...] = (),
+        visual_findings: tuple[VisualFinding, ...] = (),
     ) -> EngineResult:
-        del previous_artifact, repair_issues
+        del previous_artifact, repair_issues, visual_findings
         if stage is not Stage.AGENT_BUILD:
             raise ValueError("Antigravity supports only the agent_build stage")
         try:

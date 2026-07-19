@@ -17,6 +17,7 @@ from ..models import (
     ValidationIssue,
     WidgetArtifact,
 )
+from ..visual_models import VisualFinding
 from ..prompts import (
     ARTIFACT_JSON_SCHEMA,
     DIRECTION_JUDGE_JSON_SCHEMA,
@@ -249,6 +250,7 @@ class GeminiDirectEngine:
         revision: int,
         previous_artifact: WidgetArtifact | None = None,
         repair_issues: tuple[ValidationIssue, ...] = (),
+        visual_findings: tuple[VisualFinding, ...] = (),
         selected_direction: DirectionProposal | None = None,
     ) -> EngineResult:
         prompt = build_stage_prompt(
@@ -257,10 +259,15 @@ class GeminiDirectEngine:
             revision=revision,
             previous_artifact=previous_artifact,
             repair_issues=repair_issues,
+            visual_findings=visual_findings,
             selected_direction=selected_direction,
         )
         config = types.GenerateContentConfig(
-            temperature=request.creativity,
+            temperature=(
+                min(request.creativity, 0.35)
+                if visual_findings
+                else request.creativity
+            ),
             top_p=1.0,
             response_mime_type="application/json",
             response_json_schema=ARTIFACT_JSON_SCHEMA,

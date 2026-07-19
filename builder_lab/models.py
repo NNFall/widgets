@@ -46,6 +46,7 @@ PUBLIC_ERROR_CODES = frozenset(
         "quota_exceeded",
         "generation_timeout",
         "invalid_artifact",
+        "visual_quality_failed",
         "snapshot_download_failed",
         "snapshot_rejected",
         "run_cancelled",

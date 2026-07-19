@@ -13,6 +13,7 @@ from ..models import (
     ValidationIssue,
     WidgetArtifact,
 )
+from ..visual_models import VisualFinding
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,7 @@ class BuilderEngine(Protocol):
         revision: int,
         previous_artifact: WidgetArtifact | None = None,
         repair_issues: tuple[ValidationIssue, ...] = (),
+        visual_findings: tuple[VisualFinding, ...] = (),
     ) -> EngineResult: ...
 
     async def cancel(self) -> None: ...
@@ -95,5 +97,6 @@ class DirectBuilderEngine(BuilderEngine, Protocol):
         revision: int,
         previous_artifact: WidgetArtifact | None = None,
         repair_issues: tuple[ValidationIssue, ...] = (),
+        visual_findings: tuple[VisualFinding, ...] = (),
         selected_direction: DirectionProposal | None = None,
     ) -> EngineResult: ...

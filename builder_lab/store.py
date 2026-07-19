@@ -47,6 +47,7 @@ class _RunRecord:
     updated_at: datetime
     events: list[BuilderEvent] = field(default_factory=list)
     artifact: WidgetArtifact | None = None
+    visual_candidate: WidgetArtifact | None = None
     artifacts: dict[int, WidgetArtifact] = field(default_factory=dict)
     usage: TokenUsage = field(default_factory=TokenUsage)
     elapsed_seconds: float = 0.0
@@ -198,8 +199,11 @@ class RunStore:
         diagnostic: str | None = None,
     ) -> BuilderEvent:
         async with self._changed:
+            record = self._record(run_id)
+            if record.status in TERMINAL_STATUSES:
+                raise RunTerminal(run_id)
             return self._append_locked(
-                self._record(run_id),
+                record,
                 event_type=event_type,
                 stage=stage,
                 status=status,
@@ -223,7 +227,7 @@ class RunStore:
     async def commit_artifact(self, run_id: str, artifact: WidgetArtifact) -> None:
         async with self._changed:
             record = self._record(run_id)
-            if record.status in TERMINAL_STATUSES:
+            if record.status in TERMINAL_STATUSES or record.cancel_requested:
                 raise RunTerminal(run_id)
             if record.artifact and artifact.revision <= record.artifact.revision:
                 raise ValueError("artifact revision must increase monotonically")
@@ -231,6 +235,50 @@ class RunStore:
             record.artifacts[artifact.revision] = _copy_artifact(artifact)
             record.updated_at = datetime.now(timezone.utc)
             self._changed.notify_all()
+
+    async def stage_visual_candidate(
+        self, run_id: str, artifact: WidgetArtifact
+    ) -> None:
+        async with self._changed:
+            record = self._record(run_id)
+            if record.status in TERMINAL_STATUSES or record.cancel_requested:
+                raise RunTerminal(run_id)
+            if record.artifact and artifact.revision <= record.artifact.revision:
+                raise ValueError("visual candidate revision must exceed public revision")
+            record.visual_candidate = _copy_artifact(artifact)
+            record.updated_at = datetime.now(timezone.utc)
+            self._changed.notify_all()
+
+    async def visual_candidate(self, run_id: str) -> WidgetArtifact:
+        async with self._lock:
+            candidate = self._record(run_id).visual_candidate
+            if candidate is None:
+                raise ArtifactNotFound((run_id, "visual_candidate"))
+            return _copy_artifact(candidate)
+
+    async def commit_visual_candidate(self, run_id: str) -> WidgetArtifact:
+        async with self._changed:
+            record = self._record(run_id)
+            if record.status in TERMINAL_STATUSES or record.cancel_requested:
+                raise RunTerminal(run_id)
+            candidate = record.visual_candidate
+            if candidate is None:
+                raise ArtifactNotFound((run_id, "visual_candidate"))
+            if record.artifact and candidate.revision <= record.artifact.revision:
+                raise ValueError("artifact revision must increase monotonically")
+            committed = _copy_artifact(candidate)
+            record.artifact = committed
+            record.artifacts[candidate.revision] = _copy_artifact(candidate)
+            record.visual_candidate = None
+            self._append_locked(
+                record,
+                event_type="artifact.committed",
+                stage=candidate.stage,
+                status="completed",
+                message="Валидная ревизия передана в preview",
+                revision=candidate.revision,
+            )
+            return _copy_artifact(committed)
 
     async def artifact(
         self, run_id: str, revision: int | None = None
