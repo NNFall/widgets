@@ -36,6 +36,22 @@ class BuilderLabPackagingTests(unittest.TestCase):
         finally:
             client.close()
 
+    def test_builder_browser_dependencies_are_isolated_from_production_image(self):
+        requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+        builder_requirements = (ROOT / "requirements.builder-lab.txt").read_text(
+            encoding="utf-8"
+        )
+        builder_dockerfile = (ROOT / "Dockerfile.builder-lab").read_text(
+            encoding="utf-8"
+        )
+        production_dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+        self.assertNotIn("crawlee[playwright]", requirements)
+        self.assertIn("crawlee[playwright]", builder_requirements)
+        self.assertIn("playwright install --with-deps chromium", builder_dockerfile)
+        self.assertIn("scripts/capture_reference_site.py", builder_dockerfile)
+        self.assertNotIn("playwright install", production_dockerfile)
+
 
 if __name__ == "__main__":
     unittest.main()

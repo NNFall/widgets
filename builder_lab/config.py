@@ -74,6 +74,20 @@ class BuilderLabConfig:
     demo_path: str | None
     run_ttl_seconds: int
     max_runs: int
+    reference_max_pages: int
+    reference_max_depth: int
+    reference_timeout_seconds: int
+    reference_page_timeout_seconds: int
+    reference_max_total_bytes: int
+    reference_max_page_bytes: int
+    reference_max_retries: int
+    reference_max_scroll_steps: int
+    reference_scroll_delay_ms: int
+    reference_warmup_ms: int
+    reference_final_settle_ms: int
+    reference_max_scroll_height: int
+    reference_trace_ttl_seconds: int
+    reference_respect_robots: bool
 
     @classmethod
     def from_env(cls) -> "BuilderLabConfig":
@@ -124,4 +138,44 @@ class BuilderLabConfig:
             demo_path=_first_nonblank("KAIGO_BUILDER_DEMO_PATH"),
             run_ttl_seconds=_int("KAIGO_BUILDER_RUN_TTL_SECONDS", 3600, 60, 86400),
             max_runs=_int("KAIGO_BUILDER_MAX_RUNS", 100, 1, 1000),
+            reference_max_pages=_int("KAIGO_REFERENCE_MAX_PAGES", 5, 1, 5),
+            reference_max_depth=_int("KAIGO_REFERENCE_MAX_DEPTH", 1, 0, 2),
+            reference_timeout_seconds=_int(
+                "KAIGO_REFERENCE_TIMEOUT_SECONDS", 180, 15, 600
+            ),
+            reference_page_timeout_seconds=_int(
+                "KAIGO_REFERENCE_PAGE_TIMEOUT_SECONDS", 45, 5, 120
+            ),
+            reference_max_total_bytes=_int(
+                "KAIGO_REFERENCE_MAX_TOTAL_BYTES",
+                40 * 1024 * 1024,
+                1024 * 1024,
+                100 * 1024 * 1024,
+            ),
+            reference_max_page_bytes=_int(
+                "KAIGO_REFERENCE_MAX_PAGE_BYTES",
+                10 * 1024 * 1024,
+                256 * 1024,
+                25 * 1024 * 1024,
+            ),
+            reference_max_retries=_int("KAIGO_REFERENCE_MAX_RETRIES", 1, 0, 2),
+            reference_max_scroll_steps=_int(
+                "KAIGO_REFERENCE_MAX_SCROLL_STEPS", 24, 1, 60
+            ),
+            reference_scroll_delay_ms=_int(
+                "KAIGO_REFERENCE_SCROLL_DELAY_MS", 750, 600, 1200
+            ),
+            reference_warmup_ms=_int(
+                "KAIGO_REFERENCE_WARMUP_MS", 5000, 1000, 15000
+            ),
+            reference_final_settle_ms=_int(
+                "KAIGO_REFERENCE_FINAL_SETTLE_MS", 1500, 500, 5000
+            ),
+            reference_max_scroll_height=_int(
+                "KAIGO_REFERENCE_MAX_SCROLL_HEIGHT", 50000, 5000, 100000
+            ),
+            reference_trace_ttl_seconds=_int(
+                "KAIGO_REFERENCE_TRACE_TTL_SECONDS", 3600, 300, 86400
+            ),
+            reference_respect_robots=_bool("KAIGO_REFERENCE_RESPECT_ROBOTS", True),
         )

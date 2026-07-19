@@ -18,6 +18,20 @@ class BuilderLabConfigTests(unittest.TestCase):
             "GEMINI_API_KEY": None,
             "GOOGLE_AI_API_KEY": None,
             "GOOGLE_AI_NATIVE_BASE_URL": None,
+            "KAIGO_REFERENCE_MAX_PAGES": None,
+            "KAIGO_REFERENCE_MAX_DEPTH": None,
+            "KAIGO_REFERENCE_TIMEOUT_SECONDS": None,
+            "KAIGO_REFERENCE_PAGE_TIMEOUT_SECONDS": None,
+            "KAIGO_REFERENCE_MAX_TOTAL_BYTES": None,
+            "KAIGO_REFERENCE_MAX_PAGE_BYTES": None,
+            "KAIGO_REFERENCE_MAX_RETRIES": None,
+            "KAIGO_REFERENCE_MAX_SCROLL_STEPS": None,
+            "KAIGO_REFERENCE_SCROLL_DELAY_MS": None,
+            "KAIGO_REFERENCE_WARMUP_MS": None,
+            "KAIGO_REFERENCE_FINAL_SETTLE_MS": None,
+            "KAIGO_REFERENCE_MAX_SCROLL_HEIGHT": None,
+            "KAIGO_REFERENCE_TRACE_TTL_SECONDS": None,
+            "KAIGO_REFERENCE_RESPECT_ROBOTS": None,
         }
         base.update(values)
         clean = {key: value for key, value in base.items() if value is not None}
@@ -32,6 +46,10 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertEqual(config.temperature, 0.9)
         self.assertEqual(config.max_repairs, 3)
         self.assertIsNone(config.gemini_api_key)
+        self.assertEqual(config.reference_max_pages, 5)
+        self.assertEqual(config.reference_scroll_delay_ms, 750)
+        self.assertEqual(config.reference_warmup_ms, 5000)
+        self.assertTrue(config.reference_respect_robots)
 
     def test_accepts_configured_values(self):
         config = self.load(
@@ -62,6 +80,10 @@ class BuilderLabConfigTests(unittest.TestCase):
             ("KAIGO_BUILDER_LAB_PORT", "0"),
             ("GEMINI_BUILDER_TEMPERATURE", "2.1"),
             ("GEMINI_BUILDER_MAX_REPAIRS", "5"),
+            ("KAIGO_REFERENCE_MAX_PAGES", "6"),
+            ("KAIGO_REFERENCE_SCROLL_DELAY_MS", "599"),
+            ("KAIGO_REFERENCE_SCROLL_DELAY_MS", "1201"),
+            ("KAIGO_REFERENCE_WARMUP_MS", "999"),
         ):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 self.load(**{name: value})

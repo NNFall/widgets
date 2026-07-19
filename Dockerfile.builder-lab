@@ -1,0 +1,18 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# The builder/research image intentionally owns Chromium and its system
+# libraries. The production application image remains browser-free.
+COPY requirements.builder-lab.txt .
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN pip install --no-cache-dir -r requirements.builder-lab.txt \
+    && playwright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY builder_lab ./builder_lab
+COPY scripts/run_builder_lab.py scripts/capture_reference_site.py ./scripts/
+
+ENV PYTHONPATH=/app
+
+CMD ["python", "scripts/run_builder_lab.py"]
