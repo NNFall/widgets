@@ -45,11 +45,13 @@ Docker Compose, nginx, встроенный Browser skill Codex.
    per host, byte/time/depth/retry caps, same-site URL deduplication.
 3. Failing browser fixture с lazy image и scroll-reveal: initial screenshot пуст,
    после 5s warm-up + incremental scroll элементы видимы и входят в evidence.
-4. Реализовать lifecycle: load/fonts/images → 5s configurable warm-up → реальные
-   wheel-шаги 70% viewport/750ms (профиль 600–1200ms) → обнаружение document,
-   nested overflow и transform-based virtual scroller → две stable-height
-   итерации → надёжный reset/reload → 1.5s settle → top/middle/bottom viewport
-   tiles. `fullPage` сохраняется только как best-effort attachment, не oracle.
+4. Реализовать lifecycle: load/fonts/images → 5s configurable warm-up → `top`
+   до движения → реальные wheel-шаги 70% viewport/750ms (профиль 600–1200ms) →
+   обнаружение document, nested overflow и transform-based virtual scroller →
+   middle → доказанный реальный конец → `bottom`. Не использовать reload как
+   reset-oracle. При step/time/height cap сохранять `last_observed` и статус
+   `partial`, а не выдавать промежуточный кадр за `bottom`. `fullPage` остаётся
+   только best-effort attachment, не oracle.
 5. Собирать bounded computed-style sample и animation inventory, а не полный DOM:
    typography, colors, surfaces, radii, borders, shadows, spacing, controls,
    fixed/sticky collisions, image aspect ratios.
