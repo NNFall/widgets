@@ -11,6 +11,14 @@ class EngineName(str, Enum):
     ANTIGRAVITY = "antigravity"
 
 
+class DirectionRole(str, Enum):
+    BRAND_ARCHAEOLOGIST = "brand_archaeologist"
+    INTERACTION_INVENTOR = "interaction_inventor"
+    HOSTILE_CONVERSION_ACCESSIBILITY_CRITIC = (
+        "hostile_conversion_accessibility_critic"
+    )
+
+
 class Stage(str, Enum):
     ART_DIRECTION = "art_direction"
     FOUNDATION = "foundation"
@@ -143,6 +151,101 @@ class TokenUsage:
             "output_tokens": self.output_tokens,
             "thinking_tokens": self.thinking_tokens,
             "total_tokens": self.total_tokens,
+        }
+
+
+@dataclass(frozen=True)
+class DirectionProposal:
+    proposal_id: str
+    role: DirectionRole
+    title: str
+    art_direction: str
+    interaction_model: str
+    safeguards: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.role, DirectionRole):
+            raise ValueError("role must be a DirectionRole")
+        if self.proposal_id not in {"candidate-1", "candidate-2", "candidate-3"}:
+            raise ValueError("proposal_id must be a bounded anonymous candidate id")
+        title = self.title.strip()
+        art_direction = self.art_direction.strip()
+        interaction_model = self.interaction_model.strip()
+        safeguards = tuple(value.strip() for value in self.safeguards)
+        if not title or len(title) > 80:
+            raise ValueError("direction title is invalid")
+        if not art_direction or len(art_direction) > 1200:
+            raise ValueError("art_direction is invalid")
+        if not interaction_model or len(interaction_model) > 800:
+            raise ValueError("interaction_model is invalid")
+        if len(safeguards) > 8 or any(
+            not value or len(value) > 160 for value in safeguards
+        ):
+            raise ValueError("direction safeguards are invalid")
+        object.__setattr__(self, "title", title)
+        object.__setattr__(self, "art_direction", art_direction)
+        object.__setattr__(self, "interaction_model", interaction_model)
+        object.__setattr__(self, "safeguards", safeguards)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "DirectionProposal":
+        return cls(
+            proposal_id=str(payload["proposal_id"]),
+            role=_enum(DirectionRole, payload["role"], "direction role"),
+            title=str(payload["title"]),
+            art_direction=str(payload["art_direction"]),
+            interaction_model=str(payload["interaction_model"]),
+            safeguards=tuple(str(item) for item in payload.get("safeguards", ())),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "proposal_id": self.proposal_id,
+            "role": self.role.value,
+            "title": self.title,
+            "art_direction": self.art_direction,
+            "interaction_model": self.interaction_model,
+            "safeguards": list(self.safeguards),
+        }
+
+    def to_anonymous_dict(self) -> dict[str, Any]:
+        return {
+            "proposal_id": self.proposal_id,
+            "title": self.title,
+            "art_direction": self.art_direction,
+            "interaction_model": self.interaction_model,
+            "safeguards": list(self.safeguards),
+        }
+
+
+@dataclass(frozen=True)
+class DirectionJudgement:
+    selected_proposal_id: str
+    rationale: str
+
+    def __post_init__(self) -> None:
+        if self.selected_proposal_id not in {
+            "candidate-1",
+            "candidate-2",
+            "candidate-3",
+        }:
+            raise ValueError("judge selected an unknown proposal")
+        rationale = self.rationale.strip()
+        if not rationale or len(rationale) > 1200:
+            raise ValueError("direction judgement rationale is invalid")
+        object.__setattr__(self, "rationale", rationale)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "DirectionJudgement":
+        return cls(
+            selected_proposal_id=str(payload["selected_proposal_id"]),
+            rationale=str(payload["rationale"]),
+        )
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "selected_proposal_id": self.selected_proposal_id,
+            "rationale": self.rationale,
         }
 
 

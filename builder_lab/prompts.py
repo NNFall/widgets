@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import json
 
-from .models import BuilderRequest, Stage, ValidationIssue, WidgetArtifact
+from .models import (
+    BuilderRequest,
+    DirectionProposal,
+    DirectionRole,
+    Stage,
+    ValidationIssue,
+    WidgetArtifact,
+)
 
 
 ARTIFACT_JSON_SCHEMA = {
@@ -36,6 +43,97 @@ ARTIFACT_JSON_SCHEMA = {
         },
     },
 }
+
+
+DIRECTION_PROPOSAL_JSON_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["title", "art_direction", "interaction_model", "safeguards"],
+    "properties": {
+        "title": {"type": "string", "minLength": 1, "maxLength": 80},
+        "art_direction": {"type": "string", "minLength": 1, "maxLength": 1200},
+        "interaction_model": {"type": "string", "minLength": 1, "maxLength": 800},
+        "safeguards": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {"type": "string", "minLength": 1, "maxLength": 160},
+        },
+    },
+}
+
+
+DIRECTION_JUDGE_JSON_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["selected_proposal_id", "rationale"],
+    "properties": {
+        "selected_proposal_id": {
+            "type": "string",
+            "enum": ["candidate-1", "candidate-2", "candidate-3"],
+        },
+        "rationale": {"type": "string", "minLength": 1, "maxLength": 1200},
+    },
+}
+
+
+_DIRECTION_ROLE_BRIEFS = {
+    DirectionRole.BRAND_ARCHAEOLOGIST: (
+        "brand archaeologist: extract the site's visual grammar, hierarchy, type, "
+        "spacing and surfaces without copying page content or inventing facts"
+    ),
+    DirectionRole.INTERACTION_INVENTOR: (
+        "interaction inventor: propose one non-generic but feasible compact interaction "
+        "that remains subordinate to the host page"
+    ),
+    DirectionRole.HOSTILE_CONVERSION_ACCESSIBILITY_CRITIC: (
+        "hostile conversion/accessibility critic: expose fake actions, generic chat UI, "
+        "oversized geometry, responsive failures and accessibility barriers, then turn "
+        "those objections into a defensible direction"
+    ),
+}
+
+
+def build_direction_proposal_prompt(
+    *,
+    request: BuilderRequest,
+    role: DirectionRole,
+) -> str:
+    return f"""You are the independent {_DIRECTION_ROLE_BRIEFS[role]}.
+
+Work alone. Do not simulate a panel, judge, recursive agent, or other proposals.
+Return exactly one bounded JSON proposal. The implementation will be generated later.
+The proposal must describe a truthful AI widget rather than claiming unavailable actions.
+
+Non-negotiable product bounds: desktop open width 372px and height no more than 68dvh;
+mobile height no more than 70dvh and no fullscreen; default state closed; no more than
+two first-open suggestions; no fake actions. Generated content has no JavaScript or
+network and must be implementable by the trusted Kaigo runtime.
+
+Locale: {request.locale}
+Brief:
+{request.brief}
+"""
+
+
+def build_direction_judge_prompt(
+    *,
+    request: BuilderRequest,
+    proposals: tuple[DirectionProposal, ...],
+) -> str:
+    anonymous = [proposal.to_anonymous_dict() for proposal in proposals]
+    return f"""You are the blind direction judge. Candidate authors and roles are hidden.
+Choose exactly one candidate using this fixed matrix: site fit, subordination to the
+host page, functional truth, responsive integrity, accessibility, and trusted-runtime
+feasibility. Do not merge candidates, ask follow-up questions, or start an agent loop.
+Return only bounded JSON.
+
+Locale: {request.locale}
+Brief:
+{request.brief}
+
+Anonymous candidates:
+{json.dumps(anonymous, ensure_ascii=False, separators=(',', ':'))}
+"""
 
 
 STAGE_GUIDANCE = {
@@ -75,6 +173,7 @@ def build_stage_prompt(
     revision: int,
     previous_artifact: WidgetArtifact | None,
     repair_issues: tuple[ValidationIssue, ...] = (),
+    selected_direction: DirectionProposal | None = None,
 ) -> str:
     previous = (
         json.dumps(previous_artifact.to_dict(), ensure_ascii=False, separators=(",", ":"))
@@ -87,6 +186,15 @@ def build_stage_prompt(
         STAGE_GUIDANCE[Stage.VALIDATION]
         if repair_issues
         else STAGE_GUIDANCE[stage]
+    )
+    direction_payload = (
+        json.dumps(
+            selected_direction.to_anonymous_dict(),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        if selected_direction
+        else "null"
     )
     return f"""Ты — ведущий digital art director и frontend-дизайнер Kaigo.
 
@@ -115,6 +223,17 @@ def build_stage_prompt(
 - SVG path использует только простые M/L/H/V/C/S/Q/T/Z-команды без A/a arc;
   для окружностей и дуг используй безопасные элементы circle или ellipse;
 - текущая revision строго {revision}, stage строго {stage.value}.
+- состояние по умолчанию строго closed; panel не открывается автоматически;
+- desktop panel: ширина 372px, высота по содержимому максимум min(536px, 68dvh);
+- mobile panel: максимум 70dvh, no fullscreen, no backdrop и не блокирует страницу;
+- на первом открытии не более двух suggestions; каждая запускает реальный запрос;
+- fake actions, пустые кнопки и действия, которые только очищают поле, запрещены;
+- trusted runtime использует классы `.kaigo-widget__message--assistant`,
+  `.kaigo-widget__message--user`, `.kaigo-widget__message--status` и
+  `.kaigo-widget__message--error`; CSS обязан оформить их как редакционный transcript,
+  без bubbles и avatars;
+- data-action описывает только реальные open, close, send, suggestion и retry;
+  сгенерированный artifact не имитирует ответы.
 
 Этап: {stage.value}
 Режим: {mode}
@@ -123,6 +242,9 @@ def build_stage_prompt(
 Viewport: {', '.join(request.viewport_targets)}
 Бриф пользователя:
 {request.brief}
+
+Выбранное blind-judge направление обязательно и неизменно для всех пяти этапов:
+{direction_payload}
 
 Предыдущий полный артефакт:
 {previous}

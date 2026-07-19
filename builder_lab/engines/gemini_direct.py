@@ -7,9 +7,30 @@ from typing import Any
 from google import genai
 from google.genai import types
 
-from ..models import BuilderRequest, Stage, TokenUsage, ValidationIssue, WidgetArtifact
-from ..prompts import ARTIFACT_JSON_SCHEMA, build_stage_prompt
-from .base import BuilderEngineError, EngineResult
+from ..models import (
+    BuilderRequest,
+    DirectionJudgement,
+    DirectionProposal,
+    DirectionRole,
+    Stage,
+    TokenUsage,
+    ValidationIssue,
+    WidgetArtifact,
+)
+from ..prompts import (
+    ARTIFACT_JSON_SCHEMA,
+    DIRECTION_JUDGE_JSON_SCHEMA,
+    DIRECTION_PROPOSAL_JSON_SCHEMA,
+    build_direction_judge_prompt,
+    build_direction_proposal_prompt,
+    build_stage_prompt,
+)
+from .base import (
+    BuilderEngineError,
+    DirectionJudgeResult,
+    DirectionProposalResult,
+    EngineResult,
+)
 
 
 def build_http_options(base_url: str) -> types.HttpOptions:
@@ -69,6 +90,24 @@ def _usage(response: Any) -> TokenUsage:
     )
 
 
+def _response_payload(response: Any) -> dict[str, Any]:
+    parsed = getattr(response, "parsed", None)
+    if isinstance(parsed, dict):
+        return parsed
+    text = getattr(response, "text", None)
+    if not text or not str(text).strip():
+        raise ValueError("empty Gemini response")
+    payload = json.loads(str(text))
+    if not isinstance(payload, dict):
+        raise ValueError("Gemini JSON response must be an object")
+    return payload
+
+
+def _require_exact_keys(payload: dict[str, Any], expected: frozenset[str]) -> None:
+    if set(payload) != expected:
+        raise ValueError("Gemini JSON response fields do not match the contract")
+
+
 class GeminiDirectEngine:
     def __init__(
         self,
@@ -89,6 +128,119 @@ class GeminiDirectEngine:
             http_options=build_http_options(base_url),
         )
 
+    async def _generate_structured(
+        self,
+        *,
+        prompt: str,
+        schema: dict[str, Any],
+        temperature: float,
+        max_output_tokens: int,
+    ) -> Any:
+        config = types.GenerateContentConfig(
+            temperature=temperature,
+            top_p=1.0,
+            max_output_tokens=max_output_tokens,
+            response_mime_type="application/json",
+            response_json_schema=schema,
+        )
+        try:
+            return await self._client.aio.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=config,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            raise _provider_error(exc) from exc
+
+    async def propose_direction(
+        self,
+        *,
+        request: BuilderRequest,
+        role: DirectionRole,
+        proposal_id: str,
+    ) -> DirectionProposalResult:
+        prompt = build_direction_proposal_prompt(request=request, role=role)
+        response = await self._generate_structured(
+            prompt=prompt,
+            schema=DIRECTION_PROPOSAL_JSON_SCHEMA,
+            temperature=request.creativity,
+            max_output_tokens=900,
+        )
+        try:
+            payload = _response_payload(response)
+            _require_exact_keys(
+                payload,
+                frozenset(
+                    {"title", "art_direction", "interaction_model", "safeguards"}
+                ),
+            )
+            safeguards = payload["safeguards"]
+            if not isinstance(safeguards, list):
+                raise ValueError("direction safeguards must be an array")
+            proposal = DirectionProposal(
+                proposal_id=proposal_id,
+                role=role,
+                title=str(payload["title"]),
+                art_direction=str(payload["art_direction"]),
+                interaction_model=str(payload["interaction_model"]),
+                safeguards=tuple(str(item) for item in safeguards),
+            )
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise BuilderEngineError(
+                "invalid_artifact",
+                "Gemini вернул некорректное визуальное направление",
+                diagnostic=f"{type(exc).__name__}: {exc}",
+                usage=_usage(response),
+            ) from exc
+        return DirectionProposalResult(
+            proposal=proposal,
+            usage=_usage(response),
+            provider_request_id=getattr(response, "response_id", None),
+            diagnostic=f"model={getattr(response, 'model_version', None) or self.model}",
+        )
+
+    async def judge_directions(
+        self,
+        *,
+        request: BuilderRequest,
+        proposals: tuple[DirectionProposal, ...],
+    ) -> DirectionJudgeResult:
+        if len(proposals) != 3 or len({item.proposal_id for item in proposals}) != 3:
+            raise ValueError("judge requires exactly three unique proposals")
+        prompt = build_direction_judge_prompt(request=request, proposals=proposals)
+        response = await self._generate_structured(
+            prompt=prompt,
+            schema=DIRECTION_JUDGE_JSON_SCHEMA,
+            temperature=0.2,
+            max_output_tokens=500,
+        )
+        try:
+            payload = _response_payload(response)
+            _require_exact_keys(
+                payload,
+                frozenset({"selected_proposal_id", "rationale"}),
+            )
+            judgement = DirectionJudgement.from_dict(payload)
+            if judgement.selected_proposal_id not in {
+                proposal.proposal_id for proposal in proposals
+            }:
+                raise ValueError("judge selected an unknown proposal")
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise BuilderEngineError(
+                "invalid_artifact",
+                "Gemini вернул некорректное решение по направлению",
+                diagnostic=f"{type(exc).__name__}: {exc}",
+                usage=_usage(response),
+            ) from exc
+        return DirectionJudgeResult(
+            judgement=judgement,
+            usage=_usage(response),
+            provider_request_id=getattr(response, "response_id", None),
+            diagnostic=f"model={getattr(response, 'model_version', None) or self.model}",
+        )
+
     async def generate(
         self,
         *,
@@ -97,6 +249,7 @@ class GeminiDirectEngine:
         revision: int,
         previous_artifact: WidgetArtifact | None = None,
         repair_issues: tuple[ValidationIssue, ...] = (),
+        selected_direction: DirectionProposal | None = None,
     ) -> EngineResult:
         prompt = build_stage_prompt(
             request=request,
@@ -104,6 +257,7 @@ class GeminiDirectEngine:
             revision=revision,
             previous_artifact=previous_artifact,
             repair_issues=repair_issues,
+            selected_direction=selected_direction,
         )
         config = types.GenerateContentConfig(
             temperature=request.creativity,
@@ -122,15 +276,8 @@ class GeminiDirectEngine:
         except Exception as exc:
             raise _provider_error(exc) from exc
 
-        parsed = getattr(response, "parsed", None)
         try:
-            if isinstance(parsed, dict):
-                payload = parsed
-            else:
-                text = getattr(response, "text", None)
-                if not text or not str(text).strip():
-                    raise ValueError("empty Gemini response")
-                payload = json.loads(str(text))
+            payload = _response_payload(response)
             artifact = WidgetArtifact.from_dict(payload)
             if artifact.revision != revision or artifact.stage != stage:
                 raise ValueError("Gemini candidate violates stage or revision invariants")
@@ -139,6 +286,7 @@ class GeminiDirectEngine:
                 "invalid_artifact",
                 "Gemini вернул некорректный формат виджета",
                 diagnostic=f"{type(exc).__name__}: {exc}",
+                usage=_usage(response),
             ) from exc
 
         return EngineResult(

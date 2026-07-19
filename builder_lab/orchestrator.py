@@ -3,12 +3,19 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
-from .engines.base import BuilderEngine, BuilderEngineError, EngineResult
+from .directions import DirectionBoardError, run_direction_board
+from .engines.base import (
+    BuilderEngine,
+    BuilderEngineError,
+    DirectBuilderEngine,
+    EngineResult,
+)
 from .models import (
     BuilderRequest,
     BuilderRunSnapshot,
+    DirectionProposal,
     EngineName,
     RunStatus,
     Stage,
@@ -240,6 +247,38 @@ class BuilderOrchestrator:
         request: BuilderRequest,
         engine: BuilderEngine,
     ) -> None:
+        if not all(
+            hasattr(engine, method)
+            for method in ("propose_direction", "judge_directions")
+        ):
+            raise BuilderEngineError(
+                "provider_unavailable",
+                "Direct-режим не поддерживает выбор визуального направления",
+            )
+        direct_engine = cast(DirectBuilderEngine, engine)
+        try:
+            direction = await run_direction_board(engine=direct_engine, request=request)
+        except DirectionBoardError as exc:
+            await self.store.append_event(
+                run_id,
+                event_type="direction.failed",
+                stage=None,
+                status="failed",
+                message=exc.public_message,
+                usage=exc.usage,
+                error_code=exc.error_code,
+                diagnostic=exc.diagnostic,
+            )
+            raise
+        selected_direction = direction.selected
+        await self.store.append_event(
+            run_id,
+            event_type="direction.judged",
+            stage=None,
+            status="completed",
+            message=f"Выбрано направление: {selected_direction.title}",
+            usage=direction.usage,
+        )
         previous: WidgetArtifact | None = None
         for stage in DIRECT_STAGES:
             if await self._cancelled(run_id):
@@ -254,11 +293,12 @@ class BuilderOrchestrator:
                 message=f"Начат этап {stage.value}",
                 revision=revision,
             )
-            result = await engine.generate(
+            result = await direct_engine.generate(
                 request=request,
                 stage=stage,
                 revision=revision,
                 previous_artifact=previous,
+                selected_direction=selected_direction,
             )
             await self.store.append_event(
                 run_id,
@@ -273,9 +313,10 @@ class BuilderOrchestrator:
             candidate = await self._validate_and_repair(
                 run_id=run_id,
                 request=request,
-                engine=engine,
+                engine=direct_engine,
                 candidate=result.artifact,
                 previous=previous,
+                selected_direction=selected_direction,
             )
             await self.store.commit_artifact(run_id, candidate)
             await self.store.append_event(
@@ -293,9 +334,10 @@ class BuilderOrchestrator:
         *,
         run_id: str,
         request: BuilderRequest,
-        engine: BuilderEngine,
+        engine: DirectBuilderEngine,
         candidate: WidgetArtifact,
         previous: WidgetArtifact | None,
+        selected_direction: DirectionProposal,
     ) -> WidgetArtifact:
         previous_revision = previous.revision if previous else 0
         issues = validate_artifact(candidate, previous_revision=previous_revision)
@@ -320,6 +362,7 @@ class BuilderOrchestrator:
                 revision=candidate.revision,
                 previous_artifact=candidate,
                 repair_issues=issues,
+                selected_direction=selected_direction,
             )
             candidate = result.artifact
             await self.store.append_event(

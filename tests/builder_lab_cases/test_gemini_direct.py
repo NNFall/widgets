@@ -7,6 +7,8 @@ from builder_lab.engines.base import BuilderEngineError
 from builder_lab.engines.gemini_direct import GeminiDirectEngine, build_http_options
 from builder_lab.models import (
     BuilderRequest,
+    DirectionProposal,
+    DirectionRole,
     EngineName,
     Stage,
     ValidationIssue,
@@ -133,6 +135,129 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"revision":3', prompt)
         self.assertIn("Режим: repair", prompt)
         self.assertIn("stage строго identity", prompt)
+
+    async def test_direction_proposal_uses_bounded_structured_output(self):
+        payload = {
+            "title": "Плавающая проектная заметка",
+            "art_direction": "Острые углы, hairline и редакционная типографика.",
+            "interaction_model": "Компактная заметка раскрывается рядом с launcher.",
+            "safeguards": ["Без fake actions", "Не больше двух suggestions"],
+        }
+        client = FakeClient(response=std_types.SimpleNamespace(
+            text=json.dumps(payload, ensure_ascii=False),
+            parsed=None,
+            response_id="proposal-1",
+            usage_metadata=std_types.SimpleNamespace(
+                prompt_token_count=20,
+                candidates_token_count=8,
+                thoughts_token_count=2,
+            ),
+            model_version="gemini-3.5-flash",
+        ))
+        engine = GeminiDirectEngine(api_key="secret", client=client)
+
+        result = await engine.propose_direction(
+            request=self.request,
+            role=DirectionRole.BRAND_ARCHAEOLOGIST,
+            proposal_id="candidate-1",
+        )
+
+        self.assertEqual(result.proposal.proposal_id, "candidate-1")
+        self.assertEqual(result.proposal.role, DirectionRole.BRAND_ARCHAEOLOGIST)
+        call = client.models.calls[0]
+        self.assertEqual(call["config"].max_output_tokens, 900)
+        self.assertEqual(call["config"].response_mime_type, "application/json")
+        self.assertEqual(call["config"].response_json_schema["additionalProperties"], False)
+        self.assertIn("brand archaeologist", call["contents"])
+
+        client.models.response.text = json.dumps({**payload, "unexpected": "ignored?"})
+        with self.assertRaises(BuilderEngineError) as caught:
+            await engine.propose_direction(
+                request=self.request,
+                role=DirectionRole.BRAND_ARCHAEOLOGIST,
+                proposal_id="candidate-1",
+            )
+        self.assertEqual(caught.exception.error_code, "invalid_artifact")
+        self.assertEqual(caught.exception.usage.prompt_tokens, 20)
+        self.assertEqual(caught.exception.usage.output_tokens, 8)
+        self.assertEqual(caught.exception.usage.thinking_tokens, 2)
+
+    async def test_direction_judge_is_blind_and_rejects_unknown_selection(self):
+        proposals = tuple(
+            DirectionProposal(
+                proposal_id=f"candidate-{index}",
+                role=role,
+                title=f"Direction {index}",
+                art_direction="Editorial, compact and subordinate to the page.",
+                interaction_model="A bounded project note opens on demand.",
+                safeguards=("No fake actions",),
+            )
+            for index, role in enumerate(DirectionRole, start=1)
+        )
+        response = std_types.SimpleNamespace(
+            text=json.dumps({
+                "selected_proposal_id": "candidate-2",
+                "rationale": "The strongest fixed-matrix result.",
+            }),
+            parsed=None,
+            response_id="judge-1",
+            usage_metadata=None,
+            model_version="gemini-3.5-flash",
+        )
+        client = FakeClient(response=response)
+        engine = GeminiDirectEngine(api_key="secret", client=client)
+
+        result = await engine.judge_directions(request=self.request, proposals=proposals)
+
+        self.assertEqual(result.judgement.selected_proposal_id, "candidate-2")
+        call = client.models.calls[0]
+        self.assertEqual(call["config"].max_output_tokens, 500)
+        self.assertNotIn("brand_archaeologist", call["contents"])
+        self.assertNotIn("interaction_inventor", call["contents"])
+        self.assertNotIn("hostile_conversion_accessibility_critic", call["contents"])
+        self.assertIn("site fit", call["contents"].lower())
+
+        client.models.response.text = json.dumps({
+            "selected_proposal_id": "candidate-99",
+            "rationale": "Unknown",
+        })
+        with self.assertRaises(BuilderEngineError) as caught:
+            await engine.judge_directions(request=self.request, proposals=proposals)
+        self.assertEqual(caught.exception.error_code, "invalid_artifact")
+
+    async def test_stage_prompt_contains_selected_direction_and_nonnegotiable_widget_bounds(self):
+        client = FakeClient(response=fake_response(artifact(revision=1, stage=Stage.ART_DIRECTION)))
+        engine = GeminiDirectEngine(api_key="secret", client=client)
+        selected = DirectionProposal(
+            proposal_id="candidate-2",
+            role=DirectionRole.INTERACTION_INVENTOR,
+            title="Плавающая проектная заметка",
+            art_direction="Editorial note, sharp corners and one outer border.",
+            interaction_model="Compact project note that opens on demand.",
+            safeguards=("No fake actions",),
+        )
+        await engine.generate(
+            request=self.request,
+            stage=Stage.ART_DIRECTION,
+            revision=1,
+            selected_direction=selected,
+        )
+        prompt = client.models.calls[0]["contents"]
+        for required in (
+            "Плавающая проектная заметка",
+            "372px",
+            "68dvh",
+            "70dvh",
+            "closed",
+            "не более двух",
+            "fake actions",
+            "no fullscreen",
+            ".kaigo-widget__message--assistant",
+            ".kaigo-widget__message--user",
+            ".kaigo-widget__message--status",
+            ".kaigo-widget__message--error",
+        ):
+            self.assertIn(required.lower(), prompt.lower())
 
     async def test_provider_errors_are_sanitized(self):
         cases = (
