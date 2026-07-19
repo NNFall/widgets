@@ -11,12 +11,18 @@ from aiohttp import web
 from dotenv import load_dotenv
 
 from builder_lab.config import BuilderLabConfig
+from builder_lab.chat import GeminiDemoChatService
 from builder_lab.engines.antigravity import AntigravityEngine
 from builder_lab.engines.gemini_direct import GeminiDirectEngine
 from builder_lab.models import EngineName
 from builder_lab.orchestrator import BuilderOrchestrator
 from builder_lab.store import RunStore
-from builder_lab.web import DEMO_PATH_KEY, create_builder_lab_app
+from builder_lab.web import (
+    CHAT_SECURE_COOKIE_KEY,
+    CHAT_SERVICE_KEY,
+    DEMO_PATH_KEY,
+    create_builder_lab_app,
+)
 
 
 def make_engine_factories(config: BuilderLabConfig):
@@ -44,6 +50,10 @@ def build_app(config: BuilderLabConfig) -> web.Application:
         raise RuntimeError(
             "GEMINI_API_KEY (or GOOGLE_AI_API_KEY) is required to start builder-lab"
         )
+    if config.chat_secure_cookie and not config.chat_session_secret:
+        raise RuntimeError(
+            "KAIGO_CHAT_SESSION_SECRET is required when secure chat cookies are enabled"
+        )
     store = RunStore(
         ttl_seconds=config.run_ttl_seconds,
         max_runs=config.max_runs,
@@ -51,6 +61,19 @@ def build_app(config: BuilderLabConfig) -> web.Application:
     orchestrator = BuilderOrchestrator(
         store=store,
         engine_factories=factories,
+    )
+    chat_service = GeminiDemoChatService(
+        api_key=config.gemini_api_key,
+        model=config.chat_model,
+        base_url=config.gemini_base_url,
+        timeout_seconds=config.chat_timeout_seconds,
+        session_ttl_seconds=config.chat_session_ttl_seconds,
+        max_sessions=config.chat_max_sessions,
+        rate_limit_requests=config.chat_rate_limit_requests,
+        ip_rate_limit_requests=config.chat_ip_rate_limit_requests,
+        rate_limit_window_seconds=config.chat_rate_limit_window_seconds,
+        max_requests_per_session=config.chat_max_requests_per_session,
+        global_concurrency=config.chat_global_concurrency,
     )
     return create_builder_lab_app(
         store=store,
@@ -60,6 +83,9 @@ def build_app(config: BuilderLabConfig) -> web.Application:
         default_temperature=config.temperature,
         default_max_repairs=config.max_repairs,
         demo_path=Path(config.demo_path) if config.demo_path else None,
+        chat_service=chat_service,
+        chat_secure_cookie=config.chat_secure_cookie,
+        chat_session_secret=config.chat_session_secret,
     )
 
 

@@ -18,6 +18,17 @@ class BuilderLabConfigTests(unittest.TestCase):
             "GEMINI_API_KEY": None,
             "GOOGLE_AI_API_KEY": None,
             "GOOGLE_AI_NATIVE_BASE_URL": None,
+            "GEMINI_CHAT_MODEL": None,
+            "GEMINI_CHAT_TIMEOUT_SECONDS": None,
+            "KAIGO_CHAT_SESSION_TTL_SECONDS": None,
+            "KAIGO_CHAT_MAX_SESSIONS": None,
+            "KAIGO_CHAT_RATE_LIMIT_REQUESTS": None,
+            "KAIGO_CHAT_IP_RATE_LIMIT_REQUESTS": None,
+            "KAIGO_CHAT_RATE_LIMIT_WINDOW_SECONDS": None,
+            "KAIGO_CHAT_MAX_REQUESTS_PER_SESSION": None,
+            "KAIGO_CHAT_GLOBAL_CONCURRENCY": None,
+            "KAIGO_CHAT_SECURE_COOKIE": None,
+            "KAIGO_CHAT_SESSION_SECRET": None,
             "KAIGO_REFERENCE_MAX_PAGES": None,
             "KAIGO_REFERENCE_MAX_DEPTH": None,
             "KAIGO_REFERENCE_TIMEOUT_SECONDS": None,
@@ -45,6 +56,11 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertEqual(config.direct_model, "gemini-3.5-flash")
         self.assertEqual(config.temperature, 0.9)
         self.assertEqual(config.max_repairs, 3)
+        self.assertEqual(config.chat_model, "gemini-3.5-flash")
+        self.assertEqual(config.chat_timeout_seconds, 45)
+        self.assertEqual(config.chat_ip_rate_limit_requests, 60)
+        self.assertTrue(config.chat_secure_cookie)
+        self.assertIsNone(config.chat_session_secret)
         self.assertIsNone(config.gemini_api_key)
         self.assertEqual(config.reference_max_pages, 5)
         self.assertEqual(config.reference_scroll_delay_ms, 750)
@@ -84,6 +100,10 @@ class BuilderLabConfigTests(unittest.TestCase):
             ("KAIGO_REFERENCE_SCROLL_DELAY_MS", "599"),
             ("KAIGO_REFERENCE_SCROLL_DELAY_MS", "1201"),
             ("KAIGO_REFERENCE_WARMUP_MS", "999"),
+            ("GEMINI_CHAT_TIMEOUT_SECONDS", "181"),
+            ("KAIGO_CHAT_IP_RATE_LIMIT_REQUESTS", "0"),
+            ("KAIGO_CHAT_GLOBAL_CONCURRENCY", "33"),
+            ("KAIGO_CHAT_SESSION_SECRET", "too-short"),
         ):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 self.load(**{name: value})

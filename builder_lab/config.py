@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 from dataclasses import dataclass
 
 from .models import EngineName
@@ -72,6 +73,17 @@ class BuilderLabConfig:
     antigravity_timeout_seconds: int
     antigravity_max_snapshot_bytes: int
     demo_path: str | None
+    chat_model: str
+    chat_timeout_seconds: int
+    chat_session_ttl_seconds: int
+    chat_max_sessions: int
+    chat_rate_limit_requests: int
+    chat_ip_rate_limit_requests: int
+    chat_rate_limit_window_seconds: int
+    chat_max_requests_per_session: int
+    chat_global_concurrency: int
+    chat_secure_cookie: bool
+    chat_session_secret: str | None
     run_ttl_seconds: int
     max_runs: int
     reference_max_pages: int
@@ -90,6 +102,13 @@ class BuilderLabConfig:
     reference_respect_robots: bool
 
     def __post_init__(self) -> None:
+        if self.chat_session_secret is not None and (
+            len(self.chat_session_secret.encode("ascii", "ignore")) < 32
+            or re.fullmatch(r"[A-Za-z0-9_-]+", self.chat_session_secret) is None
+        ):
+            raise ValueError(
+                "KAIGO_CHAT_SESSION_SECRET must be at least 32 URL-safe bytes"
+            )
         if self.reference_max_page_bytes > self.reference_max_total_bytes:
             raise ValueError(
                 "KAIGO_REFERENCE_MAX_PAGE_BYTES cannot exceed "
@@ -116,12 +135,15 @@ class BuilderLabConfig:
             "GOOGLE_AI_API_KEY",
             "GOOGLE_API_KEY",
         )
+        direct_model = os.getenv(
+            "GEMINI_BUILDER_MODEL", "gemini-3.5-flash"
+        ).strip()
         return cls(
             host=host,
             port=_int("KAIGO_BUILDER_LAB_PORT", 8091, 1, 65535),
             allow_remote=allow_remote,
             default_engine=default_engine,
-            direct_model=os.getenv("GEMINI_BUILDER_MODEL", "gemini-3.5-flash").strip(),
+            direct_model=direct_model,
             temperature=_float("GEMINI_BUILDER_TEMPERATURE", 0.9, 0, 2),
             max_repairs=_int("GEMINI_BUILDER_MAX_REPAIRS", 3, 0, 4),
             enable_antigravity=_bool("KAIGO_BUILDER_ENABLE_ANTIGRAVITY", True),
@@ -143,6 +165,29 @@ class BuilderLabConfig:
                 100 * 1024 * 1024,
             ),
             demo_path=_first_nonblank("KAIGO_BUILDER_DEMO_PATH"),
+            chat_model=os.getenv("GEMINI_CHAT_MODEL", direct_model).strip(),
+            chat_timeout_seconds=_int("GEMINI_CHAT_TIMEOUT_SECONDS", 45, 1, 180),
+            chat_session_ttl_seconds=_int(
+                "KAIGO_CHAT_SESSION_TTL_SECONDS", 3600, 30, 86400
+            ),
+            chat_max_sessions=_int("KAIGO_CHAT_MAX_SESSIONS", 500, 1, 10000),
+            chat_rate_limit_requests=_int(
+                "KAIGO_CHAT_RATE_LIMIT_REQUESTS", 12, 1, 120
+            ),
+            chat_ip_rate_limit_requests=_int(
+                "KAIGO_CHAT_IP_RATE_LIMIT_REQUESTS", 60, 1, 1000
+            ),
+            chat_rate_limit_window_seconds=_int(
+                "KAIGO_CHAT_RATE_LIMIT_WINDOW_SECONDS", 60, 1, 3600
+            ),
+            chat_max_requests_per_session=_int(
+                "KAIGO_CHAT_MAX_REQUESTS_PER_SESSION", 40, 1, 1000
+            ),
+            chat_global_concurrency=_int(
+                "KAIGO_CHAT_GLOBAL_CONCURRENCY", 4, 1, 32
+            ),
+            chat_secure_cookie=_bool("KAIGO_CHAT_SECURE_COOKIE", True),
+            chat_session_secret=_first_nonblank("KAIGO_CHAT_SESSION_SECRET"),
             run_ttl_seconds=_int("KAIGO_BUILDER_RUN_TTL_SECONDS", 3600, 60, 86400),
             max_runs=_int("KAIGO_BUILDER_MAX_RUNS", 100, 1, 1000),
             reference_max_pages=_int("KAIGO_REFERENCE_MAX_PAGES", 5, 1, 5),

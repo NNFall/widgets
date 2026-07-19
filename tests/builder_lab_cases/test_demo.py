@@ -41,8 +41,91 @@ class BuilderDemoTests(unittest.TestCase):
             self.assertEqual(demo.request.brief, "Премиальный AI-куратор архитектурного бюро")
             self.assertEqual(demo.artifact.revision, 2)
             self.assertEqual(demo.usage.total_tokens, 220)
+            persisted = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(persisted["schema_version"], 1)
+            self.assertNotIn("chat_system_prompt", persisted)
+            self.assertNotIn("source_url", persisted)
+            self.assertFalse(demo.chat_enabled)
             self.assertNotIn("provider_diagnostic", path.read_text(encoding="utf-8"))
             self.assertNotIn("secret provider detail", path.read_text(encoding="utf-8"))
+
+    def test_v2_persists_server_only_grounding_and_artifact_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "latest.json"
+            demo = save_demo(
+                path,
+                completed_snapshot(),
+                model="gemini-3.5-flash",
+                source_url="https://rawbureau.ru/",
+                chat_system_prompt="Отвечай только по проверенным фактам RAW BUREAU.",
+            )
+            persisted = json.loads(path.read_text(encoding="utf-8"))
+            page = render_demo_page(demo)
+
+        self.assertEqual(persisted["schema_version"], 2)
+        self.assertEqual(demo.source_url, "https://rawbureau.ru/")
+        self.assertTrue(demo.chat_enabled)
+        self.assertRegex(demo.artifact_identity, r"^[0-9a-f]{64}$")
+        self.assertEqual(persisted["artifact_identity"], demo.artifact_identity)
+        self.assertNotIn(demo.chat_system_prompt, page)
+        self.assertNotIn("Отвечай только", page)
+        self.assertNotIn(demo.source_url, page)
+        self.assertNotIn("rawbureau.ru", page)
+        self.assertIn('id="demo-preview"', page)
+        self.assertNotIn('src="preview"', page)
+        self.assertIn("new URL('chat',demoBase)", page)
+        self.assertIn("data.version!==2", page)
+        self.assertIn("event.source!==frame.contentWindow", page)
+
+    def test_reads_v1_as_visual_only_and_does_not_invent_chat_grounding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "legacy.json"
+            payload = {
+                "schema_version": 1,
+                "generated_at": "2026-07-18T12:00:00+00:00",
+                "model": "gemini-3.5-flash",
+                "request": completed_snapshot()["request"],
+                "usage": completed_snapshot()["usage"],
+                "elapsed_seconds": 12.5,
+                "artifact": completed_snapshot()["artifact"],
+            }
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            demo = load_demo(path)
+            page = render_demo_page(demo)
+
+        self.assertEqual(demo.schema_version, 1)
+        self.assertFalse(demo.chat_enabled)
+        self.assertIsNone(demo.source_url)
+        self.assertIsNone(demo.chat_system_prompt)
+        self.assertIn("только визуальный preview", page.lower())
+
+    def test_rejects_unverified_or_incomplete_v2_chat_grounding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "latest.json"
+            for source_url in (
+                "http://rawbureau.ru/",
+                "https://localhost/",
+                "https://127.0.0.1/",
+                "https://user:pass@rawbureau.ru/",
+                "https://rawbureau.ru/?token=secret",
+                "https://bad host/",
+            ):
+                with self.subTest(source_url=source_url):
+                    with self.assertRaises(DemoUnavailable):
+                        save_demo(
+                            path,
+                            completed_snapshot(),
+                            model="gemini-3.5-flash",
+                            source_url=source_url,
+                            chat_system_prompt="Проверенный prompt.",
+                        )
+            with self.assertRaises(DemoUnavailable):
+                save_demo(
+                    path,
+                    completed_snapshot(),
+                    model="gemini-3.5-flash",
+                    source_url="https://rawbureau.ru/",
+                )
 
     def test_rejects_unfinished_or_missing_artifact(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -75,7 +158,7 @@ class BuilderDemoTests(unittest.TestCase):
             with self.assertRaises(DemoUnavailable):
                 load_demo(path)
 
-    def test_rendered_preview_stretches_its_iframe_to_the_canvas(self):
+    def test_rendered_demo_centers_widget_and_collapses_evidence_without_fixed_legacy_rail(self):
         with tempfile.TemporaryDirectory() as directory:
             demo = save_demo(
                 Path(directory) / "latest.json",
@@ -84,12 +167,12 @@ class BuilderDemoTests(unittest.TestCase):
             )
             page = render_demo_page(demo)
 
-        self.assertIn("display:flex; align-items:stretch; justify-content:center", page)
-        self.assertIn("align-self:stretch", page)
-        self.assertIn("height:calc(100dvh - 36px)", page)
-        self.assertIn("position:sticky; top:18px", page)
-        self.assertIn("position:static; height:760px", page)
-        self.assertNotIn("place-items:center", page)
+        self.assertIn("<details", page)
+        self.assertIn("Основной интерактивный объект", page)
+        self.assertNotIn("min-height:760px", page)
+        self.assertNotIn("min-height:680px", page)
+        self.assertNotIn("height:760px", page)
+        self.assertNotIn("height:680px", page)
 
 
 if __name__ == "__main__":

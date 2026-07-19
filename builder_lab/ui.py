@@ -192,11 +192,65 @@ def render_builder_page(
     let stream = null;
     let terminal = false;
     let snapshotTimer = null;
+    let previewChannel = null;
+    let previewRevision = null;
+    const previewRequests = new Set();
 
     const labUrl = path => new URL(path, document.baseURI).toString();
     const showError = (message) => {{ elements.error.textContent = message || ''; elements.error.classList.toggle('visible', Boolean(message)); }};
     const setRunning = (running) => {{ elements.generate.disabled = running; elements.cancel.disabled = !running; elements.pulse.classList.toggle('running', running); }};
     const formatNumber = value => new Intl.NumberFormat('ru-RU').format(value || 0);
+    const requestPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{{7,95}}$/;
+
+    function createChannel() {{
+      return Array.from(crypto.getRandomValues(new Uint8Array(18)), value => value.toString(16).padStart(2, '0')).join('');
+    }}
+
+    function loadPreview(revision) {{
+      previewRevision = Number(revision);
+      previewChannel = createChannel();
+      previewRequests.clear();
+      elements.preview.src = labUrl(`api/runs/${{currentRun}}/preview?revision=${{previewRevision}}&channel=${{encodeURIComponent(previewChannel)}}`);
+      elements['preview-empty'].classList.add('hidden');
+    }}
+
+    function sendToPreview(payload) {{
+      elements.preview.contentWindow?.postMessage({{
+        source:'kaigo-builder-parent',
+        version:2,
+        channel_id:previewChannel,
+        revision:previewRevision,
+        ...payload
+      }}, '*');
+    }}
+
+    async function bridgeChatRequest(data) {{
+      if (previewRequests.has(data.request_id)) return;
+      previewRequests.add(data.request_id);
+      try {{
+        const response = await fetch(labUrl(`api/runs/${{currentRun}}/chat`), {{
+          method:'POST',
+          credentials:'same-origin',
+          headers:{{'Content-Type':'application/json','X-Kaigo-Chat':'v2'}},
+          body:JSON.stringify({{request_id:data.request_id,message:data.text,revision:previewRevision}})
+        }});
+        const payload = await response.json().catch(() => ({{}}));
+        if (!response.ok) throw Object.assign(new Error(payload.error?.message || `HTTP ${{response.status}}`), {{ payload }});
+        if (payload.request_id !== data.request_id || typeof payload.reply !== 'string' || payload.reply.length > 4000) throw new Error('Некорректный ответ chat bridge');
+        sendToPreview({{type:'chat.response',request_id:data.request_id,text:payload.reply}});
+      }} catch (error) {{
+        const payload = error.payload || {{}};
+        sendToPreview({{
+          type:'chat.error',
+          request_id:data.request_id,
+          code:payload.error?.code || 'chat_network_error',
+          message:payload.error?.message || 'Связь прервалась. Текст сохранён.',
+          retryable:payload.error?.retryable !== false
+        }});
+      }} finally {{
+        previewRequests.delete(data.request_id);
+      }}
+    }}
 
     async function requestJSON(url, options = {{}}) {{
       const response = await fetch(url, {{ ...options, headers: {{ 'Content-Type':'application/json', ...(options.headers || {{}}) }} }});
@@ -236,8 +290,7 @@ def render_builder_page(
       elements.timeline.scrollTop = elements.timeline.scrollHeight;
       elements.status.textContent = `${{event.stage || 'run'}} · ${{event.status || ''}}`;
       if (event.type === 'artifact.committed' && event.revision) {{
-        elements.preview.src = labUrl(`api/runs/${{currentRun}}/preview?revision=${{event.revision}}`);
-        elements['preview-empty'].classList.add('hidden');
+        loadPreview(event.revision);
       }}
       if (event.type === 'artifact.validated') {{
         const valid = event.status === 'completed';
@@ -303,8 +356,11 @@ def render_builder_page(
     elements.engine.addEventListener('change', () => {{ elements['creativity-field'].style.opacity = elements.engine.value === 'direct' ? '1' : '.42'; elements.creativity.disabled = elements.engine.value !== 'direct'; }});
     document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {{ document.querySelectorAll('[data-view]').forEach(item => item.classList.toggle('active', item === button)); elements.viewport.classList.toggle('mobile', button.dataset.view === 'mobile'); }}));
     window.addEventListener('message', event => {{
-      if (event.source !== elements.preview.contentWindow || !event.data || event.data.source !== 'kaigo-builder-preview' || event.data.version !== 1) return;
-      if (event.data.type === 'rendered') elements.status.textContent = `Ревизия ${{event.data.revision}} отрисована`;
+      const data = event.data;
+      if (event.source!==elements.preview.contentWindow || !data || data.source!=='kaigo-builder-preview' || data.version!==2 || data.channel_id!==previewChannel || data.revision!==previewRevision) return;
+      if (data.type === 'rendered') {{ elements.status.textContent = `Ревизия ${{data.revision}} отрисована`; return; }}
+      if (data.type !== 'chat.request' || !requestPattern.test(data.request_id) || typeof data.text !== 'string' || data.text.length < 1 || data.text.length > 1000) return;
+      bridgeChatRequest(data);
     }});
   }})();
   </script>

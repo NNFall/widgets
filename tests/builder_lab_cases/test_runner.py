@@ -17,6 +17,7 @@ class BuilderLabRunnerTests(unittest.TestCase):
             "KAIGO_BUILDER_LAB_HOST": "127.0.0.1",
             "GEMINI_API_KEY": "test-key",
             "KAIGO_BUILDER_ENABLE_ANTIGRAVITY": "true",
+            "KAIGO_CHAT_SESSION_SECRET": "test-chat-session-secret-32-bytes-minimum",
         }
         defaults.update(values)
         with patch.dict(os.environ, defaults, clear=True):
@@ -55,6 +56,36 @@ class BuilderLabRunnerTests(unittest.TestCase):
         app = run_builder_lab.build_app(config)
         self.assertEqual(app[run_builder_lab.DEMO_PATH_KEY], Path(config.demo_path))
         asyncio.run(app.cleanup())
+
+    def test_configures_separate_bounded_demo_chat_service(self):
+        config = self.config(
+            GEMINI_CHAT_MODEL="gemini-3.5-flash",
+            GEMINI_CHAT_TIMEOUT_SECONDS="37",
+            KAIGO_CHAT_SESSION_TTL_SECONDS="900",
+            KAIGO_CHAT_MAX_SESSIONS="40",
+            KAIGO_CHAT_RATE_LIMIT_REQUESTS="5",
+            KAIGO_CHAT_IP_RATE_LIMIT_REQUESTS="25",
+            KAIGO_CHAT_RATE_LIMIT_WINDOW_SECONDS="30",
+            KAIGO_CHAT_MAX_REQUESTS_PER_SESSION="16",
+            KAIGO_CHAT_GLOBAL_CONCURRENCY="2",
+            KAIGO_CHAT_SECURE_COOKIE="false",
+        )
+        app = run_builder_lab.build_app(config)
+        service = app[run_builder_lab.CHAT_SERVICE_KEY]
+
+        self.assertEqual(service.model, "gemini-3.5-flash")
+        self.assertEqual(service._timeout_seconds, 37)
+        self.assertEqual(service._max_sessions, 40)
+        self.assertEqual(service._rate_limit_requests, 5)
+        self.assertEqual(service._ip_rate_limit_requests, 25)
+        self.assertEqual(service._max_requests_per_session, 16)
+        self.assertFalse(app[run_builder_lab.CHAT_SECURE_COOKIE_KEY])
+        asyncio.run(app.cleanup())
+
+    def test_secure_cookie_fails_closed_without_independent_session_secret(self):
+        config = self.config(KAIGO_CHAT_SESSION_SECRET="", KAIGO_CHAT_SECURE_COOKIE="true")
+        with self.assertRaisesRegex(RuntimeError, "KAIGO_CHAT_SESSION_SECRET"):
+            run_builder_lab.build_app(config)
 
 
 if __name__ == "__main__":
