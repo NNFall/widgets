@@ -14,6 +14,7 @@ from builder_lab.models import (
 )
 from builder_lab.orchestrator import BuilderOrchestrator
 from builder_lab.store import RunStore, RunTerminal
+from builder_lab.browser_audit import BrowserAuditError
 from builder_lab.visual_gate import VisualRepairGate
 from builder_lab.visual_models import (
     NormalizedRegion,
@@ -332,6 +333,24 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.error_code, "visual_quality_failed")
         self.assertNotIn("private browser detail", caught.exception.public_message)
         self.assertTrue(critic.closed)
+        events = await self.store.events_after(self.run_id, 0)
+        completed = [event for event in events if event.event_type == "visual_audit.completed"]
+        self.assertNotIn("private browser detail", completed[0].message)
+
+    async def test_typed_browser_audit_failure_exposes_only_public_gate_message(self):
+        error = BrowserAuditError(
+            "browser_gate_failed",
+            "Виджет не прошёл проверку: desktop panel width must be 372px",
+            diagnostic="private internal browser diagnostic",
+        )
+
+        with self.assertRaises(BuilderEngineError):
+            await self.evaluate(FakeAuditor(error=error), FakeCritic([critique()]))
+
+        events = await self.store.events_after(self.run_id, 0)
+        completed = [event for event in events if event.event_type == "visual_audit.completed"]
+        self.assertIn("desktop panel width must be 372px", completed[0].message)
+        self.assertNotIn("private internal browser diagnostic", completed[0].message)
 
     async def test_critic_factory_failure_is_sanitized_as_visual_failure(self):
         gate = VisualRepairGate(

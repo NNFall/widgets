@@ -18,6 +18,7 @@ from .models import (
 )
 from .store import RunStore
 from .validation import validate_artifact
+from .browser_audit import BrowserAuditError
 from .visual_models import VisualFinding, VisualSeverity
 
 
@@ -251,12 +252,15 @@ class VisualRepairGate:
                     raise
                 except Exception as exc:
                     usage = getattr(exc, "usage", TokenUsage())
+                    public_message = "Visual audit завершился ошибкой"
+                    if isinstance(exc, BrowserAuditError):
+                        public_message = str(exc)[:1_000]
                     await self._store.append_event(
                         run_id,
                         event_type="visual_audit.completed",
                         stage=Stage.MOTION_POLISH,
                         status="failed",
-                        message="Visual audit завершился ошибкой",
+                        message=public_message,
                         revision=candidate.revision,
                         usage=usage,
                     )
