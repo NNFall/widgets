@@ -607,6 +607,12 @@ class VisualRepairGate:
                         revision=candidate.revision,
                         usage=usage,
                     )
+                    if (
+                        getattr(exc, "error_code", None)
+                        in {"visual_evidence_unproven", "invalid_visual_critique"}
+                        and audit_attempt < MAX_VISUAL_AUDITS
+                    ):
+                        continue
                     raise self._quality_error(
                         f"{getattr(exc, 'error_code', type(exc).__name__)}: "
                         f"{getattr(exc, 'diagnostic', None) or str(exc)}"

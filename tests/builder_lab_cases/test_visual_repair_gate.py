@@ -604,6 +604,40 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed[0].status, "failed")
         self.assertNotIn("private Playwright timeout detail", completed[0].message)
 
+    async def test_unproven_critic_response_retries_without_model_repair(self):
+        transient = BuilderEngineError(
+            "visual_evidence_unproven",
+            "critic response missed one required state marker",
+            diagnostic="private state-marker diagnostic",
+            usage=TokenUsage(prompt_tokens=13, output_tokens=5),
+        )
+
+        class FlakyCritic(FakeCritic):
+            async def critique(self, **kwargs):
+                self.calls.append(kwargs)
+                if len(self.calls) == 1:
+                    raise transient
+                return types.SimpleNamespace(
+                    critique=critique(),
+                    usage=TokenUsage(prompt_tokens=7, output_tokens=3),
+                )
+
+        auditor = FakeAuditor()
+        critic = FlakyCritic([])
+        engine = FakeEngine()
+
+        result = await self.evaluate(auditor, critic, engine)
+
+        self.assertEqual(result, self.candidate)
+        self.assertEqual(len(auditor.calls), 2)
+        self.assertEqual(len(critic.calls), 2)
+        self.assertEqual(len(engine.calls), 0)
+        events = await self.store.events_after(self.run_id, 0)
+        completed = [event for event in events if event.event_type == "visual_audit.completed"]
+        self.assertEqual(len(completed), 2)
+        self.assertEqual(completed[0].status, "failed")
+        self.assertNotIn("private state-marker diagnostic", completed[0].message)
+
     async def test_critic_factory_failure_is_sanitized_as_visual_failure(self):
         gate = VisualRepairGate(
             store=self.store,

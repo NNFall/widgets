@@ -904,10 +904,23 @@ class GeminiVisualCritic:
                 suffix = next(
                     key for key in required_by_state if item.screenshot_id.endswith(key)
                 )
-                if any(not markers.intersection(group) for group in required_by_state[suffix]):
+                missing_groups = [
+                    group
+                    for group in required_by_state[suffix]
+                    if not markers.intersection(group)
+                ]
+                if missing_groups:
+                    expected = ", then one of ".join(
+                        "|".join(sorted(group)) for group in missing_groups
+                    )
                     raise VisualCriticError(
                         "visual_evidence_unproven",
                         "Gemini observation does not describe the visible control for its state",
+                        diagnostic=(
+                            f"{item.screenshot_id}: missing one of {expected}; "
+                            f"markers={','.join(sorted(markers)) or 'none'}; "
+                            f"observation={item.observation[:500]}"
+                        ),
                         usage=usage,
                     )
                 marker_sets.append(frozenset(markers))

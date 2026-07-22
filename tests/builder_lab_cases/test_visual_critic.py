@@ -685,6 +685,27 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(caught.exception.error_code, "visual_evidence_unproven")
 
+    async def test_missing_state_control_diagnostic_names_the_screenshot_and_group(self):
+        payload = response_payload()
+        bad_detail = "orange border stays near the bottom-right edge with narrow spacing"
+        payload["summary"] = payload["summary"].replace(
+            "launcher button sits at the bottom-right edge with a pale border",
+            bad_detail,
+        )
+        payload["observations"][0]["observation"] = bad_detail
+
+        with self.assertRaises(VisualCriticError) as caught:
+            await GeminiVisualCritic(client=FakeClient(payload)).critique(
+                audit=report(), brief="Brief", art_direction="Direction"
+            )
+
+        diagnostic = caught.exception.diagnostic or ""
+        self.assertIn("desktop.closed", diagnostic)
+        self.assertIn("missing one of", diagnostic)
+        for marker in ("launcher", "button", "control"):
+            self.assertIn(marker, diagnostic)
+        self.assertIn(bad_detail, diagnostic)
+
     async def test_common_russian_visual_inflections_are_accepted(self):
         payload = response_payload()
         detail = (
