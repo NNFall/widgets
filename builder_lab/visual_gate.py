@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any, Protocol
 
 from .engines.base import BuilderEngineError, DirectBuilderEngine
@@ -132,6 +133,19 @@ def forbidden_browser_repair_fields(
         if before_payload[field_name] != after_payload[field_name]
     }
     return tuple(sorted(changed - {"body_html", "css", "suggested_actions"}))
+
+
+def apply_browser_repair(
+    before: WidgetArtifact,
+    proposed: WidgetArtifact,
+) -> WidgetArtifact:
+    """Apply only the fields a deterministic browser finding can authorize."""
+    return replace(
+        before,
+        body_html=proposed.body_html,
+        css=proposed.css,
+        suggested_actions=proposed.suggested_actions,
+    )
 
 
 class VisualRepairGate:
@@ -331,7 +345,24 @@ class VisualRepairGate:
                             "browser_gate_repair_error: "
                             f"{getattr(repair_exc, 'error_code', type(repair_exc).__name__)}"
                         ) from repair_exc
-                    repaired_candidate = repair.artifact
+                    proposed_candidate = repair.artifact
+                    ignored_fields = forbidden_browser_repair_fields(
+                        candidate, proposed_candidate
+                    )
+                    repaired_candidate = apply_browser_repair(
+                        candidate, proposed_candidate
+                    )
+                    repair_diagnostic = repair.diagnostic
+                    if ignored_fields:
+                        ignored_note = (
+                            "ignored_browser_repair_fields: "
+                            + ",".join(ignored_fields)
+                        )
+                        repair_diagnostic = (
+                            f"{repair_diagnostic}; {ignored_note}"
+                            if repair_diagnostic
+                            else ignored_note
+                        )
                     await self._store.append_event(
                         run_id,
                         event_type="visual_repair.completed",
@@ -340,17 +371,9 @@ class VisualRepairGate:
                         message=f"Модель завершила browser gate repair {repair_count}",
                         revision=repaired_candidate.revision,
                         usage=repair.usage,
-                        diagnostic=repair.diagnostic,
+                        diagnostic=repair_diagnostic,
                     )
                     await self._checkpoint(run_id)
-                    forbidden = forbidden_browser_repair_fields(
-                        candidate, repaired_candidate
-                    )
-                    if forbidden:
-                        raise self._quality_error(
-                            "forbidden_browser_repair_fields: "
-                            + ",".join(forbidden)
-                        )
                     candidate = repaired_candidate
                     await self._store.stage_visual_candidate(run_id, candidate)
                     issues = validate_artifact(

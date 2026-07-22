@@ -253,6 +253,40 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("desktop panel width", call["repair_issues"][0].message)
         self.assertNotIn("private browser internals", call["repair_issues"][0].message)
 
+    async def test_browser_repair_discards_changes_outside_safe_patch_fields(self):
+        proposed = artifact(
+            revision=5,
+            stage=Stage.MOTION_POLISH,
+            art_direction="MODEL TRIED TO REPLACE THE DIRECTION",
+            theme_tokens={"surface": "#ff00ff"},
+            css=self.candidate.css + "\n.kaigo-widget { overflow: clip; }",
+        )
+        gate_error = BrowserAuditError(
+            "browser_gate_failed",
+            "Widget failed: desktop panel width must be 372px",
+            failures=("desktop panel width must be 372px",),
+        )
+
+        class RepairableAuditor(FakeAuditor):
+            async def audit(self, candidate):
+                self.calls.append(candidate)
+                if len(self.calls) == 1:
+                    raise gate_error
+                return await FakeAuditor().audit(candidate)
+
+        auditor = RepairableAuditor()
+        result = await self.evaluate(
+            auditor,
+            FakeCritic([critique()]),
+            FakeEngine([proposed]),
+        )
+
+        self.assertEqual(result.art_direction, self.candidate.art_direction)
+        self.assertEqual(result.theme_tokens, self.candidate.theme_tokens)
+        self.assertEqual(result.css, proposed.css)
+        self.assertEqual(auditor.calls[1], result)
+        self.assertEqual((await self.store.visual_candidate(self.run_id)), result)
+
     async def test_repeated_normalized_fingerprint_stops_without_second_repair(self):
         first = finding(artifact_fields=("css", "body_html"), confidence=0.90)
         same_semantics_new_id = finding(
