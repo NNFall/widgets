@@ -121,6 +121,19 @@ def browser_repair_fingerprint(issues: tuple[ValidationIssue, ...]) -> str:
     return "browser:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def validation_repair_fingerprint(issues: tuple[ValidationIssue, ...]) -> str:
+    normalized = json.dumps(
+        sorted(
+            (issue.to_dict() for issue in issues),
+            key=lambda item: json.dumps(item, sort_keys=True),
+        ),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "validation:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
 def forbidden_browser_repair_fields(
     before: WidgetArtifact,
     after: WidgetArtifact,
@@ -380,11 +393,101 @@ class VisualRepairGate:
                         candidate, previous_revision=previous.revision
                     )
                     await self._record_validation(run_id, candidate, issues)
-                    if issues:
-                        raise self._quality_error(
-                            "deterministic_regression: "
-                            + "; ".join(issue.code for issue in issues)
+                    while issues:
+                        fingerprint = validation_repair_fingerprint(issues)
+                        if fingerprint in seen:
+                            raise self._quality_error(
+                                "repeated_validation_repair_fingerprint"
+                            )
+                        seen.add(fingerprint)
+                        if repair_count >= MAX_VISUAL_REPAIRS:
+                            raise self._quality_error(
+                                "deterministic_regression: "
+                                + "; ".join(issue.code for issue in issues)
+                            )
+
+                        repair_count += 1
+                        await self._checkpoint(run_id)
+                        await self._store.append_event(
+                            run_id,
+                            event_type="visual_repair.started",
+                            stage=Stage.MOTION_POLISH,
+                            status="running",
+                            message=(
+                                "Deterministic repair after browser gate: "
+                                f"попытка {repair_count}"
+                            ),
+                            revision=candidate.revision,
+                            issues=issues,
                         )
+                        try:
+                            repair = await engine.generate(
+                                request=request,
+                                stage=Stage.MOTION_POLISH,
+                                revision=candidate.revision,
+                                previous_artifact=candidate,
+                                repair_issues=issues,
+                                visual_findings=(),
+                                selected_direction=selected_direction,
+                            )
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as repair_exc:
+                            usage = getattr(repair_exc, "usage", TokenUsage())
+                            await self._store.append_event(
+                                run_id,
+                                event_type="visual_repair.completed",
+                                stage=Stage.MOTION_POLISH,
+                                status="failed",
+                                message=(
+                                    "Deterministic repair after browser gate "
+                                    f"{repair_count} завершился ошибкой"
+                                ),
+                                revision=candidate.revision,
+                                usage=usage,
+                            )
+                            raise self._quality_error(
+                                "browser_validation_repair_error: "
+                                f"{getattr(repair_exc, 'error_code', type(repair_exc).__name__)}"
+                            ) from repair_exc
+
+                        proposed_candidate = repair.artifact
+                        ignored_fields = forbidden_browser_repair_fields(
+                            candidate, proposed_candidate
+                        )
+                        candidate = apply_browser_repair(
+                            candidate, proposed_candidate
+                        )
+                        repair_diagnostic = repair.diagnostic
+                        if ignored_fields:
+                            ignored_note = (
+                                "ignored_browser_repair_fields: "
+                                + ",".join(ignored_fields)
+                            )
+                            repair_diagnostic = (
+                                f"{repair_diagnostic}; {ignored_note}"
+                                if repair_diagnostic
+                                else ignored_note
+                            )
+                        await self._store.append_event(
+                            run_id,
+                            event_type="visual_repair.completed",
+                            stage=Stage.MOTION_POLISH,
+                            status="completed",
+                            message=(
+                                "Модель завершила deterministic repair after "
+                                f"browser gate {repair_count}"
+                            ),
+                            revision=candidate.revision,
+                            usage=repair.usage,
+                            diagnostic=repair_diagnostic,
+                        )
+                        await self._checkpoint(run_id)
+                        await self._store.stage_visual_candidate(run_id, candidate)
+                        issues = validate_artifact(
+                            candidate, previous_revision=previous.revision
+                        )
+                        await self._record_validation(run_id, candidate, issues)
                     continue
                 except Exception as exc:
                     usage = getattr(exc, "usage", TokenUsage())

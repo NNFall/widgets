@@ -287,6 +287,46 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(auditor.calls[1], result)
         self.assertEqual((await self.store.visual_candidate(self.run_id)), result)
 
+    async def test_browser_repair_regression_is_repaired_before_reaudit(self):
+        invalid = artifact(
+            revision=5,
+            stage=Stage.MOTION_POLISH,
+            body_html=self.candidate.body_html.replace(
+                'data-region="composer" role="group" aria-label=',
+                'data-region="composer" role="group" data-label=',
+            ),
+            css=self.candidate.css + "\n.kaigo-widget { overflow: clip; }",
+        )
+        fixed = artifact(
+            revision=5,
+            stage=Stage.MOTION_POLISH,
+            css=invalid.css,
+        )
+        gate_error = BrowserAuditError(
+            "browser_gate_failed",
+            "Widget failed: desktop panel width must be 372px",
+            failures=("desktop panel width must be 372px",),
+        )
+
+        class RepairableAuditor(FakeAuditor):
+            async def audit(self, candidate):
+                self.calls.append(candidate)
+                if len(self.calls) == 1:
+                    raise gate_error
+                return await FakeAuditor().audit(candidate)
+
+        auditor = RepairableAuditor()
+        engine = FakeEngine([invalid, fixed])
+        result = await self.evaluate(auditor, FakeCritic([critique()]), engine)
+
+        self.assertEqual(result, fixed)
+        self.assertEqual(len(engine.calls), 2)
+        self.assertIn(
+            "missing_accessible_label",
+            {issue.code for issue in engine.calls[1]["repair_issues"]},
+        )
+        self.assertEqual(len(auditor.calls), 2)
+
     async def test_repeated_normalized_fingerprint_stops_without_second_repair(self):
         first = finding(artifact_fields=("css", "body_html"), confidence=0.90)
         same_semantics_new_id = finding(
