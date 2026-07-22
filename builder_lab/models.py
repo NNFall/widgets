@@ -66,6 +66,7 @@ def _enum(enum_type: type[Enum], value: Any, field_name: str):
 class BuilderRequest:
     engine: EngineName
     brief: str
+    reference_context: str = ""
     locale: str = "ru"
     creativity: float = 0.9
     viewport_targets: tuple[str, ...] = ("desktop", "mobile")
@@ -73,11 +74,14 @@ class BuilderRequest:
 
     def __post_init__(self) -> None:
         brief = self.brief.strip()
+        reference_context = self.reference_context.strip()
         locale = self.locale.strip().lower()
         if not brief:
             raise ValueError("brief must not be empty")
         if len(brief) > 12_000:
             raise ValueError("brief is too large")
+        if len(reference_context) > 8_000 or "\x00" in reference_context:
+            raise ValueError("reference_context is invalid")
         if not locale or len(locale) > 16:
             raise ValueError("locale is invalid")
         if not 0 <= self.creativity <= 2:
@@ -90,13 +94,18 @@ class BuilderRequest:
         ):
             raise ValueError("viewport_targets contains an unsupported viewport")
         object.__setattr__(self, "brief", brief)
+        object.__setattr__(self, "reference_context", reference_context)
         object.__setattr__(self, "locale", locale)
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "BuilderRequest":
+        reference_context = payload.get("reference_context", "")
+        if not isinstance(reference_context, str):
+            raise ValueError("reference_context must be text")
         return cls(
             engine=_enum(EngineName, payload.get("engine", "direct"), "engine"),
             brief=str(payload.get("brief", "")),
+            reference_context=reference_context,
             locale=str(payload.get("locale", "ru")),
             creativity=float(payload.get("creativity", 0.9)),
             viewport_targets=tuple(payload.get("viewport_targets", ("desktop", "mobile"))),
@@ -107,6 +116,7 @@ class BuilderRequest:
         return {
             "engine": self.engine.value,
             "brief": self.brief,
+            "reference_context": self.reference_context,
             "locale": self.locale,
             "creativity": self.creativity,
             "viewport_targets": list(self.viewport_targets),

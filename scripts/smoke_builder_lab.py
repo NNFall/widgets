@@ -34,6 +34,8 @@ CHAT_COOKIE_NAMES = {"kaigo_chat_session", "__Host-kaigo_chat_session"}
 REQUIRED_VISUAL_SCREENSHOT_IDS = tuple(state.value for state in ScreenshotState)
 MAX_BRIEF_CHARS = 12_000
 MAX_CHAT_PROMPT_CHARS = 16_000
+MAX_REFERENCE_ARTIFACT_BYTES = 2_000_000
+MAX_REFERENCE_CONTEXT_CHARS = 8_000
 _SCREENSHOT_EVENT_MESSAGE = re.compile(
     r"^Снимок visual audit: (?P<screenshot_id>[a-z0-9][a-z0-9._-]{0,79}) "
     r"\((?P<byte_count>[1-9][0-9]*) bytes\)$"
@@ -88,6 +90,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--source-url")
     parser.add_argument(
+        "--reference-json",
+        type=Path,
+        help="inject a bounded kaigo.reference.v1 analysis into generation",
+    )
+    parser.add_argument(
         "--chat-system-prompt-file",
         "--chat-prompt-file",
         dest="chat_system_prompt_file",
@@ -105,6 +112,36 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         if token.startswith("--")
     )
     return args
+
+
+def _load_reference_context(path: Path) -> tuple[str, str]:
+    try:
+        if not path.is_file() or not 0 < path.stat().st_size <= MAX_REFERENCE_ARTIFACT_BYTES:
+            raise OSError("reference artifact is missing or outside its byte budget")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid reference artifact: {exc}") from exc
+    if not isinstance(payload, dict) or payload.get("schema_version") != "kaigo.reference.v1":
+        raise ValueError("invalid reference artifact schema")
+    source = payload.get("source")
+    analysis = payload.get("analysis")
+    if not isinstance(source, dict) or not isinstance(analysis, dict):
+        raise ValueError("invalid reference artifact content")
+    source_url = source.get("url")
+    if not isinstance(source_url, str):
+        raise ValueError("invalid reference artifact source")
+    try:
+        source_url = _verified_source_url(source_url)
+    except DemoUnavailable as exc:
+        raise ValueError(f"invalid reference artifact source: {exc}") from exc
+    context = json.dumps(
+        {"source_url": source_url, "analysis": analysis},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    if len(context) > MAX_REFERENCE_CONTEXT_CHARS or "\x00" in context:
+        raise ValueError("reference analysis exceeds its generation context budget")
+    return context, source_url
 
 
 def preflight_smoke_args(args: argparse.Namespace) -> str | None:
@@ -144,6 +181,14 @@ def preflight_smoke_args(args: argparse.Namespace) -> str | None:
             args.source_url = _verified_source_url(str(args.source_url))
         except DemoUnavailable as exc:
             raise ValueError(f"invalid demo source URL: {exc}") from exc
+
+    args.reference_context = ""
+    if args.reference_json is not None:
+        args.reference_context, reference_source = _load_reference_context(
+            Path(args.reference_json)
+        )
+        if has_source_url and args.source_url != reference_source:
+            raise ValueError("reference artifact source does not match --source-url")
 
     if not has_chat_prompt:
         return None
@@ -504,7 +549,12 @@ async def _run_smoke_locked(
         async with httpx.AsyncClient(timeout=httpx.Timeout(30, read=None)) as client:
             response = await client.post(
                 f"{base_url}/api/runs",
-                json={"engine": args.engine, "brief": args.brief, "creativity": 0.9},
+                json={
+                    "engine": args.engine,
+                    "brief": args.brief,
+                    "reference_context": args.reference_context,
+                    "creativity": 0.9,
+                },
             )
             response.raise_for_status()
             run_id = response.json()["run_id"]

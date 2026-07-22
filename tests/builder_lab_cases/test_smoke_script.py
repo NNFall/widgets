@@ -1,4 +1,5 @@
 import asyncio
+import json
 import re
 import tempfile
 import unittest
@@ -146,6 +147,32 @@ class SmokeEvidenceTests(unittest.TestCase):
             legacy.chat_system_prompt_file,
             Path("legacy-prompt.txt"),
         )
+
+    def test_preflight_loads_only_bounded_analysis_from_reference_artifact(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "reference.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "kaigo.reference.v1",
+                        "source": {"url": "https://rawbureau.ru/"},
+                        "analysis": {
+                            "visual_summary": "sharp monochrome grid",
+                            "public_facts": [],
+                            "visual_tokens": {"palette": [], "typography": [], "geometry": [], "motion": []},
+                        },
+                        "screenshots": [{"private_path": "/must/not/pass"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            args = parse_args(["--reference-json", str(path)])
+            smoke_script.preflight_smoke_args(args)
+
+            self.assertIn("sharp monochrome grid", args.reference_context)
+            self.assertNotIn("private_path", args.reference_context)
+            self.assertNotIn("/must/not/pass", args.reference_context)
 
     def test_preflight_rejects_ignored_or_incomplete_demo_grounding(self):
         invalid_argv = (

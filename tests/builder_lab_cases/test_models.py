@@ -34,6 +34,20 @@ class BuilderModelsTests(unittest.TestCase):
         )
         self.assertEqual(request.max_repairs, 4)
 
+    def test_request_preserves_bounded_grounded_reference_context(self):
+        context = '{"visual_summary":"sharp editorial grid"}'
+        request = BuilderRequest.from_dict(
+            {"engine": "direct", "brief": "x", "reference_context": context}
+        )
+
+        self.assertEqual(request.reference_context, context)
+        self.assertEqual(BuilderRequest.from_dict(request.to_dict()), request)
+        for invalid in ("x" * 8_001, "safe\x00unsafe"):
+            with self.subTest(length=len(invalid)), self.assertRaises(ValueError):
+                BuilderRequest.from_dict(
+                    {"engine": "direct", "brief": "x", "reference_context": invalid}
+                )
+
     def test_request_rejects_invalid_inputs(self):
         invalid = [
             {"engine": "unknown", "brief": "valid brief"},

@@ -374,9 +374,15 @@ async def _chat_payload(request: web.Request) -> tuple[str, str, int]:
     return request_id, message.strip(), revision
 
 
-def _run_system_prompt(brief: str, art_direction: str) -> str:
+def _run_system_prompt(
+    brief: str, art_direction: str, reference_context: str = ""
+) -> str:
     context = json.dumps(
-        {"business_brief": brief, "widget_identity": art_direction},
+        {
+            "business_brief": brief,
+            "widget_identity": art_direction,
+            "grounded_reference": reference_context or None,
+        },
         ensure_ascii=False,
         separators=(",", ":"),
     ).replace("<", "\\u003c").replace(">", "\\u003e")
@@ -510,7 +516,9 @@ async def run_chat(request: web.Request) -> web.Response:
         request_id=request_id,
         message=message,
         system_prompt=_run_system_prompt(
-            snapshot.request.brief, artifact.art_direction
+            snapshot.request.brief,
+            artifact.art_direction,
+            snapshot.request.reference_context,
         ),
     )
 
