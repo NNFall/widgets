@@ -923,6 +923,17 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("no more than three actions total", caught.exception.diagnostic or "")
 
+    async def test_subpixel_touch_target_rounding_within_half_pixel_is_tolerated(self):
+        subpixel = audit_artifact(
+            css=AUDIT_CSS
+            + "\nbutton, textarea { min-height:43.75px!important; }"
+            + "\n[data-region=launcher] { height:46px!important; }"
+        )
+
+        report = await BrowserAudit().audit(subpixel)
+
+        self.assertEqual(len(report.layouts), 8)
+
     async def test_root_with_fixed_sized_children_need_not_have_its_own_box(self):
         zero_box_root = audit_artifact(
             css=AUDIT_CSS

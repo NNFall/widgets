@@ -401,6 +401,7 @@ _REQUIRED_REGIONS = (
     "suggestions",
     "composer",
 )
+_MIN_INTERACTIVE_TARGET_PX = 43.5
 
 
 class BrowserAuditError(RuntimeError):
@@ -1669,7 +1670,13 @@ class BrowserAudit:
                 or panel.clipped
                 or retry_action is None
                 or any(item is None or not item.visible for item in retry_actions)
-                or any(item.width < 44 or item.height < 44 or item.clipped for item in retry_actions if item)
+                or any(
+                    item.width < _MIN_INTERACTIVE_TARGET_PX
+                    or item.height < _MIN_INTERACTIVE_TARGET_PX
+                    or item.clipped
+                    for item in retry_actions
+                    if item
+                )
                 or visible_suggestions
                 or retry_layout.visible_action_count != 3
                 or any(
@@ -2191,11 +2198,12 @@ class BrowserAudit:
             undersized_targets = [
                 item
                 for item in interactive_targets
-                if item.width < 44 or item.height < 44
+                if item.width < _MIN_INTERACTIVE_TARGET_PX
+                or item.height < _MIN_INTERACTIVE_TARGET_PX
             ]
             if undersized_targets:
                 details = ", ".join(
-                    f"{item.region}={item.width:.0f}×{item.height:.0f}px"
+                    f"{item.region}={item.width:.2f}×{item.height:.2f}px"
                     for item in undersized_targets[:4]
                 )
                 failures.append(
@@ -2235,7 +2243,11 @@ class BrowserAudit:
                         f"{actual_right:.1f}px, bottom {actual_bottom:.1f}px"
                     )
                 launcher_action = regions.get("action.launcher")
-                if not launcher_action or launcher_action.width < 44 or launcher_action.height < 44:
+                if (
+                    not launcher_action
+                    or launcher_action.width < _MIN_INTERACTIVE_TARGET_PX
+                    or launcher_action.height < _MIN_INTERACTIVE_TARGET_PX
+                ):
                     failures.append(f"{layout.state.value}: launcher action must be at least 44×44px")
                 if layout.visible_action_count != 1:
                     failures.append(f"{layout.state.value}: launcher must be the only visible action")
@@ -2268,11 +2280,14 @@ class BrowserAudit:
             ):
                 failures.append(f"{layout.state.value}: close and send actions are required")
             undersized_actions = [
-                item for item in actions if item.width < 44 or item.height < 44
+                item
+                for item in actions
+                if item.width < _MIN_INTERACTIVE_TARGET_PX
+                or item.height < _MIN_INTERACTIVE_TARGET_PX
             ]
             if not actions or undersized_actions:
                 details = ", ".join(
-                    f"{item.region}={item.width:.0f}×{item.height:.0f}px"
+                    f"{item.region}={item.width:.2f}×{item.height:.2f}px"
                     for item in undersized_actions[:4]
                 )
                 suffix = f"; undersized: {details}" if details else ""
