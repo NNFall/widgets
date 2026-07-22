@@ -247,6 +247,9 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["config"].response_mime_type, "application/json")
         self.assertEqual(call["config"].response_json_schema["additionalProperties"], False)
         self.assertIn("brand archaeologist", call["contents"])
+        self.assertIn("interaction_model: 1 to 800 characters", call["contents"])
+        self.assertIn("safeguards: 0 to 8 items", call["contents"])
+        self.assertIn("1 to 160 characters each", call["contents"])
 
         client.models.response.text = json.dumps({**payload, "unexpected": "ignored?"})
         with self.assertRaises(BuilderEngineError) as caught:

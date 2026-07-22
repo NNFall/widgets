@@ -113,6 +113,10 @@ def build_direction_proposal_prompt(
 Work alone. Do not simulate a panel, judge, recursive agent, or other proposals.
 Return exactly one bounded JSON proposal. The implementation will be generated later.
 The proposal must describe a truthful AI widget rather than claiming unavailable actions.
+Enforce these limits even when the provider schema omits them: title: 1 to 80 characters;
+art_direction: 1 to 1200 characters; interaction_model: 1 to 800 characters;
+safeguards: 0 to 8 items, 1 to 160 characters each. Prefer concise fields and 3 to 6
+short safeguards.
 
 Non-negotiable product bounds: desktop open width 372px and height no more than 68dvh;
 mobile height no more than 70dvh and no fullscreen; default state closed; no more than
