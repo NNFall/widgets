@@ -251,8 +251,12 @@ def build_stage_prompt(
   `[data-region="panel"][data-open]`, а не выдуманный state-селектор;
 - `.kaigo-widget` и все его потомки используют `box-sizing: border-box`; заданные ширина и max-height
   панели уже включают border и padding, поэтому фактический bounding box не должен быть на 2px больше;
-- desktop panel: ширина 372px, высота по содержимому максимум min(536px, 68dvh);
-- mobile panel: максимум 70dvh, no fullscreen, no backdrop и не блокирует страницу;
+- закрытый launcher на desktop и mobile имеет bounding box 216px × 46px; его отступ справа и снизу
+  равен 20px на desktop и 12px на mobile; в открытом состоянии launcher полностью скрыт и неинтерактивен;
+- desktop panel: ширина 372px, отступ справа и снизу 20px, высота по содержимому максимум
+  min(536px, 68dvh);
+- mobile panel: ширина `calc(100vw - 24px)` (366px при viewport 390px), отступы слева, справа и
+  снизу 12px, максимум 70dvh, no fullscreen, no backdrop и не блокирует страницу;
 - на первом открытии не более двух suggestions; каждая запускает реальный запрос;
 - fake actions, пустые кнопки и действия, которые только очищают поле, запрещены;
 - trusted runtime использует классы `.kaigo-widget__message--assistant`,

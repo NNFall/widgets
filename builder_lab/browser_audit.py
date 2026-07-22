@@ -2171,7 +2171,15 @@ class BrowserAudit:
                     or abs(layout.viewport_width - (launcher.x + launcher.width) - (20 if layout.state.value.startswith('desktop') else 12)) > 1
                     or abs(layout.viewport_height - (launcher.y + launcher.height) - (20 if layout.state.value.startswith('desktop') else 12)) > 1
                 ):
-                    failures.append(f"{layout.state.value}: launcher geometry or margin is invalid")
+                    expected_margin = 20 if layout.state.value.startswith("desktop") else 12
+                    actual_right = layout.viewport_width - (launcher.x + launcher.width)
+                    actual_bottom = layout.viewport_height - (launcher.y + launcher.height)
+                    failures.append(
+                        f"{layout.state.value}: launcher must be 216×46px with "
+                        f"{expected_margin}px right/bottom margins; actual "
+                        f"{launcher.width:.1f}×{launcher.height:.1f}px, right "
+                        f"{actual_right:.1f}px, bottom {actual_bottom:.1f}px"
+                    )
                 launcher_action = regions.get("action.launcher")
                 if not launcher_action or launcher_action.width < 44 or launcher_action.height < 44:
                     failures.append(f"{layout.state.value}: launcher action must be at least 44×44px")
@@ -2332,10 +2340,12 @@ class BrowserAudit:
                         f"margins; actual right {actual_right:.1f}px, bottom {actual_bottom:.1f}px"
                     )
             else:
-                if abs(panel.width - 366) > 1 or panel.x < 11 or panel.x + panel.width > layout.viewport_width - 11:
+                expected_mobile_width = layout.viewport_width - 24
+                if abs(panel.width - expected_mobile_width) > 1 or panel.x < 11 or panel.x + panel.width > layout.viewport_width - 11:
                     failures.append(
-                        f"{layout.state.value}: mobile panel must be 366px wide and keep "
-                        f"12px margins; actual width {panel.width:.1f}px, x {panel.x:.1f}px"
+                        f"{layout.state.value}: mobile panel must be calc(100vw - 24px) "
+                        f"({expected_mobile_width}px here) and keep 12px margins; actual "
+                        f"width {panel.width:.1f}px, x {panel.x:.1f}px"
                     )
                 if panel.height > layout.viewport_height * 0.70 + 1 or panel.height >= layout.viewport_height - 1:
                     failures.append(f"{layout.state.value}: mobile panel exceeds 70dvh/non-fullscreen cap")

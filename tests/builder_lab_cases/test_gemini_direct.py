@@ -420,6 +420,8 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         for required in (
             "Плавающая проектная заметка",
             "372px",
+            "216px",
+            "calc(100vw - 24px)",
             "box-sizing: border-box",
             "68dvh",
             "70dvh",
