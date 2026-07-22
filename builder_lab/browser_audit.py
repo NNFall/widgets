@@ -1089,6 +1089,10 @@ class BrowserAudit:
                 )
             )
 
+            await self._assert_launcher_pointer_interactable(
+                launcher, prefix=prefix
+            )
+
             await self._assert_launcher_keyboard(
                 frame,
                 root,
@@ -1359,6 +1363,24 @@ class BrowserAudit:
             await close_button.click()
             if await root.get_attribute("data-state") != "closed":
                 raise ValueError(f"launcher keyboard close cycle failed for {key}")
+
+    @staticmethod
+    async def _assert_launcher_pointer_interactable(launcher, *, prefix: str) -> None:
+        try:
+            await launcher.click(trial=True, timeout=750)
+        except PlaywrightError as exc:
+            failure = (
+                f"{prefix}.closed: launcher pointer is blocked by the hidden panel; "
+                "use pointer-events:none on the closed panel and restore "
+                "pointer-events:auto only in the open state"
+            )
+            raise BrowserAuditError(
+                "browser_gate_failed",
+                "Виджет не прошёл детерминированную браузерную проверку: "
+                + failure,
+                diagnostic=failure,
+                failures=(failure,),
+            ) from exc
 
     @staticmethod
     async def _assert_visible_suggestions_actionable(frame) -> None:

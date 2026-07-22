@@ -156,6 +156,37 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(report.screenshots), 6)
         self.assertEqual(len(report.layouts), 8)
 
+    async def test_hidden_panel_cannot_intercept_the_closed_launcher(self):
+        intercepting_css = AUDIT_CSS + """
+        [data-region="launcher"] { position: fixed; right: 20px; bottom: 20px; z-index: 1; }
+        [data-region="panel"] {
+          position: fixed;
+          right: 20px;
+          bottom: 20px;
+          display: grid;
+          grid-template-rows: 52px 1fr 48px 60px;
+          opacity: 0;
+          pointer-events: auto;
+          z-index: 2;
+        }
+        .kaigo-preview-open [data-region="panel"] { opacity: 1; }
+        @media (max-width: 600px) {
+          [data-region="launcher"] { right: 12px; bottom: 12px; }
+          [data-region="panel"] {
+            left: 12px;
+            right: 12px;
+            bottom: 12px;
+            width: calc(100vw - 24px);
+          }
+        }
+        """
+
+        with self.assertRaises(BrowserAuditError) as caught:
+            await BrowserAudit().audit(audit_artifact(css=intercepting_css))
+
+        self.assertTrue(caught.exception.failures)
+        self.assertIn("pointer-events:none", caught.exception.failures[0])
+
     async def test_motion_is_disabled_before_every_evidence_capture(self):
         class InspectingAudit(BrowserAudit):
             def __init__(self):
