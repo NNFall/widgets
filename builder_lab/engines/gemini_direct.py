@@ -251,7 +251,7 @@ class GeminiDirectEngine:
                 prompt=attempt_prompt,
                 schema=DIRECTION_PROPOSAL_JSON_SCHEMA,
                 temperature=request.creativity,
-                max_output_tokens=900,
+                max_output_tokens=1_600,
             )
             total_usage = total_usage + _usage(response)
             try:

@@ -289,7 +289,7 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.proposal.proposal_id, "candidate-1")
         self.assertEqual(result.proposal.role, DirectionRole.BRAND_ARCHAEOLOGIST)
         call = client.models.calls[0]
-        self.assertEqual(call["config"].max_output_tokens, 900)
+        self.assertEqual(call["config"].max_output_tokens, 1_600)
         self.assertIsNone(call["config"].thinking_config.thinking_level)
         self.assertEqual(call["config"].thinking_config.thinking_budget, 0)
         self.assertEqual(call["config"].tools, [])
