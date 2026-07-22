@@ -351,7 +351,12 @@ class BuilderLabPackagingTests(unittest.TestCase):
         self.assertTrue(deploy.exists())
         deploy_body = deploy.read_text(encoding="utf-8")
         self.assertIn("apply_builder_egress_guard.sh", deploy_body)
-        self.assertIn("docker compose --profile builder-lab create", deploy_body)
+        self.assertIn(
+            "docker compose --profile builder-lab up --no-start "
+            "--force-recreate --no-deps builder-lab",
+            deploy_body,
+        )
+        self.assertNotIn("create --force-recreate --no-deps", deploy_body)
         self.assertIn("docker compose --profile builder-lab start", deploy_body)
         self.assertLess(
             deploy_body.index("apply_builder_egress_guard.sh"),
