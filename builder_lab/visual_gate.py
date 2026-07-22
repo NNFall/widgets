@@ -336,6 +336,16 @@ class VisualRepairGate:
                         + artifact_fingerprint(candidate)
                     )
                     if fingerprint in seen:
+                        LOGGER.warning(
+                            "visual browser candidate exhausted run_id=%s candidate=%s",
+                            run_id,
+                            json.dumps(
+                                candidate.to_dict(),
+                                ensure_ascii=True,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            )[:32_000],
+                        )
                         raise self._quality_error(
                             "repeated_browser_gate_fingerprint"
                         ) from exc
@@ -344,6 +354,16 @@ class VisualRepairGate:
                         repair_count >= MAX_VISUAL_REPAIRS
                         or audit_attempt >= MAX_VISUAL_AUDITS
                     ):
+                        LOGGER.warning(
+                            "visual browser candidate exhausted run_id=%s candidate=%s",
+                            run_id,
+                            json.dumps(
+                                candidate.to_dict(),
+                                ensure_ascii=True,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            )[:32_000],
+                        )
                         raise self._quality_error(
                             "browser_gate_repair_exhausted"
                         ) from exc

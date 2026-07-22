@@ -293,12 +293,14 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
             failures=("first-open transcript must not scroll",),
         )
 
-        with self.assertRaises(BuilderEngineError):
-            await self.evaluate(
-                FakeAuditor(error=gate_error),
-                FakeCritic([critique()]),
-                FakeEngine([self.candidate]),
-            )
+        with self.assertLogs("builder_lab.visual_gate", level="WARNING") as logs:
+            with self.assertRaises(BuilderEngineError):
+                await self.evaluate(
+                    FakeAuditor(error=gate_error),
+                    FakeCritic([critique()]),
+                    FakeEngine([self.candidate]),
+                )
+        self.assertTrue(any("candidate=" in message for message in logs.output))
 
     async def test_browser_repair_discards_changes_outside_safe_patch_fields(self):
         proposed = artifact(
