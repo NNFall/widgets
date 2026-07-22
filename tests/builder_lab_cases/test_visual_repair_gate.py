@@ -302,6 +302,37 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertTrue(any("candidate=" in message for message in logs.output))
 
+    async def test_browser_repair_error_logs_private_diagnostic_for_operator(self):
+        gate_error = BrowserAuditError(
+            "browser_gate_failed",
+            "Widget failed: too many actions",
+            failures=("too many actions",),
+        )
+        repair_error = BuilderEngineError(
+            "provider_unavailable",
+            "repair unavailable",
+            diagnostic="private browser repair diagnostic",
+        )
+
+        with self.assertLogs("builder_lab.visual_gate", level="WARNING") as logs:
+            with self.assertRaises(BuilderEngineError):
+                await self.evaluate(
+                    FakeAuditor(error=gate_error),
+                    FakeCritic([critique()]),
+                    FakeEngine(error=repair_error),
+                )
+
+        events = await self.store.events_after(self.run_id, 0)
+        failed = [
+            event
+            for event in events
+            if event.event_type == "visual_repair.completed"
+        ]
+        self.assertNotIn("private browser repair diagnostic", failed[0].message)
+        self.assertTrue(
+            any("private browser repair diagnostic" in message for message in logs.output)
+        )
+
     async def test_browser_repair_discards_changes_outside_safe_patch_fields(self):
         proposed = artifact(
             revision=5,

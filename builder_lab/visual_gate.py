@@ -393,6 +393,16 @@ class VisualRepairGate:
                         raise
                     except Exception as repair_exc:
                         usage = getattr(repair_exc, "usage", TokenUsage())
+                        LOGGER.warning(
+                            "browser gate repair failed run_id=%s attempt=%s error_code=%s diagnostic=%s",
+                            run_id,
+                            repair_count,
+                            getattr(repair_exc, "error_code", type(repair_exc).__name__),
+                            str(
+                                getattr(repair_exc, "diagnostic", None)
+                                or str(repair_exc)
+                            )[:2_000],
+                        )
                         await self._store.append_event(
                             run_id,
                             event_type="visual_repair.completed",
