@@ -77,6 +77,17 @@ class DirectionBoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('[data-region="panel"][data-open]', prompt)
         self.assertIn('data-state="open"', prompt)
 
+    def test_stage_prompt_limits_full_width_panel_to_mobile_breakpoint(self):
+        prompt = build_stage_prompt(
+            request=BuilderRequest(engine=EngineName.DIRECT, brief="RAW BUREAU widget"),
+            stage=Stage.ART_DIRECTION,
+            revision=1,
+            previous_artifact=None,
+        )
+
+        self.assertIn("mobile rules apply only at viewport widths <= 600px", prompt)
+        self.assertIn("at every viewport width >= 601px", prompt)
+
     def test_prompts_isolate_grounded_reference_as_untrusted_data(self):
         request = BuilderRequest(
             engine=EngineName.DIRECT,

@@ -260,6 +260,8 @@ def build_stage_prompt(
   min(536px, 68dvh);
 - mobile panel: ширина `calc(100vw - 24px)` (366px при viewport 390px), отступы слева, справа и
   снизу 12px, максимум 70dvh, no fullscreen, no backdrop и не блокирует страницу;
+- mobile rules apply only at viewport widths <= 600px; at every viewport width >= 601px
+  panel сохраняет desktop-геометрию: ширина 372px и отступы справа/снизу 20px;
 - launcher and panel themselves use position: fixed relative to the viewport; root must not add viewport offsets;
   never use an absolute panel inside an offset fixed root because desktop/mobile margins would compound;
 - mobile width `calc(100vw - 24px)` применяется только к panel; launcher никогда не получает ширину панели
@@ -274,7 +276,8 @@ def build_stage_prompt(
   therefore first open has one short suggestion at most while close and send are visible;
 - if a first-open transcript repair is requested, keep any exact first-open geometry from the brief;
   shorten welcome copy, keep at most one short suggestion, and reduce nonessential gaps/padding while preserving 44×44px targets;
-- verify first-open fit at both desktop 1440×900 and mobile 390×844; each suggestion launches a real request;
+- verify first-open fit at desktop 1440×900, narrow desktop 601×700 and mobile 390×844;
+  each suggestion launches a real request;
 - fake actions, пустые кнопки и действия, которые только очищают поле, запрещены;
 - trusted runtime использует классы `.kaigo-widget__message--assistant`,
   `.kaigo-widget__message--user`, `.kaigo-widget__message--status` и

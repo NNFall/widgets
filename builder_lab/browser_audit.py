@@ -401,6 +401,7 @@ _VIEWPORTS = (
     ("desktop", 1440, 900),
     ("mobile", 390, 844),
 )
+_NARROW_DESKTOP_VIEWPORT = (601, 700)
 _REQUIRED_REGIONS = (
     "root",
     "launcher",
@@ -608,6 +609,11 @@ class BrowserAudit:
                             )
                             screenshots.extend(viewport_shots)
                             layouts.extend(viewport_layouts)
+                        await self._assert_narrow_desktop_geometry(
+                            browser=browser,
+                            artifact=artifact,
+                            deadline=deadline,
+                        )
                         report = BrowserAuditReport(
                             screenshots=tuple(screenshots), layouts=tuple(layouts)
                         )
@@ -882,6 +888,63 @@ class BrowserAudit:
         )
         await self._settle_frame(child_frame)
         return page.frame_locator("#preview")
+
+    async def _assert_narrow_desktop_geometry(
+        self,
+        *,
+        browser: Browser,
+        artifact: WidgetArtifact,
+        deadline: float | None = None,
+    ) -> None:
+        width, height = _NARROW_DESKTOP_VIEWPORT
+        context, page, failures = await self._new_context(
+            browser, width, height, deadline=deadline
+        )
+        try:
+            frame = await self._mount(page, artifact)
+            root = frame.locator('[data-region="root"]')
+            launcher = frame.locator('[data-region="launcher"]')
+            panel = frame.locator('[data-region="panel"]')
+            await root.wait_for(state="attached")
+            await launcher.click()
+            await page.wait_for_timeout(50)
+            if await root.get_attribute("data-state") != "open":
+                raise ValueError("narrow desktop launcher did not open the widget")
+            box = await panel.bounding_box()
+            if box is None:
+                raise ValueError("narrow desktop panel is not visible")
+            actual_right = width - (box["x"] + box["width"])
+            actual_bottom = height - (box["y"] + box["height"])
+            geometry_failures = []
+            if abs(box["width"] - 372) > 1:
+                geometry_failures.append(
+                    "narrow desktop panel width must be 372px; "
+                    f"actual {box['width']:.1f}px; mobile full-width panel rules "
+                    "must apply only at viewport widths <= 600px"
+                )
+            if abs(actual_right - 20) > 1 or abs(actual_bottom - 20) > 1:
+                geometry_failures.append(
+                    "narrow desktop panel must keep 20px right/bottom margins; "
+                    f"actual right {actual_right:.1f}px, bottom {actual_bottom:.1f}px"
+                )
+            if box["height"] > min(536, height * 0.68) + 1:
+                geometry_failures.append(
+                    "narrow desktop panel exceeds height cap; "
+                    f"actual {box['height']:.1f}px"
+                )
+            self._raise_policy_failures(failures)
+            if geometry_failures:
+                raise BrowserAuditError(
+                    "browser_gate_failed",
+                    "Widget failed narrow desktop geometry: "
+                    + "; ".join(geometry_failures),
+                    diagnostic="\n".join(geometry_failures),
+                    failures=tuple(geometry_failures),
+                )
+        finally:
+            await self._bounded_cleanup(
+                context.close(), self._cleanup_timeout(deadline)
+            )
 
     @staticmethod
     async def _assert_pending_turn(frame, expected_roles: tuple[str, ...]) -> None:

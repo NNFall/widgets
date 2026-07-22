@@ -156,6 +156,21 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(report.screenshots), 6)
         self.assertEqual(len(report.layouts), 8)
 
+    async def test_mobile_panel_geometry_cannot_leak_into_narrow_desktop(self):
+        overbroad_mobile_css = AUDIT_CSS + """
+        @media (min-width: 601px) and (max-width: 899px) {
+          .kaigo { right: 12px; bottom: 12px; left: 12px; }
+          [data-region="panel"] {
+            width: calc(100vw - 24px);
+          }
+        }
+        """
+
+        with self.assertRaises(BrowserAuditError) as caught:
+            await BrowserAudit().audit(audit_artifact(css=overbroad_mobile_css))
+
+        self.assertIn("narrow desktop panel width must be 372px", str(caught.exception))
+
     async def test_hidden_panel_cannot_intercept_the_closed_launcher(self):
         intercepting_css = AUDIT_CSS + """
         [data-region="launcher"] { position: fixed; right: 20px; bottom: 20px; z-index: 1; }
