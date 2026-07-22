@@ -169,7 +169,8 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
             art_direction="Warm monochrome floating note.",
         )
         critique_config = critique_client.aio.models.calls[0]["config"]
-        self.assertIsNone(critique_config.thinking_config)
+        self.assertIsNone(critique_config.thinking_config.thinking_level)
+        self.assertEqual(critique_config.thinking_config.thinking_budget, 0)
         provider_schema = json.dumps(
             critique_config.response_json_schema, sort_keys=True
         )
@@ -184,7 +185,8 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
         )
         await critic.probe_visual_evidence(audit=report())
         probe_config = probe_client.aio.models.calls[0]["config"]
-        self.assertIsNone(probe_config.thinking_config)
+        self.assertIsNone(probe_config.thinking_config.thinking_level)
+        self.assertEqual(probe_config.thinking_config.thinking_budget, 0)
         self.assertNotIn(
             '"maxItems"',
             json.dumps(probe_config.response_json_schema, sort_keys=True),

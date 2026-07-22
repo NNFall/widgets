@@ -139,9 +139,10 @@ class GeminiDemoChatServiceTests(unittest.IsolatedAsyncioTestCase):
             system_prompt="Answer briefly.",
         )
 
-        self.assertIsNone(
-            service._client.models.calls[0]["config"].thinking_config
-        )
+        thinking = service._client.models.calls[0]["config"].thinking_config
+        self.assertIsNone(thinking.thinking_level)
+        self.assertEqual(thinking.thinking_budget, 0)
+        self.assertFalse(thinking.include_thoughts)
 
     async def test_public_errors_are_readable_utf8_without_mojibake(self):
         with self.assertRaises(ChatServiceError) as missing_key:

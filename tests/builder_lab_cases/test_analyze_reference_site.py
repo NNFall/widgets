@@ -252,7 +252,8 @@ class ReferenceGeminiAnalysisTests(unittest.IsolatedAsyncioTestCase):
             )
 
             config = fake.aio.models.calls[0]["config"]
-            self.assertIsNone(config.thinking_config)
+            self.assertIsNone(config.thinking_config.thinking_level)
+            self.assertEqual(config.thinking_config.thinking_budget, 0)
             provider_schema = json.dumps(config.response_json_schema, sort_keys=True)
             for unsupported in (
                 '"maxItems"',

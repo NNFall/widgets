@@ -57,9 +57,14 @@ def build_low_thinking_config(
     *,
     include_thoughts: bool | None = None,
 ) -> types.ThinkingConfig | None:
-    """Return a low-reasoning config only for models that accept thinking levels."""
+    """Return the least-expensive supported thinking config for the model."""
 
     normalized = model.strip().lower().removeprefix("models/")
+    if normalized.startswith("gemini-2.5-flash"):
+        values: dict[str, Any] = {"thinking_budget": 0}
+        if include_thoughts is not None:
+            values["include_thoughts"] = include_thoughts
+        return types.ThinkingConfig(**values)
     if normalized.startswith("gemini-2.5-"):
         return None
     values: dict[str, Any] = {"thinking_level": types.ThinkingLevel.LOW}
