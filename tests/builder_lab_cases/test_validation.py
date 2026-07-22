@@ -145,6 +145,25 @@ class ArtifactValidationTests(unittest.TestCase):
 
         self.assertIn("body", issue.message)
 
+    def test_accepts_kaigo_bem_namespace_without_allowing_impostors_or_escape(self):
+        scoped = """
+.kaigo-widget__launcher:hover { color: red; }
+.kaigo-widget--open > .kaigo-widget__panel { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .kaigo-widget__panel { transition: none; } }
+"""
+        self.assertNotIn("unscoped_css", self.codes(artifact(css=scoped)))
+
+        for selector in (
+            ".kaigo-widget-foreign",
+            ".kaigo-widgetish",
+            ".kaigo-widget__launcher + .outside",
+        ):
+            with self.subTest(selector=selector):
+                self.assertIn(
+                    "unscoped_css",
+                    self.codes(artifact(css=f"{selector} {{ color: red; }}")),
+                )
+
     def test_rejects_selectors_that_only_mention_widget_without_targeting_it(self):
         for selector in (
             ":not(.kaigo-widget)",

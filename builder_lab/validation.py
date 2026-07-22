@@ -297,7 +297,10 @@ def _css_rules(css: str) -> tuple[list[str], list[str], bool]:
 
 def _selector_is_scoped(selector: str) -> bool:
     candidate = selector.strip()
-    root = re.match(r"^\.kaigo-widget(?![-_A-Za-z0-9])", candidate)
+    root = re.match(
+        r"^\.kaigo-widget(?:(?:__|--)[A-Za-z0-9_-]+)?(?![-_A-Za-z0-9])",
+        candidate,
+    )
     if root is None:
         return False
     depth = 0
