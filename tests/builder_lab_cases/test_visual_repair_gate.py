@@ -501,13 +501,17 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
             diagnostic="private internal browser diagnostic",
         )
 
-        with self.assertRaises(BuilderEngineError):
-            await self.evaluate(FakeAuditor(error=error), FakeCritic([critique()]))
+        with self.assertLogs("builder_lab.visual_gate", level="WARNING") as logs:
+            with self.assertRaises(BuilderEngineError):
+                await self.evaluate(FakeAuditor(error=error), FakeCritic([critique()]))
 
         events = await self.store.events_after(self.run_id, 0)
         completed = [event for event in events if event.event_type == "visual_audit.completed"]
         self.assertIn("desktop panel width must be 372px", completed[0].message)
         self.assertNotIn("private internal browser diagnostic", completed[0].message)
+        self.assertTrue(
+            any("private internal browser diagnostic" in message for message in logs.output)
+        )
 
     async def test_unstructured_browser_gate_failure_retries_without_model_repair(self):
         transient = BrowserAuditError(

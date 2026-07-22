@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import replace
@@ -26,6 +27,7 @@ from .visual_models import VisualFinding, VisualSeverity
 MAX_VISUAL_AUDITS = 3
 MAX_VISUAL_REPAIRS = 2
 MIN_REPAIR_CONFIDENCE = 0.75
+LOGGER = logging.getLogger(__name__)
 
 
 class BrowserAuditor(Protocol):
@@ -303,6 +305,13 @@ class VisualRepairGate:
                 except asyncio.CancelledError:
                     raise
                 except BrowserAuditError as exc:
+                    LOGGER.warning(
+                        "visual browser audit failed run_id=%s attempt=%s error_code=%s diagnostic=%s",
+                        run_id,
+                        audit_attempt,
+                        exc.error_code,
+                        exc.diagnostic or type(exc).__name__,
+                    )
                     await self._store.append_event(
                         run_id,
                         event_type="visual_audit.completed",
