@@ -451,17 +451,21 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             (TimeoutError("upstream timeout"), "generation_timeout"),
             (RuntimeError("connection refused https://private-route"), "provider_unavailable"),
         )
-        for error, code in cases:
-            with self.subTest(code=code):
-                engine = GeminiDirectEngine(api_key="secret", client=FakeClient(error=error))
-                with self.assertRaises(BuilderEngineError) as caught:
-                    await engine.generate(
-                        request=self.request,
-                        stage=Stage.ART_DIRECTION,
-                        revision=1,
-                    )
-                self.assertEqual(caught.exception.error_code, code)
-                self.assertNotIn("private-route", caught.exception.public_message)
+        with patch(
+            "builder_lab.engines.gemini_direct.asyncio.sleep",
+            new=AsyncMock(),
+        ):
+            for error, code in cases:
+                with self.subTest(code=code):
+                    engine = GeminiDirectEngine(api_key="secret", client=FakeClient(error=error))
+                    with self.assertRaises(BuilderEngineError) as caught:
+                        await engine.generate(
+                            request=self.request,
+                            stage=Stage.ART_DIRECTION,
+                            revision=1,
+                        )
+                    self.assertEqual(caught.exception.error_code, code)
+                    self.assertNotIn("private-route", caught.exception.public_message)
 
     async def test_transient_provider_error_is_retried_with_backoff(self):
         client = FakeClient(
@@ -483,6 +487,36 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.artifact.revision, 1)
         self.assertEqual(len(client.models.calls), 2)
         sleep.assert_awaited_once_with(0.5)
+
+    async def test_transient_provider_error_can_recover_on_fifth_attempt(self):
+        client = FakeClient(
+            response=fake_response(artifact(revision=1, stage=Stage.ART_DIRECTION)),
+            error=[
+                RuntimeError("503 upstream unavailable"),
+                RuntimeError("503 upstream unavailable"),
+                RuntimeError("503 upstream unavailable"),
+                RuntimeError("503 upstream unavailable"),
+                None,
+            ],
+        )
+        engine = GeminiDirectEngine(api_key="secret", client=client)
+
+        with patch(
+            "builder_lab.engines.gemini_direct.asyncio.sleep",
+            new=AsyncMock(),
+        ) as sleep:
+            result = await engine.generate(
+                request=self.request,
+                stage=Stage.ART_DIRECTION,
+                revision=1,
+            )
+
+        self.assertEqual(result.artifact.revision, 1)
+        self.assertEqual(len(client.models.calls), 5)
+        self.assertEqual(
+            [call.args[0] for call in sleep.await_args_list],
+            [0.5, 1.5, 3.0, 5.0],
+        )
 
     async def test_cancellation_is_not_wrapped(self):
         engine = GeminiDirectEngine(

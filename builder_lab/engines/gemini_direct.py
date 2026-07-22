@@ -209,7 +209,8 @@ class GeminiDirectEngine:
             tools=[],
             thinking_config=build_low_thinking_config(self.model),
         )
-        for attempt in range(3):
+        retry_delays = (0.5, 1.5, 3.0, 5.0)
+        for attempt in range(len(retry_delays) + 1):
             try:
                 return await self._client.aio.models.generate_content(
                     model=self.model,
@@ -224,9 +225,9 @@ class GeminiDirectEngine:
                     "provider_unavailable",
                     "generation_timeout",
                 }
-                if not retryable or attempt == 2:
+                if not retryable or attempt == len(retry_delays):
                     raise error from exc
-                await asyncio.sleep(0.5 * (3**attempt))
+                await asyncio.sleep(retry_delays[attempt])
         raise AssertionError("unreachable provider retry loop")
 
     async def propose_direction(
