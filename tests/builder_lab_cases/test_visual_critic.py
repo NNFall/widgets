@@ -345,6 +345,18 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
                 ]
             self.assertGreater(min(edge), 500, state.value)
 
+    async def test_summary_is_derived_from_validated_screenshot_observations(self):
+        payload = response_payload()
+        payload["summary"] = "Generic model summary without screenshot IDs."
+
+        result = await GeminiVisualCritic(client=FakeClient(payload)).critique(
+            audit=report(), brief="Brief", art_direction="Direction"
+        )
+
+        for state in ScreenshotState:
+            self.assertEqual(result.critique.summary.count(state.value), 1)
+        self.assertNotIn("Generic model summary", result.critique.summary)
+
     async def test_rejects_wrong_or_unproven_image_semantics(self):
         wrong_code = json.loads(json.dumps(probe_payload()))
         wrong_code["proofs"][0]["code"] = "WRONG1"
@@ -393,11 +405,6 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
                     {"screenshot_id": state.value, "observation": "Same generic observation without a visual marker."}
                     for state in ScreenshotState
                 ],
-            },
-            {**response_payload(), "summary": "Generic summary without screenshot IDs."},
-            {
-                **response_payload(),
-                "summary": " ".join(state.value for state in ScreenshotState),
             },
             {
                 **response_payload(),
@@ -464,21 +471,6 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
                     }
                     for index, state in enumerate(ScreenshotState)
                 ],
-            },
-            {
-                **response_payload(),
-                "summary": " ".join(
-                    f"{state.value}: "
-                    + (
-                        "launcher button control visible"
-                        if state.value.endswith("closed")
-                        else "panel header composer input visible"
-                        if state.value.endswith("open_initial")
-                        else "message transcript composer input button visible"
-                    )
-                    + f" state index-{index}."
-                    for index, state in enumerate(ScreenshotState)
-                ),
             },
             false_root_payload,
         )

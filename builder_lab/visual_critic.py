@@ -720,15 +720,15 @@ class GeminiVisualCritic:
                 "an image-specific fact about position, size, line wrapping, color, typography, or a "
                 "measured value. For each matching desktop/mobile state, explicitly describe a concrete "
                 "visual difference; IDs, device/state names, indices, and boilerplate do not count. "
-                "Use these explicit control words in every observation and matching summary segment: "
+                "Use these explicit control words in every observation: "
                 "closed: name launcher, button, or control; open_initial: name panel; "
                 "after_turn_2: name message, messages, transcript, conversation, response, or history. "
-                "Different numeric literals alone do not prove a different observation. Apply the same "
-                "six-state, image-specific rule to each summary segment. "
+                "Different numeric literals alone do not prove a different observation. "
                 "Independently estimate pixel_facts "
                 "from each original image: luminance band, dark-pixel area band, edge-density band, "
-                "and dominant hue. Do not copy those from text or metrics. The summary must name all "
-                "six screenshot IDs. A pass may contain only minor or low-confidence major findings."
+                "and dominant hue. Do not copy those from text or metrics. Evidence belongs in the six "
+                "structured observations; summary is informational. A pass may contain only minor or "
+                "low-confidence major findings."
             ),
             temperature=0.1,
             top_p=1.0,
@@ -942,52 +942,24 @@ class GeminiVisualCritic:
                     "Gemini returned an observation without an image-specific visual fact",
                     usage=usage,
                 )
-            summary = payload["summary"]
-            if not isinstance(summary, str):
-                raise VisualCriticError(
-                    "visual_evidence_unproven",
-                    "Gemini не дал проверяемую визуальную сводку",
-                    usage=usage,
+            summary_parts = []
+            for item in observations:
+                detail = item.observation
+                for screenshot_id in expected_ids:
+                    detail = detail.replace(screenshot_id, " ")
+                detail = re.sub(r"\s+", " ", detail).strip(" .:;-|")
+                summary_parts.append(
+                    f"{item.screenshot_id}: {detail[:240].rstrip()}"
                 )
-            positions: list[tuple[int, str]] = []
-            for screenshot_id in expected_ids:
-                if summary.count(screenshot_id) != 1:
-                    raise VisualCriticError(
-                        "visual_evidence_unproven",
-                        "Gemini не привязал сводку ровно к шести screenshot states",
-                        usage=usage,
-                    )
-                positions.append((summary.index(screenshot_id), screenshot_id))
-            positions.sort()
-            observation_by_id = {
-                item.screenshot_id: item.observation for item in observations
+            normalized_payload = {
+                **payload,
+                "summary": " | ".join(summary_parts),
             }
-            summary_signatures: dict[str, frozenset[str]] = {}
-            for index, (start, screenshot_id) in enumerate(positions):
-                end = positions[index + 1][0] if index + 1 < len(positions) else len(summary)
-                segment = summary[start:end].strip()
-                segment_without_id = segment.replace(screenshot_id, " ", 1)
-                if not visual_marker_tokens(segment_without_id).intersection(
-                    visual_marker_tokens(observation_by_id[screenshot_id])
-                ):
-                    raise VisualCriticError(
-                        "visual_evidence_unproven",
-                        "Gemini не связал summary с визуальным наблюдением каждого состояния",
-                        usage=usage,
-                    )
-                signature = _visual_specificity_signature(segment, screenshot_id)
-                if not signature:
-                    raise VisualCriticError(
-                        "visual_evidence_unproven",
-                        "Gemini summary segment lacks an image-specific visual fact",
-                        usage=usage,
-                    )
-                summary_signatures[screenshot_id] = signature
             critique = VisualCritique.from_dict(
                 {
-                    "verdict": payload["verdict"],
-                    "summary": payload["summary"],
-                    "findings": payload["findings"],
+                    "verdict": normalized_payload["verdict"],
+                    "summary": normalized_payload["summary"],
+                    "findings": normalized_payload["findings"],
                 }
             )
             if any(finding.screenshot_id not in expected_ids for finding in critique.findings):
