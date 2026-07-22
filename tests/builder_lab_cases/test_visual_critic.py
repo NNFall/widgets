@@ -470,41 +470,6 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
                 "summary": " ".join(
                     f"{state.value}: "
                     + (
-                        "launcher button control width"
-                        if state.value.endswith("closed")
-                        else "panel header composer input width"
-                        if state.value.endswith("open_initial")
-                        else "message transcript composer input button width"
-                    )
-                    + f" is {101 + index}{('px', 'rem', 'em', 'vh', 'vw', 'dvh')[index]} "
-                    + f"in visible state index-{index}."
-                    for index, state in enumerate(ScreenshotState)
-                ),
-                "observations": [
-                    {
-                        "screenshot_id": state.value,
-                        "observation": (
-                            f"{state.value}: "
-                            + (
-                                "launcher button control width"
-                                if state.value.endswith("closed")
-                                else "panel header composer input width"
-                                if state.value.endswith("open_initial")
-                                else "message transcript composer input button width"
-                            )
-                            + f" is {101 + index}{('px', 'rem', 'em', 'vh', 'vw', 'dvh')[index]} "
-                            + f"in visible state index-{index}."
-                        ),
-                        "pixel_facts": _pixel_facts(report().screenshot(state).data),
-                    }
-                    for index, state in enumerate(ScreenshotState)
-                ],
-            },
-            {
-                **response_payload(),
-                "summary": " ".join(
-                    f"{state.value}: "
-                    + (
                         "launcher button control visible"
                         if state.value.endswith("closed")
                         else "panel header composer input visible"
@@ -762,6 +727,44 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
             }
             for state in ScreenshotState
         ]
+
+        result = await GeminiVisualCritic(client=FakeClient(payload)).critique(
+            audit=report(), brief="Brief", art_direction="Direction"
+        )
+
+        self.assertEqual(result.critique.verdict.value, "pass")
+
+    async def test_similar_visual_property_sets_are_valid_for_related_states(self):
+        payload = response_payload()
+        details = {
+            ScreenshotState.DESKTOP_CLOSED: "launcher button has a pale border at the right edge",
+            ScreenshotState.MOBILE_CLOSED: "launcher control has a pale border at the right edge",
+            ScreenshotState.DESKTOP_OPEN_INITIAL: "open panel has a pale border at the right edge",
+            ScreenshotState.MOBILE_OPEN_INITIAL: "open panel keeps a pale border at the right edge",
+            ScreenshotState.DESKTOP_AFTER_TURN_2: "conversation messages meet a pale border at the right edge",
+            ScreenshotState.MOBILE_AFTER_TURN_2: "message history meets a pale border at the right edge",
+        }
+        payload["summary"] = " ".join(
+            f"{state.value}: {details[state]}." for state in ScreenshotState
+        )
+        for item, state in zip(payload["observations"], ScreenshotState):
+            item["observation"] = details[state]
+
+        result = await GeminiVisualCritic(client=FakeClient(payload)).critique(
+            audit=report(), brief="Brief", art_direction="Direction"
+        )
+
+        self.assertEqual(result.critique.verdict.value, "pass")
+
+    async def test_summary_may_use_a_different_concrete_visual_fact_than_observation(self):
+        payload = response_payload()
+        payload["observations"][0]["observation"] = (
+            "launcher button has a pale border near the right edge"
+        )
+        payload["summary"] = payload["summary"].replace(
+            "launcher button sits at the bottom-right edge with a pale border",
+            "launcher control uses compact spacing near the bottom",
+        )
 
         result = await GeminiVisualCritic(client=FakeClient(payload)).critique(
             audit=report(), brief="Brief", art_direction="Direction"

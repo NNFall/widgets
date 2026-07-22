@@ -936,13 +936,10 @@ class GeminiVisualCritic:
                     "Gemini returned a repeated generic visual formula",
                     usage=usage,
                 )
-            if (
-                any(not signature for signature in specificity_by_id.values())
-                or len(set(specificity_by_id.values())) < 3
-            ):
+            if any(not signature for signature in specificity_by_id.values()):
                 raise VisualCriticError(
                     "visual_evidence_unproven",
-                    "Gemini returned repeated templates without three state-specific visual facts",
+                    "Gemini returned an observation without an image-specific visual fact",
                     usage=usage,
                 )
             summary = payload["summary"]
@@ -979,21 +976,13 @@ class GeminiVisualCritic:
                         usage=usage,
                     )
                 signature = _visual_specificity_signature(segment, screenshot_id)
-                if not signature or not signature.intersection(
-                    specificity_by_id[screenshot_id]
-                ):
+                if not signature:
                     raise VisualCriticError(
                         "visual_evidence_unproven",
-                        "Gemini summary segment lacks a matching image-specific visual fact",
+                        "Gemini summary segment lacks an image-specific visual fact",
                         usage=usage,
                     )
                 summary_signatures[screenshot_id] = signature
-            if len(set(summary_signatures.values())) < 3:
-                raise VisualCriticError(
-                    "visual_evidence_unproven",
-                    "Gemini не дал три уникальных state-specific summary markers",
-                    usage=usage,
-                )
             critique = VisualCritique.from_dict(
                 {
                     "verdict": payload["verdict"],
