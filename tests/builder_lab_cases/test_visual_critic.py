@@ -567,6 +567,20 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(result.observations), 6)
 
+    async def test_structured_screenshot_id_need_not_be_repeated_in_observation_text(self):
+        payload = response_payload()
+        for item in payload["observations"]:
+            item["observation"] = item["observation"].split(": ", 1)[1]
+
+        result = await GeminiVisualCritic(client=FakeClient(payload)).critique(
+            audit=report(), brief="Brief", art_direction="Direction"
+        )
+
+        self.assertEqual(
+            {item.screenshot_id for item in result.observations},
+            {state.value for state in ScreenshotState},
+        )
+
     async def test_russian_marker_prefix_is_not_treated_as_a_real_control(self):
         payload = response_payload()
         bad_detail = "панелевоз header composer input uses compact vertical spacing"
