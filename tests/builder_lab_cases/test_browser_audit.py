@@ -659,6 +659,24 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("retry", caught.exception.diagnostic or "")
                 self.assertTrue(caught.exception.failures)
 
+    async def test_retry_size_failure_explains_the_actual_runtime_ancestry(self):
+        broken = audit_artifact(
+            css=(
+                AUDIT_CSS
+                + '\n[data-kaigo-runtime-retry="true"]{width:20px;height:20px;'
+                "min-width:0;min-height:0}"
+                + "\n.kaigo-widget__message--error "
+                '[data-kaigo-runtime-retry="true"]{min-width:44px;min-height:44px}'
+            )
+        )
+
+        with self.assertRaises(BrowserAuditError) as caught:
+            await BrowserAudit().audit(broken)
+
+        diagnostic = caught.exception.diagnostic or ""
+        self.assertIn('.kaigo-widget [data-kaigo-runtime-retry="true"]', diagnostic)
+        self.assertIn("do not require .kaigo-widget__message--error", diagnostic)
+
     async def test_partial_context_is_closed_when_route_setup_fails(self):
         class BrokenContext:
             def __init__(self):

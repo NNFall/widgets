@@ -1751,7 +1751,9 @@ class BrowserAudit:
                     "mobile.retry_error: retry state must expose exactly close, retry, "
                     "and send as 44px actions inside the panel; "
                     + "; ".join(retry_failures)
-                    + '; style the real [data-kaigo-runtime-retry="true"] marker and hide '
+                    + '; target .kaigo-widget [data-kaigo-runtime-retry="true"] directly; '
+                    + 'do not require .kaigo-widget__message--error or any message-class '
+                    + 'ancestor because runtime status does not provide one; hide '
                     + 'suggestions via .kaigo-widget:has([data-kaigo-runtime-status="error"]) '
                     + '[data-region="suggestions"]; do not invent data-action=retry or data-error'
                 )
