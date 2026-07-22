@@ -102,6 +102,7 @@ def build_preview_document(
     if (!root) return;
     root.classList.toggle('kaigo-preview-open', Boolean(open));
     root.dataset.state = open ? 'open' : 'closed';
+    if (panel) panel.toggleAttribute('data-open', Boolean(open));
     if (toggle) toggle.checked = Boolean(open);
     if (launcher) launcher.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (panel) panel.setAttribute('aria-hidden', open ? 'false' : 'true');

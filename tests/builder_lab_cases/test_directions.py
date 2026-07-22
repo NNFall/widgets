@@ -63,6 +63,18 @@ class BarrierDirectionEngine:
 
 
 class DirectionBoardTests(unittest.IsolatedAsyncioTestCase):
+    def test_stage_prompt_declares_exact_runtime_open_state_contract(self):
+        prompt = build_stage_prompt(
+            request=BuilderRequest(engine=EngineName.DIRECT, brief="RAW BUREAU widget"),
+            stage=Stage.ART_DIRECTION,
+            revision=1,
+            previous_artifact=None,
+        )
+
+        self.assertIn('.kaigo-preview-open [data-region="panel"]', prompt)
+        self.assertIn('[data-region="panel"][data-open]', prompt)
+        self.assertIn('data-state="open"', prompt)
+
     def test_prompts_isolate_grounded_reference_as_untrusted_data(self):
         request = BuilderRequest(
             engine=EngineName.DIRECT,

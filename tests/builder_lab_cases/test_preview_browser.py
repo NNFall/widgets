@@ -28,6 +28,12 @@ class PreviewRuntimeBrowserTests(unittest.IsolatedAsyncioTestCase):
             """previewDocument => {
                 window.bridgeEvents = [];
                 window.bridgeAttempts = {};
+                window.bridgeReplies = [];
+                window.releaseBridgeResponse = () => {
+                  const reply = window.bridgeReplies.shift();
+                  if (!reply) throw new Error('no pending bridge response');
+                  reply();
+                };
                 const frame = document.getElementById('preview');
                 window.addEventListener('message', event => {
                   const data = event.data;
@@ -42,7 +48,7 @@ class PreviewRuntimeBrowserTests(unittest.IsolatedAsyncioTestCase):
                     return;
                   }
                   event.source.postMessage({...base, channel_id:'wrong-channel-123456789', type:'chat.response', text:'Нельзя принять'}, '*');
-                  setTimeout(() => event.source.postMessage({...base, type:'chat.response', text:'Ответ на: ' + data.text}, '*'), 80);
+                  window.bridgeReplies.push(() => event.source.postMessage({...base, type:'chat.response', text:'Ответ на: ' + data.text}, '*'));
                 });
                 frame.srcdoc = previewDocument;
             }""",
@@ -77,6 +83,7 @@ class PreviewRuntimeBrowserTests(unittest.IsolatedAsyncioTestCase):
             await frame.locator('[data-region="composer"]').get_attribute("aria-busy"),
             "true",
         )
+        await self.page.evaluate("window.releaseBridgeResponse()")
         await frame.locator('[data-kaigo-runtime-message="assistant"]').wait_for()
         self.assertEqual(await input_box.input_value(), "")
         self.assertNotIn(
@@ -97,6 +104,7 @@ class PreviewRuntimeBrowserTests(unittest.IsolatedAsyncioTestCase):
             await frame.locator('[data-kaigo-runtime-message="user"]').count(), 2
         )
         await retry.click()
+        await self.page.evaluate("window.releaseBridgeResponse()")
         await frame.locator('[data-kaigo-runtime-message="assistant"]').nth(1).wait_for()
         self.assertEqual(await input_box.input_value(), "")
         self.assertEqual(

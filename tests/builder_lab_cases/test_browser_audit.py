@@ -145,6 +145,17 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertTrue(all("textarea" in item.active_element for item in mobile_after_turn))
 
+    async def test_runtime_supports_generated_panel_data_open_state(self):
+        data_open_css = AUDIT_CSS.replace(
+            '.kaigo-preview-open [data-region="panel"]',
+            '[data-region="panel"][data-open]',
+        )
+
+        report = await BrowserAudit().audit(audit_artifact(css=data_open_css))
+
+        self.assertEqual(len(report.screenshots), 6)
+        self.assertEqual(len(report.layouts), 8)
+
     async def test_motion_is_disabled_before_every_evidence_capture(self):
         class InspectingAudit(BrowserAudit):
             def __init__(self):

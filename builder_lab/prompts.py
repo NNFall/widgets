@@ -246,6 +246,9 @@ def build_stage_prompt(
   для окружностей и дуг используй безопасные элементы circle или ellipse;
 - текущая revision строго {revision}, stage строго {stage.value}.
 - состояние по умолчанию строго closed; panel не открывается автоматически;
+- fixed runtime в open-state выставляет root `.kaigo-preview-open`, root `data-state="open"` и panel
+  `data-open`; CSS открытия обязан использовать `.kaigo-preview-open [data-region="panel"]` или
+  `[data-region="panel"][data-open]`, а не выдуманный state-селектор;
 - desktop panel: ширина 372px, высота по содержимому максимум min(536px, 68dvh);
 - mobile panel: максимум 70dvh, no fullscreen, no backdrop и не блокирует страницу;
 - на первом открытии не более двух suggestions; каждая запускает реальный запрос;
