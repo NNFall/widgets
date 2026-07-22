@@ -1982,7 +1982,11 @@ class BrowserAudit:
                 ...document.querySelectorAll(interactiveSelector),
                 ...implicitLabelNodes,
                 ...customClickNodes
-              ]));
+              ])).filter(node => !(
+                node instanceof HTMLLabelElement
+                  && node.control
+                  && visible(node.control)
+              ));
               const targetDescriptor = node => String(
                 node.getAttribute('data-action')
                   || node.getAttribute('data-region')
@@ -2229,15 +2233,23 @@ class BrowserAudit:
                 failures.append(
                     f"{layout.state.value}: no more than two suggestions are allowed"
                 )
-            if any(
-                item.clipped
-                or item.x < panel.x - 1
-                or item.y < panel.y - 1
-                or item.x + item.width > panel.x + panel.width + 1
-                or item.y + item.height > panel.y + panel.height + 1
+            clipped_actions = [
+                item
                 for item in actions
-            ):
-                failures.append(f"{layout.state.value}: every open action must remain unclipped and inside the panel")
+                if (
+                    item.clipped
+                    or item.x < panel.x - 1
+                    or item.y < panel.y - 1
+                    or item.x + item.width > panel.x + panel.width + 1
+                    or item.y + item.height > panel.y + panel.height + 1
+                )
+            ]
+            if clipped_actions:
+                details = ", ".join(item.region for item in clipped_actions[:4])
+                failures.append(
+                    f"{layout.state.value}: every open action must remain unclipped "
+                    f"and inside the panel; offending: {details}"
+                )
             clipped_targets = [
                 item
                 for item in interactive_targets
@@ -2302,18 +2314,33 @@ class BrowserAudit:
                 failures.append(f"{layout.state.value}: second turn order is invalid")
             if layout.state.value.startswith("desktop"):
                 if abs(panel.width - 372) > 1:
-                    failures.append(f"{layout.state.value}: desktop panel width must be 372px")
+                    failures.append(
+                        f"{layout.state.value}: desktop panel width must be 372px; "
+                        f"actual {panel.width:.1f}px"
+                    )
                 if layout.state.value.endswith("open_initial") and abs(panel.height - 304) > 1:
-                    failures.append(f"{layout.state.value}: desktop first-open height must be 304px")
+                    failures.append(
+                        f"{layout.state.value}: desktop first-open height must be 304px; "
+                        f"actual {panel.height:.1f}px"
+                    )
                 if panel.height > min(536, layout.viewport_height * 0.68) + 1:
-                    failures.append(f"{layout.state.value}: desktop panel exceeds height cap")
+                    failures.append(
+                        f"{layout.state.value}: desktop panel exceeds height cap; "
+                        f"actual {panel.height:.1f}px"
+                    )
                 if abs(layout.viewport_width - (panel.x + panel.width) - 20) > 1 or abs(layout.viewport_height - (panel.y + panel.height) - 20) > 1:
                     failures.append(f"{layout.state.value}: desktop panel must keep 20px right/bottom margins")
             else:
                 if abs(panel.width - 366) > 1 or panel.x < 11 or panel.x + panel.width > layout.viewport_width - 11:
-                    failures.append(f"{layout.state.value}: mobile panel must keep 12px margins")
+                    failures.append(
+                        f"{layout.state.value}: mobile panel must be 366px wide and keep "
+                        f"12px margins; actual width {panel.width:.1f}px, x {panel.x:.1f}px"
+                    )
                 if layout.state.value.endswith("open_initial") and abs(panel.height - 320) > 1:
-                    failures.append(f"{layout.state.value}: mobile first-open height must be 320px")
+                    failures.append(
+                        f"{layout.state.value}: mobile first-open height must be 320px; "
+                        f"actual {panel.height:.1f}px"
+                    )
                 if panel.height > layout.viewport_height * 0.70 + 1 or panel.height >= layout.viewport_height - 1:
                     failures.append(f"{layout.state.value}: mobile panel exceeds 70dvh/non-fullscreen cap")
                 if abs(layout.viewport_height - (panel.y + panel.height) - 12) > 1:

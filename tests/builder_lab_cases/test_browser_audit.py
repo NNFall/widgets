@@ -984,6 +984,19 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(caught.exception.error_code, "browser_gate_failed")
                 self.assertIn(expected, caught.exception.diagnostic or "")
 
+    async def test_visually_hidden_textarea_label_uses_visible_control_target(self):
+        labelled_textarea = audit_artifact(
+            body_html=AUDIT_HTML.replace(
+                '<textarea aria-label="Сообщение"></textarea>',
+                '<label for="message" style="position:absolute;width:1px;height:1px;overflow:hidden">'
+                'Сообщение</label><textarea id="message"></textarea>',
+            )
+        )
+
+        report = await BrowserAudit().audit(labelled_textarea)
+
+        self.assertEqual(len(report.screenshots), 6)
+
     async def test_aria_action_requires_focus_pointer_and_keyboard_activation(self):
         broken = audit_artifact(
             body_html=AUDIT_HTML.replace(
