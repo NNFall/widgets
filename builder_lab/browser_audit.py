@@ -1315,7 +1315,9 @@ class BrowserAudit:
             )
         )
         failure = (
-            f"{state}: {name} control is outside the viewport; actual {actual}"
+            f"{state}: {name} control is outside the viewport; actual {actual}; "
+            "position launcher and panel themselves as fixed relative to the viewport "
+            "and do not add viewport offsets to the root"
         )
         raise BrowserAuditError(
             "browser_gate_failed",
@@ -2411,7 +2413,8 @@ class BrowserAudit:
                     actual_bottom = layout.viewport_height - (panel.y + panel.height)
                     failures.append(
                         f"{layout.state.value}: desktop panel must keep 20px right/bottom "
-                        f"margins; actual right {actual_right:.1f}px, bottom {actual_bottom:.1f}px"
+                        f"margins; actual right {actual_right:.1f}px, bottom {actual_bottom:.1f}px; "
+                        "make the panel itself position:fixed and do not compound offsets on the root"
                     )
             else:
                 expected_mobile_width = layout.viewport_width - 24
@@ -2424,7 +2427,12 @@ class BrowserAudit:
                 if panel.height > layout.viewport_height * 0.70 + 1 or panel.height >= layout.viewport_height - 1:
                     failures.append(f"{layout.state.value}: mobile panel exceeds 70dvh/non-fullscreen cap")
                 if abs(layout.viewport_height - (panel.y + panel.height) - 12) > 1:
-                    failures.append(f"{layout.state.value}: mobile panel must keep 12px bottom margin")
+                    actual_bottom = layout.viewport_height - (panel.y + panel.height)
+                    failures.append(
+                        f"{layout.state.value}: mobile panel must keep 12px bottom margin; "
+                        f"actual {actual_bottom:.1f}px; make the panel itself position:fixed "
+                        "and do not compound offsets on the root"
+                    )
         if failures:
             raise BrowserAuditError(
                 "browser_gate_failed",

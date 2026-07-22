@@ -427,6 +427,8 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             "372px",
             "216px",
             "calc(100vw - 24px)",
+            "launcher and panel themselves use position: fixed",
+            "root must not add viewport offsets",
             "launcher никогда не получает ширину панели",
             "box-sizing: border-box",
             "44px × 44px",

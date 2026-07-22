@@ -258,6 +258,8 @@ def build_stage_prompt(
   min(536px, 68dvh);
 - mobile panel: ширина `calc(100vw - 24px)` (366px при viewport 390px), отступы слева, справа и
   снизу 12px, максимум 70dvh, no fullscreen, no backdrop и не блокирует страницу;
+- launcher and panel themselves use position: fixed relative to the viewport; root must not add viewport offsets;
+  never use an absolute panel inside an offset fixed root because desktop/mobile margins would compound;
 - mobile width `calc(100vw - 24px)` применяется только к panel; launcher никогда не получает ширину панели
   и на mobile сохраняет отдельный bounding box 216px × 46px;
 - каждый видимый интерактивный элемент имеет фактический bounding box не меньше 44px × 44px;
