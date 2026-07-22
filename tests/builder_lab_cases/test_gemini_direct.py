@@ -428,6 +428,8 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             "216px",
             "calc(100vw - 24px)",
             "box-sizing: border-box",
+            "44px × 44px",
+            "close, send, suggestion и retry",
             "68dvh",
             "70dvh",
             "closed",
