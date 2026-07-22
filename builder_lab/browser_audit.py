@@ -320,14 +320,23 @@ _SETTLE_DOCUMENT = """async stabilityMs => {
       style.color, style.borderColor, style.transform
     ].join('|');
   }).join('\\n');
-  const cancelAnimations = () => {
+  const settleAnimations = () => {
     for (const animation of document.getAnimations({subtree: true})) {
-      try { animation.cancel(); } catch (_) {}
+      try {
+        const timing = animation.effect?.getComputedTiming();
+        if (timing && Number.isFinite(timing.endTime)) {
+          animation.finish();
+          animation.commitStyles();
+        }
+      } catch (_) {
+      } finally {
+        try { animation.cancel(); } catch (_) {}
+      }
     }
   };
-  cancelAnimations();
+  settleAnimations();
   await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-  cancelAnimations();
+  settleAnimations();
   const before = styleSignature();
   let mutations = 0;
   const observer = new MutationObserver(records => { mutations += records.length; });
@@ -867,8 +876,7 @@ class BrowserAudit:
         )
         await child_frame.add_style_tag(
             content=(
-                "*,*::before,*::after{animation:none!important;animation-duration:0s!important;"
-                "transition:none!important;transition-duration:0s!important;"
+                "*,*::before,*::after{transition:none!important;transition-duration:0s!important;"
                 "scroll-behavior:auto!important;caret-color:transparent!important}"
             )
         )
@@ -1619,6 +1627,10 @@ class BrowserAudit:
             await self._release_audit_response(page)
             retry = frame.locator('[data-kaigo-runtime-retry="true"]')
             await retry.wait_for()
+            child_frames = page.frames[1:]
+            if not child_frames:
+                raise ValueError("preview iframe is missing during retry audit")
+            await self._settle_frame(child_frames[-1])
             error_payload = await frame.locator("body").evaluate(
                 """() => ({
                   roles: Array.from(document.querySelectorAll('[data-kaigo-runtime-message]')).map(

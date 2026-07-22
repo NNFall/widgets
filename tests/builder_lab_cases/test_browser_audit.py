@@ -178,6 +178,46 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         await audit.audit(animated)
         self.assertEqual(audit.animation_counts, [0] * 6)
 
+    async def test_keyframe_driven_open_state_is_frozen_at_its_final_frame(self):
+        keyframe_css = AUDIT_CSS + """
+        @keyframes panel-in {
+          from { opacity: 0; transform: translateY(10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .kaigo { position: static; }
+        [data-region="launcher"] { position: fixed; right: 20px; bottom: 20px; }
+        [data-region="panel"] {
+          position: fixed;
+          right: 20px;
+          bottom: 20px;
+          display: grid;
+          grid-template-rows: 52px 1fr 48px 60px;
+          visibility: hidden;
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        .kaigo-preview-open [data-region="panel"] {
+          visibility: visible;
+          animation: panel-in 250ms ease-out forwards;
+        }
+        @media (max-width: 600px) {
+          [data-region="launcher"] { right: 12px; bottom: 12px; }
+          [data-region="panel"] {
+            left: 12px;
+            right: 12px;
+            bottom: 12px;
+            width: calc(100vw - 24px);
+          }
+        }
+        """
+
+        report = await BrowserAudit().audit(audit_artifact(css=keyframe_css))
+
+        open_layouts = [
+            item for item in report.layouts if not item.state.value.endswith("closed")
+        ]
+        self.assertTrue(all(item.panel_inside_viewport for item in open_layouts))
+
     async def test_late_waapi_animation_is_settled_for_every_capture(self):
         class InspectingAudit(BrowserAudit):
             def __init__(self):
