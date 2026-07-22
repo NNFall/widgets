@@ -357,7 +357,9 @@ def _validate_css(css: str) -> list[ValidationIssue]:
         add("unsafe_css_at_rule", "CSS @import is not allowed")
     if re.search(r"url\s*\(", lower):
         add("external_css_resource", "CSS url() resources are not allowed")
-    if re.search(r"expression\s*\(|javascript\s*:|behavior\s*:", lower):
+    if re.search(r"expression\s*\(|javascript\s*:", lower) or re.search(
+        r"(?:^|[;{])\s*behavior\s*:", lower
+    ):
         add("unsafe_css_value", "Unsafe CSS value is not allowed")
 
     selectors, at_rules, malformed = _css_rules(normalized)

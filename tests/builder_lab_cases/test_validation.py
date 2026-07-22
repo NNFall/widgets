@@ -136,6 +136,21 @@ class ArtifactValidationTests(unittest.TestCase):
         self.assertIn("unsafe_css_at_rule", codes)
         self.assertIn("external_css_resource", codes)
 
+    def test_accepts_safe_properties_whose_names_end_with_behavior(self):
+        css = GOOD_CSS + """
+.kaigo-widget {
+  scroll-behavior: smooth;
+  --panel-behavior: compact;
+}
+"""
+
+        self.assertNotIn("unsafe_css_value", self.codes(artifact(css=css)))
+
+    def test_rejects_legacy_behavior_property(self):
+        css = GOOD_CSS + "\n.kaigo-widget { behavior: none; }"
+
+        self.assertIn("unsafe_css_value", self.codes(artifact(css=css)))
+
     def test_unscoped_css_issue_names_the_first_offending_selector(self):
         issues = validate_artifact(
             artifact(css=GOOD_CSS + "\nbody, .outside { color: red; }"),
