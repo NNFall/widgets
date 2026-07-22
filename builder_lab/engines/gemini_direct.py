@@ -228,44 +228,57 @@ class GeminiDirectEngine:
         proposal_id: str,
     ) -> DirectionProposalResult:
         prompt = build_direction_proposal_prompt(request=request, role=role)
-        response = await self._generate_structured(
-            prompt=prompt,
-            schema=DIRECTION_PROPOSAL_JSON_SCHEMA,
-            temperature=request.creativity,
-            max_output_tokens=900,
-        )
-        try:
-            payload = _response_payload(response)
-            _require_exact_keys(
-                payload,
-                frozenset(
-                    {"title", "art_direction", "interaction_model", "safeguards"}
-                ),
+        total_usage = TokenUsage()
+        for attempt in range(2):
+            attempt_prompt = prompt
+            if attempt:
+                attempt_prompt += (
+                    "\nCORRECTION: The previous JSON violated one or more field budgets. "
+                    "Return a fresh complete proposal and keep every field within the exact "
+                    "numeric limits above."
+                )
+            response = await self._generate_structured(
+                prompt=attempt_prompt,
+                schema=DIRECTION_PROPOSAL_JSON_SCHEMA,
+                temperature=request.creativity,
+                max_output_tokens=900,
             )
-            safeguards = payload["safeguards"]
-            if not isinstance(safeguards, list):
-                raise ValueError("direction safeguards must be an array")
-            proposal = DirectionProposal(
-                proposal_id=proposal_id,
-                role=role,
-                title=str(payload["title"]),
-                art_direction=str(payload["art_direction"]),
-                interaction_model=str(payload["interaction_model"]),
-                safeguards=tuple(str(item) for item in safeguards),
+            total_usage = total_usage + _usage(response)
+            try:
+                payload = _response_payload(response)
+                _require_exact_keys(
+                    payload,
+                    frozenset(
+                        {"title", "art_direction", "interaction_model", "safeguards"}
+                    ),
+                )
+                safeguards = payload["safeguards"]
+                if not isinstance(safeguards, list):
+                    raise ValueError("direction safeguards must be an array")
+                proposal = DirectionProposal(
+                    proposal_id=proposal_id,
+                    role=role,
+                    title=str(payload["title"]),
+                    art_direction=str(payload["art_direction"]),
+                    interaction_model=str(payload["interaction_model"]),
+                    safeguards=tuple(str(item) for item in safeguards),
+                )
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                if attempt == 0:
+                    continue
+                raise BuilderEngineError(
+                    "invalid_artifact",
+                    "Gemini вернул некорректное визуальное направление",
+                    diagnostic=f"{type(exc).__name__}: {exc}",
+                    usage=total_usage,
+                ) from exc
+            return DirectionProposalResult(
+                proposal=proposal,
+                usage=total_usage,
+                provider_request_id=getattr(response, "response_id", None),
+                diagnostic=f"model={getattr(response, 'model_version', None) or self.model}",
             )
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-            raise BuilderEngineError(
-                "invalid_artifact",
-                "Gemini вернул некорректное визуальное направление",
-                diagnostic=f"{type(exc).__name__}: {exc}",
-                usage=_usage(response),
-            ) from exc
-        return DirectionProposalResult(
-            proposal=proposal,
-            usage=_usage(response),
-            provider_request_id=getattr(response, "response_id", None),
-            diagnostic=f"model={getattr(response, 'model_version', None) or self.model}",
-        )
+        raise AssertionError("unreachable direction proposal loop")
 
     async def judge_directions(
         self,

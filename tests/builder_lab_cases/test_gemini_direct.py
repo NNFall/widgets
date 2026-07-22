@@ -24,7 +24,8 @@ from builder_lab.visual_models import (
 
 class FakeModels:
     def __init__(self, response=None, error=None):
-        self.response = response
+        self.responses = response if isinstance(response, list) else None
+        self.response = response if self.responses is None else self.responses[-1]
         self.error = error
         self.calls = []
 
@@ -32,6 +33,8 @@ class FakeModels:
         self.calls.append(kwargs)
         if self.error:
             raise self.error
+        if self.responses is not None:
+            return self.responses[min(len(self.calls) - 1, len(self.responses) - 1)]
         return self.response
 
 
@@ -259,9 +262,53 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
                 proposal_id="candidate-1",
             )
         self.assertEqual(caught.exception.error_code, "invalid_artifact")
-        self.assertEqual(caught.exception.usage.prompt_tokens, 20)
-        self.assertEqual(caught.exception.usage.output_tokens, 8)
-        self.assertEqual(caught.exception.usage.thinking_tokens, 2)
+        self.assertEqual(caught.exception.usage.prompt_tokens, 40)
+        self.assertEqual(caught.exception.usage.output_tokens, 16)
+        self.assertEqual(caught.exception.usage.thinking_tokens, 4)
+
+    async def test_direction_proposal_retries_one_semantic_contract_failure(self):
+        invalid = {
+            "title": "Direction",
+            "art_direction": "Sharp editorial grid.",
+            "interaction_model": "x" * 801,
+            "safeguards": ["No fake actions"],
+        }
+        valid = {
+            **invalid,
+            "interaction_model": "A compact note opens beside the launcher.",
+        }
+
+        def response(payload, response_id):
+            return std_types.SimpleNamespace(
+                text=json.dumps(payload),
+                parsed=None,
+                response_id=response_id,
+                usage_metadata=std_types.SimpleNamespace(
+                    prompt_token_count=20,
+                    candidates_token_count=8,
+                    thoughts_token_count=0,
+                ),
+                model_version="gemini-2.5-flash",
+            )
+
+        client = FakeClient(
+            response=[response(invalid, "invalid-1"), response(valid, "valid-2")]
+        )
+        engine = GeminiDirectEngine(
+            api_key="secret", model="gemini-2.5-flash", client=client
+        )
+
+        result = await engine.propose_direction(
+            request=self.request,
+            role=DirectionRole.BRAND_ARCHAEOLOGIST,
+            proposal_id="candidate-1",
+        )
+
+        self.assertEqual(len(client.models.calls), 2)
+        self.assertIn("CORRECTION", client.models.calls[1]["contents"])
+        self.assertEqual(result.usage.prompt_tokens, 40)
+        self.assertEqual(result.usage.output_tokens, 16)
+        self.assertEqual(result.provider_request_id, "valid-2")
 
     async def test_direction_judge_is_blind_and_rejects_unknown_selection(self):
         proposals = tuple(
