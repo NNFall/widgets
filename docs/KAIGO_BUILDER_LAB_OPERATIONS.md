@@ -50,11 +50,66 @@ KAIGO_BUILDER_ENABLE_ANTIGRAVITY=true
 KAIGO_BUILDER_RUN_TTL_SECONDS=3600
 KAIGO_BUILDER_MAX_RUNS=100
 KAIGO_BUILDER_DEMO_PATH=/app/data/builder-demo/latest.json
+GEMINI_CHAT_MODEL=gemini-3.5-flash
+GEMINI_CHAT_TIMEOUT_SECONDS=45
+KAIGO_CHAT_SESSION_TTL_SECONDS=3600
+KAIGO_CHAT_MAX_SESSIONS=500
+KAIGO_CHAT_RATE_LIMIT_REQUESTS=12
+KAIGO_CHAT_IP_RATE_LIMIT_REQUESTS=60
+KAIGO_CHAT_RATE_LIMIT_WINDOW_SECONDS=60
+KAIGO_CHAT_MAX_REQUESTS_PER_SESSION=40
+KAIGO_CHAT_GLOBAL_CONCURRENCY=4
+KAIGO_CHAT_SECURE_COOKIE=true
 ```
 
 Ключи нельзя передавать в URL, записывать в Git или выводить в логи. На рабочем
 сервере `GOOGLE_AI_NATIVE_BASE_URL` может указывать на защищённый Gemini-only
 маршрут через американский сервер.
+
+Для подписания cookie публичного чата production-серверу нужен постоянный
+`KAIGO_CHAT_SESSION_SECRET` длиной не менее 32 URL-safe символов. В
+`.env.example` он намеренно пустой. На сервере секрет создаётся один раз,
+хранится только в `/root/ai_project/.env` с режимом `0600`, повторно
+используется после перезапуска и никогда не выводится в терминал или лог:
+
+```bash
+set -euo pipefail
+env_file=/root/ai_project/.env
+umask 077
+touch "$env_file"
+chmod 0600 "$env_file"
+secret_definition_pattern='^[[:space:]]*(export[[:space:]]+)?KAIGO_CHAT_SESSION_SECRET([^A-Za-z0-9_]|$)'
+secret_definition_count="$(grep -Ec "$secret_definition_pattern" "$env_file" || true)"
+case "$secret_definition_count" in
+  0)
+    secret="$(openssl rand -base64 48 | tr -d '\n' | tr '+/' '-_' | tr -d '=')"
+    printf '\nKAIGO_CHAT_SESSION_SECRET=%s\n' "$secret" >> "$env_file"
+    unset secret
+    ;;
+  1)
+    if ! grep -Eq '^KAIGO_CHAT_SESSION_SECRET=[A-Za-z0-9_-]{32,}$' "$env_file"; then
+      printf '%s\n' 'KAIGO_CHAT_SESSION_SECRET существует, но пуст или некорректен; остановка без ротации' >&2
+      exit 1
+    fi
+    ;;
+  *)
+    printf '%s\n' 'KAIGO_CHAT_SESSION_SECRET определён больше одного раза; остановка без ротации' >&2
+    exit 1
+    ;;
+esac
+unset secret_definition_count secret_definition_pattern
+```
+
+Не запускайте этот блок с `set -x` и не проверяйте значение через `cat`,
+`grep` без подавления вывода или `docker compose config`: эти команды могут
+раскрыть секрет. Проверять нужно только наличие подходящей непустой строки с
+подавленным выводом.
+Если переменная уже существует, но пуста или некорректна, блок завершается с
+ошибкой без значения секрета и без молчаливой ротации: причину нужно устранить
+вручную до запуска контейнера.
+Некорректными также считаются определения без `=`, с ведущими пробелами или с
+`export`; несколько определений всегда приводят к остановке. Генерация
+разрешена только при полном отсутствии определения переменной.
 
 ## Локальный запуск
 
@@ -149,7 +204,25 @@ location = /builder-demo/preview {
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;
 }
+
+location = /builder-demo/chat {
+    limit_except POST { deny all; }
+    client_max_body_size 4k;
+    proxy_pass http://127.0.0.1:8091/demo/chat;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_request_buffering off;
+    proxy_read_timeout 60s;
+}
 ```
+
+`/builder-demo/` и `/builder-demo/preview` остаются read-only. Единственное
+публичное изменение состояния — точный POST-обработчик
+`/builder-demo/chat`; более широкий public proxy на `/demo/` или `/api/`
+добавлять нельзя. Полный `/builder/` по-прежнему закрыт Basic Auth.
 
 Перед изменением нужно сделать timestamped backup, затем выполнить:
 
@@ -192,6 +265,36 @@ curl -fsS https://kaigo.online/ >/dev/null
 
 Без авторизации `/builder/` должен отвечать `401`. С авторизацией — `200`.
 Дополнительно проверяются app/db контейнеры, loopback-порт и browser console.
+
+Для production-чата отдельно проверяются запрет GET и два последовательных
+POST в одной cookie-сессии. Актуальную ревизию берут из опубликованного demo,
+секрет и cookie в вывод не печатают:
+
+```bash
+revision="$(jq -r '.artifact.revision' data/builder-demo/latest.json)"
+request_prefix="$(date +%s)"
+history_marker="kaigo-history-$request_prefix"
+cookie_jar="$(mktemp)"
+chmod 0600 "$cookie_jar"
+trap 'rm -f "$cookie_jar"' EXIT
+test "$(curl -sS -o /dev/null -w '%{http_code}' https://kaigo.space/builder-demo/chat)" = 403
+curl -fsS -c "$cookie_jar" -b "$cookie_jar" \
+  -H 'Origin: https://kaigo.space' \
+  -H 'X-Kaigo-Chat: v2' \
+  -H 'Content-Type: application/json' \
+  --data "{\"request_id\":\"production-chat-$request_prefix-1\",\"message\":\"Запомните уникальный маркер $history_marker и подтвердите получение\",\"revision\":$revision}" \
+  https://kaigo.space/builder-demo/chat | jq -e '.reply | strings | length > 0' >/dev/null
+curl -fsS -c "$cookie_jar" -b "$cookie_jar" \
+  -H 'Origin: https://kaigo.space' \
+  -H 'X-Kaigo-Chat: v2' \
+  -H 'Content-Type: application/json' \
+  --data "{\"request_id\":\"production-chat-$request_prefix-2\",\"message\":\"Какой уникальный маркер я просил запомнить в предыдущем сообщении? Верните его дословно\",\"revision\":$revision}" \
+  https://kaigo.space/builder-demo/chat | jq -e --arg marker "$history_marker" '.reply | strings | contains($marker)' >/dev/null
+```
+
+Перед каждым reload сначала выполняется `nginx -t`; после reload проверяются
+HTTP-коды, сохранение cookie между запросами, два непустых ответа Gemini и
+отсутствие `5xx` в логах builder-lab и nginx.
 
 ## Фактическая проверка 18 июля 2026 года
 

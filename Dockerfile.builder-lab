@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir -r requirements.builder-lab.txt \
     && rm -rf /var/lib/apt/lists/*
 
 COPY builder_lab ./builder_lab
-COPY scripts/run_builder_lab.py scripts/capture_reference_site.py scripts/cleanup_reference_evidence.py ./scripts/
+COPY scripts/run_builder_lab.py scripts/capture_reference_site.py scripts/analyze_reference_site.py scripts/smoke_builder_lab.py scripts/cleanup_reference_evidence.py ./scripts/
 
 ENV PYTHONPATH=/app
 
