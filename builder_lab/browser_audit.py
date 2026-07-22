@@ -2469,7 +2469,9 @@ class BrowserAudit:
                 if abs(panel.width - 372) > 1:
                     failures.append(
                         f"{layout.state.value}: desktop panel width must be 372px; "
-                        f"actual {panel.width:.1f}px; use box-sizing:border-box"
+                        f"actual {panel.width:.1f}px; set box-sizing:border-box on the "
+                        "panel selector itself (or a matching descendant rule), because "
+                        "box-sizing on the root does not inherit"
                     )
                 if panel.height > min(536, layout.viewport_height * 0.68) + 1:
                     failures.append(

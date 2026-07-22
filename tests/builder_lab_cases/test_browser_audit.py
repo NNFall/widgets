@@ -188,6 +188,25 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("pointer-events:none", caught.exception.failures[0])
         self.assertIn("intercepts pointer events", caught.exception.diagnostic)
 
+    async def test_content_box_panel_failure_explains_non_inheritance(self):
+        content_box_css = AUDIT_CSS.replace(
+            "* { box-sizing: border-box; }",
+            ".kaigo { box-sizing: border-box; }\n"
+            "button, textarea { box-sizing: border-box; }",
+            1,
+        )
+
+        with self.assertRaises(BrowserAuditError) as caught:
+            await BrowserAudit().audit(audit_artifact(css=content_box_css))
+
+        self.assertTrue(
+            any(
+                "panel selector itself" in failure
+                and "does not inherit" in failure
+                for failure in caught.exception.failures
+            )
+        )
+
     async def test_motion_is_disabled_before_every_evidence_capture(self):
         class InspectingAudit(BrowserAudit):
             def __init__(self):
