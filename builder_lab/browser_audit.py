@@ -2279,17 +2279,10 @@ class BrowserAudit:
                 failures.append(
                     f"{layout.state.value}: every action must be at least 44×44px{suffix}"
                 )
-            core_action_count = sum(
-                bool(item and item.visible)
-                for item in (close_action, send_action, retry_action)
-            )
-            content_action_count = max(
-                0, layout.visible_action_count - core_action_count
-            )
-            if content_action_count > 3:
+            if layout.visible_action_count > 3:
                 failures.append(
-                    f"{layout.state.value}: no more than three actions may be visible "
-                    "outside close/send/retry"
+                    f"{layout.state.value}: no more than three actions total may be "
+                    "visible, including close/send/retry/suggestions"
                 )
             if len(suggestions) > 2:
                 failures.append(
@@ -2330,7 +2323,19 @@ class BrowserAudit:
                     f"unclipped and inside the panel; offending: {details}"
                 )
             if layout.state.value.endswith("open_initial") and layout.first_open_transcript_scrollable:
-                failures.append(f"{layout.state.value}: first-open transcript must not scroll")
+                messages_region = regions.get("messages")
+                metrics = (
+                    f"; messages scrollHeight {messages_region.scroll_height}px exceeds "
+                    f"clientHeight {messages_region.client_height}px"
+                    if messages_region is not None
+                    else ""
+                )
+                failures.append(
+                    f"{layout.state.value}: first-open transcript must not scroll{metrics}; "
+                    "keep the exact first-open panel geometry and shorten the welcome copy, "
+                    "show at most one short suggestion, and reduce nonessential gaps/padding "
+                    "without shrinking any action below 44x44px"
+                )
             is_mobile_initial = layout.state is LayoutState.MOBILE_OPEN_INITIAL
             if is_mobile_initial and "textarea" in layout.active_element:
                 failures.append(f"{layout.state.value}: composer must not auto-focus on mobile first open")

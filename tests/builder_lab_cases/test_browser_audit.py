@@ -910,7 +910,7 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.error_code, "browser_gate_failed")
         self.assertIn("auto-focus", caught.exception.diagnostic or "")
 
-    async def test_two_suggestions_fit_open_action_budget(self):
+    async def test_two_suggestions_exceed_three_total_open_actions(self):
         two_suggestions = audit_artifact(
             body_html=AUDIT_HTML.replace(
                 '</nav>',
@@ -918,9 +918,10 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        report = await BrowserAudit().audit(two_suggestions)
+        with self.assertRaises(BrowserAuditError) as caught:
+            await BrowserAudit().audit(two_suggestions)
 
-        self.assertEqual(len(report.screenshots), 6)
+        self.assertIn("no more than three actions total", caught.exception.diagnostic or "")
 
     async def test_root_with_fixed_sized_children_need_not_have_its_own_box(self):
         zero_box_root = audit_artifact(

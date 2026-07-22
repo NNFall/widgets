@@ -120,7 +120,8 @@ short safeguards.
 
 Non-negotiable product bounds: desktop open width 372px and height no more than 68dvh;
 mobile height no more than 70dvh and no fullscreen; default state closed; no more than
-two first-open suggestions; no fake actions. Generated content has no JavaScript or
+one first-open suggestion because close + send + suggestion are the three-action total;
+no fake actions. Generated content has no JavaScript or
 network and must be implementable by the trusted Kaigo runtime.
 
 Locale: {request.locale}
@@ -263,9 +264,11 @@ def build_stage_prompt(
   это обязательно для close, send, suggestion и retry, даже если внутри только короткий текст или иконка;
 - при первом открытии начальный transcript полностью помещается без внутренней прокрутки на desktop и mobile:
   для messages выполняется `scrollHeight <= clientHeight`; прокрутка допустима только после добавления новых сообщений;
-- if a first-open transcript repair is requested, reduce welcome copy and/or increase panel height within caps;
-  never preserve a fixed short panel height that forces initial overflow; verify both desktop 1440×900 and mobile 390×844;
-- на первом открытии не более двух suggestions; каждая запускает реальный запрос;
+- at most three visible actions total, including close, send, retry and suggestions;
+  therefore first open has one short suggestion at most while close and send are visible;
+- if a first-open transcript repair is requested, keep any exact first-open geometry from the brief;
+  shorten welcome copy, keep at most one short suggestion, and reduce nonessential gaps/padding while preserving 44×44px targets;
+- verify first-open fit at both desktop 1440×900 and mobile 390×844; each suggestion launches a real request;
 - fake actions, пустые кнопки и действия, которые только очищают поле, запрещены;
 - trusted runtime использует классы `.kaigo-widget__message--assistant`,
   `.kaigo-widget__message--user`, `.kaigo-widget__message--status` и
