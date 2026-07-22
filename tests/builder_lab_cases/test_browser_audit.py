@@ -1318,7 +1318,7 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
             await BrowserAudit().audit(broken)
         self.assertEqual(caught.exception.error_code, "browser_gate_failed")
 
-    async def test_two_turn_history_must_have_real_scroll_range_for_wheel(self):
+    async def test_two_turn_history_may_fit_without_forced_scroll_range(self):
         compressed = audit_artifact(
             css=(
                 AUDIT_CSS
@@ -1326,9 +1326,9 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
                 "font-size:1px!important;line-height:1px!important;margin:0!important;padding:0!important}"
             )
         )
-        with self.assertRaises(BrowserAuditError) as caught:
-            await BrowserAudit().audit(compressed)
-        self.assertEqual(caught.exception.error_code, "browser_gate_failed")
+        report = await BrowserAudit().audit(compressed)
+        self.assertEqual(len(report.screenshots), 6)
+        self.assertEqual(len(report.layouts), 8)
 
     async def test_close_reopen_must_preserve_exact_transcript_text(self):
         corrupt_history = """

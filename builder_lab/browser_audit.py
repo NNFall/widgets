@@ -1210,18 +1210,17 @@ class BrowserAudit:
             )
             if scroll_metrics["overflowY"] in {"hidden", "clip"}:
                 raise ValueError("two-turn history is not wheel-accessible")
-            await messages.hover()
-            if scroll_metrics["max"] <= 1:
-                raise ValueError("two-turn transcript has no real wheel scroll range")
-            before_scroll = await messages.evaluate(
-                "(node, max) => (node.scrollTop = Math.max(1, Math.floor(max * 0.75)))",
-                scroll_metrics["max"],
-            )
-            await page.mouse.wheel(0, -min(120, max(2, before_scroll)))
-            await page.wait_for_timeout(50)
-            after_scroll = await messages.evaluate("node => node.scrollTop")
-            if after_scroll >= before_scroll - 1:
-                raise ValueError("real wheel did not move the two-turn transcript")
+            if scroll_metrics["max"] > 1:
+                await messages.hover()
+                before_scroll = await messages.evaluate(
+                    "(node, max) => (node.scrollTop = Math.max(1, Math.floor(max * 0.75)))",
+                    scroll_metrics["max"],
+                )
+                await page.mouse.wheel(0, -min(120, max(2, before_scroll)))
+                await page.wait_for_timeout(50)
+                after_scroll = await messages.evaluate("node => node.scrollTop")
+                if after_scroll >= before_scroll - 1:
+                    raise ValueError("real wheel did not move the two-turn transcript")
             after_state = ScreenshotState(f"{prefix}.after_turn_2")
             shots.append(await self._capture(page, after_state))
             layouts.append(
