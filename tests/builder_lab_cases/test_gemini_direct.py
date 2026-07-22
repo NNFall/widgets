@@ -427,6 +427,7 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             "372px",
             "216px",
             "calc(100vw - 24px)",
+            "launcher никогда не получает ширину панели",
             "box-sizing: border-box",
             "44px × 44px",
             "close, send, suggestion и retry",

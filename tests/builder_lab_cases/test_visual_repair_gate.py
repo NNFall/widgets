@@ -337,7 +337,7 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.store.visual_candidate(self.run_id)), result)
 
     async def test_browser_repair_regression_is_repaired_before_reaudit(self):
-        invalid = artifact(
+        invalid_first = artifact(
             revision=5,
             stage=Stage.MOTION_POLISH,
             body_html=self.candidate.body_html.replace(
@@ -346,10 +346,16 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
             ),
             css=self.candidate.css + "\n.kaigo-widget { overflow: clip; }",
         )
+        invalid_second = artifact(
+            revision=5,
+            stage=Stage.MOTION_POLISH,
+            body_html=invalid_first.body_html,
+            css=invalid_first.css + "\n/* changed but still invalid */",
+        )
         fixed = artifact(
             revision=5,
             stage=Stage.MOTION_POLISH,
-            css=invalid.css,
+            css=invalid_second.css,
         )
         gate_error = BrowserAuditError(
             "browser_gate_failed",
@@ -365,14 +371,18 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
                 return await FakeAuditor().audit(candidate)
 
         auditor = RepairableAuditor()
-        engine = FakeEngine([invalid, fixed])
+        engine = FakeEngine([invalid_first, invalid_second, fixed])
         result = await self.evaluate(auditor, FakeCritic([critique()]), engine)
 
         self.assertEqual(result, fixed)
-        self.assertEqual(len(engine.calls), 2)
+        self.assertEqual(len(engine.calls), 3)
         self.assertIn(
             "missing_accessible_label",
             {issue.code for issue in engine.calls[1]["repair_issues"]},
+        )
+        self.assertIn(
+            "missing_accessible_label",
+            {issue.code for issue in engine.calls[2]["repair_issues"]},
         )
         self.assertEqual(len(auditor.calls), 2)
 
@@ -393,14 +403,14 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(engine.calls), 1)
         self.assertEqual(len(critic.calls), 2)
 
-    async def test_hard_limits_are_three_audits_and_two_repairs_independent_of_request_limit(self):
+    async def test_hard_limits_are_four_audits_and_three_repairs_independent_of_request_limit(self):
         findings = [
             finding(finding_id=f"visual-{index}", instruction=f"Repair instruction {index}.")
-            for index in range(1, 4)
+            for index in range(1, 5)
         ]
         repairs = [
             artifact(revision=5, stage=Stage.MOTION_POLISH, css=self.candidate.css + f"\n/* {i} */")
-            for i in range(2)
+            for i in range(3)
         ]
         auditor = FakeAuditor()
         critic = FakeCritic([critique(item) for item in findings])
@@ -409,9 +419,9 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(BuilderEngineError):
             await self.evaluate(auditor, critic, engine)
 
-        self.assertEqual(len(auditor.calls), 3)
-        self.assertEqual(len(critic.calls), 3)
-        self.assertEqual(len(engine.calls), 2)
+        self.assertEqual(len(auditor.calls), 4)
+        self.assertEqual(len(critic.calls), 4)
+        self.assertEqual(len(engine.calls), 3)
         self.assertEqual((await self.store.snapshot(self.run_id)).artifact.revision, 4)
         self.assertEqual((await self.store.visual_candidate(self.run_id)).revision, 5)
 

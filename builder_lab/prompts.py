@@ -257,6 +257,8 @@ def build_stage_prompt(
   min(536px, 68dvh);
 - mobile panel: ширина `calc(100vw - 24px)` (366px при viewport 390px), отступы слева, справа и
   снизу 12px, максимум 70dvh, no fullscreen, no backdrop и не блокирует страницу;
+- mobile width `calc(100vw - 24px)` применяется только к panel; launcher никогда не получает ширину панели
+  и на mobile сохраняет отдельный bounding box 216px × 46px;
 - каждый видимый интерактивный элемент имеет фактический bounding box не меньше 44px × 44px;
   это обязательно для close, send, suggestion и retry, даже если внутри только короткий текст или иконка;
 - при первом открытии начальный transcript полностью помещается без внутренней прокрутки на desktop и mobile:

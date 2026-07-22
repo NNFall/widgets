@@ -24,8 +24,8 @@ from .browser_audit import BrowserAuditError
 from .visual_models import VisualFinding, VisualSeverity
 
 
-MAX_VISUAL_AUDITS = 3
-MAX_VISUAL_REPAIRS = 2
+MAX_VISUAL_AUDITS = 4
+MAX_VISUAL_REPAIRS = 3
 MIN_REPAIR_CONFIDENCE = 0.75
 LOGGER = logging.getLogger(__name__)
 
@@ -442,7 +442,11 @@ class VisualRepairGate:
                     )
                     await self._record_validation(run_id, candidate, issues)
                     while issues:
-                        fingerprint = validation_repair_fingerprint(issues)
+                        fingerprint = (
+                            validation_repair_fingerprint(issues)
+                            + ":"
+                            + artifact_fingerprint(candidate)
+                        )
                         if fingerprint in seen:
                             raise self._quality_error(
                                 "repeated_validation_repair_fingerprint"
@@ -635,7 +639,11 @@ class VisualRepairGate:
                     raise self._quality_error(
                         "immutable_visual_finding_target: art_direction"
                     )
-                fingerprint = visual_fingerprint(findings)
+                fingerprint = (
+                    visual_fingerprint(findings)
+                    + ":"
+                    + artifact_fingerprint(candidate)
+                )
                 if fingerprint in seen:
                     raise self._quality_error("repeated_visual_fingerprint")
                 seen.add(fingerprint)
