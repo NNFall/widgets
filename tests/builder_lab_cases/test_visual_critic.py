@@ -357,6 +357,16 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.critique.summary.count(state.value), 1)
         self.assertNotIn("Generic model summary", result.critique.summary)
 
+    async def test_verdict_enum_is_case_insensitive_at_provider_boundary(self):
+        payload = response_payload()
+        payload["verdict"] = "Pass"
+
+        result = await GeminiVisualCritic(client=FakeClient(payload)).critique(
+            audit=report(), brief="Brief", art_direction="Direction"
+        )
+
+        self.assertEqual(result.critique.verdict.value, "pass")
+
     async def test_rejects_wrong_or_unproven_image_semantics(self):
         wrong_code = json.loads(json.dumps(probe_payload()))
         wrong_code["proofs"][0]["code"] = "WRONG1"

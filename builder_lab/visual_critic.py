@@ -953,6 +953,11 @@ class GeminiVisualCritic:
                 )
             normalized_payload = {
                 **payload,
+                "verdict": (
+                    payload["verdict"].strip().casefold()
+                    if isinstance(payload["verdict"], str)
+                    else payload["verdict"]
+                ),
                 "summary": " | ".join(summary_parts),
             }
             critique = VisualCritique.from_dict(
