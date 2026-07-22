@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import Callable
 from typing import Any, cast
@@ -34,6 +35,15 @@ DIRECT_STAGES = (
     Stage.CONVERSATION,
     Stage.MOTION_POLISH,
 )
+
+
+def _artifact_fingerprint(candidate: WidgetArtifact) -> str:
+    return json.dumps(
+        candidate.to_dict(),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 class BuilderOrchestrator:
@@ -384,7 +394,7 @@ class BuilderOrchestrator:
         await self._record_validation(run_id, candidate, issues)
         if not issues:
             return candidate
-        seen = {issue_fingerprint(issues)}
+        seen = {(issue_fingerprint(issues), _artifact_fingerprint(candidate))}
         for attempt in range(1, request.max_repairs + 1):
             self._stages[run_id] = Stage.VALIDATION
             await self.store.append_event(
@@ -419,7 +429,10 @@ class BuilderOrchestrator:
             await self._record_validation(run_id, candidate, issues)
             if not issues:
                 return candidate
-            fingerprint = issue_fingerprint(issues)
+            fingerprint = (
+                issue_fingerprint(issues),
+                _artifact_fingerprint(candidate),
+            )
             if fingerprint in seen:
                 break
             seen.add(fingerprint)

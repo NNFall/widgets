@@ -220,6 +220,38 @@ class BuilderOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             Stage.FOUNDATION,
         ])
 
+    async def test_same_issue_can_retry_when_candidate_changed(self):
+        repair_calls = 0
+
+        def handler(kwargs, _):
+            nonlocal repair_calls
+            if kwargs["stage"] is not Stage.FOUNDATION:
+                return None
+            if not kwargs.get("repair_issues"):
+                return EngineResult(
+                    artifact=artifact(
+                        revision=kwargs["revision"],
+                        stage=kwargs["stage"],
+                        css="body { color: red; }",
+                    )
+                )
+            repair_calls += 1
+            if repair_calls == 1:
+                return EngineResult(
+                    artifact=artifact(
+                        revision=kwargs["revision"],
+                        stage=kwargs["stage"],
+                        css="body { color: red; } /* model changed the candidate */",
+                    )
+                )
+            return None
+
+        engine = ScriptedEngine(handler)
+        _, snapshot = await self.run_direct(engine)
+
+        self.assertEqual(snapshot.status, RunStatus.COMPLETED)
+        self.assertEqual(repair_calls, 2)
+
     async def test_provider_error_becomes_stable_failed_run(self):
         engine = ScriptedEngine(
             lambda _kwargs, _count: BuilderEngineError(
