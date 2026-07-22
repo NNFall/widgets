@@ -186,6 +186,7 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(caught.exception.failures)
         self.assertIn("pointer-events:none", caught.exception.failures[0])
+        self.assertIn("intercepts pointer events", caught.exception.diagnostic)
 
     async def test_motion_is_disabled_before_every_evidence_capture(self):
         class InspectingAudit(BrowserAudit):

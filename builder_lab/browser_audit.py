@@ -1378,7 +1378,11 @@ class BrowserAudit:
                 "browser_gate_failed",
                 "Виджет не прошёл детерминированную браузерную проверку: "
                 + failure,
-                diagnostic=failure,
+                diagnostic=(
+                    failure
+                    + "; playwright="
+                    + _failure_text(exc, limit=2_000)
+                ),
                 failures=(failure,),
             ) from exc
 
