@@ -864,6 +864,22 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
                     await BrowserAudit().audit(broken)
                 self.assertEqual(caught.exception.error_code, "browser_gate_failed")
 
+    async def test_close_outside_viewport_is_a_structured_browser_gate_failure(self):
+        broken = audit_artifact(
+            css=(
+                AUDIT_CSS
+                + "\n[data-action=close]{position:fixed!important;top:-100px!important;"
+                "left:0!important;width:80px!important;height:44px!important}"
+            )
+        )
+
+        with self.assertRaises(BrowserAuditError) as caught:
+            await BrowserAudit().audit(broken)
+
+        self.assertEqual(caught.exception.error_code, "browser_gate_failed")
+        self.assertTrue(caught.exception.failures)
+        self.assertIn("close control is outside the viewport", caught.exception.failures[0])
+
     async def test_launcher_must_have_semantics_and_real_keyboard_activation(self):
         keyboard_dead_launcher = audit_artifact(
             body_html=AUDIT_HTML.replace(

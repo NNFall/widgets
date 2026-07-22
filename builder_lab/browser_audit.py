@@ -1080,7 +1080,14 @@ class BrowserAudit:
                 )
             )
 
-            await self._assert_launcher_keyboard(frame, root, launcher)
+            await self._assert_launcher_keyboard(
+                frame,
+                root,
+                launcher,
+                prefix=prefix,
+                width=width,
+                height=height,
+            )
             await launcher.click()
             await page.wait_for_timeout(50)
             if await root.get_attribute("data-state") != "open":
@@ -1246,9 +1253,17 @@ class BrowserAudit:
                 raise ValueError("close/reopen did not preserve the composer draft")
             if await self._transcript(frame) != expected_history:
                 raise ValueError("close/reopen did not preserve two-turn history")
-            await frame.locator(
+            close_control = frame.locator(
                 '[data-action="close"], [aria-label*="Закрыть" i]'
-            ).click()
+            ).first
+            await self._assert_control_in_viewport(
+                close_control,
+                width=width,
+                height=height,
+                state=f"{prefix}.after_reopen",
+                name="close",
+            )
+            await close_control.click()
             if await root.get_attribute("data-state") != "closed":
                 raise ValueError("close button did not close the widget")
             if not await launcher.evaluate("node => document.activeElement === node"):
@@ -1278,7 +1293,40 @@ class BrowserAudit:
                     probe_session.failures = None
 
     @staticmethod
-    async def _assert_launcher_keyboard(frame, root, launcher) -> None:
+    async def _assert_control_in_viewport(
+        control, *, width: int, height: int, state: str, name: str
+    ) -> None:
+        box = await control.bounding_box()
+        if (
+            box is not None
+            and box["x"] + box["width"] > 0
+            and box["y"] + box["height"] > 0
+            and box["x"] < width
+            and box["y"] < height
+        ):
+            return
+        actual = (
+            "missing"
+            if box is None
+            else (
+                f"x={box['x']:.1f}, y={box['y']:.1f}, "
+                f"width={box['width']:.1f}, height={box['height']:.1f}"
+            )
+        )
+        failure = (
+            f"{state}: {name} control is outside the viewport; actual {actual}"
+        )
+        raise BrowserAuditError(
+            "browser_gate_failed",
+            "Виджет не прошёл детерминированную браузерную проверку: " + failure,
+            diagnostic=failure,
+            failures=(failure,),
+        )
+
+    @classmethod
+    async def _assert_launcher_keyboard(
+        cls, frame, root, launcher, *, prefix: str, width: int, height: int
+    ) -> None:
         semantic = await launcher.evaluate(
             "node => node.tagName === 'BUTTON' || node.getAttribute('role') === 'button'"
         )
@@ -1290,6 +1338,13 @@ class BrowserAudit:
             await launcher.press(key)
             if await root.get_attribute("data-state") != "open":
                 raise ValueError(f"launcher keyboard activation failed for {key}")
+            await cls._assert_control_in_viewport(
+                close_button,
+                width=width,
+                height=height,
+                state=f"{prefix}.keyboard_{key.casefold()}",
+                name="close",
+            )
             await close_button.click()
             if await root.get_attribute("data-state") != "closed":
                 raise ValueError(f"launcher keyboard close cycle failed for {key}")
