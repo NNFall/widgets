@@ -54,10 +54,22 @@ class BuilderLabPackagingTests(unittest.TestCase):
 
         self.assertNotIn("crawlee[playwright]", requirements)
         self.assertIn("crawlee[playwright]", builder_requirements)
+        self.assertIn("playwright==1.61.0", builder_requirements)
+        self.assertIn("Pillow", builder_requirements)
         self.assertIn("python-dotenv", builder_requirements)
         self.assertIn("playwright install --with-deps chromium", builder_dockerfile)
         self.assertIn("scripts/capture_reference_site.py", builder_dockerfile)
         self.assertRegex(builder_dockerfile, r"(?m)^USER kaigo$")
+        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        self.assertIn("init: true", compose)
+        self.assertIn("shm_size: 1gb", compose)
+        self.assertIn("GEMINI_VISUAL_CRITIC_MODEL:", compose)
+        self.assertIn("KAIGO_BROWSER_AUDIT_TIMEOUT_MS:", compose)
+        self.assertIn("KAIGO_BROWSER_AUDIT_TOTAL_TIMEOUT_SECONDS:", compose)
+        env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+        self.assertIn("GEMINI_VISUAL_CRITIC_MODEL=gemini-3.5-flash", env_example)
+        self.assertIn("KAIGO_BROWSER_AUDIT_TIMEOUT_MS=10000", env_example)
+        self.assertIn("KAIGO_BROWSER_AUDIT_TOTAL_TIMEOUT_SECONDS=120", env_example)
         self.assertNotIn("playwright install", production_dockerfile)
 
     def test_egress_guard_runbook_is_server_operable_and_does_not_claim_dns_pinning(self):

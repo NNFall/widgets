@@ -88,9 +88,13 @@ class VisualEvidenceModelTests(unittest.TestCase):
             regions=(region,),
             horizontal_overflow_px=0.5,
             panel_inside_viewport=True,
+            visible_action_count=3,
             transcript_roles=("assistant", "user"),
+            aria_states=("launcher.aria-expanded=true", "panel.aria-hidden=false"),
         )
         self.assertEqual(LayoutEvidence.from_dict(layout.to_dict()), layout)
+        self.assertIn("panel.aria-hidden=false", layout.aria_states)
+        self.assertEqual(layout.visible_action_count, 3)
         with self.assertRaises(ValueError):
             LayoutEvidence(
                 evidence_id="layout-duplicate",
@@ -113,6 +117,8 @@ class VisualEvidenceModelTests(unittest.TestCase):
             {"viewport_width": "1440"},
             {"viewport_height": 900.5},
             {"active_element": 42},
+            {"visible_action_count": "3"},
+            {"visible_action_count": 101},
             {"transcript_roles": ["assistant", 7]},
         ):
             payload = layout.to_dict()

@@ -245,8 +245,10 @@ class LayoutEvidence:
     horizontal_overflow_px: float = 0
     panel_inside_viewport: bool = False
     first_open_transcript_scrollable: bool = False
+    visible_action_count: int = 0
     active_element: str = "body"
     transcript_roles: tuple[str, ...] = ()
+    aria_states: tuple[str, ...] = ()
     console_errors: tuple[str, ...] = ()
     page_errors: tuple[str, ...] = ()
     request_failures: tuple[str, ...] = ()
@@ -294,12 +296,19 @@ class LayoutEvidence:
             self.first_open_transcript_scrollable,
             "first_open_transcript_scrollable",
         )
+        _strict_int(
+            self.visible_action_count,
+            "visible_action_count",
+            lower=0,
+            upper=100,
+        )
         active_element = self.active_element.strip() if isinstance(self.active_element, str) else ""
         if not active_element or len(active_element) > 160:
             raise ValueError("active_element is invalid")
         object.__setattr__(self, "active_element", active_element)
         for field_name, limit, item_limit in (
             ("transcript_roles", 32, 32),
+            ("aria_states", 16, 160),
             ("console_errors", 20, 500),
             ("page_errors", 20, 500),
             ("request_failures", 20, 500),
@@ -330,8 +339,10 @@ class LayoutEvidence:
             first_open_transcript_scrollable=payload.get(
                 "first_open_transcript_scrollable", False
             ),
+            visible_action_count=payload.get("visible_action_count", 0),
             active_element=payload.get("active_element", "body"),
             transcript_roles=tuple(payload.get("transcript_roles", ())),
+            aria_states=tuple(payload.get("aria_states", ())),
             console_errors=tuple(payload.get("console_errors", ())),
             page_errors=tuple(payload.get("page_errors", ())),
             request_failures=tuple(payload.get("request_failures", ())),
@@ -348,8 +359,10 @@ class LayoutEvidence:
             "horizontal_overflow_px": self.horizontal_overflow_px,
             "panel_inside_viewport": self.panel_inside_viewport,
             "first_open_transcript_scrollable": self.first_open_transcript_scrollable,
+            "visible_action_count": self.visible_action_count,
             "active_element": self.active_element,
             "transcript_roles": list(self.transcript_roles),
+            "aria_states": list(self.aria_states),
             "console_errors": list(self.console_errors),
             "page_errors": list(self.page_errors),
             "request_failures": list(self.request_failures),

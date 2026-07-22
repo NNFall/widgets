@@ -20,6 +20,10 @@ class BuilderLabConfigTests(unittest.TestCase):
             "GOOGLE_AI_NATIVE_BASE_URL": None,
             "GEMINI_CHAT_MODEL": None,
             "GEMINI_CHAT_TIMEOUT_SECONDS": None,
+            "GEMINI_VISUAL_CRITIC_MODEL": None,
+            "GEMINI_VISUAL_CRITIC_TIMEOUT_SECONDS": None,
+            "KAIGO_BROWSER_AUDIT_TIMEOUT_MS": None,
+            "KAIGO_BROWSER_AUDIT_TOTAL_TIMEOUT_SECONDS": None,
             "KAIGO_CHAT_SESSION_TTL_SECONDS": None,
             "KAIGO_CHAT_MAX_SESSIONS": None,
             "KAIGO_CHAT_RATE_LIMIT_REQUESTS": None,
@@ -58,6 +62,10 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertEqual(config.max_repairs, 3)
         self.assertEqual(config.chat_model, "gemini-3.5-flash")
         self.assertEqual(config.chat_timeout_seconds, 45)
+        self.assertEqual(config.visual_critic_model, "gemini-3.5-flash")
+        self.assertEqual(config.visual_critic_timeout_seconds, 60)
+        self.assertEqual(config.browser_audit_timeout_ms, 10_000)
+        self.assertEqual(config.browser_audit_total_timeout_seconds, 120)
         self.assertEqual(config.chat_ip_rate_limit_requests, 60)
         self.assertTrue(config.chat_secure_cookie)
         self.assertIsNone(config.chat_session_secret)
@@ -74,11 +82,18 @@ class BuilderLabConfigTests(unittest.TestCase):
             GEMINI_BUILDER_MAX_REPAIRS="1",
             GEMINI_API_KEY="secret",
             GOOGLE_AI_NATIVE_BASE_URL="https://example.test/v1beta",
+            GEMINI_VISUAL_CRITIC_MODEL="gemini-3.5-flash",
+            GEMINI_VISUAL_CRITIC_TIMEOUT_SECONDS="75",
+            KAIGO_BROWSER_AUDIT_TIMEOUT_MS="15000",
+            KAIGO_BROWSER_AUDIT_TOTAL_TIMEOUT_SECONDS="150",
         )
         self.assertEqual(config.port, 9012)
         self.assertEqual(config.temperature, 1.25)
         self.assertEqual(config.max_repairs, 1)
         self.assertEqual(config.gemini_base_url, "https://example.test/v1beta")
+        self.assertEqual(config.visual_critic_timeout_seconds, 75)
+        self.assertEqual(config.browser_audit_timeout_ms, 15_000)
+        self.assertEqual(config.browser_audit_total_timeout_seconds, 150)
 
     def test_non_loopback_is_rejected_by_default(self):
         with self.assertRaisesRegex(ValueError, "loopback"):
@@ -101,6 +116,11 @@ class BuilderLabConfigTests(unittest.TestCase):
             ("KAIGO_REFERENCE_SCROLL_DELAY_MS", "1201"),
             ("KAIGO_REFERENCE_WARMUP_MS", "999"),
             ("GEMINI_CHAT_TIMEOUT_SECONDS", "181"),
+            ("GEMINI_VISUAL_CRITIC_TIMEOUT_SECONDS", "181"),
+            ("KAIGO_BROWSER_AUDIT_TIMEOUT_MS", "999"),
+            ("KAIGO_BROWSER_AUDIT_TIMEOUT_MS", "30001"),
+            ("KAIGO_BROWSER_AUDIT_TOTAL_TIMEOUT_SECONDS", "29"),
+            ("KAIGO_BROWSER_AUDIT_TOTAL_TIMEOUT_SECONDS", "301"),
             ("KAIGO_CHAT_IP_RATE_LIMIT_REQUESTS", "0"),
             ("KAIGO_CHAT_GLOBAL_CONCURRENCY", "33"),
             ("KAIGO_CHAT_SESSION_SECRET", "too-short"),

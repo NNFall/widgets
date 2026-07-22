@@ -75,6 +75,10 @@ class BuilderLabConfig:
     demo_path: str | None
     chat_model: str
     chat_timeout_seconds: int
+    visual_critic_model: str
+    visual_critic_timeout_seconds: int
+    browser_audit_timeout_ms: int
+    browser_audit_total_timeout_seconds: int
     chat_session_ttl_seconds: int
     chat_max_sessions: int
     chat_rate_limit_requests: int
@@ -167,6 +171,18 @@ class BuilderLabConfig:
             demo_path=_first_nonblank("KAIGO_BUILDER_DEMO_PATH"),
             chat_model=os.getenv("GEMINI_CHAT_MODEL", direct_model).strip(),
             chat_timeout_seconds=_int("GEMINI_CHAT_TIMEOUT_SECONDS", 45, 1, 180),
+            visual_critic_model=os.getenv(
+                "GEMINI_VISUAL_CRITIC_MODEL", "gemini-3.5-flash"
+            ).strip(),
+            visual_critic_timeout_seconds=_int(
+                "GEMINI_VISUAL_CRITIC_TIMEOUT_SECONDS", 60, 10, 180
+            ),
+            browser_audit_timeout_ms=_int(
+                "KAIGO_BROWSER_AUDIT_TIMEOUT_MS", 10_000, 1_000, 30_000
+            ),
+            browser_audit_total_timeout_seconds=_int(
+                "KAIGO_BROWSER_AUDIT_TOTAL_TIMEOUT_SECONDS", 120, 30, 300
+            ),
             chat_session_ttl_seconds=_int(
                 "KAIGO_CHAT_SESSION_TTL_SECONDS", 3600, 30, 86400
             ),
