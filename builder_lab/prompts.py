@@ -233,6 +233,8 @@ def build_stage_prompt(
 - никакого JavaScript, script, iframe, form, внешних URL, @import или url();
 - корневой класс всех CSS-селекторов — .kaigo-widget;
 - обязательны data-region: root, launcher, panel, header, messages, suggestions, composer;
+- header, messages, suggestions and composer are peer panel regions with panel as their nearest data-region ancestor;
+  never nest suggestions inside messages or composer; launcher and panel have root as their nearest data-region ancestor;
 - launcher и composer имеют понятный aria-label;
 - используются только системные шрифты и inline CSS-графика;
 - бесконечные анимации запрещены на любом этапе: не используй `infinite`;

@@ -77,6 +77,18 @@ class ArtifactValidationTests(unittest.TestCase):
         self.assertIn("missing_region", codes)
         self.assertIn("missing_accessible_label", codes)
 
+    def test_requires_panel_regions_to_be_semantic_peers(self):
+        nested = GOOD_HTML.replace(
+            'data-region="suggestions"', 'data-region="decorative-suggestions"'
+        ).replace(
+            "</main>", '<div data-region="suggestions"></div></main>'
+        )
+
+        self.assertIn(
+            "invalid_region_structure",
+            self.codes(artifact(body_html=nested)),
+        )
+
     def test_rejects_forbidden_elements_and_event_handlers(self):
         candidate = artifact(
             body_html=GOOD_HTML.replace(

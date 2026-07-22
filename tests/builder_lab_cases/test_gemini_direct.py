@@ -429,6 +429,7 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             "calc(100vw - 24px)",
             "launcher and panel themselves use position: fixed",
             "root must not add viewport offsets",
+            "header, messages, suggestions and composer are peer panel regions",
             "launcher никогда не получает ширину панели",
             "box-sizing: border-box",
             "44px × 44px",

@@ -135,8 +135,10 @@ class _ArtifactHTMLParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.stack: list[str] = []
+        self.region_stack: list[str | None] = []
         self.node_count = 0
         self.regions: set[str] = set()
+        self.region_parents: dict[str, str | None] = {}
         self.labelled_regions: set[str] = set()
         self.issues: list[ValidationIssue] = []
 
@@ -165,6 +167,10 @@ class _ArtifactHTMLParser(HTMLParser):
         region = attributes.get("data-region")
         if region:
             self.regions.add(region)
+            parent_region = next(
+                (item for item in reversed(self.region_stack) if item), None
+            )
+            self.region_parents.setdefault(region, parent_region)
             if attributes.get("aria-label") or attributes.get("title"):
                 self.labelled_regions.add(region)
         for name, value in normalized_attributes:
@@ -195,11 +201,13 @@ class _ArtifactHTMLParser(HTMLParser):
                 )
         if tag not in VOID_ELEMENTS:
             self.stack.append(tag)
+            self.region_stack.append(region)
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.handle_starttag(tag, attrs)
         if self.stack and self.stack[-1] == tag.lower():
             self.stack.pop()
+            self.region_stack.pop()
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
@@ -208,9 +216,12 @@ class _ArtifactHTMLParser(HTMLParser):
         if not self.stack or self.stack[-1] != tag:
             self._add(_issue("malformed_html", "body_html", "HTML tags are not balanced"))
             if tag in self.stack:
-                self.stack = self.stack[: self.stack.index(tag)]
+                keep = self.stack.index(tag)
+                self.stack = self.stack[:keep]
+                self.region_stack = self.region_stack[:keep]
             return
         self.stack.pop()
+        self.region_stack.pop()
 
     def close(self) -> None:
         super().close()
@@ -430,6 +441,30 @@ def validate_artifact(
         issues.append(_issue("too_many_nodes", "body_html", "HTML contains too many elements"))
     for region in sorted(REQUIRED_REGIONS - parser.regions):
         issues.append(_issue("missing_region", "body_html", f"Required region {region} is missing"))
+    expected_region_parents = {
+        "launcher": "root",
+        "panel": "root",
+        "header": "panel",
+        "messages": "panel",
+        "suggestions": "panel",
+        "composer": "panel",
+    }
+    invalid_region_parents = [
+        f"{region}->{parser.region_parents.get(region) or 'none'}"
+        for region, expected_parent in expected_region_parents.items()
+        if region in parser.regions
+        and parser.region_parents.get(region) != expected_parent
+    ]
+    if invalid_region_parents:
+        issues.append(
+            _issue(
+                "invalid_region_structure",
+                "body_html",
+                "Header, messages, suggestions and composer must be peer panel regions; "
+                "launcher and panel must be root regions. Invalid: "
+                + ", ".join(invalid_region_parents),
+            )
+        )
     for region in ("launcher", "composer"):
         if region in parser.regions and region not in parser.labelled_regions:
             issues.append(
