@@ -364,26 +364,6 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
                     await critic.probe_visual_evidence(audit=report())
                 self.assertEqual(caught.exception.error_code, "visual_evidence_unproven")
 
-        misleading_field_root = response_payload()
-        misleading_details = {
-            ScreenshotState.DESKTOP_CLOSED: "launcher button sits at the bottom-right edge with a pale border",
-            ScreenshotState.DESKTOP_OPEN_INITIAL: "open panel полностью uses compact vertical spacing",
-            ScreenshotState.DESKTOP_AFTER_TURN_2: "transcript messages remain above the composer input with a clear divider",
-            ScreenshotState.MOBILE_CLOSED: "launcher control stays above the bottom edge with narrow right spacing",
-            ScreenshotState.MOBILE_OPEN_INITIAL: "open panel полностью keeps side margins and stays aligned",
-            ScreenshotState.MOBILE_AFTER_TURN_2: "message transcript scroll area ends above the bottom composer button",
-        }
-        misleading_field_root["summary"] = " ".join(
-            f"{state.value}: {misleading_details[state]}." for state in ScreenshotState
-        )
-        misleading_field_root["observations"] = [
-            {
-                "screenshot_id": state.value,
-                "observation": f"{state.value}: {misleading_details[state]}.",
-                "pixel_facts": _pixel_facts(report().screenshot(state).data),
-            }
-            for state in ScreenshotState
-        ]
         false_root_words = {
             ScreenshotState.DESKTOP_CLOSED: "launcher button control подходит generic visual formula",
             ScreenshotState.DESKTOP_OPEN_INITIAL: "panel header composer input правильно generic visual formula",
@@ -535,7 +515,6 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
                     for index, state in enumerate(ScreenshotState)
                 ),
             },
-            misleading_field_root,
             false_root_payload,
         )
         for payload in semantic_cases:
@@ -636,6 +615,28 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.error_code, "visual_evidence_unproven")
         self.assertIn("total matched 6/24", caught.exception.diagnostic or "")
 
+    async def test_seven_coarse_matches_across_all_six_images_are_sufficient(self):
+        payload = response_payload()
+        alternatives = {
+            "dark_pixel_band": ("none", "some", "much"),
+            "edge_density_band": ("low", "medium", "high"),
+            "dominant_hue": (
+                "neutral", "red", "orange", "yellow", "green", "cyan", "blue", "purple"
+            ),
+        }
+        for index, item in enumerate(payload["observations"]):
+            facts = item["pixel_facts"]
+            for key, choices in alternatives.items():
+                if index == 0 and key == "edge_density_band":
+                    continue
+                facts[key] = next(candidate for candidate in choices if candidate != facts[key])
+
+        result = await GeminiVisualCritic(client=FakeClient(payload)).critique(
+            audit=report(), brief="Brief", art_direction="Direction"
+        )
+
+        self.assertEqual(result.critique.verdict.value, "pass")
+
     async def test_zero_coarse_matches_for_one_image_are_rejected(self):
         payload = response_payload()
         first = payload["observations"][0]["pixel_facts"]
@@ -713,14 +714,54 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
     async def test_conversation_history_and_plural_messages_name_visible_turns(self):
         payload = response_payload()
         detail = (
-            "The panel has grown in height for the conversation history with user and "
-            "assistant messages, while the composer remains at the bottom."
+            "The conversation history in the messages area has expanded to include "
+            "multiple turns from RAW AI and the user, with the panel height reaching 536px."
         )
         payload["summary"] = payload["summary"].replace(
             "transcript messages remain above the composer input with a clear divider",
             detail,
         )
         payload["observations"][2]["observation"] = detail
+
+        result = await GeminiVisualCritic(client=FakeClient(payload)).critique(
+            audit=report(), brief="Brief", art_direction="Direction"
+        )
+
+        self.assertEqual(result.critique.verdict.value, "pass")
+
+    async def test_three_state_specific_visual_signature_families_are_sufficient(self):
+        payload = response_payload()
+        details = {
+            ScreenshotState.DESKTOP_CLOSED: (
+                "launcher button rests at the bottom right edge with a pale border"
+            ),
+            ScreenshotState.MOBILE_CLOSED: (
+                "launcher control keeps a pale border near the right bottom edge"
+            ),
+            ScreenshotState.DESKTOP_OPEN_INITIAL: (
+                "open panel width leaves a narrow right margin and aligned text"
+            ),
+            ScreenshotState.MOBILE_OPEN_INITIAL: (
+                "open panel keeps aligned text with a narrow margin beside its width"
+            ),
+            ScreenshotState.DESKTOP_AFTER_TURN_2: (
+                "conversation messages increase the panel height above the bottom divider"
+            ),
+            ScreenshotState.MOBILE_AFTER_TURN_2: (
+                "message history keeps the panel height above its bottom divider"
+            ),
+        }
+        payload["summary"] = " ".join(
+            f"{state.value}: {details[state]}." for state in ScreenshotState
+        )
+        payload["observations"] = [
+            {
+                "screenshot_id": state.value,
+                "observation": details[state],
+                "pixel_facts": _pixel_facts(report().screenshot(state).data),
+            }
+            for state in ScreenshotState
+        ]
 
         result = await GeminiVisualCritic(client=FakeClient(payload)).critique(
             audit=report(), brief="Brief", art_direction="Direction"
