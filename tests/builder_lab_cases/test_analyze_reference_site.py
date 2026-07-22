@@ -123,15 +123,16 @@ def evidence_with_manifest(root: Path, *, payloads: dict[str, bytes] | None = No
 
 
 class FakeModels:
-    def __init__(self, payload: dict):
-        self.payload = payload
+    def __init__(self, payload: dict | list[dict]):
+        self.payloads = payload if isinstance(payload, list) else [payload]
         self.calls: list[dict] = []
 
     async def generate_content(self, **kwargs):
         self.calls.append(kwargs)
+        payload = self.payloads[min(len(self.calls) - 1, len(self.payloads) - 1)]
         return SimpleNamespace(
-            parsed=self.payload,
-            text=json.dumps(self.payload, ensure_ascii=False),
+            parsed=payload,
+            text=json.dumps(payload, ensure_ascii=False),
             response_id="reference-analysis-123",
             usage_metadata=SimpleNamespace(
                 prompt_token_count=321,
@@ -143,7 +144,7 @@ class FakeModels:
 
 
 class FakeClient:
-    def __init__(self, payload: dict):
+    def __init__(self, payload: dict | list[dict]):
         self.aio = SimpleNamespace(models=FakeModels(payload))
 
 
@@ -232,6 +233,33 @@ class ReferenceInputValidationTests(unittest.TestCase):
 
 
 class ReferenceGeminiAnalysisTests(unittest.IsolatedAsyncioTestCase):
+    async def test_retries_once_with_explicit_local_budgets_after_semantic_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs, manifest_path = evidence_with_manifest(root)
+            invalid = valid_analysis(REQUIRED_LABELS)
+            invalid["public_facts"] = []
+            fake = FakeClient([invalid, valid_analysis(REQUIRED_LABELS)])
+
+            reference = await analyze_reference_site(
+                source_url="https://rawbureau.ru/",
+                allowed_hosts={"rawbureau.ru"},
+                screenshot_inputs=inputs,
+                evidence_root=root,
+                captured_at="2026-07-19T12:10:23.127441+00:00",
+                coverage_status="complete",
+                capture_manifest=manifest_path,
+                api_key="test-key",
+                model="gemini-2.5-flash",
+                client=fake,
+            )
+
+            self.assertEqual(len(fake.aio.models.calls), 2)
+            retry_prompt = fake.aio.models.calls[1]["contents"][0].text
+            self.assertIn("public_facts: 1 to 24 items", retry_prompt)
+            self.assertIn("each visual token category: 0 to 16 items", retry_prompt)
+            self.assertEqual(reference["provenance"]["attempt_count"], 2)
+
     async def test_gemini_2_5_omits_unsupported_thinking_level(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

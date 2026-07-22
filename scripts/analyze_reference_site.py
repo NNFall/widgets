@@ -483,7 +483,11 @@ def _validate_semantic_output(payload: dict[str, Any], labels: set[str]) -> dict
 def _prompt(source_url: str, labels: Iterable[str]) -> str:
     return (
         "You are a visual brand researcher. Inspect only the JPEG evidence parts supplied after this message. "
-        "Return the strict JSON contract. Record only facts visibly printed on the page and visual tokens directly "
+        "Return the strict JSON contract. Enforce these local budgets even when the provider schema omits them: "
+        "visual_summary: 24 to 1200 characters; public_facts: 1 to 24 items, with 8 to 500 characters per "
+        "statement; each visual token category: 0 to 16 items, with 2 to 80 characters per token and 2 to 240 "
+        "characters per value; every evidence list: 1 to 6 unique labels. Prefer a concise 4 to 12 facts and 2 "
+        "to 8 strong tokens per non-empty category. Record only facts visibly printed on the page and visual tokens directly "
         "observable in pixels. Never infer promises, people, capabilities, availability, prices, contacts, or "
         "business claims that are not legible. Cite one or more exact evidence labels for every fact and token. "
         "A missing or ambiguous detail must be omitted, not guessed. Describe motion only if a sequence of supplied "
@@ -542,7 +546,8 @@ async def analyze_reference_site(
         api_key=api_key.strip(),
         http_options=build_http_options(native_base_url),
     )
-    contents: list[types.Part] = [types.Part.from_text(text=_prompt(safe_url, (item.label for item in screenshots)))]
+    prompt = _prompt(safe_url, (item.label for item in screenshots))
+    contents: list[types.Part] = [types.Part.from_text(text=prompt)]
     for screenshot in screenshots:
         contents.append(types.Part.from_text(text=f"EVIDENCE {screenshot.label}"))
         contents.append(types.Part.from_bytes(data=screenshot.data, mime_type="image/jpeg"))
@@ -558,17 +563,37 @@ async def analyze_reference_site(
         tools=[],
         thinking_config=build_low_thinking_config(model),
     )
+    request_id: str | None = None
+    usage = {key: 0 for key in ("prompt_tokens", "output_tokens", "thinking_tokens", "total_tokens")}
+    attempt_count = 0
     try:
-        async with asyncio.timeout(timeout_seconds):
-            response = await gemini_client.aio.models.generate_content(
-                model=model.strip(),
-                contents=contents,
-                config=config,
-            )
-        analysis = _validate_semantic_output(
-            _response_payload(response), {item.label for item in screenshots}
-        )
-        request_id, usage = _response_provenance(response)
+        for attempt_count in range(1, 3):
+            attempt_contents = contents
+            if attempt_count > 1:
+                retry_prompt = (
+                    prompt
+                    + "\nCORRECTION: The previous response violated the local JSON contract. Return a fresh, "
+                    "complete object within every numeric budget above; do not repeat the invalid output."
+                )
+                attempt_contents = [types.Part.from_text(text=retry_prompt), *contents[1:]]
+            async with asyncio.timeout(timeout_seconds):
+                response = await gemini_client.aio.models.generate_content(
+                    model=model.strip(),
+                    contents=attempt_contents,
+                    config=config,
+                )
+            current_request_id, current_usage = _response_provenance(response)
+            request_id = current_request_id or request_id
+            usage = {key: usage[key] + current_usage[key] for key in usage}
+            try:
+                analysis = _validate_semantic_output(
+                    _response_payload(response), {item.label for item in screenshots}
+                )
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                if attempt_count < 2:
+                    continue
+                raise
+            break
     except asyncio.CancelledError:
         raise
     except ReferenceAnalysisError:
@@ -620,6 +645,7 @@ async def analyze_reference_site(
             "model": model.strip(),
             "request_id": request_id,
             "usage": usage,
+            "attempt_count": attempt_count,
             "image_transport": "inline JPEG bytes",
             "evidence_policy": "every fact and token cites one or more supplied screenshot states",
         },
