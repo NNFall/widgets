@@ -89,6 +89,18 @@ class ArtifactValidationTests(unittest.TestCase):
             self.codes(artifact(body_html=nested)),
         )
 
+    def test_requires_widget_namespace_class_on_the_root_region(self):
+        missing_namespace = GOOD_HTML.replace(
+            'class="kaigo-widget" data-region="root"',
+            'data-region="root"',
+            1,
+        )
+
+        self.assertIn(
+            "missing_widget_root_class",
+            self.codes(artifact(body_html=missing_namespace)),
+        )
+
     def test_rejects_forbidden_elements_and_event_handlers(self):
         candidate = artifact(
             body_html=GOOD_HTML.replace(

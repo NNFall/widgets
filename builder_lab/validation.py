@@ -140,6 +140,7 @@ class _ArtifactHTMLParser(HTMLParser):
         self.regions: set[str] = set()
         self.region_parents: dict[str, str | None] = {}
         self.labelled_regions: set[str] = set()
+        self.root_has_widget_class = False
         self.issues: list[ValidationIssue] = []
 
     def _add(self, issue: ValidationIssue) -> None:
@@ -167,6 +168,10 @@ class _ArtifactHTMLParser(HTMLParser):
         region = attributes.get("data-region")
         if region:
             self.regions.add(region)
+            if region == "root" and "kaigo-widget" in attributes.get(
+                "class", ""
+            ).split():
+                self.root_has_widget_class = True
             parent_region = next(
                 (item for item in reversed(self.region_stack) if item), None
             )
@@ -461,6 +466,15 @@ def validate_artifact(
         issues.append(_issue("too_many_nodes", "body_html", "HTML contains too many elements"))
     for region in sorted(REQUIRED_REGIONS - parser.regions):
         issues.append(_issue("missing_region", "body_html", f"Required region {region} is missing"))
+    if "root" in parser.regions and not parser.root_has_widget_class:
+        issues.append(
+            _issue(
+                "missing_widget_root_class",
+                "body_html",
+                'The data-region="root" element must include class="kaigo-widget" '
+                "so every scoped CSS selector can match the rendered widget",
+            )
+        )
     expected_region_parents = {
         "launcher": "root",
         "panel": "root",
