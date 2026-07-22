@@ -581,6 +581,13 @@ class VisualRepairGate:
                     raise
                 except Exception as exc:
                     usage = getattr(exc, "usage", TokenUsage())
+                    LOGGER.warning(
+                        "visual critic failed run_id=%s attempt=%s error_code=%s diagnostic=%s",
+                        run_id,
+                        audit_attempt,
+                        getattr(exc, "error_code", type(exc).__name__),
+                        str(getattr(exc, "diagnostic", None) or str(exc))[:2_000],
+                    )
                     await self._store.append_event(
                         run_id,
                         event_type="visual_audit.completed",

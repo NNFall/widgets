@@ -493,6 +493,24 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(completed), 1)
         self.assertEqual(completed[0].usage.total_tokens, 15)
 
+    async def test_critic_error_logs_private_diagnostic_for_server_operator(self):
+        error = BuilderEngineError(
+            "provider_unavailable",
+            "critic unavailable",
+            diagnostic="private critic diagnostic",
+        )
+
+        with self.assertLogs("builder_lab.visual_gate", level="WARNING") as logs:
+            with self.assertRaises(BuilderEngineError):
+                await self.evaluate(FakeAuditor(), FakeCritic([], error=error))
+
+        events = await self.store.events_after(self.run_id, 0)
+        completed = [event for event in events if event.event_type == "visual_audit.completed"]
+        self.assertNotIn("private critic diagnostic", completed[0].message)
+        self.assertTrue(
+            any("private critic diagnostic" in message for message in logs.output)
+        )
+
     async def test_unexpected_audit_failure_is_sanitized_as_visual_failure(self):
         critic = FakeCritic([critique()])
         with self.assertRaises(BuilderEngineError) as caught:
