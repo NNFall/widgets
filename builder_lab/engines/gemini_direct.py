@@ -340,54 +340,54 @@ class GeminiDirectEngine:
             visual_findings=visual_findings,
             selected_direction=selected_direction,
         )
-        config = types.GenerateContentConfig(
-            temperature=(
-                min(request.creativity, 0.35)
-                if visual_findings
-                else request.creativity
-            ),
-            top_p=1.0,
-            max_output_tokens=8_192,
-            response_mime_type="application/json",
-            response_json_schema=build_provider_json_schema(
-                ARTIFACT_JSON_SCHEMA,
-                self.model,
-            ),
-            tools=[],
-            thinking_config=build_low_thinking_config(self.model),
+        temperature = (
+            min(request.creativity, 0.35)
+            if visual_findings
+            else request.creativity
         )
-        try:
-            response = await self._client.aio.models.generate_content(
-                model=self.model,
-                contents=prompt,
-                config=config,
+        total_usage = TokenUsage()
+        for attempt in range(2):
+            attempt_prompt = prompt
+            if attempt:
+                attempt_prompt += (
+                    "\nCORRECTION: The previous JSON could not be accepted as a complete "
+                    "widget artifact. Return a fresh full JSON object with the exact stage "
+                    f"{stage.value} and revision {revision}; preserve every schema field and "
+                    "do not add commentary."
+                )
+            response = await self._generate_structured(
+                prompt=attempt_prompt,
+                schema=ARTIFACT_JSON_SCHEMA,
+                temperature=temperature,
+                max_output_tokens=8_192,
             )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            raise _provider_error(exc) from exc
+            total_usage = total_usage + _usage(response)
+            try:
+                payload = {**_response_payload(response), "schema_version": "1.0"}
+                artifact = WidgetArtifact.from_dict(payload)
+                if artifact.revision != revision or artifact.stage != stage:
+                    raise ValueError(
+                        "Gemini candidate violates stage or revision invariants"
+                    )
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                if attempt == 0:
+                    continue
+                raise BuilderEngineError(
+                    "invalid_artifact",
+                    "Gemini вернул некорректный формат виджета",
+                    diagnostic=f"{type(exc).__name__}: {exc}",
+                    usage=total_usage,
+                ) from exc
 
-        try:
-            payload = {**_response_payload(response), "schema_version": "1.0"}
-            artifact = WidgetArtifact.from_dict(payload)
-            if artifact.revision != revision or artifact.stage != stage:
-                raise ValueError("Gemini candidate violates stage or revision invariants")
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-            raise BuilderEngineError(
-                "invalid_artifact",
-                "Gemini вернул некорректный формат виджета",
-                diagnostic=f"{type(exc).__name__}: {exc}",
-                usage=_usage(response),
-            ) from exc
-
-        return EngineResult(
-            artifact=artifact,
-            usage=_usage(response),
-            provider_request_id=getattr(response, "response_id", None),
-            diagnostic=(
-                f"model={getattr(response, 'model_version', None) or self.model}"
-            ),
-        )
+            return EngineResult(
+                artifact=artifact,
+                usage=total_usage,
+                provider_request_id=getattr(response, "response_id", None),
+                diagnostic=(
+                    f"model={getattr(response, 'model_version', None) or self.model}"
+                ),
+            )
+        raise AssertionError("unreachable widget artifact loop")
 
     async def cancel(self) -> None:
         return None

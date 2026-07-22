@@ -154,6 +154,28 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.artifact.schema_version, "1.0")
 
+    async def test_stage_generation_retries_one_invalid_protocol_response(self):
+        invalid = fake_response(artifact(revision=99, stage=Stage.FOUNDATION))
+        valid = fake_response(artifact(revision=2, stage=Stage.FOUNDATION))
+        client = FakeClient(response=[invalid, valid])
+        engine = GeminiDirectEngine(
+            api_key="secret", model="gemini-2.5-flash", client=client
+        )
+
+        result = await engine.generate(
+            request=self.request,
+            stage=Stage.FOUNDATION,
+            revision=2,
+            previous_artifact=artifact(revision=1, stage=Stage.ART_DIRECTION),
+        )
+
+        self.assertEqual(len(client.models.calls), 2)
+        self.assertIn("CORRECTION", client.models.calls[1]["contents"])
+        self.assertEqual(result.artifact.revision, 2)
+        self.assertEqual(result.usage.prompt_tokens, 240)
+        self.assertEqual(result.usage.output_tokens, 80)
+        self.assertEqual(result.usage.thinking_tokens, 20)
+
     async def test_prompt_demands_premium_non_generic_safe_russian_widget(self):
         client = FakeClient(
             response=fake_response(artifact(revision=3, stage=Stage.IDENTITY))
