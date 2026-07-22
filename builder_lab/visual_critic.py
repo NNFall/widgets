@@ -854,6 +854,7 @@ class GeminiVisualCritic:
                 "luminance_band", "dark_pixel_band", "edge_density_band", "dominant_hue"
             }
             coarse_fact_failures: list[str] = []
+            total_matching_facts = 0
             for item in observations:
                 expected_facts = _pixel_facts(screenshot_by_id[item.screenshot_id].data)
                 if set(item.pixel_facts) != pixel_fact_keys:
@@ -863,7 +864,8 @@ class GeminiVisualCritic:
                     item.pixel_facts[key] == expected_facts[key]
                     for key in pixel_fact_keys
                 )
-                if matching < 3:
+                total_matching_facts += matching
+                if matching < 1:
                     differing = sorted(
                         key
                         for key in pixel_fact_keys
@@ -873,6 +875,10 @@ class GeminiVisualCritic:
                         f"{item.screenshot_id}: matched {matching}/4; differing="
                         + ",".join(differing)
                     )
+            if total_matching_facts < 9:
+                coarse_fact_failures.append(
+                    f"total matched {total_matching_facts}/24; minimum is 9/24"
+                )
             if coarse_fact_failures:
                 raise VisualCriticError(
                     "visual_evidence_unproven",

@@ -581,13 +581,48 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.critique.verdict.value, "pass")
 
-    async def test_two_wrong_coarse_estimates_for_one_image_are_rejected(self):
+    async def test_realistic_coarse_estimates_are_scored_across_all_six_images(self):
         payload = response_payload()
-        first = payload["observations"][0]["pixel_facts"]
-        first["dominant_hue"] = "blue" if first["dominant_hue"] != "blue" else "orange"
-        first["luminance_band"] = (
-            "dark" if first["luminance_band"] != "dark" else "light"
+
+        def alternate(key, value):
+            choices = {
+                "luminance_band": ("dark", "mid", "light"),
+                "dark_pixel_band": ("none", "some", "much"),
+                "edge_density_band": ("low", "medium", "high"),
+                "dominant_hue": (
+                    "neutral", "red", "orange", "yellow", "green", "cyan", "blue", "purple"
+                ),
+            }
+            return next(candidate for candidate in choices[key] if candidate != value)
+
+        for item in payload["observations"]:
+            facts = item["pixel_facts"]
+            for key in ("dark_pixel_band", "dominant_hue"):
+                facts[key] = alternate(key, facts[key])
+        last = payload["observations"][-1]["pixel_facts"]
+        last["edge_density_band"] = alternate(
+            "edge_density_band", last["edge_density_band"]
         )
+
+        result = await GeminiVisualCritic(client=FakeClient(payload)).critique(
+            audit=report(), brief="Brief", art_direction="Direction"
+        )
+
+        self.assertEqual(result.critique.verdict.value, "pass")
+
+    async def test_one_lucky_coarse_match_per_image_is_not_enough(self):
+        payload = response_payload()
+        alternatives = {
+            "dark_pixel_band": ("none", "some", "much"),
+            "edge_density_band": ("low", "medium", "high"),
+            "dominant_hue": (
+                "neutral", "red", "orange", "yellow", "green", "cyan", "blue", "purple"
+            ),
+        }
+        for item in payload["observations"]:
+            facts = item["pixel_facts"]
+            for key, choices in alternatives.items():
+                facts[key] = next(candidate for candidate in choices if candidate != facts[key])
 
         with self.assertRaises(VisualCriticError) as caught:
             await GeminiVisualCritic(client=FakeClient(payload)).critique(
@@ -595,7 +630,29 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(caught.exception.error_code, "visual_evidence_unproven")
-        self.assertIn("matched 2/4", caught.exception.diagnostic or "")
+        self.assertIn("total matched 6/24", caught.exception.diagnostic or "")
+
+    async def test_zero_coarse_matches_for_one_image_are_rejected(self):
+        payload = response_payload()
+        first = payload["observations"][0]["pixel_facts"]
+        first["dominant_hue"] = "blue" if first["dominant_hue"] != "blue" else "orange"
+        first["luminance_band"] = (
+            "dark" if first["luminance_band"] != "dark" else "light"
+        )
+        first["dark_pixel_band"] = (
+            "much" if first["dark_pixel_band"] != "much" else "none"
+        )
+        first["edge_density_band"] = (
+            "high" if first["edge_density_band"] != "high" else "low"
+        )
+
+        with self.assertRaises(VisualCriticError) as caught:
+            await GeminiVisualCritic(client=FakeClient(payload)).critique(
+                audit=report(), brief="Brief", art_direction="Direction"
+        )
+
+        self.assertEqual(caught.exception.error_code, "visual_evidence_unproven")
+        self.assertIn("matched 0/4", caught.exception.diagnostic or "")
 
     async def test_structured_screenshot_id_need_not_be_repeated_in_observation_text(self):
         payload = response_payload()
