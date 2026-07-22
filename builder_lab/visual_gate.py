@@ -80,6 +80,16 @@ def visual_fingerprint(findings: tuple[VisualFinding, ...]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def artifact_fingerprint(candidate: WidgetArtifact) -> str:
+    payload = json.dumps(
+        candidate.to_dict(),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def forbidden_repair_fields(
     before: WidgetArtifact,
     after: WidgetArtifact,
@@ -303,10 +313,19 @@ class VisualRepairGate:
                     )
                     repair_issues = browser_repair_issues(exc)
                     if not repair_issues:
+                        if (
+                            exc.error_code == "browser_gate_failed"
+                            and audit_attempt < MAX_VISUAL_AUDITS
+                        ):
+                            continue
                         raise self._quality_error(
                             f"{exc.error_code}: {exc.diagnostic or str(exc)}"
                         ) from exc
-                    fingerprint = browser_repair_fingerprint(repair_issues)
+                    fingerprint = (
+                        browser_repair_fingerprint(repair_issues)
+                        + ":"
+                        + artifact_fingerprint(candidate)
+                    )
                     if fingerprint in seen:
                         raise self._quality_error(
                             "repeated_browser_gate_fingerprint"

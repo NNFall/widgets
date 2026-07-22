@@ -253,6 +253,53 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("desktop panel width", call["repair_issues"][0].message)
         self.assertNotIn("private browser internals", call["repair_issues"][0].message)
 
+    async def test_repeated_browser_issue_can_repair_again_after_artifact_changes(self):
+        gate_error = BrowserAuditError(
+            "browser_gate_failed",
+            "Widget failed: first-open transcript must not scroll",
+            failures=("first-open transcript must not scroll",),
+        )
+        first = artifact(
+            revision=5,
+            stage=Stage.MOTION_POLISH,
+            css=self.candidate.css + "\n.kaigo-widget__messages { min-height: 120px; }",
+        )
+        second = artifact(
+            revision=5,
+            stage=Stage.MOTION_POLISH,
+            css=self.candidate.css + "\n.kaigo-widget__messages { min-height: 180px; }",
+        )
+
+        class TwiceFailingAuditor(FakeAuditor):
+            async def audit(self, candidate):
+                self.calls.append(candidate)
+                if len(self.calls) <= 2:
+                    raise gate_error
+                return await FakeAuditor().audit(candidate)
+
+        auditor = TwiceFailingAuditor()
+        engine = FakeEngine([first, second])
+
+        result = await self.evaluate(auditor, FakeCritic([critique()]), engine)
+
+        self.assertEqual(result, second)
+        self.assertEqual(len(auditor.calls), 3)
+        self.assertEqual(len(engine.calls), 2)
+
+    async def test_repeated_browser_issue_stops_when_repair_does_not_change_artifact(self):
+        gate_error = BrowserAuditError(
+            "browser_gate_failed",
+            "Widget failed: first-open transcript must not scroll",
+            failures=("first-open transcript must not scroll",),
+        )
+
+        with self.assertRaises(BuilderEngineError):
+            await self.evaluate(
+                FakeAuditor(error=gate_error),
+                FakeCritic([critique()]),
+                FakeEngine([self.candidate]),
+            )
+
     async def test_browser_repair_discards_changes_outside_safe_patch_fields(self):
         proposed = artifact(
             revision=5,
@@ -461,6 +508,36 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         completed = [event for event in events if event.event_type == "visual_audit.completed"]
         self.assertIn("desktop panel width must be 372px", completed[0].message)
         self.assertNotIn("private internal browser diagnostic", completed[0].message)
+
+    async def test_unstructured_browser_gate_failure_retries_without_model_repair(self):
+        transient = BrowserAuditError(
+            "browser_gate_failed",
+            "Виджет не прошёл детерминированную браузерную проверку",
+            diagnostic="private Playwright timeout detail",
+        )
+
+        class FlakyAuditor(FakeAuditor):
+            async def audit(self, candidate):
+                self.calls.append(candidate)
+                if len(self.calls) == 1:
+                    raise transient
+                return await FakeAuditor().audit(candidate)
+
+        auditor = FlakyAuditor()
+        critic = FakeCritic([critique()])
+        engine = FakeEngine()
+
+        result = await self.evaluate(auditor, critic, engine)
+
+        self.assertEqual(result, self.candidate)
+        self.assertEqual(len(auditor.calls), 2)
+        self.assertEqual(len(engine.calls), 0)
+        self.assertEqual(len(critic.calls), 1)
+        events = await self.store.events_after(self.run_id, 0)
+        completed = [event for event in events if event.event_type == "visual_audit.completed"]
+        self.assertEqual(len(completed), 2)
+        self.assertEqual(completed[0].status, "failed")
+        self.assertNotIn("private Playwright timeout detail", completed[0].message)
 
     async def test_critic_factory_failure_is_sanitized_as_visual_failure(self):
         gate = VisualRepairGate(
