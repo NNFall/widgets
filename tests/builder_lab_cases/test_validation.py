@@ -136,6 +136,15 @@ class ArtifactValidationTests(unittest.TestCase):
         self.assertIn("unsafe_css_at_rule", codes)
         self.assertIn("external_css_resource", codes)
 
+    def test_unscoped_css_issue_names_the_first_offending_selector(self):
+        issues = validate_artifact(
+            artifact(css=GOOD_CSS + "\nbody, .outside { color: red; }"),
+            previous_revision=1,
+        )
+        issue = next(item for item in issues if item.code == "unscoped_css")
+
+        self.assertIn("body", issue.message)
+
     def test_rejects_selectors_that_only_mention_widget_without_targeting_it(self):
         for selector in (
             ":not(.kaigo-widget)",

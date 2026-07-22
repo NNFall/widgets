@@ -135,6 +135,25 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertNotIn(unsupported, provider_schema)
 
+    async def test_server_owns_protocol_schema_version_not_the_model(self):
+        candidate = artifact(revision=2, stage=Stage.FOUNDATION)
+        candidate = type(candidate).from_dict(
+            {**candidate.to_dict(), "schema_version": "model-guessed-version"}
+        )
+        client = FakeClient(response=fake_response(candidate))
+        engine = GeminiDirectEngine(
+            api_key="secret", model="gemini-2.5-flash", client=client
+        )
+
+        result = await engine.generate(
+            request=self.request,
+            stage=Stage.FOUNDATION,
+            revision=2,
+            previous_artifact=artifact(revision=1, stage=Stage.ART_DIRECTION),
+        )
+
+        self.assertEqual(result.artifact.schema_version, "1.0")
+
     async def test_prompt_demands_premium_non_generic_safe_russian_widget(self):
         client = FakeClient(
             response=fake_response(artifact(revision=3, stage=Stage.IDENTITY))

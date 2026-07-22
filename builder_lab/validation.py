@@ -363,7 +363,12 @@ def _validate_css(css: str) -> list[ValidationIssue]:
         if not _selector_is_scoped(selector) or re.search(
             r"(^|[\s>+~])(html|body|:root)([\s>+~.#:]|$)", selector, re.I
         ):
-            add("unscoped_css", "Every selector must be scoped under .kaigo-widget")
+            excerpt = re.sub(r"\s+", " ", selector).strip()[:240]
+            add(
+                "unscoped_css",
+                "Every selector must be scoped under .kaigo-widget; "
+                f"offending selector: {excerpt}",
+            )
             break
 
     animation_count = len(re.findall(r"@(?:-webkit-)?keyframes\b", lower))

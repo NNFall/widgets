@@ -368,7 +368,7 @@ class GeminiDirectEngine:
             raise _provider_error(exc) from exc
 
         try:
-            payload = _response_payload(response)
+            payload = {**_response_payload(response), "schema_version": "1.0"}
             artifact = WidgetArtifact.from_dict(payload)
             if artifact.revision != revision or artifact.stage != stage:
                 raise ValueError("Gemini candidate violates stage or revision invariants")
