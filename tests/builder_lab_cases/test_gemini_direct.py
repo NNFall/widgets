@@ -2,6 +2,7 @@ import asyncio
 import json
 import types as std_types
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from builder_lab.engines.base import BuilderEngineError
 from builder_lab.engines.gemini_direct import GeminiDirectEngine, build_http_options
@@ -26,13 +27,17 @@ class FakeModels:
     def __init__(self, response=None, error=None):
         self.responses = response if isinstance(response, list) else None
         self.response = response if self.responses is None else self.responses[-1]
-        self.error = error
+        self.errors = error if isinstance(error, list) else None
+        self.error = error if self.errors is None else None
         self.calls = []
 
     async def generate_content(self, **kwargs):
         self.calls.append(kwargs)
-        if self.error:
-            raise self.error
+        error = self.error
+        if self.errors is not None:
+            error = self.errors[min(len(self.calls) - 1, len(self.errors) - 1)]
+        if error:
+            raise error
         if self.responses is not None:
             return self.responses[min(len(self.calls) - 1, len(self.responses) - 1)]
         return self.response
@@ -446,6 +451,27 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertEqual(caught.exception.error_code, code)
                 self.assertNotIn("private-route", caught.exception.public_message)
+
+    async def test_transient_provider_error_is_retried_with_backoff(self):
+        client = FakeClient(
+            response=fake_response(artifact(revision=1, stage=Stage.ART_DIRECTION)),
+            error=[RuntimeError("503 upstream unavailable"), None],
+        )
+        engine = GeminiDirectEngine(api_key="secret", client=client)
+
+        with patch(
+            "builder_lab.engines.gemini_direct.asyncio.sleep",
+            new=AsyncMock(),
+        ) as sleep:
+            result = await engine.generate(
+                request=self.request,
+                stage=Stage.ART_DIRECTION,
+                revision=1,
+            )
+
+        self.assertEqual(result.artifact.revision, 1)
+        self.assertEqual(len(client.models.calls), 2)
+        sleep.assert_awaited_once_with(0.5)
 
     async def test_cancellation_is_not_wrapped(self):
         engine = GeminiDirectEngine(
