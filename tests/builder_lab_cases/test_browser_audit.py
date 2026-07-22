@@ -929,6 +929,21 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(report.screenshots), 6)
 
+    async def test_content_driven_panel_heights_within_caps_pass(self):
+        dynamic_height = audit_artifact(
+            css=AUDIT_CSS
+            + """
+[data-region="panel"] { height: 400px; }
+@media (max-width: 600px) {
+  [data-region="panel"] { height: 420px; }
+}
+"""
+        )
+
+        report = await BrowserAudit().audit(dynamic_height)
+
+        self.assertEqual(len(report.screenshots), 6)
+
     async def test_native_label_actions_are_counted_and_touch_target_gated(self):
         extra_actions = (
             '<span role="link" tabindex="0" '

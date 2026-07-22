@@ -2318,11 +2318,6 @@ class BrowserAudit:
                         f"{layout.state.value}: desktop panel width must be 372px; "
                         f"actual {panel.width:.1f}px"
                     )
-                if layout.state.value.endswith("open_initial") and abs(panel.height - 304) > 1:
-                    failures.append(
-                        f"{layout.state.value}: desktop first-open height must be 304px; "
-                        f"actual {panel.height:.1f}px"
-                    )
                 if panel.height > min(536, layout.viewport_height * 0.68) + 1:
                     failures.append(
                         f"{layout.state.value}: desktop panel exceeds height cap; "
@@ -2335,11 +2330,6 @@ class BrowserAudit:
                     failures.append(
                         f"{layout.state.value}: mobile panel must be 366px wide and keep "
                         f"12px margins; actual width {panel.width:.1f}px, x {panel.x:.1f}px"
-                    )
-                if layout.state.value.endswith("open_initial") and abs(panel.height - 320) > 1:
-                    failures.append(
-                        f"{layout.state.value}: mobile first-open height must be 320px; "
-                        f"actual {panel.height:.1f}px"
                     )
                 if panel.height > layout.viewport_height * 0.70 + 1 or panel.height >= layout.viewport_height - 1:
                     failures.append(f"{layout.state.value}: mobile panel exceeds 70dvh/non-fullscreen cap")
