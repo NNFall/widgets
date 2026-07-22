@@ -116,6 +116,11 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             client.models.calls[0]["config"].response_json_schema,
             sort_keys=True,
         )
+        config = client.models.calls[0]["config"]
+        self.assertIsNone(config.thinking_config.thinking_level)
+        self.assertEqual(config.thinking_config.thinking_budget, 0)
+        self.assertEqual(config.max_output_tokens, 8_192)
+        self.assertEqual(config.tools, [])
         self.assertIn('"schema_version"', provider_schema)
         for unsupported in (
             '"enum"',
@@ -222,7 +227,9 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             ),
             model_version="gemini-3.5-flash",
         ))
-        engine = GeminiDirectEngine(api_key="secret", client=client)
+        engine = GeminiDirectEngine(
+            api_key="secret", model="gemini-2.5-flash", client=client
+        )
 
         result = await engine.propose_direction(
             request=self.request,
@@ -234,6 +241,9 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.proposal.role, DirectionRole.BRAND_ARCHAEOLOGIST)
         call = client.models.calls[0]
         self.assertEqual(call["config"].max_output_tokens, 900)
+        self.assertIsNone(call["config"].thinking_config.thinking_level)
+        self.assertEqual(call["config"].thinking_config.thinking_budget, 0)
+        self.assertEqual(call["config"].tools, [])
         self.assertEqual(call["config"].response_mime_type, "application/json")
         self.assertEqual(call["config"].response_json_schema["additionalProperties"], False)
         self.assertIn("brand archaeologist", call["contents"])

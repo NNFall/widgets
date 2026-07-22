@@ -206,6 +206,8 @@ class GeminiDirectEngine:
             max_output_tokens=max_output_tokens,
             response_mime_type="application/json",
             response_json_schema=build_provider_json_schema(schema, self.model),
+            tools=[],
+            thinking_config=build_low_thinking_config(self.model),
         )
         try:
             return await self._client.aio.models.generate_content(
@@ -332,11 +334,14 @@ class GeminiDirectEngine:
                 else request.creativity
             ),
             top_p=1.0,
+            max_output_tokens=8_192,
             response_mime_type="application/json",
             response_json_schema=build_provider_json_schema(
                 ARTIFACT_JSON_SCHEMA,
                 self.model,
             ),
+            tools=[],
+            thinking_config=build_low_thinking_config(self.model),
         )
         try:
             response = await self._client.aio.models.generate_content(
