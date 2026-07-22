@@ -566,6 +566,7 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
                     await BrowserAudit().audit(broken)
                 self.assertEqual(caught.exception.error_code, "browser_gate_failed")
                 self.assertIn("retry", caught.exception.diagnostic or "")
+                self.assertTrue(caught.exception.failures)
 
     async def test_partial_context_is_closed_when_route_setup_fails(self):
         class BrokenContext:

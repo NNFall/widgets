@@ -1666,33 +1666,60 @@ class BrowserAudit:
                 for item in retry_layout.regions
                 if item.region.startswith("target.interactive.") and item.visible
             ]
-            if (
-                panel is None
-                or not panel.visible
-                or panel.clipped
-                or retry_action is None
-                or any(item is None or not item.visible for item in retry_actions)
-                or any(
+            retry_failures: list[str] = []
+            if panel is None or not panel.visible or panel.clipped:
+                retry_failures.append("panel is missing, hidden, or clipped")
+            for action_name, item in zip(
+                ("close", "send", "retry"), retry_actions, strict=True
+            ):
+                if item is None or not item.visible:
+                    retry_failures.append(f"{action_name} action is missing or hidden")
+                elif (
                     item.width < _MIN_INTERACTIVE_TARGET_PX
                     or item.height < _MIN_INTERACTIVE_TARGET_PX
                     or item.clipped
-                    for item in retry_actions
-                    if item
+                ):
+                    retry_failures.append(
+                        f"{action_name} action is clipped or undersized at "
+                        f"{item.width:.2f}x{item.height:.2f}px"
+                    )
+            if visible_suggestions:
+                retry_failures.append(
+                    f"{len(visible_suggestions)} suggestion action(s) remain visible"
                 )
-                or visible_suggestions
-                or retry_layout.visible_action_count != 3
-                or any(
-                    item.clipped
-                    or item.x < panel.x - 1
-                    or item.y < panel.y - 1
-                    or item.x + item.width > panel.x + panel.width + 1
-                    or item.y + item.height > panel.y + panel.height + 1
+            if retry_layout.visible_action_count != 3:
+                retry_failures.append(
+                    f"visible action count is {retry_layout.visible_action_count}, expected 3"
+                )
+            if panel is not None:
+                outside_targets = [
+                    item.region
                     for item in interactive_targets
+                    if (
+                        item.clipped
+                        or item.x < panel.x - 1
+                        or item.y < panel.y - 1
+                        or item.x + item.width > panel.x + panel.width + 1
+                        or item.y + item.height > panel.y + panel.height + 1
+                    )
+                ]
+                if outside_targets:
+                    retry_failures.append(
+                        "interactive targets outside panel: "
+                        + ", ".join(outside_targets[:4])
+                    )
+            if retry_failures:
+                failure = (
+                    "mobile.retry_error: retry state must expose exactly close, retry, "
+                    "and send as 44px actions inside the panel; "
+                    + "; ".join(retry_failures)
                 )
-            ):
-                raise ValueError(
-                    "retry state must expose exactly close, retry, and send as "
-                    "44px actions inside the panel"
+                raise BrowserAuditError(
+                    "browser_gate_failed",
+                    "Виджет не прошёл детерминированную браузерную проверку: "
+                    + failure,
+                    diagnostic=failure,
+                    failures=(failure,),
                 )
             await retry.click()
             await self._assert_pending_turn(frame, ("user",))
