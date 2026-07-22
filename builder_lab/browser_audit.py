@@ -1983,8 +1983,16 @@ class BrowserAudit:
                 ...implicitLabelNodes,
                 ...customClickNodes
               ]));
+              const targetDescriptor = node => String(
+                node.getAttribute('data-action')
+                  || node.getAttribute('data-region')
+                  || node.getAttribute('role')
+                  || node.tagName.toLowerCase()
+              ).replace(/[^a-z0-9_-]+/gi, '_').slice(0, 40);
               interactiveNodes
-                .forEach((node, index) => regions.push(record(`target.interactive.${index}`, node, true)));
+                .forEach((node, index) => regions.push(record(
+                  `target.interactive.${index}.${targetDescriptor(node)}`, node, true
+                )));
               invalidAriaNodes
                 .forEach((node, index) => regions.push(record(`invalid.aria-action.${index}`, node, true)));
               invalidNativeNodes
@@ -2122,10 +2130,20 @@ class BrowserAudit:
                 failures.append(f"{layout.state.value}: horizontal overflow > 1px")
             if layout.console_errors or layout.page_errors or layout.request_failures:
                 failures.append(f"{layout.state.value}: browser errors are present")
-            if any(
-                item.width < 44 or item.height < 44 for item in interactive_targets
-            ):
-                failures.append(f"{layout.state.value}: every interactive target must be at least 44×44px")
+            undersized_targets = [
+                item
+                for item in interactive_targets
+                if item.width < 44 or item.height < 44
+            ]
+            if undersized_targets:
+                details = ", ".join(
+                    f"{item.region}={item.width:.0f}×{item.height:.0f}px"
+                    for item in undersized_targets[:4]
+                )
+                failures.append(
+                    f"{layout.state.value}: every interactive target must be at least "
+                    f"44×44px; undersized: {details}"
+                )
             if invalid_aria_actions:
                 failures.append(
                     f"{layout.state.value}: every ARIA action must be focusable and support pointer and keyboard activation"
@@ -2138,8 +2156,6 @@ class BrowserAudit:
                 failures.append(
                     f"{layout.state.value}: every generic custom action must expose activation behavior"
                 )
-            if layout.visible_action_count > 3:
-                failures.append(f"{layout.state.value}: no more than three actions may be visible")
             if layout.state.value.endswith("closed"):
                 if panel and panel.visible:
                     failures.append(f"{layout.state.value}: panel must be hidden")
@@ -2173,10 +2189,11 @@ class BrowserAudit:
             suggestions = [
                 item
                 for item in layout.regions
-                if item.region.startswith("action.suggestion.")
+                if item.region.startswith("action.suggestion.") and item.visible
             ]
             close_action = regions.get("action.close")
             send_action = regions.get("action.send")
+            retry_action = regions.get("action.retry")
             if (
                 close_action is None
                 or send_action is None
@@ -2184,10 +2201,34 @@ class BrowserAudit:
                 or not send_action.visible
             ):
                 failures.append(f"{layout.state.value}: close and send actions are required")
-            if not actions or any(item.width < 44 or item.height < 44 for item in actions):
-                failures.append(f"{layout.state.value}: every action must be at least 44×44px")
-            if len(suggestions) > 3:
-                failures.append(f"{layout.state.value}: no more than three suggestions are allowed")
+            undersized_actions = [
+                item for item in actions if item.width < 44 or item.height < 44
+            ]
+            if not actions or undersized_actions:
+                details = ", ".join(
+                    f"{item.region}={item.width:.0f}×{item.height:.0f}px"
+                    for item in undersized_actions[:4]
+                )
+                suffix = f"; undersized: {details}" if details else ""
+                failures.append(
+                    f"{layout.state.value}: every action must be at least 44×44px{suffix}"
+                )
+            core_action_count = sum(
+                bool(item and item.visible)
+                for item in (close_action, send_action, retry_action)
+            )
+            content_action_count = max(
+                0, layout.visible_action_count - core_action_count
+            )
+            if content_action_count > 3:
+                failures.append(
+                    f"{layout.state.value}: no more than three actions may be visible "
+                    "outside close/send/retry"
+                )
+            if len(suggestions) > 2:
+                failures.append(
+                    f"{layout.state.value}: no more than two suggestions are allowed"
+                )
             if any(
                 item.clipped
                 or item.x < panel.x - 1
@@ -2197,15 +2238,23 @@ class BrowserAudit:
                 for item in actions
             ):
                 failures.append(f"{layout.state.value}: every open action must remain unclipped and inside the panel")
-            if any(
+            clipped_targets = [
+                item
+                for item in interactive_targets
+                if (
                 item.clipped
                 or item.x < panel.x - 1
                 or item.y < panel.y - 1
                 or item.x + item.width > panel.x + panel.width + 1
                 or item.y + item.height > panel.y + panel.height + 1
-                for item in interactive_targets
-            ):
-                failures.append(f"{layout.state.value}: every interactive target must remain unclipped and inside the panel")
+                )
+            ]
+            if clipped_targets:
+                details = ", ".join(item.region for item in clipped_targets[:4])
+                failures.append(
+                    f"{layout.state.value}: every interactive target must remain "
+                    f"unclipped and inside the panel; offending: {details}"
+                )
             if layout.state.value.endswith("open_initial") and layout.first_open_transcript_scrollable:
                 failures.append(f"{layout.state.value}: first-open transcript must not scroll")
             is_mobile_initial = layout.state is LayoutState.MOBILE_OPEN_INITIAL
@@ -2231,6 +2280,8 @@ class BrowserAudit:
                 failures.append(f"{layout.state.value}: live transcript ARIA state is invalid")
             for required in _REQUIRED_REGIONS:
                 region = regions.get(required)
+                if required == "root":
+                    continue
                 if region is None or not region.visible:
                     if required != "launcher":
                         failures.append(f"{layout.state.value}: required region {required} is not visible")

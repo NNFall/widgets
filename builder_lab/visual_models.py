@@ -278,7 +278,7 @@ class LayoutEvidence:
         if any(not isinstance(region, RegionEvidence) for region in regions):
             raise ValueError("regions must contain RegionEvidence values")
         region_ids = [region.region for region in regions]
-        if len(regions) > 24 or len(region_ids) != len(set(region_ids)):
+        if len(regions) > 48 or len(region_ids) != len(set(region_ids)):
             raise ValueError("layout regions must be bounded and unique")
         object.__setattr__(self, "regions", regions)
         object.__setattr__(

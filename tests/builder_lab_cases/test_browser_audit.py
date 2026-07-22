@@ -894,14 +894,59 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.error_code, "browser_gate_failed")
         self.assertIn("auto-focus", caught.exception.diagnostic or "")
 
+    async def test_two_suggestions_fit_open_action_budget(self):
+        two_suggestions = audit_artifact(
+            body_html=AUDIT_HTML.replace(
+                '</nav>',
+                '<button data-suggestion="Стоимость">Стоимость</button></nav>',
+            )
+        )
+
+        report = await BrowserAudit().audit(two_suggestions)
+
+        self.assertEqual(len(report.screenshots), 6)
+
+    async def test_root_with_fixed_sized_children_need_not_have_its_own_box(self):
+        zero_box_root = audit_artifact(
+            css=AUDIT_CSS
+            + """
+.kaigo { position: static; width: 0; height: 0; }
+[data-region="launcher"], [data-region="panel"] {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+}
+@media (max-width: 600px) {
+  [data-region="launcher"], [data-region="panel"] {
+    right: 12px;
+    bottom: 12px;
+  }
+}
+"""
+        )
+
+        report = await BrowserAudit().audit(zero_box_root)
+
+        self.assertEqual(len(report.screenshots), 6)
+
     async def test_native_label_actions_are_counted_and_touch_target_gated(self):
         extra_actions = (
-            '<input id="choice-a" type="checkbox" hidden>'
-            '<label for="choice-a" style="display:flex;width:44px;height:44px">A</label>'
+            '<span role="link" tabindex="0" '
+            'onclick="this.dataset.pointerActivated=\'true\'" '
+            'onkeydown="if(event.key===\'Enter\')this.dataset.keyboardActivated=\'true\'" '
+            'style="display:flex;width:44px;height:44px">A</span>'
             '<span role="link" tabindex="0" '
             'onclick="this.dataset.pointerActivated=\'true\'" '
             'onkeydown="if(event.key===\'Enter\')this.dataset.keyboardActivated=\'true\'" '
             'style="display:flex;width:44px;height:44px">B</span>'
+            '<span role="link" tabindex="0" '
+            'onclick="this.dataset.pointerActivated=\'true\'" '
+            'onkeydown="if(event.key===\'Enter\')this.dataset.keyboardActivated=\'true\'" '
+            'style="display:flex;width:44px;height:44px">C</span>'
+            '<span role="link" tabindex="0" '
+            'onclick="this.dataset.pointerActivated=\'true\'" '
+            'onkeydown="if(event.key===\'Enter\')this.dataset.keyboardActivated=\'true\'" '
+            'style="display:flex;width:44px;height:44px">D</span>'
         )
         too_many = audit_artifact(
             body_html=AUDIT_HTML.replace(
