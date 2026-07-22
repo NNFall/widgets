@@ -362,6 +362,26 @@ def _validate_css(css: str) -> list[ValidationIssue]:
         add("css_too_large", "Stylesheet exceeds the size limit")
     normalized = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
     lower = normalized.lower()
+    for declaration_block in re.findall(r"\{([^{}]*)\}", lower, flags=re.DOTALL):
+        all_unset = list(
+            re.finditer(
+                r"(?:^|;)\s*all\s*:\s*unset(?:\s*!important)?\s*(?:;|$)",
+                declaration_block,
+            )
+        )
+        if not all_unset:
+            continue
+        declarations_after_reset = declaration_block[all_unset[-1].end() :]
+        if not re.search(
+            r"(?:^|;)\s*box-sizing\s*:\s*border-box(?:\s*!important)?\s*(?:;|$)",
+            declarations_after_reset,
+        ):
+            add(
+                "box_sizing_reset",
+                "Every rule using all: unset must redeclare box-sizing: border-box "
+                "after all in the same rule so padded controls cannot overflow",
+            )
+            break
     if re.search(r"</\s*style\b", normalized, re.IGNORECASE):
         add("unsafe_style_terminator", "CSS must not contain an HTML style terminator")
     if re.search(r"@import\b", lower):

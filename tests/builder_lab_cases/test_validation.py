@@ -158,6 +158,27 @@ class ArtifactValidationTests(unittest.TestCase):
 
         self.assertNotIn("unsafe_css_value", self.codes(artifact(css=css)))
 
+    def test_all_unset_must_restore_border_box_in_the_same_rule(self):
+        unsafe = GOOD_CSS + """
+.kaigo-widget__suggestion {
+  box-sizing: border-box;
+  all: unset;
+  width: 100%;
+  padding: 0 12px;
+}
+"""
+        safe = GOOD_CSS + """
+.kaigo-widget__suggestion {
+  all: unset;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0 12px;
+}
+"""
+
+        self.assertIn("box_sizing_reset", self.codes(artifact(css=unsafe)))
+        self.assertNotIn("box_sizing_reset", self.codes(artifact(css=safe)))
+
     def test_rejects_legacy_behavior_property(self):
         css = GOOD_CSS + "\n.kaigo-widget { behavior: none; }"
 
