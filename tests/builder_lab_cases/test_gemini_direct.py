@@ -430,6 +430,7 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             "box-sizing: border-box",
             "44px × 44px",
             "close, send, suggestion и retry",
+            "scrollHeight <= clientHeight",
             "68dvh",
             "70dvh",
             "closed",
