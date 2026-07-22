@@ -110,6 +110,22 @@ class BuilderLabPackagingTests(unittest.TestCase):
         self.assertRegex(dockerfile, r"(?m)^USER kaigo$")
         self.assertIn("PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", dockerfile)
 
+    def test_deploy_prepares_demo_mount_for_the_unprivileged_image_user(self):
+        deploy = (ROOT / "scripts" / "deploy_builder_lab.sh").read_text(
+            encoding="utf-8"
+        )
+        build_index = deploy.index("docker compose --profile builder-lab build builder-lab")
+        ownership_index = deploy.index('chown "$builder_uid:$builder_gid" "$demo_path"')
+        create_index = deploy.index(
+            "docker compose --profile builder-lab up --no-start --force-recreate --no-deps builder-lab"
+        )
+
+        self.assertLess(build_index, ownership_index)
+        self.assertLess(ownership_index, create_index)
+        self.assertIn('[[ ! -L "$demo_path" ]]', deploy)
+        self.assertIn('install -d -m 0700 "$demo_path"', deploy)
+        self.assertIn('docker run --rm --network none --read-only --cap-drop ALL', deploy)
+
     def test_operations_document_exact_post_only_public_chat_route(self):
         operations = (ROOT / "docs" / "KAIGO_BUILDER_LAB_OPERATIONS.md").read_text(
             encoding="utf-8"

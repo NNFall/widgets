@@ -7,6 +7,31 @@ cleanup_on_error() {
 trap cleanup_on_error ERR
 
 docker compose --profile builder-lab build builder-lab
+
+builder_image="$(docker compose --profile builder-lab images -q builder-lab)"
+builder_uid="$(docker run --rm --network none --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --entrypoint id "$builder_image" -u)"
+builder_gid="$(docker run --rm --network none --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --entrypoint id "$builder_image" -g)"
+if [[ ! "$builder_uid" =~ ^[0-9]+$ || ! "$builder_gid" =~ ^[0-9]+$ ]]; then
+  echo "builder image returned an invalid runtime identity" >&2
+  exit 1
+fi
+
+demo_path="$(pwd -P)/data/builder-demo"
+[[ ! -L "$(pwd -P)/data" ]]
+[[ ! -L "$demo_path" ]]
+install -d -m 0700 "$demo_path"
+chown "$builder_uid:$builder_gid" "$demo_path"
+for demo_file in "$demo_path/latest.json" "$demo_path/.latest.json.smoke.lock"; do
+  if [[ -e "$demo_file" || -L "$demo_file" ]]; then
+    [[ -f "$demo_file" && ! -L "$demo_file" ]]
+    chown "$builder_uid:$builder_gid" "$demo_file"
+    chmod 0600 "$demo_file"
+  fi
+done
+unset builder_image builder_uid builder_gid demo_file demo_path
+
 docker compose --profile builder-lab up --no-start --force-recreate --no-deps builder-lab
 
 # The container remains stopped until both host safety controls are installed
