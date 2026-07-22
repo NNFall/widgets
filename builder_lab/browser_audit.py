@@ -2378,7 +2378,8 @@ class BrowserAudit:
                     f"{layout.state.value}: first-open transcript must not scroll{metrics}; "
                     "keep the exact first-open panel geometry and shorten the welcome copy, "
                     "show at most one short suggestion, and reduce nonessential gaps/padding "
-                    "without shrinking any action below 44x44px"
+                    "without shrinking any action below 44x44px; reset browser-default p and "
+                    "heading margins to 0"
                 )
             is_mobile_initial = layout.state is LayoutState.MOBILE_OPEN_INITIAL
             if is_mobile_initial and "textarea" in layout.active_element:

@@ -437,6 +437,8 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             "scrollHeight <= clientHeight",
             "at most three visible actions total",
             "one short suggestion",
+            "welcome copy is at most 60 characters",
+            "reset p and heading margins to 0",
             "68dvh",
             "70dvh",
             "closed",

@@ -268,6 +268,8 @@ def build_stage_prompt(
   это обязательно для close, send, suggestion и retry, даже если внутри только короткий текст или иконка;
 - при первом открытии начальный transcript полностью помещается без внутренней прокрутки на desktop и mobile:
   для messages выполняется `scrollHeight <= clientHeight`; прокрутка допустима только после добавления новых сообщений;
+- first-open welcome copy is at most 60 characters excluding the `RAW AI` label; reset p and heading margins to 0;
+  do not rely on browser default margins anywhere inside the compact panel;
 - at most three visible actions total, including close, send, retry and suggestions;
   therefore first open has one short suggestion at most while close and send are visible;
 - if a first-open transcript repair is requested, keep any exact first-open geometry from the brief;
