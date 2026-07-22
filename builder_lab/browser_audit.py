@@ -2328,8 +2328,23 @@ class BrowserAudit:
                 if "launcher.aria-expanded=false" not in layout.aria_states or "panel.aria-hidden=true" not in layout.aria_states:
                     failures.append(f"{layout.state.value}: closed ARIA state is invalid")
                 continue
-            if not layout.panel_inside_viewport or panel is None or not panel.visible:
-                failures.append(f"{layout.state.value}: panel must fit inside viewport")
+            if panel is None:
+                failures.append(f"{layout.state.value}: panel region is missing")
+                continue
+            if not panel.visible:
+                failures.append(f"{layout.state.value}: open panel must be visible")
+                continue
+            if not layout.panel_inside_viewport:
+                right = layout.viewport_width - (panel.x + panel.width)
+                bottom = layout.viewport_height - (panel.y + panel.height)
+                failures.append(
+                    f"{layout.state.value}: panel must fit inside viewport; panel rect="
+                    f"(x={panel.x:.1f}, y={panel.y:.1f}, width={panel.width:.1f}, "
+                    f"height={panel.height:.1f}), viewport={layout.viewport_width}x"
+                    f"{layout.viewport_height}, right={right:.1f}, bottom={bottom:.1f}; "
+                    "put position: fixed on the panel itself, remove transforms and "
+                    "viewport offsets from the root, and set explicit right/bottom offsets"
+                )
                 continue
             if panel.clipped:
                 failures.append(f"{layout.state.value}: panel is clipped")

@@ -990,6 +990,36 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(caught.exception.failures)
         self.assertIn("close control is outside the viewport", caught.exception.failures[0])
 
+    async def test_panel_outside_viewport_failure_contains_repair_geometry(self):
+        healthy = await BrowserAudit().audit(audit_artifact())
+        layouts = list(healthy.layouts)
+        index = next(
+            i
+            for i, layout in enumerate(layouts)
+            if layout.state is LayoutState.DESKTOP_OPEN_INITIAL
+        )
+        layout = layouts[index]
+        layouts[index] = replace(
+            layout,
+            panel_inside_viewport=False,
+            regions=tuple(
+                replace(region, x=-380.0, width=1800.0)
+                if region.region == "panel"
+                else region
+                for region in layout.regions
+            ),
+        )
+        broken = replace(healthy, layouts=tuple(layouts))
+
+        with self.assertRaises(BrowserAuditError) as caught:
+            BrowserAudit()._assert_release_gate(broken)
+
+        diagnostic = caught.exception.diagnostic or ""
+        self.assertIn("panel rect=(x=", diagnostic)
+        self.assertIn("viewport=1440x900", diagnostic)
+        self.assertIn("position: fixed", diagnostic)
+        self.assertIn("right/bottom offsets", diagnostic)
+
     async def test_launcher_must_have_semantics_and_real_keyboard_activation(self):
         keyboard_dead_launcher = audit_artifact(
             body_html=AUDIT_HTML.replace(
