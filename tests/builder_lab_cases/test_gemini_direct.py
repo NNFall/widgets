@@ -308,11 +308,11 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
                 proposal_id="candidate-1",
             )
         self.assertEqual(caught.exception.error_code, "invalid_artifact")
-        self.assertEqual(caught.exception.usage.prompt_tokens, 40)
-        self.assertEqual(caught.exception.usage.output_tokens, 16)
-        self.assertEqual(caught.exception.usage.thinking_tokens, 4)
+        self.assertEqual(caught.exception.usage.prompt_tokens, 60)
+        self.assertEqual(caught.exception.usage.output_tokens, 24)
+        self.assertEqual(caught.exception.usage.thinking_tokens, 6)
 
-    async def test_direction_proposal_retries_one_semantic_contract_failure(self):
+    async def test_direction_proposal_allows_two_semantic_corrections(self):
         invalid = {
             "title": "Direction",
             "art_direction": "Sharp editorial grid.",
@@ -338,7 +338,11 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             )
 
         client = FakeClient(
-            response=[response(invalid, "invalid-1"), response(valid, "valid-2")]
+            response=[
+                response(invalid, "invalid-1"),
+                response(invalid, "invalid-2"),
+                response(valid, "valid-3"),
+            ]
         )
         engine = GeminiDirectEngine(
             api_key="secret", model="gemini-2.5-flash", client=client
@@ -350,11 +354,12 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             proposal_id="candidate-1",
         )
 
-        self.assertEqual(len(client.models.calls), 2)
+        self.assertEqual(len(client.models.calls), 3)
         self.assertIn("CORRECTION", client.models.calls[1]["contents"])
-        self.assertEqual(result.usage.prompt_tokens, 40)
-        self.assertEqual(result.usage.output_tokens, 16)
-        self.assertEqual(result.provider_request_id, "valid-2")
+        self.assertIn("CORRECTION", client.models.calls[2]["contents"])
+        self.assertEqual(result.usage.prompt_tokens, 60)
+        self.assertEqual(result.usage.output_tokens, 24)
+        self.assertEqual(result.provider_request_id, "valid-3")
 
     async def test_direction_judge_is_blind_and_rejects_unknown_selection(self):
         proposals = tuple(

@@ -238,7 +238,7 @@ class GeminiDirectEngine:
     ) -> DirectionProposalResult:
         prompt = build_direction_proposal_prompt(request=request, role=role)
         total_usage = TokenUsage()
-        for attempt in range(2):
+        for attempt in range(3):
             attempt_prompt = prompt
             if attempt:
                 attempt_prompt += (
@@ -273,7 +273,7 @@ class GeminiDirectEngine:
                     safeguards=tuple(str(item) for item in safeguards),
                 )
             except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-                if attempt == 0:
+                if attempt < 2:
                     continue
                 raise BuilderEngineError(
                     "invalid_artifact",
