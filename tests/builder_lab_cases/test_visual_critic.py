@@ -168,9 +168,13 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
             brief="Compact editorial assistant.",
             art_direction="Warm monochrome floating note.",
         )
-        self.assertIsNone(
-            critique_client.aio.models.calls[0]["config"].thinking_config
+        critique_config = critique_client.aio.models.calls[0]["config"]
+        self.assertIsNone(critique_config.thinking_config)
+        provider_schema = json.dumps(
+            critique_config.response_json_schema, sort_keys=True
         )
+        for unsupported in ('"maxItems"', '"minItems"', '"uniqueItems"'):
+            self.assertNotIn(unsupported, provider_schema)
 
         probe_client = FakeClient(probe_payload())
         critic = GeminiVisualCritic(
@@ -179,7 +183,12 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
             proof_code_factory=lambda state: PROOF_CODES[state],
         )
         await critic.probe_visual_evidence(audit=report())
-        self.assertIsNone(probe_client.aio.models.calls[0]["config"].thinking_config)
+        probe_config = probe_client.aio.models.calls[0]["config"]
+        self.assertIsNone(probe_config.thinking_config)
+        self.assertNotIn(
+            '"maxItems"',
+            json.dumps(probe_config.response_json_schema, sort_keys=True),
+        )
 
     async def test_report_rejects_noncanonical_id_wrong_viewport_or_payload_budget(self):
         valid = report()

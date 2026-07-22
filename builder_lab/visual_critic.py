@@ -23,7 +23,11 @@ from .browser_audit import (
     MAX_INLINE_BYTES,
     MAX_SCREENSHOT_BYTES,
 )
-from .engines.gemini_direct import build_http_options, build_low_thinking_config
+from .engines.gemini_direct import (
+    build_http_options,
+    build_low_thinking_config,
+    build_provider_json_schema,
+)
 from .models import TokenUsage
 from .visual_models import ScreenshotState, VisualCritique
 
@@ -727,7 +731,10 @@ class GeminiVisualCritic:
             top_p=1.0,
             max_output_tokens=3000,
             response_mime_type="application/json",
-            response_json_schema=VISUAL_CRITIC_SCHEMA,
+            response_json_schema=build_provider_json_schema(
+                VISUAL_CRITIC_SCHEMA,
+                self.model,
+            ),
             tools=[],
             thinking_config=build_low_thinking_config(self.model),
         )
@@ -1058,7 +1065,10 @@ class GeminiVisualCritic:
             top_p=1.0,
             max_output_tokens=800,
             response_mime_type="application/json",
-            response_json_schema=VISUAL_PROBE_SCHEMA,
+            response_json_schema=build_provider_json_schema(
+                VISUAL_PROBE_SCHEMA,
+                self.model,
+            ),
             tools=[],
             thinking_config=build_low_thinking_config(self.model),
         )

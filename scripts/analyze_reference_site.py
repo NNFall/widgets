@@ -27,6 +27,7 @@ from PIL import Image, UnidentifiedImageError
 from builder_lab.engines.gemini_direct import (
     build_http_options,
     build_low_thinking_config,
+    build_provider_json_schema,
 )
 
 
@@ -550,7 +551,10 @@ async def analyze_reference_site(
         top_p=1.0,
         max_output_tokens=3000,
         response_mime_type="application/json",
-        response_json_schema=REFERENCE_ANALYSIS_SCHEMA,
+        response_json_schema=build_provider_json_schema(
+            REFERENCE_ANALYSIS_SCHEMA,
+            model,
+        ),
         tools=[],
         thinking_config=build_low_thinking_config(model),
     )

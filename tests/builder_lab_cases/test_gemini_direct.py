@@ -97,6 +97,36 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("архитектурного бюро", call["contents"])
         self.assertIn('"revision":1', call["contents"])
 
+    async def test_gemini_2_5_uses_structural_provider_schema(self):
+        client = FakeClient(response=fake_response())
+        engine = GeminiDirectEngine(
+            api_key="secret",
+            model="gemini-2.5-flash",
+            client=client,
+        )
+
+        await engine.generate(
+            request=self.request,
+            stage=Stage.FOUNDATION,
+            revision=2,
+            previous_artifact=artifact(revision=1, stage=Stage.ART_DIRECTION),
+        )
+
+        provider_schema = json.dumps(
+            client.models.calls[0]["config"].response_json_schema,
+            sort_keys=True,
+        )
+        self.assertIn('"schema_version"', provider_schema)
+        for unsupported in (
+            '"enum"',
+            '"maxItems"',
+            '"minItems"',
+            '"maxLength"',
+            '"minLength"',
+            '"pattern"',
+        ):
+            self.assertNotIn(unsupported, provider_schema)
+
     async def test_prompt_demands_premium_non_generic_safe_russian_widget(self):
         client = FakeClient(
             response=fake_response(artifact(revision=3, stage=Stage.IDENTITY))

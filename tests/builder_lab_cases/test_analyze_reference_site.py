@@ -251,7 +251,17 @@ class ReferenceGeminiAnalysisTests(unittest.IsolatedAsyncioTestCase):
                 client=fake,
             )
 
-            self.assertIsNone(fake.aio.models.calls[0]["config"].thinking_config)
+            config = fake.aio.models.calls[0]["config"]
+            self.assertIsNone(config.thinking_config)
+            provider_schema = json.dumps(config.response_json_schema, sort_keys=True)
+            for unsupported in (
+                '"maxItems"',
+                '"minItems"',
+                '"maxLength"',
+                '"minLength"',
+                '"uniqueItems"',
+            ):
+                self.assertNotIn(unsupported, provider_schema)
 
     async def test_sends_label_then_real_inline_jpeg_for_every_input(self):
         with tempfile.TemporaryDirectory() as temporary:

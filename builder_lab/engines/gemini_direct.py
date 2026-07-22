@@ -68,6 +68,48 @@ def build_low_thinking_config(
     return types.ThinkingConfig(**values)
 
 
+_GEMINI_25_SCHEMA_CONSTRAINTS = frozenset(
+    {
+        "enum",
+        "exclusiveMaximum",
+        "exclusiveMinimum",
+        "format",
+        "maxItems",
+        "maxLength",
+        "maxProperties",
+        "maximum",
+        "minItems",
+        "minLength",
+        "minProperties",
+        "minimum",
+        "multipleOf",
+        "pattern",
+        "uniqueItems",
+    }
+)
+
+
+def build_provider_json_schema(schema: dict[str, Any], model: str) -> dict[str, Any]:
+    """Keep strict schemas for Gemini 3.x and trim serving-state constraints for 2.5."""
+
+    normalized = model.strip().lower().removeprefix("models/")
+    if not normalized.startswith("gemini-2.5-"):
+        return schema
+
+    def simplify(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: simplify(item)
+                for key, item in value.items()
+                if key not in _GEMINI_25_SCHEMA_CONSTRAINTS
+            }
+        if isinstance(value, list):
+            return [simplify(item) for item in value]
+        return value
+
+    return simplify(schema)
+
+
 def _provider_error(exc: Exception) -> BuilderEngineError:
     diagnostic = f"{type(exc).__name__}: {exc}"
     lower = diagnostic.lower()
@@ -158,7 +200,7 @@ class GeminiDirectEngine:
             top_p=1.0,
             max_output_tokens=max_output_tokens,
             response_mime_type="application/json",
-            response_json_schema=schema,
+            response_json_schema=build_provider_json_schema(schema, self.model),
         )
         try:
             return await self._client.aio.models.generate_content(
@@ -286,7 +328,10 @@ class GeminiDirectEngine:
             ),
             top_p=1.0,
             response_mime_type="application/json",
-            response_json_schema=ARTIFACT_JSON_SCHEMA,
+            response_json_schema=build_provider_json_schema(
+                ARTIFACT_JSON_SCHEMA,
+                self.model,
+            ),
         )
         try:
             response = await self._client.aio.models.generate_content(
