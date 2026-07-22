@@ -263,6 +263,8 @@ def build_stage_prompt(
   это обязательно для close, send, suggestion и retry, даже если внутри только короткий текст или иконка;
 - при первом открытии начальный transcript полностью помещается без внутренней прокрутки на desktop и mobile:
   для messages выполняется `scrollHeight <= clientHeight`; прокрутка допустима только после добавления новых сообщений;
+- if a first-open transcript repair is requested, reduce welcome copy and/or increase panel height within caps;
+  never preserve a fixed short panel height that forces initial overflow; verify both desktop 1440×900 and mobile 390×844;
 - на первом открытии не более двух suggestions; каждая запускает реальный запрос;
 - fake actions, пустые кнопки и действия, которые только очищают поле, запрещены;
 - trusted runtime использует классы `.kaigo-widget__message--assistant`,

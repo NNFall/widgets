@@ -403,14 +403,14 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(engine.calls), 1)
         self.assertEqual(len(critic.calls), 2)
 
-    async def test_hard_limits_are_four_audits_and_three_repairs_independent_of_request_limit(self):
+    async def test_hard_limits_are_six_audits_and_five_repairs_independent_of_request_limit(self):
         findings = [
             finding(finding_id=f"visual-{index}", instruction=f"Repair instruction {index}.")
-            for index in range(1, 5)
+            for index in range(1, 7)
         ]
         repairs = [
             artifact(revision=5, stage=Stage.MOTION_POLISH, css=self.candidate.css + f"\n/* {i} */")
-            for i in range(3)
+            for i in range(5)
         ]
         auditor = FakeAuditor()
         critic = FakeCritic([critique(item) for item in findings])
@@ -419,9 +419,9 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(BuilderEngineError):
             await self.evaluate(auditor, critic, engine)
 
-        self.assertEqual(len(auditor.calls), 4)
-        self.assertEqual(len(critic.calls), 4)
-        self.assertEqual(len(engine.calls), 3)
+        self.assertEqual(len(auditor.calls), 6)
+        self.assertEqual(len(critic.calls), 6)
+        self.assertEqual(len(engine.calls), 5)
         self.assertEqual((await self.store.snapshot(self.run_id)).artifact.revision, 4)
         self.assertEqual((await self.store.visual_candidate(self.run_id)).revision, 5)
 

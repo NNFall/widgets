@@ -24,8 +24,8 @@ from .browser_audit import BrowserAuditError
 from .visual_models import VisualFinding, VisualSeverity
 
 
-MAX_VISUAL_AUDITS = 4
-MAX_VISUAL_REPAIRS = 3
+MAX_VISUAL_AUDITS = 6
+MAX_VISUAL_REPAIRS = 5
 MIN_REPAIR_CONFIDENCE = 0.75
 LOGGER = logging.getLogger(__name__)
 

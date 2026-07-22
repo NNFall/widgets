@@ -432,6 +432,7 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             "44px × 44px",
             "close, send, suggestion и retry",
             "scrollHeight <= clientHeight",
+            "reduce welcome copy and/or increase panel height within caps",
             "68dvh",
             "70dvh",
             "closed",
