@@ -249,6 +249,8 @@ def build_stage_prompt(
 - fixed runtime в open-state выставляет root `.kaigo-preview-open`, root `data-state="open"` и panel
   `data-open`; CSS открытия обязан использовать `.kaigo-widget.kaigo-preview-open [data-region="panel"]` или
   `[data-region="panel"][data-open]`, а не выдуманный state-селектор;
+- `.kaigo-widget` и все его потомки используют `box-sizing: border-box`; заданные ширина и max-height
+  панели уже включают border и padding, поэтому фактический bounding box не должен быть на 2px больше;
 - desktop panel: ширина 372px, высота по содержимому максимум min(536px, 68dvh);
 - mobile panel: максимум 70dvh, no fullscreen, no backdrop и не блокирует страницу;
 - на первом открытии не более двух suggestions; каждая запускает реальный запрос;

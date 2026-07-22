@@ -2316,15 +2316,21 @@ class BrowserAudit:
                 if abs(panel.width - 372) > 1:
                     failures.append(
                         f"{layout.state.value}: desktop panel width must be 372px; "
-                        f"actual {panel.width:.1f}px"
+                        f"actual {panel.width:.1f}px; use box-sizing:border-box"
                     )
                 if panel.height > min(536, layout.viewport_height * 0.68) + 1:
                     failures.append(
                         f"{layout.state.value}: desktop panel exceeds height cap; "
-                        f"actual {panel.height:.1f}px"
+                        f"actual {panel.height:.1f}px; max-height must include borders via "
+                        "box-sizing:border-box"
                     )
                 if abs(layout.viewport_width - (panel.x + panel.width) - 20) > 1 or abs(layout.viewport_height - (panel.y + panel.height) - 20) > 1:
-                    failures.append(f"{layout.state.value}: desktop panel must keep 20px right/bottom margins")
+                    actual_right = layout.viewport_width - (panel.x + panel.width)
+                    actual_bottom = layout.viewport_height - (panel.y + panel.height)
+                    failures.append(
+                        f"{layout.state.value}: desktop panel must keep 20px right/bottom "
+                        f"margins; actual right {actual_right:.1f}px, bottom {actual_bottom:.1f}px"
+                    )
             else:
                 if abs(panel.width - 366) > 1 or panel.x < 11 or panel.x + panel.width > layout.viewport_width - 11:
                     failures.append(
