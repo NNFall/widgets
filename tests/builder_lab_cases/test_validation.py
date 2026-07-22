@@ -149,6 +149,7 @@ class ArtifactValidationTests(unittest.TestCase):
         scoped = """
 .kaigo-widget__launcher:hover { color: red; }
 .kaigo-widget--open > .kaigo-widget__panel { opacity: 1; }
+.kaigo-widget__textarea:not(:placeholder-shown) + .kaigo-widget__composer-label { opacity: 1; }
 @media (prefers-reduced-motion: reduce) { .kaigo-widget__panel { transition: none; } }
 """
         self.assertNotIn("unscoped_css", self.codes(artifact(css=scoped)))

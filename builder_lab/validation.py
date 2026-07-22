@@ -323,14 +323,18 @@ def _selector_is_scoped(selector: str) -> bool:
         elif character in ")]" and depth:
             depth -= 1
         elif depth == 0 and character in "+~":
-            return False
+            remainder = candidate[cursor + 1 :].lstrip()
+            return bool(remainder) and _selector_is_scoped(remainder)
         elif depth == 0 and character == ">":
             return True
         elif depth == 0 and character.isspace():
             remainder = candidate[cursor:].lstrip()
             if not remainder:
                 return True
-            return remainder[0] not in "+~"
+            if remainder[0] in "+~":
+                sibling = remainder[1:].lstrip()
+                return bool(sibling) and _selector_is_scoped(sibling)
+            return True
         cursor += 1
     return True
 

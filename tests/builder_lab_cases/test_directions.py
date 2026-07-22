@@ -71,7 +71,9 @@ class DirectionBoardTests(unittest.IsolatedAsyncioTestCase):
             previous_artifact=None,
         )
 
-        self.assertIn('.kaigo-preview-open [data-region="panel"]', prompt)
+        self.assertIn(
+            '.kaigo-widget.kaigo-preview-open [data-region="panel"]', prompt
+        )
         self.assertIn('[data-region="panel"][data-open]', prompt)
         self.assertIn('data-state="open"', prompt)
 
