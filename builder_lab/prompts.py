@@ -280,7 +280,11 @@ def build_stage_prompt(
   `.kaigo-widget__message--user`, `.kaigo-widget__message--status` и
   `.kaigo-widget__message--error`; CSS обязан оформить их как редакционный transcript,
   без bubbles и avatars;
-- data-action описывает только реальные open, close, send, suggestion и retry;
+- trusted runtime injects retry as `[data-kaigo-runtime-retry="true"]` inside messages and marks errors with
+  `[data-kaigo-runtime-status="error"]`; CSS must give that actual retry marker at least 44×44px;
+  during error hide suggestions with `.kaigo-widget:has([data-kaigo-runtime-status="error"]) [data-region="suggestions"]`;
+  do not invent `[data-action="retry"]`, panel `[data-error]`, or any other state marker the runtime never sets;
+- data-action описывает только реальные open, close, send и suggestion; retry существует только как runtime-маркер;
   сгенерированный artifact не имитирует ответы.
 
 Этап: {stage.value}

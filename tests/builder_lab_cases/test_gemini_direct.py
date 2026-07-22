@@ -448,6 +448,8 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             ".kaigo-widget__message--user",
             ".kaigo-widget__message--status",
             ".kaigo-widget__message--error",
+            'data-kaigo-runtime-retry="true"',
+            'data-kaigo-runtime-status="error"',
         ):
             self.assertIn(required.lower(), prompt.lower())
 
