@@ -52,6 +52,22 @@ def build_http_options(base_url: str) -> types.HttpOptions:
     )
 
 
+def build_low_thinking_config(
+    model: str,
+    *,
+    include_thoughts: bool | None = None,
+) -> types.ThinkingConfig | None:
+    """Return a low-reasoning config only for models that accept thinking levels."""
+
+    normalized = model.strip().lower().removeprefix("models/")
+    if normalized.startswith("gemini-2.5-"):
+        return None
+    values: dict[str, Any] = {"thinking_level": types.ThinkingLevel.LOW}
+    if include_thoughts is not None:
+        values["include_thoughts"] = include_thoughts
+    return types.ThinkingConfig(**values)
+
+
 def _provider_error(exc: Exception) -> BuilderEngineError:
     diagnostic = f"{type(exc).__name__}: {exc}"
     lower = diagnostic.lower()

@@ -24,7 +24,10 @@ from google import genai
 from google.genai import types
 from PIL import Image, UnidentifiedImageError
 
-from builder_lab.engines.gemini_direct import build_http_options
+from builder_lab.engines.gemini_direct import (
+    build_http_options,
+    build_low_thinking_config,
+)
 
 
 MAX_SCREENSHOT_BYTES = 1_500_000
@@ -549,7 +552,7 @@ async def analyze_reference_site(
         response_mime_type="application/json",
         response_json_schema=REFERENCE_ANALYSIS_SCHEMA,
         tools=[],
-        thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
+        thinking_config=build_low_thinking_config(model),
     )
     try:
         async with asyncio.timeout(timeout_seconds):

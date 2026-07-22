@@ -13,7 +13,7 @@ from typing import Any, Callable
 from google import genai
 from google.genai import types
 
-from .engines.gemini_direct import build_http_options
+from .engines.gemini_direct import build_http_options, build_low_thinking_config
 from .models import TokenUsage
 
 
@@ -397,8 +397,8 @@ class GeminiDemoChatService:
                 temperature=0.35,
                 top_p=1.0,
                 max_output_tokens=384,
-                thinking_config=types.ThinkingConfig(
-                    thinking_level=types.ThinkingLevel.LOW,
+                thinking_config=build_low_thinking_config(
+                    self.model,
                     include_thoughts=False,
                 ),
             )

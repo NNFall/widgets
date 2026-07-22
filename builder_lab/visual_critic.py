@@ -23,7 +23,7 @@ from .browser_audit import (
     MAX_INLINE_BYTES,
     MAX_SCREENSHOT_BYTES,
 )
-from .engines.gemini_direct import build_http_options
+from .engines.gemini_direct import build_http_options, build_low_thinking_config
 from .models import TokenUsage
 from .visual_models import ScreenshotState, VisualCritique
 
@@ -729,9 +729,7 @@ class GeminiVisualCritic:
             response_mime_type="application/json",
             response_json_schema=VISUAL_CRITIC_SCHEMA,
             tools=[],
-            thinking_config=types.ThinkingConfig(
-                thinking_level=types.ThinkingLevel.LOW,
-            ),
+            thinking_config=build_low_thinking_config(self.model),
         )
         try:
             async with asyncio.timeout(self.timeout_seconds):
@@ -1062,7 +1060,7 @@ class GeminiVisualCritic:
             response_mime_type="application/json",
             response_json_schema=VISUAL_PROBE_SCHEMA,
             tools=[],
-            thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW),
+            thinking_config=build_low_thinking_config(self.model),
         )
         try:
             async with asyncio.timeout(self.timeout_seconds):

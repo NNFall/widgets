@@ -128,6 +128,21 @@ class GeminiDemoChatServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Какие проекты вы делаете?", rendered)
         self.assertIn("Первый ответ", rendered)
 
+    async def test_gemini_2_5_omits_unsupported_thinking_level(self):
+        service = self.service([response("OK")], model="gemini-2.5-flash")
+
+        await service.reply(
+            scope="demo:artifact-25",
+            session_id="session-25",
+            request_id="request-2501",
+            text="Hello",
+            system_prompt="Answer briefly.",
+        )
+
+        self.assertIsNone(
+            service._client.models.calls[0]["config"].thinking_config
+        )
+
     async def test_public_errors_are_readable_utf8_without_mojibake(self):
         with self.assertRaises(ChatServiceError) as missing_key:
             GeminiDemoChatService(api_key=None)

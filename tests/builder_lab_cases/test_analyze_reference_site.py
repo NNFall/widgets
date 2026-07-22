@@ -232,6 +232,27 @@ class ReferenceInputValidationTests(unittest.TestCase):
 
 
 class ReferenceGeminiAnalysisTests(unittest.IsolatedAsyncioTestCase):
+    async def test_gemini_2_5_omits_unsupported_thinking_level(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs, manifest_path = evidence_with_manifest(root)
+            fake = FakeClient(valid_analysis(REQUIRED_LABELS))
+
+            await analyze_reference_site(
+                source_url="https://rawbureau.ru/",
+                allowed_hosts={"rawbureau.ru"},
+                screenshot_inputs=inputs,
+                evidence_root=root,
+                captured_at="2026-07-19T12:10:23.127441+00:00",
+                coverage_status="complete",
+                capture_manifest=manifest_path,
+                api_key="test-key",
+                model="gemini-2.5-flash",
+                client=fake,
+            )
+
+            self.assertIsNone(fake.aio.models.calls[0]["config"].thinking_config)
+
     async def test_sends_label_then_real_inline_jpeg_for_every_input(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
