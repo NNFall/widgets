@@ -404,10 +404,18 @@ _REQUIRED_REGIONS = (
 
 
 class BrowserAuditError(RuntimeError):
-    def __init__(self, error_code: str, message: str, *, diagnostic: str | None = None):
+    def __init__(
+        self,
+        error_code: str,
+        message: str,
+        *,
+        diagnostic: str | None = None,
+        failures: tuple[str, ...] = (),
+    ):
         super().__init__(message)
         self.error_code = error_code
         self.diagnostic = diagnostic
+        self.failures = tuple(str(item) for item in failures if str(item).strip())
 
 
 @dataclass(frozen=True)
@@ -2264,6 +2272,7 @@ class BrowserAudit:
                 "browser_gate_failed",
                 "Виджет не прошёл детерминированную браузерную проверку: " + "; ".join(failures[:8]),
                 diagnostic="\n".join(failures),
+                failures=tuple(failures),
             )
 
 

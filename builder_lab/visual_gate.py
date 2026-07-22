@@ -100,6 +100,40 @@ def forbidden_repair_fields(
     return tuple(sorted(changed - allowed))
 
 
+def browser_repair_issues(error: BrowserAuditError) -> tuple[ValidationIssue, ...]:
+    if error.error_code != "browser_gate_failed" or not error.failures:
+        return ()
+    return tuple(
+        ValidationIssue(
+            code="browser_gate_failed",
+            field="body_html/css",
+            message=failure[:500],
+        )
+        for failure in error.failures[:12]
+    )
+
+
+def browser_repair_fingerprint(issues: tuple[ValidationIssue, ...]) -> str:
+    normalized = "\n".join(
+        re.sub(r"\s+", " ", issue.message).strip().casefold() for issue in issues
+    )
+    return "browser:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def forbidden_browser_repair_fields(
+    before: WidgetArtifact,
+    after: WidgetArtifact,
+) -> tuple[str, ...]:
+    before_payload = before.to_dict()
+    after_payload = after.to_dict()
+    changed = {
+        field_name
+        for field_name in before_payload
+        if before_payload[field_name] != after_payload[field_name]
+    }
+    return tuple(sorted(changed - {"body_html", "css", "suggested_actions"}))
+
+
 class VisualRepairGate:
     """Keep revision 5 private until browser and Gemini visual checks pass."""
 
@@ -229,7 +263,124 @@ class VisualRepairGate:
                 )
                 try:
                     audit = await self._audit_factory().audit(candidate)
+                except asyncio.CancelledError:
+                    raise
+                except BrowserAuditError as exc:
+                    await self._store.append_event(
+                        run_id,
+                        event_type="visual_audit.completed",
+                        stage=Stage.MOTION_POLISH,
+                        status="failed",
+                        message=str(exc)[:1_000],
+                        revision=candidate.revision,
+                    )
+                    repair_issues = browser_repair_issues(exc)
+                    if not repair_issues:
+                        raise self._quality_error(
+                            f"{exc.error_code}: {exc.diagnostic or str(exc)}"
+                        ) from exc
+                    fingerprint = browser_repair_fingerprint(repair_issues)
+                    if fingerprint in seen:
+                        raise self._quality_error(
+                            "repeated_browser_gate_fingerprint"
+                        ) from exc
+                    seen.add(fingerprint)
+                    if (
+                        repair_count >= MAX_VISUAL_REPAIRS
+                        or audit_attempt >= MAX_VISUAL_AUDITS
+                    ):
+                        raise self._quality_error(
+                            "browser_gate_repair_exhausted"
+                        ) from exc
+
+                    repair_count += 1
                     await self._checkpoint(run_id)
+                    await self._store.append_event(
+                        run_id,
+                        event_type="visual_repair.started",
+                        stage=Stage.MOTION_POLISH,
+                        status="running",
+                        message=f"Browser gate repair: попытка {repair_count}",
+                        revision=candidate.revision,
+                        issues=repair_issues,
+                    )
+                    try:
+                        repair = await engine.generate(
+                            request=request,
+                            stage=Stage.MOTION_POLISH,
+                            revision=candidate.revision,
+                            previous_artifact=candidate,
+                            repair_issues=repair_issues,
+                            visual_findings=(),
+                            selected_direction=selected_direction,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as repair_exc:
+                        usage = getattr(repair_exc, "usage", TokenUsage())
+                        await self._store.append_event(
+                            run_id,
+                            event_type="visual_repair.completed",
+                            stage=Stage.MOTION_POLISH,
+                            status="failed",
+                            message=f"Browser gate repair {repair_count} завершился ошибкой",
+                            revision=candidate.revision,
+                            usage=usage,
+                        )
+                        raise self._quality_error(
+                            "browser_gate_repair_error: "
+                            f"{getattr(repair_exc, 'error_code', type(repair_exc).__name__)}"
+                        ) from repair_exc
+                    repaired_candidate = repair.artifact
+                    await self._store.append_event(
+                        run_id,
+                        event_type="visual_repair.completed",
+                        stage=Stage.MOTION_POLISH,
+                        status="completed",
+                        message=f"Модель завершила browser gate repair {repair_count}",
+                        revision=repaired_candidate.revision,
+                        usage=repair.usage,
+                        diagnostic=repair.diagnostic,
+                    )
+                    await self._checkpoint(run_id)
+                    forbidden = forbidden_browser_repair_fields(
+                        candidate, repaired_candidate
+                    )
+                    if forbidden:
+                        raise self._quality_error(
+                            "forbidden_browser_repair_fields: "
+                            + ",".join(forbidden)
+                        )
+                    candidate = repaired_candidate
+                    await self._store.stage_visual_candidate(run_id, candidate)
+                    issues = validate_artifact(
+                        candidate, previous_revision=previous.revision
+                    )
+                    await self._record_validation(run_id, candidate, issues)
+                    if issues:
+                        raise self._quality_error(
+                            "deterministic_regression: "
+                            + "; ".join(issue.code for issue in issues)
+                        )
+                    continue
+                except Exception as exc:
+                    usage = getattr(exc, "usage", TokenUsage())
+                    await self._store.append_event(
+                        run_id,
+                        event_type="visual_audit.completed",
+                        stage=Stage.MOTION_POLISH,
+                        status="failed",
+                        message="Visual audit завершился ошибкой",
+                        revision=candidate.revision,
+                        usage=usage,
+                    )
+                    raise self._quality_error(
+                        f"{getattr(exc, 'error_code', type(exc).__name__)}: "
+                        f"{getattr(exc, 'diagnostic', None) or str(exc)}"
+                    ) from exc
+
+                await self._checkpoint(run_id)
+                try:
                     for screenshot in audit.screenshots:
                         await self._store.append_event(
                             run_id,
@@ -252,15 +403,12 @@ class VisualRepairGate:
                     raise
                 except Exception as exc:
                     usage = getattr(exc, "usage", TokenUsage())
-                    public_message = "Visual audit завершился ошибкой"
-                    if isinstance(exc, BrowserAuditError):
-                        public_message = str(exc)[:1_000]
                     await self._store.append_event(
                         run_id,
                         event_type="visual_audit.completed",
                         stage=Stage.MOTION_POLISH,
                         status="failed",
-                        message=public_message,
+                        message="Visual audit завершился ошибкой",
                         revision=candidate.revision,
                         usage=usage,
                     )

@@ -217,6 +217,42 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["visual_findings"], (finding(),))
         self.assertEqual((await self.store.visual_candidate(self.run_id)), repaired)
 
+    async def test_structured_browser_gate_failure_repairs_then_reaudits_before_critic(self):
+        repaired = artifact(
+            revision=5,
+            stage=Stage.MOTION_POLISH,
+            css=self.candidate.css + "\n.kaigo-widget { overflow: clip; }",
+        )
+        gate_error = BrowserAuditError(
+            "browser_gate_failed",
+            "Виджет не прошёл проверку: desktop panel width must be 372px",
+            diagnostic="private browser internals",
+            failures=("desktop panel width must be 372px",),
+        )
+
+        class RepairableAuditor(FakeAuditor):
+            async def audit(self, candidate):
+                self.calls.append(candidate)
+                if len(self.calls) == 1:
+                    raise gate_error
+                return await FakeAuditor().audit(candidate)
+
+        auditor = RepairableAuditor()
+        critic = FakeCritic([critique()])
+        engine = FakeEngine([repaired])
+
+        result = await self.evaluate(auditor, critic, engine)
+
+        self.assertEqual(result, repaired)
+        self.assertEqual(len(auditor.calls), 2)
+        self.assertEqual(len(critic.calls), 1)
+        self.assertEqual(len(engine.calls), 1)
+        call = engine.calls[0]
+        self.assertEqual(call["visual_findings"], ())
+        self.assertEqual(call["repair_issues"][0].code, "browser_gate_failed")
+        self.assertIn("desktop panel width", call["repair_issues"][0].message)
+        self.assertNotIn("private browser internals", call["repair_issues"][0].message)
+
     async def test_repeated_normalized_fingerprint_stops_without_second_repair(self):
         first = finding(artifact_fields=("css", "body_html"), confidence=0.90)
         same_semantics_new_id = finding(

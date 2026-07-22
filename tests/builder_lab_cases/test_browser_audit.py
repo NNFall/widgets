@@ -831,6 +831,8 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
             await BrowserAudit().audit(broken)
         self.assertEqual(caught.exception.error_code, "browser_gate_failed")
         self.assertIn("44", str(caught.exception))
+        self.assertTrue(caught.exception.failures)
+        self.assertTrue(any("44" in failure for failure in caught.exception.failures))
 
     async def test_ancestor_overflow_clipping_reduces_effective_touch_target(self):
         cases = (
