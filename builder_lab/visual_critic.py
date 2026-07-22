@@ -720,6 +720,10 @@ class GeminiVisualCritic:
                 "an image-specific fact about position, size, line wrapping, color, typography, or a "
                 "measured value. For each matching desktop/mobile state, explicitly describe a concrete "
                 "visual difference; IDs, device/state names, indices, and boilerplate do not count. "
+                "Use these explicit control words in every observation and matching summary segment: "
+                "closed: name launcher, button, or control; open_initial: name panel and also header, "
+                "composer, or input; after_turn_2: name message, messages, transcript, conversation, "
+                "response, or history and also composer, input, or button. "
                 "Different numeric literals alone do not prove a different observation. Apply the same "
                 "six-state, image-specific rule to each summary segment. "
                 "Independently estimate pixel_facts "
@@ -818,7 +822,8 @@ class GeminiVisualCritic:
             marker_terms = {
                 "alignment", "border", "button", "closed", "color", "composer",
                 "control", "edge", "font", "header", "input", "launcher", "left",
-                "margin", "message", "open", "panel", "right", "spacing", "suggestion",
+                "margin", "message", "messages", "conversation", "conversations",
+                "response", "responses", "history", "open", "panel", "right", "spacing", "suggestion",
                 "text", "top", "bottom", "transcript", "typography", "width", "height",
                 "граница", "заголовок", "кнопка", "линия", "отступ", "панель",
                 "поле", "сверху", "слева", "снизу", "сообщение", "справа", "текст",
@@ -893,7 +898,10 @@ class GeminiVisualCritic:
                     {"header", "composer", "input", "заголовок", "поле"},
                 ),
                 "after_turn_2": (
-                    {"message", "transcript", "сообщение"},
+                    {
+                        "message", "messages", "transcript", "conversation",
+                        "conversations", "response", "responses", "history", "сообщение",
+                    },
                     {"composer", "input", "button", "поле", "кнопка"},
                 ),
             }

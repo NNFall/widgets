@@ -259,7 +259,11 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config.top_p, 1.0)
         self.assertEqual(config.tools, [])
         self.assertIn("LOW", str(config.thinking_config.thinking_level).upper())
-        self.assertIn("untrusted", str(config.system_instruction).lower())
+        instruction = str(config.system_instruction).lower()
+        self.assertIn("untrusted", instruction)
+        self.assertIn("closed: name launcher, button, or control", instruction)
+        self.assertIn("open_initial: name panel", instruction)
+        self.assertIn("after_turn_2: name message", instruction)
         contents = call["contents"]
         image_parts = [part for part in contents if getattr(part, "inline_data", None)]
         self.assertEqual(len(image_parts), 6)
@@ -705,6 +709,24 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
         for marker in ("launcher", "button", "control"):
             self.assertIn(marker, diagnostic)
         self.assertIn(bad_detail, diagnostic)
+
+    async def test_conversation_history_and_plural_messages_name_visible_turns(self):
+        payload = response_payload()
+        detail = (
+            "The panel has grown in height for the conversation history with user and "
+            "assistant messages, while the composer remains at the bottom."
+        )
+        payload["summary"] = payload["summary"].replace(
+            "transcript messages remain above the composer input with a clear divider",
+            detail,
+        )
+        payload["observations"][2]["observation"] = detail
+
+        result = await GeminiVisualCritic(client=FakeClient(payload)).critique(
+            audit=report(), brief="Brief", art_direction="Direction"
+        )
+
+        self.assertEqual(result.critique.verdict.value, "pass")
 
     async def test_common_russian_visual_inflections_are_accepted(self):
         payload = response_payload()
