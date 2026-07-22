@@ -567,6 +567,36 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(result.observations), 6)
 
+    async def test_one_coarse_pixel_estimate_may_differ_per_original_image(self):
+        payload = response_payload()
+        for item in payload["observations"]:
+            actual = item["pixel_facts"]["dominant_hue"]
+            item["pixel_facts"]["dominant_hue"] = (
+                "blue" if actual != "blue" else "orange"
+            )
+
+        result = await GeminiVisualCritic(client=FakeClient(payload)).critique(
+            audit=report(), brief="Brief", art_direction="Direction"
+        )
+
+        self.assertEqual(result.critique.verdict.value, "pass")
+
+    async def test_two_wrong_coarse_estimates_for_one_image_are_rejected(self):
+        payload = response_payload()
+        first = payload["observations"][0]["pixel_facts"]
+        first["dominant_hue"] = "blue" if first["dominant_hue"] != "blue" else "orange"
+        first["luminance_band"] = (
+            "dark" if first["luminance_band"] != "dark" else "light"
+        )
+
+        with self.assertRaises(VisualCriticError) as caught:
+            await GeminiVisualCritic(client=FakeClient(payload)).critique(
+                audit=report(), brief="Brief", art_direction="Direction"
+            )
+
+        self.assertEqual(caught.exception.error_code, "visual_evidence_unproven")
+        self.assertIn("matched 2/4", caught.exception.diagnostic or "")
+
     async def test_structured_screenshot_id_need_not_be_repeated_in_observation_text(self):
         payload = response_payload()
         for item in payload["observations"]:
