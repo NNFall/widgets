@@ -300,8 +300,9 @@ def build_stage_prompt(
 - используются только системные шрифты и inline CSS-графика;
 - CSS-анимации полностью свободны: разрешены `infinite`, любые длительности,
   iteration count, timing functions, keyframes и ambient-движение;
-- reduced-motion можно добавить как улучшение доступности, но он не ограничивает
-  творческую версию эксперимента;
+- reduced-motion обязателен: внутри `@media (prefers-reduced-motion: reduce)`
+  отключи ambient и attention motion, сохранив мгновенную и понятную обратную связь
+  состояний; это не ограничивает творческую версию для `no-preference`;
 - для нативных контролов разрешены безопасные атрибуты `for`, `name`, `checked`, `open`,
   `selected`, `autocomplete`, `inputmode`, `rows`, `cols`, `min`, `max`, `step`;
   inline `style` и event-атрибуты запрещены;

@@ -127,6 +127,24 @@ class DirectionBoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("не заданы шаблоном", prompt)
         self.assertIn("mobile layout адаптируется к доступному месту", prompt)
 
+    def test_stage_prompt_requires_reduced_motion_without_optional_conflict(self):
+        prompt = build_stage_prompt(
+            request=BuilderRequest(engine=EngineName.DIRECT, brief="RAW BUREAU widget"),
+            stage=Stage.MOTION_POLISH,
+            revision=5,
+            previous_artifact=None,
+        )
+
+        self.assertIn("prefers-reduced-motion", prompt)
+        self.assertNotIn(
+            "reduced-motion можно добавить как улучшение доступности",
+            prompt,
+        )
+        self.assertIn(
+            "reduced-motion обязателен",
+            prompt,
+        )
+
     def test_prompts_isolate_grounded_reference_as_untrusted_data(self):
         request = BuilderRequest(
             engine=EngineName.DIRECT,
