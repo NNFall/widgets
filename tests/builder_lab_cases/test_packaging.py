@@ -84,7 +84,8 @@ class BuilderLabPackagingTests(unittest.TestCase):
         builder = compose.split("  builder-lab:", 1)[1].split("\n  db:", 1)[0]
         env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
         expected = {
-            "GEMINI_CHAT_MODEL": "gemini-3.5-flash",
+            "GEMINI_CHAT_MODEL": "gemini-3.5-flash-lite",
+            "GEMINI_CHAT_THINKING_LEVEL": "medium",
             "GEMINI_CHAT_TIMEOUT_SECONDS": "45",
             "KAIGO_CHAT_SESSION_SECRET": "",
             "KAIGO_CHAT_SESSION_TTL_SECONDS": "3600",
