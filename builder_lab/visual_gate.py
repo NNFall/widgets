@@ -113,7 +113,11 @@ def forbidden_repair_fields(
     return tuple(sorted(changed - allowed))
 
 
-def browser_repair_issues(error: BrowserAuditError) -> tuple[ValidationIssue, ...]:
+def browser_repair_issues(
+    error: BrowserAuditError,
+    *,
+    include_transient_runtime: bool = False,
+) -> tuple[ValidationIssue, ...]:
     if error.error_code != "browser_gate_failed":
         return ()
     failures = error.failures
@@ -128,6 +132,10 @@ def browser_repair_issues(error: BrowserAuditError) -> tuple[ValidationIssue, ..
                 "target page, context or browser has been closed",
             )
         )
+        if include_transient_runtime and (
+            "timeout" in normalized or "timed out" in normalized
+        ):
+            repairable_runtime_failure = True
         if not diagnostic or not repairable_runtime_failure:
             return ()
         failures = (f"Browser audit runtime failure: {diagnostic}",)
@@ -348,7 +356,10 @@ class VisualRepairGate:
                         message=str(exc)[:1_000],
                         revision=candidate.revision,
                     )
-                    repair_issues = browser_repair_issues(exc)
+                    repair_issues = browser_repair_issues(
+                        exc,
+                        include_transient_runtime=audit_attempt > 1,
+                    )
                     if not repair_issues:
                         if (
                             exc.error_code == "browser_gate_failed"

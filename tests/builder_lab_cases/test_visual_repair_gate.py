@@ -640,6 +640,40 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed[0].status, "failed")
         self.assertNotIn("private Playwright timeout detail", completed[0].message)
 
+    async def test_repeated_unstructured_browser_timeout_triggers_model_repair(self):
+        timeout = BrowserAuditError(
+            "browser_gate_failed",
+            "Widget browser audit could not complete",
+            diagnostic="TimeoutError: Page.set_content exceeded 10000ms",
+        )
+        repaired = artifact(
+            revision=5,
+            stage=Stage.MOTION_POLISH,
+            javascript="",
+        )
+
+        class TwiceTimingOutAuditor(FakeAuditor):
+            async def audit(self, candidate):
+                self.calls.append(candidate)
+                if len(self.calls) <= 2:
+                    raise timeout
+                return await FakeAuditor().audit(candidate)
+
+        auditor = TwiceTimingOutAuditor()
+        engine = FakeEngine([repaired])
+
+        result = await self.evaluate(
+            auditor,
+            FakeCritic([critique()]),
+            engine,
+        )
+
+        self.assertEqual(result, repaired)
+        self.assertEqual(len(auditor.calls), 3)
+        self.assertEqual(len(engine.calls), 1)
+        issue = engine.calls[0]["repair_issues"][0]
+        self.assertIn("Page.set_content", issue.message)
+
     async def test_unproven_critic_response_retries_without_model_repair(self):
         transient = BuilderEngineError(
             "visual_evidence_unproven",
