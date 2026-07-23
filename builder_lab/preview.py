@@ -76,6 +76,7 @@ try {{
     html, body {{ margin: 0; min-height: 100%; background: transparent; }}
     body {{ min-height: 100vh; overflow: hidden; font-family: Inter, Arial, sans-serif; }}
     {css}
+    [data-region="root"] [hidden] {{ display: none !important; }}
     [data-region="root"] [data-kaigo-runtime-input] {{ resize: none; scrollbar-width: none; }}
     [data-region="root"] [data-kaigo-runtime-input]::-webkit-scrollbar,
     [data-region="root"] [data-region="messages"]::-webkit-scrollbar {{ display: none; width: 0; height: 0; }}

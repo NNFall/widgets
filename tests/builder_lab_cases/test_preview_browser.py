@@ -77,6 +77,38 @@ class PreviewRuntimeBrowserTests(unittest.IsolatedAsyncioTestCase):
             "yes",
         )
 
+    async def test_runtime_hidden_suggestions_cannot_be_reshown_by_generated_css(self):
+        base = artifact(revision=9)
+        body_html = base.body_html.replace(
+            "<button type=\"button\">Подобрать решение</button>",
+            (
+                "<button type=\"button\">Первый вопрос</button>"
+                "<button type=\"button\">Второй вопрос</button>"
+                "<button type=\"button\">Третий вопрос</button>"
+            ),
+        )
+        frame = await self.mount_runtime(
+            artifact(
+                revision=9,
+                body_html=body_html,
+                css=base.css
+                + "\n[data-region=\"suggestions\"] button { display:flex; }",
+                suggested_actions=(
+                    "Первый вопрос",
+                    "Второй вопрос",
+                    "Третий вопрос",
+                ),
+            )
+        )
+        suggestions = frame.locator('[data-region="suggestions"] button')
+
+        self.assertEqual(await suggestions.count(), 3)
+        self.assertEqual(
+            [await suggestions.nth(index).is_visible() for index in range(3)],
+            [True, True, False],
+        )
+        self.assertTrue(await suggestions.nth(2).is_disabled())
+
     async def test_generated_javascript_cannot_reach_parent_document(self):
         frame = await self.mount_runtime(
             artifact(
