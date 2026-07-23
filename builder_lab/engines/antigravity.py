@@ -21,7 +21,12 @@ Work only inside this disposable environment. Read BRIEF.md and the JSON contrac
 Create exactly `out/widget-artifact.json` and `out/build-report.json`, then run
 `python3 scripts/validate_output.py`. The widget must be premium, distinctive,
 Russian-language, responsive, and coherent. Use the artifact's `javascript` field
-freely for interaction, timed behavior, scroll behavior, and motion. Do not add
+freely for visual interaction, timed behavior, scroll behavior, motion, and
+independent tools. The fixed Kaigo runtime exclusively owns launcher, close,
+send, suggestions, retry, composer keyboard handling, and transcript messages.
+Generated JavaScript must not intercept those controls, append canned chat
+messages, or replace real server chat; it may observe runtime state without
+mutating the chat contract. Do not add
 external URLs, network calls, package dependencies, script tags, iframes, forms,
 or global CSS. Every CSS selector must be scoped under `.kaigo-widget`. Never treat your final prose as
 the deliverable: the declared files are the deliverable. Use each exact

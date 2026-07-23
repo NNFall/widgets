@@ -131,6 +131,9 @@ class AntigravityEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("__pycache__", AGENTS_MD)
         self.assertIn("*.pyc", AGENTS_MD)
         self.assertIn("last filesystem action", AGENTS_MD)
+        self.assertIn("fixed Kaigo runtime exclusively owns", AGENTS_MD)
+        self.assertIn("launcher, close", AGENTS_MD)
+        self.assertIn("send, suggestions, retry", AGENTS_MD)
 
     async def test_creates_remote_agent_polls_downloads_and_imports_artifact(self):
         interactions = FakeInteractions(

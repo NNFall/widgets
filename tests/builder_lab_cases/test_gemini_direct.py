@@ -193,21 +193,25 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             },
         }
 
-        provider = build_provider_json_schema(schema, "gemini-3.5-flash")
-        encoded = json.dumps(provider, sort_keys=True)
+        for model in ("gemini-3.5-flash", "gemini-3.6-flash"):
+            with self.subTest(model=model):
+                provider = build_provider_json_schema(schema, model)
+                encoded = json.dumps(provider, sort_keys=True)
 
-        self.assertIn('"required"', encoded)
-        self.assertIn('"properties"', encoded)
-        self.assertIn('"enum"', encoded)
-        self.assertNotIn('"additionalProperties"', encoded)
-        self.assertNotIn('"minItems"', encoded)
-        self.assertNotIn('"maxItems"', encoded)
-        self.assertNotIn('"minimum"', encoded)
-        self.assertNotIn('"maximum"', encoded)
-        self.assertEqual(
-            provider["properties"]["items"]["items"]["properties"]["label"]["type"],
-            "string",
-        )
+                self.assertIn('"required"', encoded)
+                self.assertIn('"properties"', encoded)
+                self.assertIn('"enum"', encoded)
+                self.assertNotIn('"additionalProperties"', encoded)
+                self.assertNotIn('"minItems"', encoded)
+                self.assertNotIn('"maxItems"', encoded)
+                self.assertNotIn('"minimum"', encoded)
+                self.assertNotIn('"maximum"', encoded)
+                self.assertEqual(
+                    provider["properties"]["items"]["items"]["properties"]["label"][
+                        "type"
+                    ],
+                    "string",
+                )
 
     async def test_server_owns_protocol_schema_version_not_the_model(self):
         candidate = artifact(revision=2, stage=Stage.FOUNDATION)
