@@ -12,6 +12,8 @@ from builder_lab.engines.gemini_direct import (
 )
 from builder_lab.models import (
     BuilderRequest,
+    ConceptRole,
+    ConceptRoleBrief,
     DirectionProposal,
     DirectionRole,
     EngineName,
@@ -402,6 +404,83 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.usage.prompt_tokens, 60)
         self.assertEqual(caught.exception.usage.output_tokens, 24)
         self.assertEqual(caught.exception.usage.thinking_tokens, 6)
+
+    async def test_concept_role_uses_bounded_output_and_server_owned_role(self):
+        payload = {
+            "summary": "Редакционная система RAW",
+            "decisions": ["Использовать строгую сетку", "Сохранить монохром"],
+            "safeguards": ["Не придумывать услуги"],
+        }
+        response = std_types.SimpleNamespace(
+            text=json.dumps(payload, ensure_ascii=False),
+            parsed=None,
+            response_id="concept-1",
+            usage_metadata=std_types.SimpleNamespace(
+                prompt_token_count=21,
+                candidates_token_count=9,
+                thoughts_token_count=3,
+            ),
+            model_version="gemini-3.6-flash",
+        )
+        client = FakeClient(response=response)
+        engine = GeminiDirectEngine(api_key="secret", client=client)
+
+        result = await engine.develop_concept_role(
+            request=self.request,
+            role=ConceptRole.SITE_BRAND_ANALYST,
+        )
+
+        self.assertEqual(result.brief.role, ConceptRole.SITE_BRAND_ANALYST)
+        self.assertEqual(result.usage.prompt_tokens, 21)
+        self.assertEqual(result.provider_request_id, "concept-1")
+        call = client.models.calls[0]
+        self.assertEqual(call["config"].max_output_tokens, 8_192)
+        self.assertEqual(
+            set(call["config"].response_json_schema["properties"]),
+            {"summary", "decisions", "safeguards"},
+        )
+        self.assertNotIn('"role"', call["contents"])
+
+    async def test_concept_role_retries_invalid_payload_and_aggregates_usage(self):
+        invalid = {
+            "summary": "x" * 81,
+            "decisions": ["Valid"],
+            "safeguards": [],
+        }
+        response = std_types.SimpleNamespace(
+            text=json.dumps(invalid),
+            parsed=None,
+            response_id="invalid-concept",
+            usage_metadata=std_types.SimpleNamespace(
+                prompt_token_count=5,
+                candidates_token_count=2,
+                thoughts_token_count=1,
+            ),
+            model_version="gemini-3.6-flash",
+        )
+        client = FakeClient(response=response)
+        engine = GeminiDirectEngine(api_key="secret", client=client)
+
+        with self.assertRaises(BuilderEngineError) as caught:
+            await engine.develop_concept_role(
+                request=self.request,
+                role=ConceptRole.CONVERSATION_DESIGNER,
+                prior_briefs=(
+                    ConceptRoleBrief(
+                        role=ConceptRole.SITE_BRAND_ANALYST,
+                        summary="RAW visual system",
+                        decisions=("Use the grid",),
+                        safeguards=(),
+                    ),
+                ),
+            )
+
+        self.assertEqual(len(client.models.calls), 3)
+        self.assertIn("CORRECTION", client.models.calls[1]["contents"])
+        self.assertEqual(caught.exception.error_code, "invalid_artifact")
+        self.assertEqual(caught.exception.usage.prompt_tokens, 15)
+        self.assertEqual(caught.exception.usage.output_tokens, 6)
+        self.assertEqual(caught.exception.usage.thinking_tokens, 3)
 
     async def test_direction_proposal_allows_two_semantic_corrections(self):
         invalid = {

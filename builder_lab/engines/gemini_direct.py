@@ -10,6 +10,8 @@ from google.genai import types
 from ..model_config import generation_policy, normalize_thinking_level
 from ..models import (
     BuilderRequest,
+    ConceptRole,
+    ConceptRoleBrief,
     DirectionJudgement,
     DirectionProposal,
     DirectionRole,
@@ -21,14 +23,17 @@ from ..models import (
 from ..visual_models import VisualFinding
 from ..prompts import (
     ARTIFACT_JSON_SCHEMA,
+    CONCEPT_ROLE_BRIEF_JSON_SCHEMA,
     DIRECTION_JUDGE_JSON_SCHEMA,
     DIRECTION_PROPOSAL_JSON_SCHEMA,
     build_direction_judge_prompt,
     build_direction_proposal_prompt,
+    build_concept_role_prompt,
     build_stage_prompt,
 )
 from .base import (
     BuilderEngineError,
+    ConceptRoleResult,
     DirectionJudgeResult,
     DirectionProposalResult,
     EngineResult,
@@ -334,6 +339,60 @@ class GeminiDirectEngine:
                 diagnostic=f"model={getattr(response, 'model_version', None) or self.model}",
             )
         raise AssertionError("unreachable direction proposal loop")
+
+    async def develop_concept_role(
+        self,
+        *,
+        request: BuilderRequest,
+        role: ConceptRole,
+        prior_briefs: tuple[ConceptRoleBrief, ...] = (),
+    ) -> ConceptRoleResult:
+        prompt = build_concept_role_prompt(
+            request=request,
+            role=role,
+            prior_briefs=prior_briefs,
+        )
+        total_usage = TokenUsage()
+        for attempt in range(3):
+            attempt_prompt = prompt
+            if attempt:
+                attempt_prompt += (
+                    "\nCORRECTION: The previous JSON violated the concept-role field "
+                    "budgets. Return a fresh complete object with exactly summary, "
+                    "decisions and safeguards within the numeric limits above."
+                )
+            response = await self._generate_structured(
+                prompt=attempt_prompt,
+                schema=CONCEPT_ROLE_BRIEF_JSON_SCHEMA,
+                temperature=request.creativity,
+                max_output_tokens=8_192,
+            )
+            total_usage = total_usage + _usage(response)
+            try:
+                payload = _response_payload(response)
+                _require_exact_keys(
+                    payload,
+                    frozenset({"summary", "decisions", "safeguards"}),
+                )
+                brief = ConceptRoleBrief.from_dict(payload, role=role)
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                if attempt < 2:
+                    continue
+                raise BuilderEngineError(
+                    "invalid_artifact",
+                    "Gemini вернул некорректный контракт концептуальной роли",
+                    diagnostic=f"{type(exc).__name__}: {exc}",
+                    usage=total_usage,
+                ) from exc
+            return ConceptRoleResult(
+                brief=brief,
+                usage=total_usage,
+                provider_request_id=getattr(response, "response_id", None),
+                diagnostic=(
+                    f"model={getattr(response, 'model_version', None) or self.model}"
+                ),
+            )
+        raise AssertionError("unreachable concept role loop")
 
     async def judge_directions(
         self,

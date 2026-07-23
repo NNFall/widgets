@@ -5,6 +5,8 @@ from typing import Protocol
 
 from ..models import (
     BuilderRequest,
+    ConceptRole,
+    ConceptRoleBrief,
     DirectionJudgement,
     DirectionProposal,
     DirectionRole,
@@ -35,6 +37,14 @@ class DirectionProposalResult:
 @dataclass(frozen=True)
 class DirectionJudgeResult:
     judgement: DirectionJudgement
+    usage: TokenUsage = TokenUsage()
+    provider_request_id: str | None = None
+    diagnostic: str | None = None
+
+
+@dataclass(frozen=True)
+class ConceptRoleResult:
+    brief: ConceptRoleBrief
     usage: TokenUsage = TokenUsage()
     provider_request_id: str | None = None
     diagnostic: str | None = None
@@ -74,6 +84,14 @@ class BuilderEngine(Protocol):
 
 
 class DirectBuilderEngine(BuilderEngine, Protocol):
+    async def develop_concept_role(
+        self,
+        *,
+        request: BuilderRequest,
+        role: ConceptRole,
+        prior_briefs: tuple[ConceptRoleBrief, ...] = (),
+    ) -> ConceptRoleResult: ...
+
     async def propose_direction(
         self,
         *,

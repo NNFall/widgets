@@ -20,6 +20,12 @@ class CreativeProfile(str, Enum):
     AI_CHARACTER = "ai_character"
 
 
+class ConceptRole(str, Enum):
+    SITE_BRAND_ANALYST = "site_brand_analyst"
+    CONVERSATION_DESIGNER = "conversation_designer"
+    ART_DIRECTOR_FRONTEND_DEVELOPER = "art_director_frontend_developer"
+
+
 class DirectionRole(str, Enum):
     BRAND_ARCHAEOLOGIST = "brand_archaeologist"
     INTERACTION_INVENTOR = "interaction_inventor"
@@ -206,17 +212,87 @@ class TokenUsage:
 
 
 @dataclass(frozen=True)
+class ConceptRoleBrief:
+    role: ConceptRole
+    summary: str
+    decisions: tuple[str, ...]
+    safeguards: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.role, ConceptRole):
+            raise ValueError("role must be a ConceptRole")
+        summary = self.summary.strip()
+        decisions = tuple(value.strip() for value in self.decisions)
+        safeguards = tuple(value.strip() for value in self.safeguards)
+        if not summary or len(summary) > 80:
+            raise ValueError("concept role summary is invalid")
+        if not 1 <= len(decisions) <= 4 or any(
+            not value or len(value) > 160 for value in decisions
+        ):
+            raise ValueError("concept role decisions are invalid")
+        if len(safeguards) > 8 or any(
+            not value or len(value) > 160 for value in safeguards
+        ):
+            raise ValueError("concept role safeguards are invalid")
+        object.__setattr__(self, "summary", summary)
+        object.__setattr__(self, "decisions", decisions)
+        object.__setattr__(self, "safeguards", safeguards)
+
+    @classmethod
+    def from_dict(
+        cls,
+        payload: Mapping[str, Any],
+        *,
+        role: ConceptRole | None = None,
+    ) -> "ConceptRoleBrief":
+        decisions = payload.get("decisions", ())
+        safeguards = payload.get("safeguards", ())
+        if not isinstance(decisions, (list, tuple)):
+            raise ValueError("concept role decisions must be an array")
+        if not isinstance(safeguards, (list, tuple)):
+            raise ValueError("concept role safeguards must be an array")
+        resolved_role = role or _enum(
+            ConceptRole,
+            payload.get("role"),
+            "concept role",
+        )
+        return cls(
+            role=resolved_role,
+            summary=str(payload.get("summary", "")),
+            decisions=tuple(str(item) for item in decisions),
+            safeguards=tuple(str(item) for item in safeguards),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "role": self.role.value,
+            "summary": self.summary,
+            "decisions": list(self.decisions),
+            "safeguards": list(self.safeguards),
+        }
+
+
+def _direction_role(value: Any) -> DirectionRole | ConceptRole:
+    for enum_type in (DirectionRole, ConceptRole):
+        try:
+            return enum_type(value)
+        except (TypeError, ValueError):
+            continue
+    raise ValueError(f"Unsupported direction role: {value!r}")
+
+
+@dataclass(frozen=True)
 class DirectionProposal:
     proposal_id: str
-    role: DirectionRole
+    role: DirectionRole | ConceptRole
     title: str
     art_direction: str
     interaction_model: str
     safeguards: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if not isinstance(self.role, DirectionRole):
-            raise ValueError("role must be a DirectionRole")
+        if not isinstance(self.role, (DirectionRole, ConceptRole)):
+            raise ValueError("role must be a DirectionRole or ConceptRole")
         if self.proposal_id not in {"candidate-1", "candidate-2", "candidate-3"}:
             raise ValueError("proposal_id must be a bounded anonymous candidate id")
         title = self.title.strip()
@@ -242,7 +318,7 @@ class DirectionProposal:
     def from_dict(cls, payload: Mapping[str, Any]) -> "DirectionProposal":
         return cls(
             proposal_id=str(payload["proposal_id"]),
-            role=_enum(DirectionRole, payload["role"], "direction role"),
+            role=_direction_role(payload["role"]),
             title=str(payload["title"]),
             art_direction=str(payload["art_direction"]),
             interaction_model=str(payload["interaction_model"]),
