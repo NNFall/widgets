@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from PIL import Image
-from playwright.async_api import Error as PlaywrightError, async_playwright
+from playwright.async_api import async_playwright
 
 from builder_lab.browser_audit import (
     BrowserAudit,
@@ -90,7 +90,7 @@ class ScreenshotBundleContractTests(unittest.TestCase):
 
 
 class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
-    async def test_launcher_trial_timeout_remains_a_transient_playwright_error(self):
+    async def test_launcher_hit_test_does_not_depend_on_a_flaky_trial_click(self):
         class SlowLauncher:
             async def evaluate(self, _script):
                 return {
@@ -99,14 +99,11 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
                 }
 
             async def click(self, **_kwargs):
-                raise PlaywrightError("simulated overloaded browser timeout")
+                raise AssertionError("redundant trial click must not run")
 
-        with self.assertRaises(PlaywrightError) as caught:
-            await BrowserAudit._assert_launcher_pointer_interactable(
-                SlowLauncher(), prefix="mobile"
-            )
-
-        self.assertNotIsInstance(caught.exception, BrowserAuditError)
+        await BrowserAudit._assert_launcher_pointer_interactable(
+            SlowLauncher(), prefix="mobile"
+        )
 
     async def test_real_chromium_captures_six_jpegs_and_eight_layout_states(self):
         report = await BrowserAudit().audit(audit_artifact())

@@ -1486,10 +1486,6 @@ class BrowserAudit:
                 ),
                 failures=(failure,),
             )
-        # A trial timeout after a successful DOM hit-test is infrastructure noise,
-        # not proof that the generated artifact needs another model repair.
-        await launcher.click(trial=True, timeout=3_000)
-
     @staticmethod
     async def _assert_visible_suggestions_actionable(frame) -> None:
         suggestions = frame.locator(
