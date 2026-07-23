@@ -127,11 +127,11 @@ art_direction: 1 to 1200 characters; interaction_model: 1 to 800 characters;
 safeguards: 0 to 8 items, 1 to 160 characters each. Prefer concise fields and 3 to 6
 short safeguards.
 
-Non-negotiable product bounds: desktop open width 372px and height no more than 68dvh;
-mobile height no more than 70dvh and no fullscreen; default state closed; no more than
-one first-open suggestion because close + send + suggestion are the three-action total;
-no fake actions. Generated content has no JavaScript or
-network and must be implementable by the trusted Kaigo runtime.
+Product bounds: the widget must remain compact, subordinate to the host page, fully
+inside every requested viewport, and usable without a default scrollbar on first open.
+Geometry is a design decision, not a fixed template. The implementation may use
+unrestricted JavaScript and any CSS animation, including infinite ambient motion.
+No fake actions; every visible control must work.
 
 Locale: {request.locale}
 Brief:
@@ -183,8 +183,9 @@ STAGE_GUIDANCE = {
         "русские тексты и ощущение живого профессионального сотрудника."
     ),
     Stage.MOTION_POLISH: (
-        "Добавь аккуратные входные, hover, focus и ambient-анимации. Каждая "
-        "анимация конечна, длится не более 20 секунд и имеет reduced-motion fallback."
+        "Добавь выразительные входные, hover, focus и ambient-анимации. Допускаются "
+        "любые длительности, циклы, бесконечное движение и JavaScript-сценарии, если "
+        "они поддерживают выбранную идею и не ломают взаимодействие."
     ),
     Stage.VALIDATION: (
         "Исправь только перечисленные детерминированные ошибки, сохранив сильную "
@@ -239,52 +240,54 @@ def build_stage_prompt(
 Безопасный контракт обязателен:
 - верни только JSON по заданной схеме;
 - body_html содержит полный HTML-фрагмент, css содержит полный stylesheet;
-- никакого JavaScript, script, iframe, form, внешних URL, @import или url();
+- javascript содержит unrestricted JavaScript виджета: разрешены любые DOM-сценарии,
+  таймеры, обработчики прокрутки, произвольные переходы состояний и запуск анимаций;
+- change_summary в одном-двух предложениях объясняет пользователю, что изменилось на этом этапе;
+- layout_contract перечисляет выбранные моделью ключевые размеры и поведение desktop/mobile;
+- script-теги внутри body_html, iframe, form, внешние URL, @import и url() не нужны:
+  весь исполняемый код возвращай отдельным полем javascript;
 - корневой класс всех CSS-селекторов — .kaigo-widget;
 - обязательны data-region: root, launcher, panel, header, messages, suggestions, composer;
 - header, messages, suggestions and composer are peer panel regions with panel as their nearest data-region ancestor;
   never nest suggestions inside messages or composer; launcher and panel have root as their nearest data-region ancestor;
 - launcher и composer имеют понятный aria-label;
 - используются только системные шрифты и inline CSS-графика;
-- бесконечные анимации запрещены на любом этапе: не используй `infinite`;
-- `animation-iteration-count` допускает не более 12 повторов, длительность одной
-  анимации — не более 20 секунд;
-- любая анимация обязательно имеет `@media (prefers-reduced-motion: reduce)` с
-  отключением animation и transition;
+- CSS-анимации полностью свободны: разрешены `infinite`, любые длительности,
+  iteration count, timing functions, keyframes и ambient-движение;
+- reduced-motion можно добавить как улучшение доступности, но он не ограничивает
+  творческую версию эксперимента;
 - для нативных контролов разрешены безопасные атрибуты `for`, `name`, `checked`, `open`,
   `selected`, `autocomplete`, `inputmode`, `rows`, `cols`, `min`, `max`, `step`;
   inline `style` и event-атрибуты запрещены;
 - SVG path использует только простые M/L/H/V/C/S/Q/T/Z-команды без A/a arc;
   для окружностей и дуг используй безопасные элементы circle или ellipse;
 - текущая revision строго {revision}, stage строго {stage.value}.
-- состояние по умолчанию строго closed; panel не открывается автоматически;
+- базовое состояние может быть closed, а javascript вправе открыть panel по таймеру,
+  прокрутке, клику по элементу или любому другому сценарию из брифа;
 - fixed runtime в open-state выставляет root `.kaigo-preview-open`, root `data-state="open"` и panel
   `data-open`; CSS открытия обязан использовать `.kaigo-widget.kaigo-preview-open [data-region="panel"]` или
   `[data-region="panel"][data-open]`, а не выдуманный state-селектор;
-- `.kaigo-widget` и все его потомки используют `box-sizing: border-box`; заданные ширина и max-height
-  панели уже включают border и padding, поэтому фактический bounding box не должен быть на 2px больше;
-- закрытый launcher на desktop и mobile имеет bounding box 216px × 46px; его отступ справа и снизу
-  равен 20px на desktop и 12px на mobile; в открытом состоянии launcher полностью скрыт и неинтерактивен;
-- desktop panel: ширина 372px, отступ справа и снизу 20px, высота по содержимому максимум
-  min(536px, 68dvh);
-- mobile panel: ширина `calc(100vw - 24px)` (366px при viewport 390px), отступы слева, справа и
-  снизу 12px, максимум 70dvh, no fullscreen, no backdrop и не блокирует страницу;
-- mobile rules apply only at viewport widths <= 600px; at every viewport width >= 601px
-  panel сохраняет desktop-геометрию: ширина 372px и отступы справа/снизу 20px;
-- launcher and panel themselves use position: fixed relative to the viewport; root must not add viewport offsets;
-  never use an absolute panel inside an offset fixed root because desktop/mobile margins would compound;
-- mobile width `calc(100vw - 24px)` применяется только к panel; launcher никогда не получает ширину панели
-  и на mobile сохраняет отдельный bounding box 216px × 46px;
+- `.kaigo-widget` и все его потомки используют `box-sizing: border-box`;
+- конкретные ширина, высота, расположение, радиусы и способ раскрытия не заданы шаблоном:
+  выбери их самостоятельно по арт-направлению и запиши фактические решения в layout_contract;
+- launcher должен быть компактным, полностью видимым и не занимать основную часть страницы;
+- open panel должен fit entirely inside the viewport, оставаться подчинённым сайту,
+  соблюдать no fullscreen и не создавать горизонтальный overflow;
+- desktop panel обычно хорошо работает примерно в диапазоне 320–440px, но это рекомендация,
+  а не hardcoded requirement: обоснованный layout_contract может выбрать другую ширину;
+- mobile layout адаптируется к доступному месту и оставляет безопасные поля вокруг panel;
+- launcher и panel могут использовать fixed, absolute, sticky или другой механизм,
+  если фактические bounding boxes остаются внутри viewport и все действия доступны;
 - каждый видимый интерактивный элемент имеет фактический bounding box не меньше 44px × 44px;
   это обязательно для close, send, suggestion и retry, даже если внутри только короткий текст или иконка;
 - при первом открытии начальный transcript полностью помещается без внутренней прокрутки на desktop и mobile:
   для messages выполняется `scrollHeight <= clientHeight`; прокрутка допустима только после добавления новых сообщений;
-- first-open welcome copy is at most 60 characters excluding the `RAW AI` label; reset p and heading margins to 0;
-  do not rely on browser default margins anywhere inside the compact panel;
-- at most three visible actions total, including close, send, retry and suggestions;
-  therefore first open has one short suggestion at most while close and send are visible;
-- if a first-open transcript repair is requested, keep any exact first-open geometry from the brief;
-  shorten welcome copy, keep at most one short suggestion, and reduce nonessential gaps/padding while preserving 44×44px targets;
+- reset p and heading margins to 0; do not rely on browser default margins anywhere
+  inside the compact panel;
+- количество действий и suggestions выбирается моделью; каждое видимое действие должно
+  быть реальным, доступным и помещаться без наложений;
+- if a first-open transcript repair is requested, preserve the visual direction and
+  layout_contract while reducing only the content or spacing that caused overflow;
 - verify first-open fit at desktop 1440×900, narrow desktop 601×700 and mobile 390×844;
   each suggestion launches a real request;
 - fake actions, пустые кнопки и действия, которые только очищают поле, запрещены;

@@ -222,11 +222,14 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("премиаль", prompt.lower())
         self.assertIn("фиолет", prompt.lower())
         self.assertIn("javascript", prompt.lower())
+        self.assertIn("layout_contract", prompt)
+        self.assertIn("change_summary", prompt)
         self.assertIn("полный", prompt.lower())
-        self.assertIn("бесконечные анимации запрещены", prompt.lower())
-        self.assertIn("animation-iteration-count", prompt)
-        self.assertIn("prefers-reduced-motion", prompt)
-        self.assertIn("не более 12 повторов", prompt.lower())
+        self.assertIn("unrestricted javascript", prompt.lower())
+        self.assertIn("infinite", prompt.lower())
+        self.assertNotIn("animation-iteration-count", prompt)
+        self.assertNotIn("216px", prompt)
+        self.assertNotIn("372px", prompt)
         self.assertIn("svg path", prompt.lower())
         self.assertIn("circle", prompt.lower())
 
@@ -433,7 +436,7 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             await engine.judge_directions(request=self.request, proposals=proposals)
         self.assertEqual(caught.exception.error_code, "invalid_artifact")
 
-    async def test_stage_prompt_contains_selected_direction_and_nonnegotiable_widget_bounds(self):
+    async def test_stage_prompt_contains_selected_direction_and_flexible_widget_bounds(self):
         client = FakeClient(response=fake_response(artifact(revision=1, stage=Stage.ART_DIRECTION)))
         engine = GeminiDirectEngine(api_key="secret", client=client)
         selected = DirectionProposal(
@@ -453,24 +456,17 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         prompt = client.models.calls[0]["contents"]
         for required in (
             "Плавающая проектная заметка",
-            "372px",
-            "216px",
-            "calc(100vw - 24px)",
-            "launcher and panel themselves use position: fixed",
-            "root must not add viewport offsets",
+            "javascript",
+            "layout_contract",
+            "change_summary",
+            "unrestricted JavaScript",
+            "fit entirely inside the viewport",
             "header, messages, suggestions and composer are peer panel regions",
-            "launcher никогда не получает ширину панели",
             "box-sizing: border-box",
             "44px × 44px",
             "close, send, suggestion и retry",
             "scrollHeight <= clientHeight",
-            "at most three visible actions total",
-            "one short suggestion",
-            "welcome copy is at most 60 characters",
             "reset p and heading margins to 0",
-            "68dvh",
-            "70dvh",
-            "closed",
             "fake actions",
             "no fullscreen",
             ".kaigo-widget__message--assistant",
@@ -483,6 +479,15 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             "runtime status has none",
         ):
             self.assertIn(required.lower(), prompt.lower())
+        for forbidden in (
+            "372px",
+            "216px",
+            "68dvh",
+            "70dvh",
+            "at most three visible actions total",
+            "бесконечные анимации запрещены",
+        ):
+            self.assertNotIn(forbidden.lower(), prompt.lower())
 
     async def test_provider_errors_are_sanitized(self):
         cases = (

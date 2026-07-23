@@ -156,6 +156,20 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(report.screenshots), 6)
         self.assertEqual(len(report.layouts), 8)
 
+    async def test_valid_desktop_panel_width_is_not_hardcoded(self):
+        for width in (336, 432):
+            with self.subTest(width=width):
+                candidate = audit_artifact(
+                    css=AUDIT_CSS.replace(
+                        "width: 372px; height: 304px",
+                        f"width: {width}px; height: 304px",
+                    )
+                )
+
+                report = await BrowserAudit().audit(candidate)
+
+                self.assertEqual(len(report.layouts), 8)
+
     async def test_audit_runs_the_artifact_javascript_in_every_state(self):
         class InspectingAudit(BrowserAudit):
             def __init__(self):
@@ -198,7 +212,7 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(BrowserAuditError) as caught:
             await BrowserAudit().audit(audit_artifact(css=overbroad_mobile_css))
 
-        self.assertIn("narrow desktop panel width must be 372px", str(caught.exception))
+        self.assertIn("compact desktop bound", str(caught.exception))
 
     async def test_hidden_panel_cannot_intercept_the_closed_launcher(self):
         intercepting_css = AUDIT_CSS + """
@@ -232,7 +246,7 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("pointer-events:none", caught.exception.failures[0])
         self.assertIn("intercepts pointer events", caught.exception.diagnostic)
 
-    async def test_content_box_panel_failure_explains_non_inheritance(self):
+    async def test_content_box_panel_is_allowed_when_computed_geometry_fits(self):
         content_box_css = AUDIT_CSS.replace(
             "* { box-sizing: border-box; }",
             ".kaigo { box-sizing: border-box; }\n"
@@ -240,16 +254,10 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
             1,
         )
 
-        with self.assertRaises(BrowserAuditError) as caught:
-            await BrowserAudit().audit(audit_artifact(css=content_box_css))
+        report = await BrowserAudit().audit(audit_artifact(css=content_box_css))
 
-        self.assertTrue(
-            any(
-                "panel selector itself" in failure
-                and "does not inherit" in failure
-                for failure in caught.exception.failures
-            )
-        )
+        self.assertEqual(len(report.screenshots), 6)
+        self.assertEqual(len(report.layouts), 8)
 
     async def test_motion_is_disabled_before_every_evidence_capture(self):
         class InspectingAudit(BrowserAudit):
@@ -1005,12 +1013,17 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
                     await BrowserAudit().audit(clipped)
                 self.assertEqual(caught.exception.error_code, "browser_gate_failed")
 
-    async def test_launcher_exact_geometry_and_required_close_send_are_gated(self):
+    async def test_launcher_touch_target_and_required_close_send_are_gated(self):
         cases = (
-            audit_artifact(css=AUDIT_CSS + "\n[data-region=launcher] { width: 14px; height: 10px; }"),
+            audit_artifact(
+                css=(
+                    AUDIT_CSS
+                    + "\n[data-region=launcher] { min-width: 0 !important; "
+                    "min-height: 0 !important; width: 14px; height: 10px; }"
+                )
+            ),
             audit_artifact(body_html=AUDIT_HTML.replace('<button data-action="close" aria-label="Закрыть">×</button>', "")),
             audit_artifact(body_html=AUDIT_HTML.replace('<button data-action="send">Отправить</button>', "")),
-            audit_artifact(css=AUDIT_CSS + "\n.kaigo { right: 4px; bottom: 4px; }"),
         )
         for broken in cases:
             with self.subTest(body=broken.body_html[-80:], css=broken.css[-80:]):
@@ -1094,7 +1107,7 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.error_code, "browser_gate_failed")
         self.assertIn("auto-focus", caught.exception.diagnostic or "")
 
-    async def test_two_suggestions_exceed_three_total_open_actions(self):
+    async def test_two_suggestions_are_allowed_when_they_fit(self):
         two_suggestions = audit_artifact(
             body_html=AUDIT_HTML.replace(
                 '</nav>',
@@ -1102,10 +1115,9 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        with self.assertRaises(BrowserAuditError) as caught:
-            await BrowserAudit().audit(two_suggestions)
+        report = await BrowserAudit().audit(two_suggestions)
 
-        self.assertIn("no more than three actions total", caught.exception.diagnostic or "")
+        self.assertEqual(len(report.layouts), 8)
 
     async def test_subpixel_touch_target_rounding_within_half_pixel_is_tolerated(self):
         subpixel = audit_artifact(
@@ -1200,8 +1212,10 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
             css=AUDIT_CSS + "\n[data-region=suggestions] button{display:none!important}",
         )
 
+        report = await BrowserAudit().audit(too_many)
+        self.assertEqual(len(report.layouts), 8)
+
         for broken, expected in (
-            (too_many, "no more than three actions"),
             (tiny_label, "44"),
             (tiny_wrapping_label, "44"),
         ):
@@ -1600,7 +1614,7 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(report.screenshots), 6)
         self.assertEqual(len(report.layouts), 8)
 
-    async def test_all_interactive_targets_and_max_three_suggestions_are_gated(self):
+    async def test_all_interactive_targets_are_gated_without_an_action_count_cap(self):
         tiny_link = audit_artifact(
             body_html=AUDIT_HTML.replace(
                 "</main>", '<a href="#details" style="width:10px;height:10px">i</a></main>'
@@ -1642,9 +1656,11 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
                 '<input type="number" style="width:44px;height:44px">',
             )
         )
+        allowed = await BrowserAudit().audit(four_suggestions)
+        self.assertEqual(len(allowed.screenshots), 6)
+
         for broken in (
             tiny_link,
-            four_suggestions,
             fourth_summary_action,
             tiny_native_control,
             *native_activation_controls,

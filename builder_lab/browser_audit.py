@@ -412,6 +412,13 @@ _REQUIRED_REGIONS = (
     "composer",
 )
 _MIN_INTERACTIVE_TARGET_PX = 43.5
+_MIN_PANEL_WIDTH_PX = 260.0
+_MAX_DESKTOP_PANEL_WIDTH_PX = 560.0
+_MAX_DESKTOP_PANEL_HEIGHT_PX = 720.0
+_MAX_PANEL_VIEWPORT_HEIGHT_RATIO = 0.88
+_MIN_VIEWPORT_INSET_PX = 8.0
+_MAX_LAUNCHER_WIDTH_PX = 420.0
+_MAX_LAUNCHER_HEIGHT_PX = 120.0
 
 
 class BrowserAuditError(RuntimeError):
@@ -914,25 +921,31 @@ class BrowserAudit:
             box = await panel.bounding_box()
             if box is None:
                 raise ValueError("narrow desktop panel is not visible")
+            geometry_failures = []
+            if not (
+                _MIN_PANEL_WIDTH_PX
+                <= box["width"]
+                <= min(_MAX_DESKTOP_PANEL_WIDTH_PX, width)
+            ):
+                geometry_failures.append(
+                    "narrow desktop panel must remain within the compact desktop bound "
+                    f"{_MIN_PANEL_WIDTH_PX:.0f}..{_MAX_DESKTOP_PANEL_WIDTH_PX:.0f}px; "
+                    f"actual {box['width']:.1f}px"
+                )
             actual_right = width - (box["x"] + box["width"])
             actual_bottom = height - (box["y"] + box["height"])
-            geometry_failures = []
-            if abs(box["width"] - 372) > 1:
+            if min(box["x"], box["y"], actual_right, actual_bottom) < -1:
                 geometry_failures.append(
-                    "narrow desktop panel width must be 372px; "
-                    f"actual {box['width']:.1f}px; set box-sizing:border-box on the "
-                    "panel selector itself (or a matching descendant rule), because "
-                    "box-sizing on the root does not inherit; mobile full-width panel "
-                    "rules must apply only at viewport widths <= 600px"
+                    "narrow desktop panel must fit entirely inside the viewport; "
+                    f"x {box['x']:.1f}px, y {box['y']:.1f}px, right "
+                    f"{actual_right:.1f}px, bottom {actual_bottom:.1f}px"
                 )
-            if abs(actual_right - 20) > 1 or abs(actual_bottom - 20) > 1:
+            if box["height"] > min(
+                _MAX_DESKTOP_PANEL_HEIGHT_PX,
+                height * _MAX_PANEL_VIEWPORT_HEIGHT_RATIO,
+            ) + 1:
                 geometry_failures.append(
-                    "narrow desktop panel must keep 20px right/bottom margins; "
-                    f"actual right {actual_right:.1f}px, bottom {actual_bottom:.1f}px"
-                )
-            if box["height"] > min(536, height * 0.68) + 1:
-                geometry_failures.append(
-                    "narrow desktop panel exceeds height cap; "
+                    "narrow desktop panel occupies too much viewport height; "
                     f"actual {box['height']:.1f}px"
                 )
             self._raise_policy_failures(failures)
@@ -2365,21 +2378,30 @@ class BrowserAudit:
                     failures.append(f"{layout.state.value}: panel must be hidden")
                 if not launcher or not launcher.visible:
                     failures.append(f"{layout.state.value}: launcher must be visible")
-                elif (
-                    abs(launcher.width - 216) > 1
-                    or abs(launcher.height - 46) > 1
-                    or abs(layout.viewport_width - (launcher.x + launcher.width) - (20 if layout.state.value.startswith('desktop') else 12)) > 1
-                    or abs(layout.viewport_height - (launcher.y + launcher.height) - (20 if layout.state.value.startswith('desktop') else 12)) > 1
-                ):
-                    expected_margin = 20 if layout.state.value.startswith("desktop") else 12
+                else:
                     actual_right = layout.viewport_width - (launcher.x + launcher.width)
                     actual_bottom = layout.viewport_height - (launcher.y + launcher.height)
-                    failures.append(
-                        f"{layout.state.value}: launcher must be 216×46px with "
-                        f"{expected_margin}px right/bottom margins; actual "
-                        f"{launcher.width:.1f}×{launcher.height:.1f}px, right "
-                        f"{actual_right:.1f}px, bottom {actual_bottom:.1f}px"
-                    )
+                    if (
+                        launcher.width > min(
+                            _MAX_LAUNCHER_WIDTH_PX,
+                            layout.viewport_width,
+                        )
+                        or launcher.height > _MAX_LAUNCHER_HEIGHT_PX
+                        or min(
+                            launcher.x,
+                            launcher.y,
+                            actual_right,
+                            actual_bottom,
+                        )
+                        < -1
+                    ):
+                        failures.append(
+                            f"{layout.state.value}: launcher must stay compact and "
+                            "inside the viewport; actual "
+                            f"{launcher.width:.1f}×{launcher.height:.1f}px, x "
+                            f"{launcher.x:.1f}px, y {launcher.y:.1f}px, right "
+                            f"{actual_right:.1f}px, bottom {actual_bottom:.1f}px"
+                        )
                 launcher_action = regions.get("action.launcher")
                 if (
                     not launcher_action
@@ -2447,15 +2469,6 @@ class BrowserAudit:
                 failures.append(
                     f"{layout.state.value}: every action must be at least 44×44px{suffix}"
                 )
-            if layout.visible_action_count > 3:
-                failures.append(
-                    f"{layout.state.value}: no more than three actions total may be "
-                    "visible, including close/send/retry/suggestions"
-                )
-            if len(suggestions) > 2:
-                failures.append(
-                    f"{layout.state.value}: no more than two suggestions are allowed"
-                )
             clipped_actions = [
                 item
                 for item in actions
@@ -2500,8 +2513,8 @@ class BrowserAudit:
                 )
                 failures.append(
                     f"{layout.state.value}: first-open transcript must not scroll{metrics}; "
-                    "keep the exact first-open panel geometry and shorten the welcome copy, "
-                    "show at most one short suggestion, and reduce nonessential gaps/padding "
+                    "preserve the chosen layout contract, shorten the welcome copy, and "
+                    "reduce nonessential gaps/padding "
                     "without shrinking any action below 44x44px; reset browser-default p and "
                     "heading margins to 0"
                 )
@@ -2549,43 +2562,50 @@ class BrowserAudit:
             ):
                 failures.append(f"{layout.state.value}: second turn order is invalid")
             if layout.state.value.startswith("desktop"):
-                if abs(panel.width - 372) > 1:
+                if not (
+                    _MIN_PANEL_WIDTH_PX
+                    <= panel.width
+                    <= _MAX_DESKTOP_PANEL_WIDTH_PX
+                ):
                     failures.append(
-                        f"{layout.state.value}: desktop panel width must be 372px; "
-                        f"actual {panel.width:.1f}px; set box-sizing:border-box on the "
-                        "panel selector itself (or a matching descendant rule), because "
-                        "box-sizing on the root does not inherit"
+                        f"{layout.state.value}: desktop panel must remain within the "
+                        f"compact desktop bound {_MIN_PANEL_WIDTH_PX:.0f}.."
+                        f"{_MAX_DESKTOP_PANEL_WIDTH_PX:.0f}px; actual "
+                        f"{panel.width:.1f}px"
                     )
-                if panel.height > min(536, layout.viewport_height * 0.68) + 1:
+                if panel.height > min(
+                    _MAX_DESKTOP_PANEL_HEIGHT_PX,
+                    layout.viewport_height * _MAX_PANEL_VIEWPORT_HEIGHT_RATIO,
+                ) + 1:
                     failures.append(
-                        f"{layout.state.value}: desktop panel exceeds height cap; "
-                        f"actual {panel.height:.1f}px; max-height must include borders via "
-                        "box-sizing:border-box"
-                    )
-                if abs(layout.viewport_width - (panel.x + panel.width) - 20) > 1 or abs(layout.viewport_height - (panel.y + panel.height) - 20) > 1:
-                    actual_right = layout.viewport_width - (panel.x + panel.width)
-                    actual_bottom = layout.viewport_height - (panel.y + panel.height)
-                    failures.append(
-                        f"{layout.state.value}: desktop panel must keep 20px right/bottom "
-                        f"margins; actual right {actual_right:.1f}px, bottom {actual_bottom:.1f}px; "
-                        "make the panel itself position:fixed and do not compound offsets on the root"
+                        f"{layout.state.value}: desktop panel occupies too much viewport "
+                        f"height; actual {panel.height:.1f}px"
                     )
             else:
-                expected_mobile_width = layout.viewport_width - 24
-                if abs(panel.width - expected_mobile_width) > 1 or panel.x < 11 or panel.x + panel.width > layout.viewport_width - 11:
+                max_mobile_width = layout.viewport_width - (
+                    2 * _MIN_VIEWPORT_INSET_PX
+                )
+                if not (
+                    _MIN_PANEL_WIDTH_PX
+                    <= panel.width
+                    <= max_mobile_width + 1
+                    and panel.x >= _MIN_VIEWPORT_INSET_PX - 1
+                    and panel.x + panel.width
+                    <= layout.viewport_width - _MIN_VIEWPORT_INSET_PX + 1
+                ):
                     failures.append(
-                        f"{layout.state.value}: mobile panel must be calc(100vw - 24px) "
-                        f"({expected_mobile_width}px here) and keep 12px margins; actual "
-                        f"width {panel.width:.1f}px, x {panel.x:.1f}px"
+                        f"{layout.state.value}: mobile panel width must remain usable "
+                        f"and inside the viewport; actual width {panel.width:.1f}px, "
+                        f"x {panel.x:.1f}px"
                     )
-                if panel.height > layout.viewport_height * 0.70 + 1 or panel.height >= layout.viewport_height - 1:
-                    failures.append(f"{layout.state.value}: mobile panel exceeds 70dvh/non-fullscreen cap")
-                if abs(layout.viewport_height - (panel.y + panel.height) - 12) > 1:
-                    actual_bottom = layout.viewport_height - (panel.y + panel.height)
+                if (
+                    panel.height
+                    > layout.viewport_height * _MAX_PANEL_VIEWPORT_HEIGHT_RATIO + 1
+                    or panel.height >= layout.viewport_height - 1
+                ):
                     failures.append(
-                        f"{layout.state.value}: mobile panel must keep 12px bottom margin; "
-                        f"actual {actual_bottom:.1f}px; make the panel itself position:fixed "
-                        "and do not compound offsets on the root"
+                        f"{layout.state.value}: mobile panel occupies too much viewport "
+                        "height or becomes fullscreen"
                     )
         if failures:
             raise BrowserAuditError(
