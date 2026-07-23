@@ -5,10 +5,19 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Mapping
 
+from .contracts import resolve_widget_contract
+
 
 class EngineName(str, Enum):
     DIRECT = "direct"
     ANTIGRAVITY = "antigravity"
+
+
+class CreativeProfile(str, Enum):
+    BALANCED = "balanced"
+    PRODUCT_CHAT = "product_chat"
+    BRAND_MOTION = "brand_motion"
+    AI_CHARACTER = "ai_character"
 
 
 class DirectionRole(str, Enum):
@@ -71,6 +80,9 @@ class BuilderRequest:
     creativity: float = 0.9
     viewport_targets: tuple[str, ...] = ("desktop", "mobile")
     max_repairs: int = 3
+    contract_id: str = "chat-v1"
+    creative_profile: CreativeProfile = CreativeProfile.BALANCED
+    visual_repair_limit: int = 5
 
     def __post_init__(self) -> None:
         brief = self.brief.strip()
@@ -88,6 +100,15 @@ class BuilderRequest:
             raise ValueError("creativity must be between 0 and 2")
         if not 0 <= self.max_repairs <= 4:
             raise ValueError("max_repairs must be between 0 and 4")
+        resolve_widget_contract(self.contract_id)
+        if not isinstance(self.creative_profile, CreativeProfile):
+            raise ValueError("creative_profile must be a CreativeProfile")
+        if (
+            isinstance(self.visual_repair_limit, bool)
+            or not isinstance(self.visual_repair_limit, int)
+            or not 0 <= self.visual_repair_limit <= 5
+        ):
+            raise ValueError("visual_repair_limit must be an integer between 0 and 5")
         if not self.viewport_targets or any(
             viewport not in {"desktop", "mobile"}
             for viewport in self.viewport_targets
@@ -102,6 +123,15 @@ class BuilderRequest:
         reference_context = payload.get("reference_context", "")
         if not isinstance(reference_context, str):
             raise ValueError("reference_context must be text")
+        contract_id = payload.get("contract_id", "chat-v1")
+        if not isinstance(contract_id, str):
+            raise ValueError("contract_id must be text")
+        visual_repair_limit = payload.get("visual_repair_limit", 5)
+        if isinstance(visual_repair_limit, bool) or not isinstance(
+            visual_repair_limit,
+            int,
+        ):
+            raise ValueError("visual_repair_limit must be an integer")
         return cls(
             engine=_enum(EngineName, payload.get("engine", "direct"), "engine"),
             brief=str(payload.get("brief", "")),
@@ -110,6 +140,13 @@ class BuilderRequest:
             creativity=float(payload.get("creativity", 0.9)),
             viewport_targets=tuple(payload.get("viewport_targets", ("desktop", "mobile"))),
             max_repairs=int(payload.get("max_repairs", 3)),
+            contract_id=contract_id,
+            creative_profile=_enum(
+                CreativeProfile,
+                payload.get("creative_profile", "balanced"),
+                "creative profile",
+            ),
+            visual_repair_limit=visual_repair_limit,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -121,6 +158,9 @@ class BuilderRequest:
             "creativity": self.creativity,
             "viewport_targets": list(self.viewport_targets),
             "max_repairs": self.max_repairs,
+            "contract_id": self.contract_id,
+            "creative_profile": self.creative_profile.value,
+            "visual_repair_limit": self.visual_repair_limit,
         }
 
 

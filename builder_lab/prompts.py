@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 
+from .contracts import resolve_widget_contract
 from .models import (
     BuilderRequest,
+    CreativeProfile,
     DirectionProposal,
     DirectionRole,
     Stage,
@@ -86,6 +88,39 @@ DIRECTION_JUDGE_JSON_SCHEMA = {
 }
 
 
+PROFILE_PROMPTS = {
+    CreativeProfile.BALANCED: (
+        "preserve the legacy balanced direction: combine brand specificity, familiar "
+        "chat usability, expressive but coherent motion, and page subordination"
+    ),
+    CreativeProfile.PRODUCT_CHAT: (
+        "prioritize instant clarity, high readability, familiar conversation mechanics, "
+        "and minimal decorative noise; express individuality through typography, "
+        "proportion, rhythm, and one or two brand-grounded gestures"
+    ),
+    CreativeProfile.BRAND_MOTION: (
+        "grant explicit motion carte blanche for a maximally expressive brand widget: "
+        "explore unusual launcher and panel shapes, ambitious opening and closing "
+        "choreography, ambient motion, and micro-interactions, bounded only by compact "
+        "chat usability, readable text, working controls, and a non-blocking page"
+    ),
+    CreativeProfile.AI_CHARACTER: (
+        "center a digital employee or character expressed with CSS or SVG across the "
+        "launcher, opening, pending, and error states without stealing transcript space "
+        "or turning the chat into a decorative scene"
+    ),
+}
+
+
+def _contract_and_profile_prompt(request: BuilderRequest) -> str:
+    contract = resolve_widget_contract(request.contract_id)
+    return (
+        f"{contract.prompt_block}\n\n"
+        f"CREATIVE_PROFILE_BRIEF: {request.creative_profile.value}\n"
+        f"{PROFILE_PROMPTS[request.creative_profile]}"
+    )
+
+
 _DIRECTION_ROLE_BRIEFS = {
     DirectionRole.BRAND_ARCHAEOLOGIST: (
         "brand archaeologist: extract the site's visual grammar, hierarchy, type, "
@@ -136,6 +171,8 @@ a real conversation: one short assistant welcome message, AI messages on the lef
 user messages on the right, visually distinct chat bubbles or equally clear message
 surfaces, visible author labels, a composer, and at most two initial quick replies.
 Do not turn the first screen into a service menu, price list, dashboard, or promo card.
+
+{_contract_and_profile_prompt(request)}
 
 Locale: {request.locale}
 Brief:
@@ -332,6 +369,8 @@ def build_stage_prompt(
   do not invent `[data-action="retry"]`, panel `[data-error]`, or any other state marker the runtime never sets;
 - data-action описывает только реальные open, close, send и suggestion; retry существует только как runtime-маркер;
   сгенерированный artifact не имитирует ответы.
+
+{_contract_and_profile_prompt(request)}
 
 Этап: {stage.value}
 Режим: {mode}

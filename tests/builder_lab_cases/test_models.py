@@ -3,6 +3,7 @@ import unittest
 from builder_lab.models import (
     BuilderEvent,
     BuilderRequest,
+    CreativeProfile,
     EngineName,
     Stage,
     TokenUsage,
@@ -26,7 +27,34 @@ class BuilderModelsTests(unittest.TestCase):
         self.assertEqual(request.creativity, 0.9)
         self.assertEqual(request.max_repairs, 3)
         self.assertEqual(request.viewport_targets, ("desktop", "mobile"))
+        self.assertEqual(request.contract_id, "chat-v1")
+        self.assertEqual(request.creative_profile, CreativeProfile.BALANCED)
+        self.assertEqual(request.visual_repair_limit, 5)
         self.assertEqual(BuilderRequest.from_dict(request.to_dict()), request)
+
+    def test_request_round_trips_explicit_contract_and_profile(self):
+        request = BuilderRequest(
+            engine=EngineName.DIRECT,
+            brief="Собери чат",
+            contract_id="chat-v1",
+            creative_profile=CreativeProfile.BRAND_MOTION,
+            visual_repair_limit=1,
+        )
+
+        self.assertEqual(BuilderRequest.from_dict(request.to_dict()), request)
+        self.assertEqual(request.to_dict()["creative_profile"], "brand_motion")
+
+    def test_request_accepts_bounded_visual_repair_limits(self):
+        for limit in (0, 5):
+            with self.subTest(limit=limit):
+                request = BuilderRequest.from_dict(
+                    {
+                        "engine": "direct",
+                        "brief": "x",
+                        "visual_repair_limit": limit,
+                    }
+                )
+                self.assertEqual(request.visual_repair_limit, limit)
 
     def test_request_allows_a_bounded_fourth_repair(self):
         request = BuilderRequest.from_dict(
@@ -54,6 +82,12 @@ class BuilderModelsTests(unittest.TestCase):
             {"engine": "direct", "brief": " "},
             {"engine": "direct", "brief": "x", "creativity": 2.1},
             {"engine": "direct", "brief": "x", "max_repairs": 8},
+            {"engine": "direct", "brief": "x", "contract_id": "chat-v2"},
+            {"engine": "direct", "brief": "x", "creative_profile": "unknown"},
+            {"engine": "direct", "brief": "x", "visual_repair_limit": -1},
+            {"engine": "direct", "brief": "x", "visual_repair_limit": 6},
+            {"engine": "direct", "brief": "x", "visual_repair_limit": 1.5},
+            {"engine": "direct", "brief": "x", "visual_repair_limit": True},
         ]
         for payload in invalid:
             with self.subTest(payload=payload), self.assertRaises(ValueError):

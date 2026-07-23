@@ -9,6 +9,7 @@ from builder_lab.engines.base import (
 )
 from builder_lab.models import (
     BuilderRequest,
+    CreativeProfile,
     DirectionJudgement,
     DirectionProposal,
     DirectionRole,
@@ -63,6 +64,42 @@ class BarrierDirectionEngine:
 
 
 class DirectionBoardTests(unittest.IsolatedAsyncioTestCase):
+    def test_direction_and_stage_prompts_include_only_selected_profile_brief(self):
+        distinctive_phrases = {
+            CreativeProfile.BALANCED: "preserve the legacy balanced direction",
+            CreativeProfile.PRODUCT_CHAT: "instant clarity",
+            CreativeProfile.BRAND_MOTION: "motion carte blanche",
+            CreativeProfile.AI_CHARACTER: "digital employee or character",
+        }
+
+        for profile, expected_phrase in distinctive_phrases.items():
+            with self.subTest(profile=profile.value):
+                request = BuilderRequest(
+                    engine=EngineName.DIRECT,
+                    brief="RAW BUREAU widget",
+                    creative_profile=profile,
+                )
+                prompts = (
+                    build_direction_proposal_prompt(
+                        request=request,
+                        role=DirectionRole.BRAND_ARCHAEOLOGIST,
+                    ),
+                    build_stage_prompt(
+                        request=request,
+                        stage=Stage.ART_DIRECTION,
+                        revision=1,
+                        previous_artifact=None,
+                    ),
+                )
+
+                for prompt in prompts:
+                    self.assertEqual(prompt.count("CREATIVE_PROFILE_BRIEF:"), 1)
+                    self.assertIn(expected_phrase, prompt)
+                    self.assertIn("WIDGET_CONTRACT chat-v1 VERSION 1", prompt)
+                    for other_phrase in distinctive_phrases.values():
+                        if other_phrase != expected_phrase:
+                            self.assertNotIn(other_phrase, prompt)
+
     def test_stage_prompt_declares_exact_runtime_open_state_contract(self):
         prompt = build_stage_prompt(
             request=BuilderRequest(engine=EngineName.DIRECT, brief="RAW BUREAU widget"),
