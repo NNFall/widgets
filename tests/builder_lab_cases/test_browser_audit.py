@@ -156,6 +156,35 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(report.screenshots), 6)
         self.assertEqual(len(report.layouts), 8)
 
+    async def test_audit_runs_the_artifact_javascript_in_every_state(self):
+        class InspectingAudit(BrowserAudit):
+            def __init__(self):
+                super().__init__()
+                self.generated_markers = []
+
+            async def _capture(self, page, state):
+                captured = await super()._capture(page, state)
+                self.generated_markers.append(
+                    await page.frames[1].evaluate(
+                        "document.querySelector('[data-region=root]')"
+                        ".dataset.generated"
+                    )
+                )
+                return captured
+
+        audit = InspectingAudit()
+        report = await audit.audit(
+            audit_artifact(
+                javascript=(
+                    "document.querySelector('[data-region=root]')"
+                    ".dataset.generated='yes'"
+                )
+            )
+        )
+
+        self.assertEqual(len(report.screenshots), 6)
+        self.assertEqual(audit.generated_markers, ["yes"] * 6)
+
     async def test_mobile_panel_geometry_cannot_leak_into_narrow_desktop(self):
         overbroad_mobile_css = AUDIT_CSS + """
         @media (min-width: 601px) and (max-width: 899px) {

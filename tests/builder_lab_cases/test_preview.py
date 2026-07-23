@@ -34,7 +34,42 @@ class PreviewDocumentTests(unittest.TestCase):
         self.assertIn("event.source !== window.parent", document)
         self.assertIn("data.channel_id !== channelId", document)
         self.assertIn("data.revision !== revision", document)
-        self.assertNotIn("generated_javascript", document)
+        self.assertNotIn("data-kaigo-generated", document)
+
+    def test_generated_javascript_is_appended_after_the_trusted_runtime(self):
+        candidate = artifact(
+            revision=9,
+            javascript=(
+                "document.querySelector('[data-region=root]')"
+                ".dataset.generated = 'yes';"
+            ),
+        )
+
+        document = build_preview_document(
+            candidate,
+            channel_id="channel-1234567890abcdef",
+        )
+
+        self.assertIn("data-kaigo-generated", document)
+        self.assertIn("dataset.generated = 'yes'", document)
+        self.assertGreater(
+            document.index("data-kaigo-generated"),
+            document.index("type: 'rendered'"),
+        )
+
+    def test_generated_script_terminator_is_escaped_case_insensitively(self):
+        document = build_preview_document(
+            artifact(
+                javascript=(
+                    "document.body.dataset.safe = "
+                    "'</ScRiPt><script id=escape>bad()</script>';"
+                )
+            )
+        )
+
+        self.assertNotIn("</ScRiPt>", document)
+        self.assertNotIn("</ScRiPt><script", document)
+        self.assertIn("<\\/script><script id=escape>", document)
 
     def test_chat_runtime_is_closed_by_default_and_uses_safe_dom_messages(self):
         document = build_preview_document(

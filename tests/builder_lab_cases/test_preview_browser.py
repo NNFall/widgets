@@ -19,9 +19,9 @@ class PreviewRuntimeBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.browser.close()
         await self.playwright.stop()
 
-    async def mount_runtime(self):
+    async def mount_runtime(self, candidate=None):
         document = build_preview_document(
-            artifact(revision=9), channel_id=CHANNEL
+            candidate or artifact(revision=9), channel_id=CHANNEL
         )
         await self.page.set_content("<main><iframe id='preview' sandbox='allow-scripts'></iframe></main>")
         await self.page.evaluate(
@@ -58,6 +58,43 @@ class PreviewRuntimeBrowserTests(unittest.IsolatedAsyncioTestCase):
             "window.bridgeEvents.some(event => event.type === 'rendered')"
         )
         return self.page.frame_locator("#preview")
+
+    async def test_generated_javascript_runs_inside_the_preview(self):
+        frame = await self.mount_runtime(
+            artifact(
+                revision=9,
+                javascript=(
+                    "document.querySelector('[data-region=root]')"
+                    ".dataset.generated='yes'"
+                ),
+            )
+        )
+
+        self.assertEqual(
+            await frame.locator("[data-region=root]").get_attribute(
+                "data-generated"
+            ),
+            "yes",
+        )
+
+    async def test_generated_javascript_cannot_reach_parent_document(self):
+        frame = await self.mount_runtime(
+            artifact(
+                revision=9,
+                javascript=(
+                    "try{parent.document.body.dataset.pwned='1'}"
+                    "catch(error){document.body.dataset.isolated='1'}"
+                ),
+            )
+        )
+
+        self.assertIsNone(
+            await self.page.locator("body").get_attribute("data-pwned")
+        )
+        self.assertEqual(
+            await frame.locator("body").get_attribute("data-isolated"),
+            "1",
+        )
 
     async def test_real_protocol_keyboard_error_retry_and_close_reopen_history(self):
         frame = await self.mount_runtime()

@@ -34,6 +34,15 @@ def _safe_style(css: str) -> str:
     return re.sub(r"</\s*style", "<\\\\/style", css, flags=re.IGNORECASE)
 
 
+def _safe_script(javascript: str) -> str:
+    return re.sub(
+        r"</\s*script",
+        lambda _match: "<\\/script",
+        javascript,
+        flags=re.IGNORECASE,
+    )
+
+
 def build_preview_document(
     artifact: WidgetArtifact, *, channel_id: str = DEFAULT_VISUAL_CHANNEL
 ) -> str:
@@ -43,6 +52,17 @@ def build_preview_document(
         raise ValueError("preview channel_id is invalid")
     csp = escape(PREVIEW_CSP, quote=True)
     css = _safe_style(artifact.css)
+    generated_javascript = _safe_script(artifact.javascript)
+    generated_script = ""
+    if generated_javascript.strip():
+        generated_script = f"""
+<script data-kaigo-generated>
+try {{
+{generated_javascript}
+}} catch (error) {{
+  console.error('kaigo-generated-javascript', error);
+}}
+</script>"""
     revision = int(artifact.revision)
     encoded_channel = json.dumps(channel_id)
     return f"""<!doctype html>
@@ -279,5 +299,6 @@ def build_preview_document(
   }}, '*');
 }})();
 </script>
+{generated_script}
 </body>
 </html>"""
