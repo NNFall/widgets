@@ -71,7 +71,9 @@ prompt.
 
 ### Motion defaults
 
-Gemini самостоятельно выбирает motion language, но контракт требует:
+Fixed runtime владеет таймером и семантическим attention-состоянием launcher. Gemini
+самостоятельно выбирает motion language и CSS/SVG-реакцию на это состояние, но не
+может самовольно открыть panel или запустить второй transport. Контракт требует:
 
 - понятную анимацию открытия и закрытия;
 - hover, focus, active, pending и error feedback;
@@ -81,6 +83,10 @@ Gemini самостоятельно выбирает motion language, но ко�
 - допустимы pulse, glow, небольшой сдвиг, появление детали или выглядывание персонажа;
 - `prefers-reduced-motion` отключает ambient и attention motion, сохраняя мгновенные
   изменения состояния.
+
+BrowserAudit разделяет функциональный flow с замороженным motion, короткий
+`no-preference` probe attention-state и отдельный reduced-motion probe. Поэтому
+проверка анимации не подменяется только статическим screenshot.
 
 Для профиля B разрешена максимально смелая хореография раскрытия, закрытия и ambient
 motion, пока deterministic gate подтверждает доступность контролов, fit панели,
@@ -100,6 +106,11 @@ motion, пока deterministic gate подтверждает доступнос�
 ## Последовательные роли
 
 Три роли выполняются последовательно, а не конкурируют в blind vote.
+
+Это отдельный experiment-path для A/B/C. Существующий стабильный Direct v1/v2 path с
+параллельными предложениями и blind judge остаётся доступным и не переписывается этой
+итерацией. Новый путь использует отдельные bounded role-brief модели и передаёт только
+итог art director в существующий stage generator.
 
 ### 1. Site and brand analyst
 
@@ -166,6 +177,9 @@ overflow, ARIA и HTTP. Модельный критик оценивает ви�
 После исходного visual critique допускается ровно одна целевая визуальная ревизия.
 Повторный browser audit и critique либо принимают результат, либо честно оставляют
 вариант отклонённым. Бесконечного self-repair loop нет.
+
+Ограничение одной ревизии действует на новый A/B/C experiment policy. Legacy visual
+gate сохраняет прежний потолок, чтобы не менять уже работающие публичные сценарии.
 
 ## Raw и final
 

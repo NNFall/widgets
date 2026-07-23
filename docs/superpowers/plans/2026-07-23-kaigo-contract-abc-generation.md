@@ -123,27 +123,29 @@ git commit -m "feat: add versioned widget contracts"
 ### Task 2: Последовательные специализированные роли
 
 **Files:**
+- Create: `builder_lab/concept_roles.py`
+- Create: `tests/builder_lab_cases/test_concept_roles.py`
 - Modify: `builder_lab/models.py`
-- Modify: `builder_lab/directions.py`
 - Modify: `builder_lab/engines/base.py`
 - Modify: `builder_lab/engines/gemini_direct.py`
 - Modify: `builder_lab/prompts.py`
-- Modify: `tests/builder_lab_cases/test_directions.py`
 - Modify: `tests/builder_lab_cases/test_gemini_direct.py`
-- Modify: `tests/builder_lab_cases/test_orchestrator.py`
 
 - [ ] **Step 1: Write a failing sequence test**
 
 ```python
 async def test_direction_roles_run_sequentially_and_receive_prior_work():
-    engine = RecordingDirectionEngine()
-    result = await run_direction_board(engine=engine, request=request())
+    engine = RecordingConceptRoleEngine()
+    result = await run_concept_roles(engine=engine, request=request())
     assert engine.calls == [
         ("site_brand_analyst", ()),
-        ("conversation_designer", ("candidate-1",)),
-        ("art_director_frontend_developer", ("candidate-1", "candidate-2")),
+        ("conversation_designer", ("site_brand_analyst",)),
+        (
+            "art_director_frontend_developer",
+            ("site_brand_analyst", "conversation_designer"),
+        ),
     ]
-    assert result.selected.proposal_id == "candidate-3"
+    assert result.selected_direction.role == "art_director_frontend_developer"
 ```
 
 Also assert that failure usage includes only completed role calls and that a failed role
@@ -152,100 +154,213 @@ prevents later calls.
 - [ ] **Step 2: Run and verify RED**
 
 ```powershell
-python -m pytest tests/builder_lab_cases/test_directions.py tests/builder_lab_cases/test_gemini_direct.py -q
+python -m pytest tests/builder_lab_cases/test_concept_roles.py tests/builder_lab_cases/test_gemini_direct.py -q
 ```
 
-Expected: the existing board runs three proposals in parallel and invokes a blind judge.
+Expected: `concept_roles` and its bounded models do not exist.
 
-- [ ] **Step 3: Add the new role vocabulary**
+- [ ] **Step 3: Add bounded experiment-only role models**
 
 ```python
-class DirectionRole(str, Enum):
+class ConceptRole(str, Enum):
     SITE_BRAND_ANALYST = "site_brand_analyst"
     CONVERSATION_DESIGNER = "conversation_designer"
     ART_DIRECTOR_FRONTEND_DEVELOPER = "art_director_frontend_developer"
+
+
+@dataclass(frozen=True)
+class ConceptRoleBrief:
+    role: ConceptRole
+    summary: str
+    decisions: tuple[str, ...]
+    safeguards: tuple[str, ...]
 ```
 
-Keep legacy enum values readable for historical snapshots, but do not include them in
-the new `DIRECTION_ROLES`.
+Do not change the existing `DirectionRole`, `DIRECTION_ROLES`,
+`run_direction_board`, blind judge or legacy Direct path.
 
 - [ ] **Step 4: Pass prior proposals through the engine**
 
-Extend `propose_direction` with:
+Add an experiment-only engine method:
 
 ```python
-prior_proposals: tuple[DirectionProposal, ...] = ()
+async def develop_concept_role(
+    *,
+    request: BuilderRequest,
+    role: ConceptRole,
+    prior_briefs: tuple[ConceptRoleBrief, ...] = (),
+) -> ConceptRoleResult: ...
 ```
 
-The provider prompt serializes prior proposals as untrusted data. The analyst receives
-none, conversation designer receives analyst output, art director receives both.
+The provider prompt serializes prior briefs as untrusted data. The analyst receives
+none, conversation designer receives analyst output, art director receives both. Only
+the final role gets the creative-profile block; the canonical site and conversation
+inputs remain the same for A/B/C.
 
 - [ ] **Step 5: Replace blind selection with final synthesis**
 
-Run roles sequentially. `DirectionBoardResult.selected` returns the third proposal.
-Create a local `DirectionJudgement` selecting `candidate-3` with a bounded rationale.
-Do not make a fourth model call. Keep the legacy `judge_directions` method only for
-reading old code paths until a separate cleanup.
+Run the new roles sequentially and convert the third bounded brief to one
+`DirectionProposal` compatible with the existing stage generator. Do not make a fourth
+model call. Existing `run_direction_board` continues to serve legacy runs unchanged.
 
 - [ ] **Step 6: Run focused tests and verify GREEN**
 
 ```powershell
-python -m pytest tests/builder_lab_cases/test_directions.py tests/builder_lab_cases/test_gemini_direct.py tests/builder_lab_cases/test_orchestrator.py -q
+python -m pytest tests/builder_lab_cases/test_concept_roles.py tests/builder_lab_cases/test_directions.py tests/builder_lab_cases/test_gemini_direct.py tests/builder_lab_cases/test_orchestrator.py -q
 ```
 
 - [ ] **Step 7: Commit**
 
 ```powershell
-git add builder_lab/models.py builder_lab/directions.py builder_lab/engines/base.py builder_lab/engines/gemini_direct.py builder_lab/prompts.py tests/builder_lab_cases/test_directions.py tests/builder_lab_cases/test_gemini_direct.py tests/builder_lab_cases/test_orchestrator.py
+git add builder_lab/concept_roles.py builder_lab/models.py builder_lab/engines/base.py builder_lab/engines/gemini_direct.py builder_lab/prompts.py tests/builder_lab_cases/test_concept_roles.py tests/builder_lab_cases/test_gemini_direct.py
 git commit -m "feat: split direction work into sequential roles"
 ```
 
-### Task 3: Агрессивный критик, raw candidate и одна ревизия
+### Task 3: Runtime lifecycle и attention motion
 
 **Files:**
-- Modify: `builder_lab/visual_critic.py`
-- Modify: `builder_lab/visual_gate.py`
-- Modify: `builder_lab/store.py`
-- Modify: `tests/builder_lab_cases/test_visual_critic.py`
-- Modify: `tests/builder_lab_cases/test_visual_repair_gate.py`
-- Modify: `tests/builder_lab_cases/test_store.py`
+- Modify: `builder_lab/preview.py`
+- Modify: `builder_lab/browser_audit.py`
+- Modify: `tests/builder_lab_cases/test_preview.py`
+- Modify: `tests/builder_lab_cases/test_browser_audit.py`
 
-- [ ] **Step 1: Write failing critic prompt tests**
+- [ ] **Step 1: Write failing lifecycle tests**
 
 ```python
-assert "Act as an adversarial independent design QA" in system_instruction
-assert "Do not praise" in system_instruction
-assert "smallest observable defect" in system_instruction
-assert "do not invent defects" in system_instruction
-assert "two-second chat recognition" in system_instruction
+def test_runtime_has_separate_pending_and_failed_requests():
+    document = render_widget_document(artifact())
+    assert "pendingRequest" in document
+    assert "failedRequest" in document
+    assert "pendingRequest = null" in document
+
+
+def test_runtime_attention_is_one_shot_and_reduced_motion_safe():
+    document = render_widget_document(artifact())
+    assert "15000" in document
+    assert "kaigo-preview-attention" in document
+    assert "prefers-reduced-motion: reduce" in document
 ```
 
-The existing screenshot-specificity and pixel-proof requirements must remain.
+Add browser cases proving that a failed request does not leave a visually enabled but
+non-working send control, retry does not duplicate the user message, and new send from
+error creates a new request.
 
-- [ ] **Step 2: Write failing one-revision and raw-preservation tests**
-
-```python
-async def test_visual_gate_performs_at_most_request_visual_repair_limit():
-    request = make_request(visual_repair_limit=1)
-    with pytest.raises(BuilderEngineError):
-        await gate.evaluate(...)
-    assert engine.visual_repair_calls == 1
-
-
-async def test_store_preserves_first_visual_candidate():
-    await store.stage_visual_candidate(run_id, raw)
-    await store.stage_visual_candidate(run_id, repaired)
-    assert await store.visual_initial_candidate(run_id) == raw
-    assert await store.visual_candidate(run_id) == repaired
-```
-
-- [ ] **Step 3: Run and verify RED**
+- [ ] **Step 2: Run and verify RED**
 
 ```powershell
-python -m pytest tests/builder_lab_cases/test_visual_critic.py tests/builder_lab_cases/test_visual_repair_gate.py tests/builder_lab_cases/test_store.py -q
+python -m pytest tests/builder_lab_cases/test_preview.py tests/builder_lab_cases/test_browser_audit.py -q
 ```
 
-- [ ] **Step 4: Harden the critic instruction**
+- [ ] **Step 3: Implement explicit request state**
+
+Use separate `pendingRequest` and `failedRequest`. On transport error, move the request
+to `failedRequest` and clear pending. Retry reuses the failed request without adding a
+second user message. New send removes the old error and creates a new request.
+
+- [ ] **Step 4: Implement server-owned attention state**
+
+The runtime schedules one 15-second timer only while the document is visible, the
+surface is closed and the user has not interacted. It toggles
+`.kaigo-preview-attention`, never opens the panel, never moves focus and never plays
+sound. Open, pointer, key, visibility change or reduced-motion cancels it for the page
+session. Generated CSS owns the visual response.
+
+- [ ] **Step 5: Add separate motion probes**
+
+Keep the existing deterministic layout flow motion-frozen. Add:
+
+- `no-preference` attention probe;
+- reduced-motion probe;
+- assertions for no auto-open, no focus change and one-shot cancellation.
+
+- [ ] **Step 6: Run focused tests and verify GREEN**
+
+```powershell
+python -m pytest tests/builder_lab_cases/test_preview.py tests/builder_lab_cases/test_browser_audit.py -q
+```
+
+- [ ] **Step 7: Commit**
+
+```powershell
+git add builder_lab/preview.py builder_lab/browser_audit.py tests/builder_lab_cases/test_preview.py tests/builder_lab_cases/test_browser_audit.py
+git commit -m "feat: add contract driven widget lifecycle"
+```
+
+### Task 4: Агрессивный критик, raw candidate и одна ревизия
+
+**Files:**
+- Create: `builder_lab/strict_visual_models.py`
+- Create: `builder_lab/strict_visual_critic.py`
+- Create: `builder_lab/experiment_review.py`
+- Create: `tests/builder_lab_cases/test_strict_visual_models.py`
+- Create: `tests/builder_lab_cases/test_strict_visual_critic.py`
+- Create: `tests/builder_lab_cases/test_experiment_review.py`
+
+- [ ] **Step 1: Write failing typed-rubric tests**
+
+```python
+def test_host_rejects_score_below_release_bar():
+    critique = StrictVisualCritique(assessments=assessments(score=3), ...)
+    assert critique.verdict is StrictVisualVerdict.REPAIR
+
+
+def test_core_dimension_below_four_blocks_even_high_average():
+    critique = StrictVisualCritique(
+        assessments=assessments(default=5, conversation_clarity=3),
+        ...
+    )
+    assert critique.verdict is StrictVisualVerdict.REPAIR
+```
+
+Require exactly ten dimensions:
+`direction_fidelity`, `page_subordination`, `visual_hierarchy`,
+`conversation_clarity`, `typography_legibility`, `spacing_alignment`,
+`system_coherence`, `responsive_composition`, `craft_polish`, `distinctiveness`.
+Score `0` means `not_observable`; every observable score has confidence at least `0.80`;
+every score `1..3` has a concrete linked finding.
+
+- [ ] **Step 2: Write failing adversarial prompt tests**
+
+```python
+prompt = build_strict_visual_critic_prompt(locale="ru", phase="raw")
+assert "не пишешь дружеский feedback" in prompt
+assert "не выдумывай дефект" in prompt
+assert "двухсекунд" in prompt
+assert "микродетал" in prompt
+assert "не возвращай verdict" in prompt
+```
+
+The model returns observations, assessments, findings and a revision plan, but never its
+own pass/fail verdict. Python derives the verdict.
+
+- [ ] **Step 3: Write failing one-revision state-machine tests**
+
+```python
+async def test_repair_then_pass_uses_exactly_one_generation():
+    result = await reviewer.review(raw_artifact)
+    assert engine.visual_revision_calls == 1
+    assert auditor.calls == 2
+    assert critic.calls == 2
+    assert result.raw.artifact == raw_artifact
+    assert result.final.verdict == "pass"
+
+
+async def test_second_failure_is_terminal_without_another_generation():
+    with pytest.raises(ExperimentVisualQualityError):
+        await reviewer.review(raw_artifact)
+    assert engine.visual_revision_calls == 1
+```
+
+Initial deterministic failure calls neither taste critic nor generator. A deterministic
+regression after the one revision is terminal.
+
+- [ ] **Step 4: Run and verify RED**
+
+```powershell
+python -m pytest tests/builder_lab_cases/test_strict_visual_models.py tests/builder_lab_cases/test_strict_visual_critic.py tests/builder_lab_cases/test_experiment_review.py -q
+```
+
+- [ ] **Step 5: Implement the experiment-only strict critic**
 
 Require concrete negative inspection across:
 
@@ -259,40 +374,52 @@ Require concrete negative inspection across:
 - fake or decorative actions;
 - small alignment, wrapping, contrast and spacing defects.
 
-Keep the evidence rule: no finding without screenshot or deterministic metric.
+Forbid generic standalone language such as “looks clean”, “можно улучшить иерархию”
+and “add breathing room”. Keep screenshot-specific observations and pixel proof. The
+model may return zero findings when evidence supports a strong result.
 
-- [ ] **Step 5: Parameterize the repair loop**
+- [ ] **Step 6: Compute release verdict in Python**
 
-Replace the global repair ceiling inside `evaluate` with:
+Use:
 
 ```python
-repair_limit = request.visual_repair_limit
-if repair_count >= repair_limit:
-    raise self._quality_error("visual_repair_exhausted", usage=total_usage)
+repair = (
+    weighted_score < 4.0
+    or any(core_score < 4 for core_score in core_scores)
+    or any(score <= 2 for score in observable_scores)
+)
 ```
 
-Browser/runtime repair remains separate from the single model-taste revision.
+Severity derives from score: `1=blocker`, `2=major`, `3=minor`. The model cannot lower
+confidence to avoid a repair. `not_observable` is uncertainty, not a defect.
 
-- [ ] **Step 6: Preserve raw visual candidate**
+- [ ] **Step 7: Implement immutable raw/final review records**
 
-Add `_RunRecord.visual_initial_artifact`, store the first staged candidate once, and
-expose `visual_initial_candidate(run_id)`. Return defensive copies exactly like the
-existing artifact APIs.
+`ExperimentReviewResult` stores raw artifact, raw audit, raw critique, final artifact,
+final audit, final critique, usage and elapsed time. The raw record is created once and
+never overwritten. The sole visual revision may change only fields allowed by at most
+three revision actions; unrelated redesign is rejected.
 
-- [ ] **Step 7: Run focused tests and verify GREEN**
+- [ ] **Step 8: Run focused tests and verify GREEN**
 
 ```powershell
-python -m pytest tests/builder_lab_cases/test_visual_critic.py tests/builder_lab_cases/test_visual_repair_gate.py tests/builder_lab_cases/test_store.py -q
+python -m pytest tests/builder_lab_cases/test_strict_visual_models.py tests/builder_lab_cases/test_strict_visual_critic.py tests/builder_lab_cases/test_experiment_review.py -q
 ```
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Confirm legacy gate is unchanged**
 
 ```powershell
-git add builder_lab/visual_critic.py builder_lab/visual_gate.py builder_lab/store.py tests/builder_lab_cases/test_visual_critic.py tests/builder_lab_cases/test_visual_repair_gate.py tests/builder_lab_cases/test_store.py
+python -m pytest tests/builder_lab_cases/test_visual_models.py tests/builder_lab_cases/test_visual_critic.py tests/builder_lab_cases/test_visual_repair_gate.py -q
+```
+
+- [ ] **Step 10: Commit**
+
+```powershell
+git add builder_lab/strict_visual_models.py builder_lab/strict_visual_critic.py builder_lab/experiment_review.py tests/builder_lab_cases/test_strict_visual_models.py tests/builder_lab_cases/test_strict_visual_critic.py tests/builder_lab_cases/test_experiment_review.py
 git commit -m "feat: add adversarial one-pass visual review"
 ```
 
-### Task 4: A/B/C experiment runner and comparison package
+### Task 5: A/B/C experiment runner and comparison package
 
 **Files:**
 - Create: `builder_lab/experiments.py`
@@ -387,7 +514,7 @@ git add builder_lab/experiments.py builder_lab/comparison.py scripts/run_abc_com
 git commit -m "feat: package direct abc experiments"
 ```
 
-### Task 5: Regression verification before paid generation
+### Task 6: Regression verification before paid generation
 
 **Files:**
 - No production changes expected
@@ -415,7 +542,7 @@ git diff --check
 git status --short --branch
 ```
 
-### Task 6: Generate and publish RAW BUREAU A/B/C
+### Task 7: Generate and publish RAW BUREAU A/B/C
 
 **Files:**
 - Create: `docs/RAW_BUREAU_ABC_COMPARISON.md`
@@ -477,4 +604,3 @@ paid runs.
 
 Run the relevant test suite again, commit documentation/evidence, push, fast-forward the
 server checkout, verify remote SHA, HTTP 200 routes, Nginx and container health.
-
