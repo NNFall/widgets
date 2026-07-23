@@ -55,9 +55,14 @@ Runtime and lifecycle:
 Motion and feedback:
 - Provide opening and closing feedback plus visible hover, focus, active, pending, and
   error feedback.
-- After about a 15-second idle delay, the closed launcher may use one subtle,
-  non-aggressive attention cue. It must stop permanently after the first interaction,
-  must not play sound, must not block the page, and must not repeat aggressively.
+- The fixed runtime owns and schedules the 15-second attention timer.
+- It owns and applies the semantic attention state `.kaigo-preview-attention` to the root.
+- The runtime must stop permanently after the first interaction.
+- When the attention capability is enabled, generated CSS/SVG must provide one subtle,
+  non-aggressive launcher cue that reacts to `.kaigo-preview-attention`. The generated
+  artifact must not implement its own attention timer, delayed JavaScript, or attention-state toggling.
+  The cue must not play sound, must not block the page, and
+  must not repeat aggressively.
 - Under `prefers-reduced-motion`, disable ambient and attention motion while keeping
   immediate state feedback.
 

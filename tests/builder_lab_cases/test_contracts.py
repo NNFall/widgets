@@ -57,6 +57,29 @@ class WidgetContractTests(unittest.TestCase):
         self.assertNotIn("color must be", prompt)
         self.assertNotRegex(prompt, r"#[0-9a-f]{3,8}\b")
 
+    def test_chat_v1_makes_attention_timing_and_state_runtime_owned(self):
+        prompt = resolve_widget_contract("chat-v1").prompt_block
+
+        self.assertIn(
+            "fixed runtime owns and schedules the 15-second attention timer",
+            prompt,
+        )
+        self.assertIn(
+            "owns and applies the semantic attention state "
+            "`.kaigo-preview-attention`",
+            prompt,
+        )
+        self.assertIn(
+            "When the attention capability is enabled, generated CSS/SVG must provide",
+            prompt,
+        )
+        self.assertIn(
+            "must not implement its own attention timer, delayed JavaScript, or "
+            "attention-state toggling",
+            prompt,
+        )
+        self.assertNotIn("launcher may use one", prompt)
+
     def test_unknown_contract_is_rejected(self):
         with self.assertRaisesRegex(
             ValueError,
