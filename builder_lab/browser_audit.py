@@ -1453,9 +1453,23 @@ class BrowserAudit:
 
     @staticmethod
     async def _assert_launcher_pointer_interactable(launcher, *, prefix: str) -> None:
-        try:
-            await launcher.click(trial=True, timeout=750)
-        except PlaywrightError as exc:
+        hit_test = await launcher.evaluate(
+            """node => {
+              const rect = node.getBoundingClientRect();
+              const x = rect.left + rect.width / 2;
+              const y = rect.top + rect.height / 2;
+              const hit = document.elementFromPoint(x, y);
+              const label = hit
+                ? `${hit.tagName.toLowerCase()}${hit.id ? `#${hit.id}` : ''}`
+                  + `${hit.classList.length ? `.${[...hit.classList].join('.')}` : ''}`
+                : 'nothing';
+              return {
+                interactable: Boolean(hit && (hit === node || node.contains(hit))),
+                hit: label
+              };
+            }"""
+        )
+        if not hit_test.get("interactable"):
             failure = (
                 f"{prefix}.closed: launcher pointer is blocked by the hidden panel; "
                 "use pointer-events:none on the closed panel and restore "
@@ -1467,11 +1481,14 @@ class BrowserAudit:
                 + failure,
                 diagnostic=(
                     failure
-                    + "; playwright="
-                    + _failure_text(exc, limit=2_000)
+                    + f"; {hit_test.get('hit', 'unknown element')} intercepts pointer "
+                    "events at the launcher center"
                 ),
                 failures=(failure,),
-            ) from exc
+            )
+        # A trial timeout after a successful DOM hit-test is infrastructure noise,
+        # not proof that the generated artifact needs another model repair.
+        await launcher.click(trial=True, timeout=3_000)
 
     @staticmethod
     async def _assert_visible_suggestions_actionable(frame) -> None:
