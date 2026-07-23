@@ -233,7 +233,7 @@ cp data/dialogs.sqlite3 dialogs.sqlite3.backup
 ## Gemini Builder Lab
 
 В репозитории есть отдельная лаборатория для поэтапной генерации виджетов через
-`gemini-3.5-flash` и сравнения с Antigravity Managed Agent. Она не подключена к
+`gemini-3.6-flash` и сравнения с Antigravity Managed Agent. Она не подключена к
 production-базе виджетов и не умеет публиковать embed-код.
 
 Локальный запуск:
@@ -263,3 +263,26 @@ firewall до старта контейнера и затем проверяет
 Русские инструкции по Gemini-only маршруту, сохранению демо, журналу стадий,
 nginx и откату:
 [docs/KAIGO_BUILDER_LAB_OPERATIONS.md](docs/KAIGO_BUILDER_LAB_OPERATIONS.md).
+
+### Воспроизводимое сравнение генераторов
+
+Текущая матрица эксперимента: Direct `gemini-3.6-flash` с `high` thinking,
+визуальный критик и анализатор `gemini-3.5-flash/high`, чат посетителя
+`gemini-3.5-flash-lite/medium`, агентская версия
+`antigravity-preview-05-2026`.
+
+Исходный бриф и доказательства RAW BUREAU фиксируются неизменяемым manifest с
+SHA-256, после чего обе версии собираются из одного input bundle:
+
+```powershell
+py -3.12 scripts/build_raw_bureau_comparison.py freeze `
+  --source-url https://rawbureau.ru/ `
+  --existing-baseline D:\path\to\baseline `
+  --output D:\path\to\comparison
+
+py -3.12 scripts/build_raw_bureau_comparison.py render `
+  --output D:\path\to\comparison
+```
+
+Результат содержит архив старой версии, Direct и Antigravity, отдельные
+`report.json`, доказательства и общий статический `index.html`.
