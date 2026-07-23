@@ -433,6 +433,11 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(BrowserAuditError) as caught:
             await BrowserAudit().audit(blocked)
         self.assertEqual(caught.exception.error_code, "browser_gate_failed")
+        self.assertTrue(caught.exception.failures)
+        self.assertIn(
+            "visible suggestion is not pointer-interactable",
+            caught.exception.failures[0],
+        )
 
     async def test_each_send_requires_real_pending_busy_and_disabled_state(self):
         def without_pending_busy(candidate, *, channel_id):

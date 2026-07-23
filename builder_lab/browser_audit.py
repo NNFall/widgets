@@ -668,7 +668,15 @@ class BrowserAudit:
                             )
         except BrowserAuditError:
             raise
-        except (ValueError, asyncio.TimeoutError, PlaywrightError) as exc:
+        except ValueError as exc:
+            diagnostic = f"{type(exc).__name__}: {exc}"
+            raise BrowserAuditError(
+                "browser_gate_failed",
+                "Виджет не прошёл детерминированную браузерную проверку",
+                diagnostic=diagnostic,
+                failures=(diagnostic,),
+            ) from exc
+        except (asyncio.TimeoutError, PlaywrightError) as exc:
             raise BrowserAuditError(
                 "browser_gate_failed",
                 "Виджет не прошёл детерминированную браузерную проверку",
