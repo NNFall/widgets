@@ -124,11 +124,20 @@ class PreviewDocumentTests(unittest.TestCase):
         self.assertIn("[data-kaigo-runtime-input]::-webkit-scrollbar", document)
         self.assertIn("scrollbar-width: none", document)
         self.assertIn("resize: none", document)
-        self.assertIn("input.style.height = `${Math.min(input.scrollHeight, maxHeight)}px`", document)
+        self.assertIn("const minHeight = Math.max(44, lineHeight + 8)", document)
+        self.assertIn(
+            "Math.max(minHeight, Math.min(input.scrollHeight, maxHeight))",
+            document,
+        )
         self.assertIn("event.isComposing", document)
         self.assertIn("event.key === 'Enter' && !event.shiftKey", document)
         self.assertIn("event.key === 'Escape'", document)
         self.assertIn("launcher.focus()", document)
+        self.assertIn("launcher.hidden = Boolean(open)", document)
+        self.assertIn(
+            "launcher.setAttribute('aria-hidden', open ? 'true' : 'false')",
+            document,
+        )
         self.assertIn("matchMedia('(hover: hover) and (pointer: fine)').matches", document)
         self.assertIn("document.querySelector('[data-action=\"close\"]')", document)
         self.assertNotIn("[data-region=\"header\"] button", document)

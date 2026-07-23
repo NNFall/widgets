@@ -127,7 +127,11 @@ try {{
     root.dataset.state = open ? 'open' : 'closed';
     if (panel) panel.toggleAttribute('data-open', Boolean(open));
     if (toggle) toggle.checked = Boolean(open);
-    if (launcher) launcher.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (launcher) {{
+      launcher.hidden = Boolean(open);
+      launcher.setAttribute('aria-hidden', open ? 'true' : 'false');
+      launcher.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }}
     if (panel) panel.setAttribute('aria-hidden', open ? 'false' : 'true');
     if (open && input && matchMedia('(hover: hover) and (pointer: fine)').matches) {{
       setTimeout(() => input.focus(), 0);
@@ -255,8 +259,9 @@ try {{
     if (!input) return;
     input.style.height = 'auto';
     const lineHeight = parseFloat(getComputedStyle(input).lineHeight) || 20;
+    const minHeight = Math.max(44, lineHeight + 8);
     const maxHeight = lineHeight * 4 + 8;
-    input.style.height = `${{Math.min(input.scrollHeight, maxHeight)}}px`;
+    input.style.height = `${{Math.max(minHeight, Math.min(input.scrollHeight, maxHeight))}}px`;
     input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden';
   }}
   if (input) {{
