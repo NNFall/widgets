@@ -910,6 +910,7 @@ class BrowserAudit:
             await page.wait_for_timeout(50)
             if await root.get_attribute("data-state") != "open":
                 raise ValueError("narrow desktop launcher did not open the widget")
+            await self._settle_frame(page.frames[-1])
             box = await panel.bounding_box()
             if box is None:
                 raise ValueError("narrow desktop panel is not visible")
@@ -919,8 +920,10 @@ class BrowserAudit:
             if abs(box["width"] - 372) > 1:
                 geometry_failures.append(
                     "narrow desktop panel width must be 372px; "
-                    f"actual {box['width']:.1f}px; mobile full-width panel rules "
-                    "must apply only at viewport widths <= 600px"
+                    f"actual {box['width']:.1f}px; set box-sizing:border-box on the "
+                    "panel selector itself (or a matching descendant rule), because "
+                    "box-sizing on the root does not inherit; mobile full-width panel "
+                    "rules must apply only at viewport widths <= 600px"
                 )
             if abs(actual_right - 20) > 1 or abs(actual_bottom - 20) > 1:
                 geometry_failures.append(
