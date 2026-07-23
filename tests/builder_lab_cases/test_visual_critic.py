@@ -298,6 +298,7 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config.temperature, 0.1)
         self.assertEqual(config.top_p, 1.0)
         self.assertEqual(config.tools, [])
+        self.assertEqual(config.max_output_tokens, 16_384)
         self.assertIn("HIGH", str(config.thinking_config.thinking_level).upper())
         instruction = str(config.system_instruction).lower()
         self.assertIn("untrusted", instruction)
@@ -342,6 +343,7 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(proof.model, "gemini-3.5-flash")
         self.assertEqual(proof.response_id, "fake-response-123")
         call = fake.aio.models.calls[0]
+        self.assertEqual(call["config"].max_output_tokens, 4_096)
         images = [part.inline_data.data for part in call["contents"] if getattr(part, "inline_data", None)]
         self.assertEqual(len(images), 6)
         for image, state, item in zip(images, ScreenshotState, proof.proofs):

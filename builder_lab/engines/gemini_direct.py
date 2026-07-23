@@ -251,7 +251,10 @@ class GeminiDirectEngine:
                 prompt=attempt_prompt,
                 schema=DIRECTION_PROPOSAL_JSON_SCHEMA,
                 temperature=request.creativity,
-                max_output_tokens=1_600,
+                # Gemini 3.x counts hidden thinking against this ceiling. A small
+                # response schema still needs enough room for high reasoning plus
+                # the visible proposal, otherwise valid JSON is truncated.
+                max_output_tokens=8_192,
             )
             total_usage = total_usage + _usage(response)
             try:
@@ -303,7 +306,7 @@ class GeminiDirectEngine:
             prompt=prompt,
             schema=DIRECTION_JUDGE_JSON_SCHEMA,
             temperature=0.2,
-            max_output_tokens=500,
+            max_output_tokens=4_096,
         )
         try:
             payload = _response_payload(response)
@@ -369,7 +372,7 @@ class GeminiDirectEngine:
                 prompt=attempt_prompt,
                 schema=ARTIFACT_JSON_SCHEMA,
                 temperature=temperature,
-                max_output_tokens=8_192,
+                max_output_tokens=32_768,
             )
             total_usage = total_usage + _usage(response)
             try:
