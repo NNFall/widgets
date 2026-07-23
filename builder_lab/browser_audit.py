@@ -2271,6 +2271,86 @@ class BrowserAudit:
               const panelRect = panel && panel.getBoundingClientRect();
               const messageRect = messages && messages.getBoundingClientRect();
               const composerRect = composer && composer.getBoundingClientRect();
+              const runtimeMessages = Array.from(document.querySelectorAll(
+                '[data-kaigo-runtime-message]'
+              ));
+              const painted = style => {
+                const color = style.backgroundColor || '';
+                const alpha = color.match(/rgba?\\([^)]*,\\s*([0-9.]+)\\s*\\)$/);
+                const backgroundVisible = color && color !== 'transparent'
+                  && (!alpha || Number(alpha[1]) > 0);
+                const borderVisible = [
+                  style.borderTopWidth, style.borderRightWidth,
+                  style.borderBottomWidth, style.borderLeftWidth
+                ].some(value => parseFloat(value) > 0);
+                return backgroundVisible || borderVisible || style.boxShadow !== 'none';
+              };
+              const describeMessage = node => {
+                const rect = node.getBoundingClientRect();
+                const content = node.querySelector('[data-kaigo-runtime-content]');
+                const nodeStyle = getComputedStyle(node);
+                const contentStyle = content ? getComputedStyle(content) : nodeStyle;
+                const surfaceStyle = painted(contentStyle) ? contentStyle : nodeStyle;
+                const label = node.querySelector('[data-kaigo-runtime-label]');
+                const labelStyle = label ? getComputedStyle(label) : null;
+                const leftGap = messageRect ? rect.left - messageRect.left : 0;
+                const rightGap = messageRect ? messageRect.right - rect.right : 0;
+                return {
+                  role: node.dataset.kaigoRuntimeMessage || '',
+                  leftGap,
+                  rightGap,
+                  widthRatio: messageRect && messageRect.width
+                    ? rect.width / messageRect.width : 1,
+                  labelVisible: Boolean(
+                    label
+                    && label.textContent.trim()
+                    && labelStyle
+                    && labelStyle.display !== 'none'
+                    && labelStyle.visibility !== 'hidden'
+                    && Number(labelStyle.opacity) > 0
+                  ),
+                  classContract: Boolean(
+                    node.classList.contains('kaigo-widget__message')
+                    && node.classList.contains(
+                      `kaigo-widget__message--${node.dataset.kaigoRuntimeMessage}`
+                    )
+                  ),
+                  signature: [
+                    surfaceStyle.backgroundColor,
+                    surfaceStyle.color,
+                    surfaceStyle.borderTopColor,
+                    surfaceStyle.borderTopWidth,
+                    surfaceStyle.borderRadius,
+                    surfaceStyle.boxShadow
+                  ].join('|')
+                };
+              };
+              const messageVisuals = runtimeMessages.map(describeMessage);
+              const lastFor = role => messageVisuals.filter(
+                item => item.role === role
+              ).at(-1);
+              const userVisual = lastFor('user');
+              const assistantVisual = lastFor('assistant');
+              const chatVisualStates = [
+                `chat.user-side=${userVisual
+                  ? (userVisual.rightGap <= userVisual.leftGap ? 'right' : 'invalid')
+                  : 'missing'}`,
+                `chat.assistant-side=${assistantVisual
+                  ? (assistantVisual.leftGap <= assistantVisual.rightGap ? 'left' : 'invalid')
+                  : 'missing'}`,
+                `chat.bubbles-bounded=${messageVisuals.length
+                  && messageVisuals.every(item => item.widthRatio <= 0.94)
+                  ? 'true' : 'false'}`,
+                `chat.roles-distinct=${userVisual && assistantVisual
+                  && userVisual.signature !== assistantVisual.signature
+                  ? 'true' : 'false'}`,
+                `chat.labels-visible=${messageVisuals.length
+                  && messageVisuals.every(item => item.labelVisible)
+                  ? 'true' : 'false'}`,
+                `chat.class-contract=${messageVisuals.length
+                  && messageVisuals.every(item => item.classContract)
+                  ? 'true' : 'false'}`
+              ];
               if (messageRect && composerRect && messageRect.bottom > composerRect.top + 1 && messageRect.top < composerRect.bottom - 1) {
                 const message = regions.find(item => item && item.region === 'messages');
                 const compose = regions.find(item => item && item.region === 'composer');
@@ -2284,7 +2364,8 @@ class BrowserAudit:
                 transcriptScrollable: Boolean(messages && messages.scrollHeight - messages.clientHeight > 1),
                 visibleActionCount,
                 activeElement: document.activeElement ? `${document.activeElement.tagName.toLowerCase()}${document.activeElement.getAttribute('data-region') ? '[data-region=' + document.activeElement.getAttribute('data-region') + ']' : ''}` : 'body',
-                roles: Array.from(document.querySelectorAll('[data-kaigo-runtime-message]')).map(node => node.dataset.kaigoRuntimeMessage),
+                roles: runtimeMessages.map(node => node.dataset.kaigoRuntimeMessage),
+                chatVisualStates,
                 ariaStates: [
                   `launcher.aria-expanded=${document.querySelector('[data-region="launcher"]')?.getAttribute('aria-expanded') ?? 'missing'}`,
                   `panel.aria-hidden=${document.querySelector('[data-region="panel"]')?.getAttribute('aria-hidden') ?? 'missing'}`,
@@ -2321,6 +2402,7 @@ class BrowserAudit:
             visible_action_count=payload["visibleActionCount"],
             active_element=payload["activeElement"],
             transcript_roles=tuple(payload["roles"]),
+            chat_visual_states=tuple(payload["chatVisualStates"]),
             aria_states=tuple(payload["ariaStates"]),
             console_errors=tuple(failures.console),
             page_errors=tuple(failures.page),
@@ -2576,7 +2658,11 @@ class BrowserAudit:
                 if required == "root":
                     continue
                 if region is None or not region.visible:
-                    if required != "launcher":
+                    suggestions_may_hide = (
+                        required == "suggestions"
+                        and "after_turn" in layout.state.value
+                    )
+                    if required != "launcher" and not suggestions_may_hide:
                         failures.append(f"{layout.state.value}: required region {required} is not visible")
                     continue
                 if region.clipped or region.scroll_width - region.client_width > 1:
@@ -2593,6 +2679,35 @@ class BrowserAudit:
                 "assistant",
             ):
                 failures.append(f"{layout.state.value}: second turn order is invalid")
+            if "after_turn" in layout.state.value:
+                required_chat_states = {
+                    "chat.user-side=right",
+                    "chat.assistant-side=left",
+                    "chat.bubbles-bounded=true",
+                    "chat.roles-distinct=true",
+                    "chat.labels-visible=true",
+                    "chat.class-contract=true",
+                }
+                missing_chat_states = sorted(
+                    required_chat_states - set(layout.chat_visual_states)
+                )
+                if missing_chat_states:
+                    failures.append(
+                        f"{layout.state.value}: runtime chat bubbles must show AI on "
+                        "the left, user on the right, bounded and visually distinct "
+                        "surfaces, visible author labels, and stable runtime classes; "
+                        "missing: " + ", ".join(missing_chat_states)
+                    )
+                if suggestions:
+                    failures.append(
+                        f"{layout.state.value}: quick-reply suggestions must be hidden "
+                        "after the first user message"
+                    )
+            elif layout.state.value.endswith("open_initial") and len(suggestions) > 2:
+                failures.append(
+                    f"{layout.state.value}: first open may show at most two quick-reply "
+                    "suggestions"
+                )
             if layout.state.value.startswith("desktop"):
                 if not (
                     _MIN_PANEL_WIDTH_PX

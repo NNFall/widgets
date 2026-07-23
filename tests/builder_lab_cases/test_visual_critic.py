@@ -332,6 +332,10 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("closed: name launcher, button, or control", instruction)
         self.assertIn("open_initial: name panel", instruction)
         self.assertIn("after_turn_2: name message", instruction)
+        self.assertIn("ai messages on the left", instruction)
+        self.assertIn("user messages on the right", instruction)
+        self.assertIn("visually distinct chat bubbles", instruction)
+        self.assertIn("quick replies are absent after the first user turn", instruction)
         contents = call["contents"]
         image_parts = [part for part in contents if getattr(part, "inline_data", None)]
         self.assertEqual(len(image_parts), 9)

@@ -95,6 +95,8 @@ try {{
   const panel = document.querySelector('[data-region="panel"]');
   const composer = document.querySelector('[data-region="composer"]');
   const messages = document.querySelector('[data-region="messages"]');
+  const suggestionsRegion = document.querySelector('[data-region="suggestions"]');
+  const suggestions = Array.from(document.querySelectorAll('[data-suggestion], [data-region="suggestions"] button'));
   let input = composer && composer.querySelector('input, textarea');
   const toggle = root && root.querySelector('.kaigo-toggle, [data-action="toggle"], input[type="checkbox"]');
   const requestPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{{7,95}}$/;
@@ -151,11 +153,14 @@ try {{
   function appendMessage(role, text) {{
     if (!messages) return;
     const message = document.createElement('article');
+    message.className = `kaigo-widget__message kaigo-widget__message--${{role}}`;
     message.setAttribute('data-kaigo-runtime-message', role);
     const label = document.createElement('span');
+    label.className = 'kaigo-widget__message-label';
     label.setAttribute('data-kaigo-runtime-label', role);
     label.textContent = role === 'user' ? 'ВЫ' : 'RAW AI';
     const content = document.createElement('p');
+    content.className = 'kaigo-widget__message-content';
     content.setAttribute('data-kaigo-runtime-content', role);
     content.textContent = text;
     message.append(label, content);
@@ -172,6 +177,7 @@ try {{
     if (!messages) return;
     clearStatus();
     const status = document.createElement('div');
+    status.className = `kaigo-widget__message-status kaigo-widget__message-status--${{kind}}`;
     status.setAttribute('data-kaigo-runtime-status', kind);
     status.setAttribute('role', kind === 'error' ? 'alert' : 'status');
     const copy = document.createElement('span');
@@ -220,12 +226,17 @@ try {{
   function sendText(text) {{
     const normalized = String(text || '').trim();
     if (!normalized || normalized.length > 1000 || pending) return;
+    if (root) root.dataset.chatStarted = 'true';
+    if (suggestionsRegion) {{
+      suggestionsRegion.hidden = true;
+      suggestionsRegion.setAttribute('aria-hidden', 'true');
+    }}
+    suggestions.forEach(item => {{ item.disabled = true; }});
     pending = {{ requestId: requestId(), text: normalized }};
     appendMessage('user', normalized);
     postPending();
   }}
 
-  const suggestions = Array.from(document.querySelectorAll('[data-suggestion], [data-region="suggestions"] button'));
   suggestions.slice(2).forEach(item => {{ item.hidden = true; item.disabled = true; }});
   suggestions.slice(0, 2).forEach(suggestion => suggestion.addEventListener('click', event => {{
     event.preventDefault();

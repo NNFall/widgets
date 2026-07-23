@@ -81,6 +81,9 @@ class PreviewDocumentTests(unittest.TestCase):
         self.assertNotIn("message.textContent = text", document)
         self.assertIn("label.textContent = role === 'user' ? 'ВЫ' : 'RAW AI'", document)
         self.assertIn("data-kaigo-runtime-message", document)
+        self.assertIn("message.className = `kaigo-widget__message kaigo-widget__message--${role}`", document)
+        self.assertIn("label.className = 'kaigo-widget__message-label'", document)
+        self.assertIn("content.className = 'kaigo-widget__message-content'", document)
         self.assertIn("messages.setAttribute('role', 'log')", document)
         self.assertIn("messages.setAttribute('aria-live', 'polite')", document)
         self.assertNotIn("innerHTML", document)
@@ -138,6 +141,9 @@ class PreviewDocumentTests(unittest.TestCase):
         )
         self.assertIn("sendText(text)", document)
         self.assertIn("suggestions.slice(2).forEach", document)
+        self.assertIn("root.dataset.chatStarted = 'true'", document)
+        self.assertIn("suggestionsRegion.hidden = true", document)
+        self.assertIn("suggestionsRegion.setAttribute('aria-hidden', 'true')", document)
         self.assertNotIn("input.focus();\n  }});", document)
 
     def test_rejects_invalid_channel_identifier(self):

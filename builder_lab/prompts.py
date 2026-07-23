@@ -96,9 +96,9 @@ _DIRECTION_ROLE_BRIEFS = {
         "that remains subordinate to the host page"
     ),
     DirectionRole.HOSTILE_CONVERSION_ACCESSIBILITY_CRITIC: (
-        "hostile conversion/accessibility critic: expose fake actions, generic chat UI, "
-        "oversized geometry, responsive failures and accessibility barriers, then turn "
-        "those objections into a defensible direction"
+        "hostile conversion/accessibility critic: expose fake actions, an interface that "
+        "does not read as a real two-sided chat, oversized geometry, responsive failures "
+        "and accessibility barriers, then turn those objections into a defensible direction"
     ),
 }
 
@@ -131,7 +131,11 @@ Product bounds: the widget must remain compact, subordinate to the host page, fu
 inside every requested viewport, and usable without a default scrollbar on first open.
 Geometry is a design decision, not a fixed template. The implementation may use
 unrestricted JavaScript and any CSS animation, including infinite ambient motion.
-No fake actions; every visible control must work.
+No fake actions; every visible control must work. The result must remain unmistakably
+a real conversation: one short assistant welcome message, AI messages on the left,
+user messages on the right, visually distinct chat bubbles or equally clear message
+surfaces, visible author labels, a composer, and at most two initial quick replies.
+Do not turn the first screen into a service menu, price list, dashboard, or promo card.
 
 Locale: {request.locale}
 Brief:
@@ -179,8 +183,9 @@ STAGE_GUIDANCE = {
         "глубину и осмысленные декоративные детали."
     ),
     Stage.CONVERSATION: (
-        "Доработай messages, suggestions и composer: ясная иерархия, полезные "
-        "русские тексты и ощущение живого профессионального сотрудника."
+        "Доработай messages, suggestions и composer как настоящий двухсторонний чат: "
+        "AI слева, посетитель справа, разные message surfaces, короткие подписи автора, "
+        "не больше двух quick replies до первого вопроса и ясный ввод."
     ),
     Stage.MOTION_POLISH: (
         "Добавь выразительные входные, hover, focus и ambient-анимации. Допускаются "
@@ -280,6 +285,8 @@ def build_stage_prompt(
 - desktop panel обычно хорошо работает примерно в диапазоне 320–440px, но это рекомендация,
   а не hardcoded requirement: обоснованный layout_contract может выбрать другую ширину;
 - mobile layout адаптируется к доступному месту и оставляет безопасные поля вокруг panel;
+  обычно держи open panel roughly 64–78% of the viewport height, сохраняя видимый
+  контекст страницы; это диапазон-композиционная рекомендация, а не hardcoded size;
 - launcher и panel могут использовать fixed, absolute, sticky или другой механизм,
   если фактические bounding boxes остаются внутри viewport и все действия доступны;
 - каждый видимый интерактивный элемент имеет фактический bounding box не меньше 44px × 44px;
@@ -290,15 +297,33 @@ def build_stage_prompt(
   inside the compact panel;
 - количество действий и suggestions выбирается моделью; каждое видимое действие должно
   быть реальным, доступным и помещаться без наложений;
+- первый экран обязан читаться как чат, а не как лендинг, каталог или dashboard:
+  используй one short assistant welcome message, не длиннее двух-трёх коротких предложений;
+- разрешены chat bubbles, avatars, CSS/SVG-персонаж и необычная форма message surface,
+  если текст остаётся читаемым и две стороны разговора очевидны;
+- AI messages on the left; user messages on the right. У обеих сторон ограниченная
+  ширина, visually distinct chat bubbles или равноценные отдельные поверхности и
+  visible author label;
+- runtime messages and the initial assistant message must share one visual language;
+  оформи одновременно статическое welcome-сообщение и реальные runtime-селекторы
+  `[data-kaigo-runtime-message="assistant"]`, `[data-kaigo-runtime-message="user"]`,
+  `[data-kaigo-runtime-label]` и `[data-kaigo-runtime-content]`;
+- на первом открытии допускаются at most two quick replies. Они формулируются как
+  короткие реальные вопросы, а не как меню услуг;
+  hide the entire suggestions region after the first user message;
+- permanent facts, prices, service menus and statistic cards вне message stream запрещены;
+  факты и цены появляются только в ответе AI, когда они относятся к вопросу;
 - if a first-open transcript repair is requested, preserve the visual direction and
   layout_contract while reducing only the content or spacing that caused overflow;
 - verify first-open fit at desktop 1440×900, narrow desktop 601×700 and mobile 390×844;
   each suggestion launches a real request;
 - fake actions, пустые кнопки и действия, которые только очищают поле, запрещены;
-- trusted runtime использует классы `.kaigo-widget__message--assistant`,
-  `.kaigo-widget__message--user`, `.kaigo-widget__message--status` и
-  `.kaigo-widget__message--error`; CSS обязан оформить их как редакционный transcript,
-  без bubbles и avatars;
+- trusted runtime использует общий класс `.kaigo-widget__message`, role-классы
+  `.kaigo-widget__message--assistant` и `.kaigo-widget__message--user`, а также
+  `.kaigo-widget__message-label`, `.kaigo-widget__message-content`,
+  `.kaigo-widget__message-status`, `.kaigo-widget__message-status--pending` и
+  `.kaigo-widget__message-status--error`; CSS обязан оформлять их вместе с
+  `data-kaigo-runtime-*` селекторами как настоящий chat transcript;
 - trusted runtime injects retry as `[data-kaigo-runtime-retry="true"]` directly inside the separate
   `[data-kaigo-runtime-status="error"]` status block; target
   `.kaigo-widget [data-kaigo-runtime-retry="true"]` directly and give it at least 44×44px;

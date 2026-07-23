@@ -248,6 +248,7 @@ class LayoutEvidence:
     visible_action_count: int = 0
     active_element: str = "body"
     transcript_roles: tuple[str, ...] = ()
+    chat_visual_states: tuple[str, ...] = ()
     aria_states: tuple[str, ...] = ()
     console_errors: tuple[str, ...] = ()
     page_errors: tuple[str, ...] = ()
@@ -308,6 +309,7 @@ class LayoutEvidence:
         object.__setattr__(self, "active_element", active_element)
         for field_name, limit, item_limit in (
             ("transcript_roles", 32, 32),
+            ("chat_visual_states", 16, 160),
             ("aria_states", 16, 160),
             ("console_errors", 20, 500),
             ("page_errors", 20, 500),
@@ -342,6 +344,7 @@ class LayoutEvidence:
             visible_action_count=payload.get("visible_action_count", 0),
             active_element=payload.get("active_element", "body"),
             transcript_roles=tuple(payload.get("transcript_roles", ())),
+            chat_visual_states=tuple(payload.get("chat_visual_states", ())),
             aria_states=tuple(payload.get("aria_states", ())),
             console_errors=tuple(payload.get("console_errors", ())),
             page_errors=tuple(payload.get("page_errors", ())),
@@ -362,6 +365,7 @@ class LayoutEvidence:
             "visible_action_count": self.visible_action_count,
             "active_element": self.active_element,
             "transcript_roles": list(self.transcript_roles),
+            "chat_visual_states": list(self.chat_visual_states),
             "aria_states": list(self.aria_states),
             "console_errors": list(self.console_errors),
             "page_errors": list(self.page_errors),

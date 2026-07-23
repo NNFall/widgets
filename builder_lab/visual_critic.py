@@ -721,6 +721,7 @@ def _compact_metrics(audit: BrowserAuditReport) -> str:
                 "first_open_transcript_scrollable": layout.first_open_transcript_scrollable,
                 "focus": layout.active_element,
                 "roles": list(layout.transcript_roles),
+                "chat_visual_states": list(layout.chat_visual_states),
                 "errors": len(layout.console_errors)
                 + len(layout.page_errors)
                 + len(layout.request_failures),
@@ -830,6 +831,11 @@ class GeminiVisualCritic:
                 "Use these explicit control words in every observation: "
                 "closed: name launcher, button, or control; open_initial: name panel; "
                 "after_turn_2: name message, messages, transcript, conversation, response, or history. "
+                "For both after_turn_2 frames, verify that AI messages on the left and "
+                "user messages on the right form visually distinct chat bubbles or equally "
+                "clear message surfaces with visible authors. Treat the result as repair "
+                "when it looks like undifferentiated prose, a dashboard, a service menu, "
+                "or when quick replies are absent after the first user turn is false. "
                 "Different numeric literals alone do not prove a different observation. "
                 "Independently estimate pixel_facts "
                 "from each original image: luminance band, dark-pixel area band, edge-density band, "

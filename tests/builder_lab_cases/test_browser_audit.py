@@ -41,7 +41,32 @@ AUDIT_CSS = """
 .kaigo-preview-open [data-region="launcher"] { display: none; }
 .kaigo-preview-open [data-region="panel"] { display: grid; grid-template-rows: 52px 1fr 48px 60px; }
 [data-region="header"], [data-region="composer"] { display: flex; align-items: center; justify-content: space-between; }
-[data-region="messages"] { overflow: auto; min-height: 0; }
+[data-region="messages"] {
+  overflow: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+[data-kaigo-runtime-message] {
+  display: flex;
+  flex-direction: column;
+  width: fit-content;
+  max-width: 82%;
+  padding: 8px 10px;
+  border: 1px solid #111;
+}
+[data-kaigo-runtime-message="assistant"] {
+  align-self: flex-start;
+  background: #fff;
+  color: #111;
+}
+[data-kaigo-runtime-message="user"] {
+  align-self: flex-end;
+  background: #111;
+  color: #fff;
+}
+[data-kaigo-runtime-label] { display: block; font-size: 10px; }
+[data-kaigo-runtime-content] { margin: 0; }
 [data-region="root"]:has([data-kaigo-runtime-status="error"]) [data-region="suggestions"] { display: none; }
 button, textarea { min-height: 44px; }
 button { min-width: 44px; }
@@ -151,6 +176,18 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
             item for item in report.layouts if item.state.value.endswith("after_turn_2")
         ]
         self.assertTrue(all(item.transcript_roles == ("user", "assistant", "user", "assistant") for item in turn_two))
+        after_turns = [
+            item for item in report.layouts if "after_turn" in item.state.value
+        ]
+        self.assertTrue(
+            all(
+                not any(
+                    region.region.startswith("action.suggestion.") and region.visible
+                    for region in item.regions
+                )
+                for item in after_turns
+            )
+        )
         self.assertTrue(all(not item.console_errors for item in report.layouts))
         self.assertTrue(all(not item.page_errors for item in report.layouts))
         self.assertTrue(all(not item.request_failures for item in report.layouts))
@@ -186,6 +223,25 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
             item for item in open_layouts if item.state.value.startswith("mobile.after_turn")
         ]
         self.assertTrue(all("textarea" in item.active_element for item in mobile_after_turn))
+
+    async def test_rejects_runtime_messages_without_left_right_chat_bubbles(self):
+        broken = audit_artifact(
+            css=(
+                AUDIT_CSS
+                + "\n[data-kaigo-runtime-message]{"
+                "display:block!important;align-self:stretch!important;"
+                "width:100%!important;max-width:none!important;"
+                "padding:0!important;border:0!important;"
+                "background:transparent!important;color:#111!important}"
+                + "\n[data-kaigo-runtime-label]{display:block!important}"
+            )
+        )
+
+        with self.assertRaises(BrowserAuditError) as caught:
+            await BrowserAudit().audit(broken)
+
+        self.assertEqual(caught.exception.error_code, "browser_gate_failed")
+        self.assertIn("chat bubbles", caught.exception.diagnostic or "")
 
     async def test_after_turn_screenshot_restores_transcript_to_latest_message(self):
         class TailInspectingAudit(BrowserAudit):

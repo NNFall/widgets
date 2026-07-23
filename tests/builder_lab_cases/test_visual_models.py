@@ -90,10 +90,16 @@ class VisualEvidenceModelTests(unittest.TestCase):
             panel_inside_viewport=True,
             visible_action_count=3,
             transcript_roles=("assistant", "user"),
+            chat_visual_states=(
+                "chat.user-side=right",
+                "chat.assistant-side=left",
+                "chat.roles-distinct=true",
+            ),
             aria_states=("launcher.aria-expanded=true", "panel.aria-hidden=false"),
         )
         self.assertEqual(LayoutEvidence.from_dict(layout.to_dict()), layout)
         self.assertIn("panel.aria-hidden=false", layout.aria_states)
+        self.assertIn("chat.user-side=right", layout.chat_visual_states)
         self.assertEqual(layout.visible_action_count, 3)
         with self.assertRaises(ValueError):
             LayoutEvidence(
@@ -120,6 +126,7 @@ class VisualEvidenceModelTests(unittest.TestCase):
             {"visible_action_count": "3"},
             {"visible_action_count": 101},
             {"transcript_roles": ["assistant", 7]},
+            {"chat_visual_states": ["chat.roles-distinct=true", 7]},
         ):
             payload = layout.to_dict()
             payload.update(changes)
