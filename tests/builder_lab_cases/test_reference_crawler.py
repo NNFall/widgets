@@ -649,6 +649,10 @@ class SelectiveLocalGuard(PermissiveLocalGuard):
 
 
 class BrowserLifecycleTests(unittest.TestCase):
+    def test_default_desktop_capture_uses_wide_full_context_viewport(self):
+        settings = VisualReferenceCrawler()._settings("desktop")
+        self.assertEqual((settings.width, settings.height), (1920, 1080))
+
     def test_chunked_response_is_aborted_near_byte_cap_without_full_buffering(self):
         reason = browser_unavailable_reason()
         if reason:

@@ -398,7 +398,7 @@ _END_VISUAL_WATCH = """() => {
 _SCREENSHOT_ORDER = tuple(ScreenshotState)
 _LAYOUT_ORDER = tuple(LayoutState)
 _VIEWPORTS = (
-    ("desktop", 1440, 900),
+    ("desktop", 1920, 1080),
     ("mobile", 390, 844),
 )
 _NARROW_DESKTOP_VIEWPORT = (601, 700)
@@ -493,7 +493,7 @@ class BrowserAuditReport:
             if evidence.screenshot_id != evidence.state.value:
                 raise ValueError("browser audit screenshot ids must equal their state ids")
             expected_size = (
-                (1440, 900)
+                (1920, 1080)
                 if evidence.state.value.startswith("desktop")
                 else (390, 844)
             )
@@ -505,7 +505,7 @@ class BrowserAuditReport:
         shot_by_state = {item.evidence.state.value: item.evidence for item in screenshots}
         for layout in layouts:
             expected_size = (
-                (1440, 900)
+                (1920, 1080)
                 if layout.state.value.startswith("desktop")
                 else (390, 844)
             )

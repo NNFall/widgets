@@ -353,6 +353,66 @@ def _pixel_facts(data: bytes) -> dict[str, str]:
     }
 
 
+def _context_crops(audit: BrowserAuditReport) -> tuple[tuple[str, str, bytes], ...]:
+    specs = (
+        ("desktop.launcher_crop", "desktop.closed", ("launcher",), 48),
+        ("desktop.panel_crop", "desktop.open_initial", ("panel",), 28),
+        (
+            "desktop.detail_crop",
+            "desktop.after_turn_2",
+            ("messages", "composer"),
+            20,
+        ),
+    )
+    layouts = {layout.state.value: layout for layout in audit.layouts}
+    crops: list[tuple[str, str, bytes]] = []
+    for crop_id, source_id, region_names, padding in specs:
+        layout = layouts[source_id]
+        regions = [
+            region for region in layout.regions if region.region in region_names
+        ]
+        if len(regions) != len(region_names):
+            raise VisualCriticError(
+                "visual_evidence_invalid",
+                "Не удалось подготовить приближённые кадры виджета",
+                diagnostic=f"{crop_id}: missing regions {region_names}",
+            )
+        source = audit.screenshot(source_id)
+        with Image.open(io.BytesIO(source.data)) as opened:
+            image = opened.convert("RGB")
+            left = max(0, int(min(region.x for region in regions) - padding))
+            top = max(0, int(min(region.y for region in regions) - padding))
+            right = min(
+                image.width,
+                int(max(region.x + region.width for region in regions) + padding + 0.999),
+            )
+            bottom = min(
+                image.height,
+                int(max(region.y + region.height for region in regions) + padding + 0.999),
+            )
+            if right <= left or bottom <= top:
+                raise VisualCriticError(
+                    "visual_evidence_invalid",
+                    "Не удалось подготовить приближённые кадры виджета",
+                    diagnostic=f"{crop_id}: empty crop",
+                )
+            cropped = image.crop((left, top, right, bottom))
+            if cropped.width < 640 and cropped.height < 900:
+                scale = min(2.0, 900 / max(1, cropped.height), 960 / max(1, cropped.width))
+                if scale > 1:
+                    cropped = cropped.resize(
+                        (
+                            max(1, round(cropped.width * scale)),
+                            max(1, round(cropped.height * scale)),
+                        ),
+                        Image.Resampling.LANCZOS,
+                    )
+            output = io.BytesIO()
+            cropped.save(output, "JPEG", quality=90, optimize=True)
+        crops.append((crop_id, source_id, output.getvalue()))
+    return tuple(crops)
+
+
 _VISUAL_SIGNAL_ALIASES: dict[str, tuple[str, ...]] = {
     "left": ("left",), "right": ("right",), "top": ("top",),
     "bottom": ("bottom",), "above": ("above",), "below": ("below",),
@@ -711,6 +771,25 @@ class GeminiVisualCritic:
                 )
             )
             contents.append(types.Part.from_bytes(data=data, mime_type="image/jpeg"))
+        for index, (crop_id, source_id, data) in enumerate(
+            _context_crops(audit),
+            start=1,
+        ):
+            total += len(data)
+            if len(data) > MAX_SCREENSHOT_BYTES or total > MAX_INLINE_BYTES:
+                raise VisualCriticError(
+                    "visual_payload_too_large",
+                    "Набор визуальных доказательств превышает допустимый размер",
+                )
+            contents.append(
+                types.Part.from_text(
+                    text=(
+                        f"CONTEXT CROP {index}/3 — {crop_id}; "
+                        f"source full frame: {source_id}"
+                    )
+                )
+            )
+            contents.append(types.Part.from_bytes(data=data, mime_type="image/jpeg"))
 
         policy = generation_policy(
             self.model,
@@ -735,7 +814,10 @@ class GeminiVisualCritic:
                 "Independently estimate pixel_facts "
                 "from each original image: luminance band, dark-pixel area band, edge-density band, "
                 "and dominant hue. Do not copy those from text or metrics. Evidence belongs in the six "
-                "structured observations; summary is informational. A pass may contain only minor or "
+                "structured observations. Three labelled context crops follow the six original "
+                "frames; use them to inspect small launcher, panel, message, and composer details, "
+                "but keep the structured observation IDs tied to the six originals. "
+                "Summary is informational. A pass may contain only minor or "
                 "low-confidence major findings."
             ),
             max_output_tokens=3000,

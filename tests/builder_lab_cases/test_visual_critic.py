@@ -38,7 +38,7 @@ def report():
     screenshots = []
     layouts = []
     for index, state in enumerate(ScreenshotState):
-        width, height = ((1440, 900) if state.value.startswith("desktop") else (390, 844))
+        width, height = ((1920, 1080) if state.value.startswith("desktop") else (390, 844))
         data = jpeg(width, height, index)
         screenshots.append(
             CapturedScreenshot(
@@ -56,7 +56,10 @@ def report():
         )
     screenshot_by_state = {item.evidence.state.value: item.evidence.screenshot_id for item in screenshots}
     for state in LayoutState:
-        width, height = ((1440, 900) if state.value.startswith("desktop") else (390, 844))
+        width, height = ((1920, 1080) if state.value.startswith("desktop") else (390, 844))
+        panel_width = 372 if width == 1920 else 366
+        panel_x = width - panel_width - (20 if width == 1920 else 12)
+        panel_y = height - 320 - (20 if width == 1920 else 12)
         layouts.append(
             LayoutEvidence(
                 evidence_id="layout-" + state.value,
@@ -67,14 +70,50 @@ def report():
                 regions=(
                     RegionEvidence(
                         region="panel",
-                        x=20,
-                        y=20,
-                        width=372 if width == 1440 else 366,
+                        x=panel_x,
+                        y=panel_y,
+                        width=panel_width,
                         height=304 if "open_initial" in state.value else 300,
-                        client_width=372 if width == 1440 else 366,
-                        scroll_width=372 if width == 1440 else 366,
+                        client_width=panel_width,
+                        scroll_width=panel_width,
                         client_height=300,
                         scroll_height=300,
+                        visible=not state.value.endswith("closed"),
+                    ),
+                    RegionEvidence(
+                        region="launcher",
+                        x=width - 236,
+                        y=height - 66,
+                        width=216,
+                        height=46,
+                        client_width=216,
+                        scroll_width=216,
+                        client_height=46,
+                        scroll_height=46,
+                        visible=state.value.endswith("closed"),
+                    ),
+                    RegionEvidence(
+                        region="messages",
+                        x=panel_x + 12,
+                        y=panel_y + 58,
+                        width=panel_width - 24,
+                        height=170,
+                        client_width=panel_width - 24,
+                        scroll_width=panel_width - 24,
+                        client_height=170,
+                        scroll_height=170,
+                        visible=not state.value.endswith("closed"),
+                    ),
+                    RegionEvidence(
+                        region="composer",
+                        x=panel_x + 12,
+                        y=panel_y + 236,
+                        width=panel_width - 24,
+                        height=56,
+                        client_width=panel_width - 24,
+                        scroll_width=panel_width - 24,
+                        client_height=56,
+                        scroll_height=56,
                         visible=not state.value.endswith("closed"),
                     ),
                 ),
@@ -236,7 +275,7 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             BrowserAuditReport(screenshots=over_limit, layouts=valid.layouts)
 
-    async def test_production_critique_sends_exact_six_unmodified_interleaved_jpegs(self):
+    async def test_production_critique_sends_six_originals_and_three_context_crops(self):
         fake = FakeClient(response_payload())
         critic = GeminiVisualCritic(
             api_key="test-key",
@@ -267,19 +306,28 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("after_turn_2: name message", instruction)
         contents = call["contents"]
         image_parts = [part for part in contents if getattr(part, "inline_data", None)]
-        self.assertEqual(len(image_parts), 6)
+        self.assertEqual(len(image_parts), 9)
         self.assertEqual(
             [index for index, part in enumerate(contents) if getattr(part, "inline_data", None)],
-            [2, 4, 6, 8, 10, 12],
+            [2, 4, 6, 8, 10, 12, 14, 16, 18],
         )
         self.assertTrue(all(part.inline_data.mime_type == "image/jpeg" for part in image_parts))
         text = "\n".join(str(getattr(part, "text", "") or "") for part in contents)
         self.assertIn("desktop.closed", text)
         self.assertIn("mobile.after_turn_2", text)
         self.assertEqual(
-            [part.inline_data.data for part in image_parts],
+            [part.inline_data.data for part in image_parts[:6]],
             [shot.data for shot in report().screenshots],
         )
+        self.assertTrue(
+            all(
+                part.inline_data.data not in [shot.data for shot in report().screenshots]
+                for part in image_parts[6:]
+            )
+        )
+        self.assertIn("desktop.launcher_crop", text)
+        self.assertIn("desktop.panel_crop", text)
+        self.assertIn("desktop.detail_crop", text)
 
     async def test_explicit_pixel_probe_is_separate_and_fake_inspects_derived_image(self):
         fake = FakeClient(probe_payload())

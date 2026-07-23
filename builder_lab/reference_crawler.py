@@ -1140,6 +1140,81 @@ async def _wait_for_fonts_and_visible_images(page: Any, timeout_ms: int) -> None
     )
 
 
+async def _wait_for_visual_quiet(
+    page: Any,
+    *,
+    minimum_ms: int = 600,
+    quiet_ms: int = 450,
+    maximum_ms: int = 5000,
+) -> Mapping[str, Any]:
+    return await page.evaluate(
+        """({minimumMs, quietMs, maximumMs}) => new Promise(resolve => {
+          const started = performance.now();
+          let lastMutation = started;
+          let stableSamples = 0;
+          let previous = '';
+          const observer = new MutationObserver(() => { lastMutation = performance.now(); });
+          observer.observe(document.documentElement, {
+            attributes:true, childList:true, characterData:true, subtree:true
+          });
+          const signature = () => {
+            const root = document.scrollingElement || document.documentElement;
+            const pendingImages = [...document.images].slice(0,500).filter(img => !img.complete).length;
+            const sample = [...document.querySelectorAll('body *')].slice(0,1200)
+              .map(node => {
+                const rect = node.getBoundingClientRect();
+                const style = getComputedStyle(node);
+                return [node.tagName, Math.round(rect.x), Math.round(rect.y),
+                  Math.round(rect.width), Math.round(rect.height), style.display,
+                  style.visibility, style.opacity].join(':');
+              }).join('|');
+            return [
+              document.readyState,
+              document.fonts?.status || 'unsupported',
+              pendingImages,
+              root.scrollWidth, root.scrollHeight,
+              sample
+            ].join('\\n');
+          };
+          const tick = () => {
+            const now = performance.now();
+            const current = signature();
+            stableSamples = current === previous ? stableSamples + 1 : 0;
+            previous = current;
+            const elapsed = now - started;
+            const quietFor = now - lastMutation;
+            const ready = document.readyState === 'complete'
+              && (!document.fonts || document.fonts.status === 'loaded')
+              && [...document.images].slice(0,500).every(img => img.complete);
+            if (
+              elapsed >= minimumMs
+              && quietFor >= quietMs
+              && stableSamples >= 3
+              && ready
+            ) {
+              observer.disconnect();
+              resolve({settled:true, elapsedMs:Math.round(elapsed),
+                quietMs:Math.round(quietFor), stableLayoutSamples:stableSamples});
+              return;
+            }
+            if (elapsed >= maximumMs) {
+              observer.disconnect();
+              resolve({settled:false, elapsedMs:Math.round(elapsed),
+                quietMs:Math.round(quietFor), stableLayoutSamples:stableSamples});
+              return;
+            }
+            setTimeout(tick, 100);
+          };
+          tick();
+        })""",
+        {
+            "minimumMs": minimum_ms,
+            "quietMs": quiet_ms,
+            "maximumMs": maximum_ms,
+        },
+    )
+
+
 _SCROLL_STATE_SCRIPT = r"""() => {
   const root = document.scrollingElement || document.documentElement;
   const nodes = [...document.querySelectorAll('body *')].slice(0, 5000);
@@ -1441,6 +1516,7 @@ async def _capture_loaded_page(
         await asyncio.to_thread(guard.validate_redirect, page.url)
     await _wait_for_fonts_and_visible_images(page, timeout_ms)
     await page.wait_for_timeout(settings.warmup_ms)
+    await _wait_for_visual_quiet(page)
     telemetry.raise_if_oversize()
     initial_hidden = await page.evaluate(
         """() => [...document.querySelectorAll('body *')].slice(0, 5000).filter((el) => {
@@ -1487,6 +1563,12 @@ async def _capture_loaded_page(
         scroll_result = await _scroll_once(page, previous, step_px)
         fallback_used = fallback_used or scroll_result == "script_fallback"
         await page.wait_for_timeout(settings.scroll_delay_ms)
+        await _wait_for_visual_quiet(
+            page,
+            minimum_ms=600,
+            quiet_ms=450,
+            maximum_ms=min(5000, timeout_ms),
+        )
         try:
             await _wait_for_fonts_and_visible_images(page, 2500)
         except Exception:
@@ -1560,6 +1642,7 @@ async def _capture_loaded_page(
     if exhausted:
         skipped_reasons.append("scroll_step_cap_reached")
     await page.wait_for_timeout(settings.final_settle_ms)
+    await _wait_for_visual_quiet(page)
     observed_texts.extend(state.get("visible", ()))
     coverage_status = "complete" if coverage_complete else "partial"
     final_position = "bottom" if coverage_status == "complete" else "last_observed"
@@ -1851,7 +1934,7 @@ class VisualReferenceCrawler:
         self.guard = guard or UrlGuard()
 
     def _settings(self, viewport: str) -> CaptureSettings:
-        width, height = ((1440, 900) if viewport == "desktop" else (390, 844))
+        width, height = ((1920, 1080) if viewport == "desktop" else (390, 844))
         return CaptureSettings(
             width=width,
             height=height,

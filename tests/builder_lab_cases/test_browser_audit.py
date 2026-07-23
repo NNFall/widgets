@@ -103,7 +103,7 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(shot.data.startswith(b"\xff\xd8\xff") for shot in report.screenshots))
         self.assertEqual(
             [(shot.evidence.width, shot.evidence.height) for shot in report.screenshots],
-            [(1440, 900)] * 3 + [(390, 844)] * 3,
+            [(1920, 1080)] * 3 + [(390, 844)] * 3,
         )
         turn_two = [
             item for item in report.layouts if item.state.value.endswith("after_turn_2")
