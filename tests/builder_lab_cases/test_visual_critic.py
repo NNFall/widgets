@@ -199,6 +199,33 @@ class FakeClient:
 
 
 class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
+    def test_finding_schema_bounds_semantic_regions_and_repair_fields(self):
+        finding = VISUAL_CRITIC_SCHEMA["properties"]["findings"]["items"][
+            "properties"
+        ]
+        self.assertEqual(
+            set(finding["region"]["properties"]["semantic_region"]["enum"]),
+            {
+                "root",
+                "launcher",
+                "panel",
+                "header",
+                "messages",
+                "suggestions",
+                "composer",
+            },
+        )
+        self.assertEqual(
+            set(finding["artifact_fields"]["items"]["enum"]),
+            {
+                "art_direction",
+                "body_html",
+                "css",
+                "suggested_actions",
+                "theme_tokens",
+            },
+        )
+
     async def test_gemini_2_5_omits_unsupported_thinking_level(self):
         critique_client = FakeClient(response_payload())
         critic = GeminiVisualCritic(model="gemini-2.5-flash", client=critique_client)
