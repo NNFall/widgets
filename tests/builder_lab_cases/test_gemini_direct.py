@@ -5,7 +5,11 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 from builder_lab.engines.base import BuilderEngineError
-from builder_lab.engines.gemini_direct import GeminiDirectEngine, build_http_options
+from builder_lab.engines.gemini_direct import (
+    GeminiDirectEngine,
+    build_http_options,
+    build_provider_json_schema,
+)
 from builder_lab.models import (
     BuilderRequest,
     DirectionProposal,
@@ -160,6 +164,50 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             '"pattern"',
         ):
             self.assertNotIn(unsupported, provider_schema)
+
+    def test_gemini_35_relaxes_nested_serving_constraints_but_keeps_structure(self):
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["items"],
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 6,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["kind", "label"],
+                        "properties": {
+                            "kind": {"type": "string", "enum": ["pass", "repair"]},
+                            "label": {"type": ["string", "null"]},
+                            "score": {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 1,
+                            },
+                        },
+                    },
+                }
+            },
+        }
+
+        provider = build_provider_json_schema(schema, "gemini-3.5-flash")
+        encoded = json.dumps(provider, sort_keys=True)
+
+        self.assertIn('"required"', encoded)
+        self.assertIn('"properties"', encoded)
+        self.assertIn('"enum"', encoded)
+        self.assertNotIn('"additionalProperties"', encoded)
+        self.assertNotIn('"minItems"', encoded)
+        self.assertNotIn('"maxItems"', encoded)
+        self.assertNotIn('"minimum"', encoded)
+        self.assertNotIn('"maximum"', encoded)
+        self.assertEqual(
+            provider["properties"]["items"]["items"]["properties"]["label"]["type"],
+            "string",
+        )
 
     async def test_server_owns_protocol_schema_version_not_the_model(self):
         candidate = artifact(revision=2, stage=Stage.FOUNDATION)

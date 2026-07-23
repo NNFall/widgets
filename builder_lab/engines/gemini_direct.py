@@ -87,11 +87,44 @@ _GEMINI_25_SCHEMA_CONSTRAINTS = frozenset(
     }
 )
 
+_GEMINI_35_SCHEMA_CONSTRAINTS = frozenset(
+    {
+        "additionalProperties",
+        "maxItems",
+        "maximum",
+        "minItems",
+        "minimum",
+    }
+)
+
 
 def build_provider_json_schema(schema: dict[str, Any], model: str) -> dict[str, Any]:
-    """Keep strict schemas for Gemini 3.x and trim serving-state constraints for 2.5."""
+    """Adapt the strict local schema to each Gemini serving implementation."""
 
     normalized = model.strip().lower().removeprefix("models/")
+    if normalized.startswith("gemini-3.5-"):
+        def simplify_35(value: Any) -> Any:
+            if isinstance(value, dict):
+                simplified = {
+                    key: simplify_35(item)
+                    for key, item in value.items()
+                    if key not in _GEMINI_35_SCHEMA_CONSTRAINTS
+                }
+                declared_type = simplified.get("type")
+                if (
+                    isinstance(declared_type, list)
+                    and len(declared_type) == 2
+                    and "null" in declared_type
+                ):
+                    simplified["type"] = next(
+                        item for item in declared_type if item != "null"
+                    )
+                return simplified
+            if isinstance(value, list):
+                return [simplify_35(item) for item in value]
+            return value
+
+        return simplify_35(schema)
     if not normalized.startswith("gemini-2.5-"):
         return schema
 
