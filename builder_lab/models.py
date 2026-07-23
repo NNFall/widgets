@@ -341,6 +341,34 @@ class WidgetArtifact:
         }
 
 
+ARTIFACT_DIFF_FIELDS = (
+    "art_direction",
+    "body_html",
+    "css",
+    "javascript",
+    "layout_contract",
+    "theme_tokens",
+)
+
+
+def artifact_changed_fields(
+    before: WidgetArtifact | None,
+    after: WidgetArtifact,
+) -> tuple[str, ...]:
+    return tuple(
+        name
+        for name in ARTIFACT_DIFF_FIELDS
+        if before is None or getattr(before, name) != getattr(after, name)
+    )
+
+
+def artifact_commit_message(artifact: WidgetArtifact) -> str:
+    return (
+        artifact.change_summary.strip()
+        or f"Ревизия {artifact.revision} готова и передана в предпросмотр."
+    )
+
+
 @dataclass(frozen=True)
 class BuilderEvent:
     run_id: str
@@ -353,6 +381,7 @@ class BuilderEvent:
     revision: int | None = None
     usage: TokenUsage = field(default_factory=TokenUsage)
     issues: tuple[ValidationIssue, ...] = ()
+    changes: tuple[str, ...] = ()
     error_code: str | None = None
     diagnostic: str | None = field(default=None, compare=False, repr=False)
 
@@ -362,6 +391,11 @@ class BuilderEvent:
         if self.error_code is not None and self.error_code not in PUBLIC_ERROR_CODES:
             raise ValueError("unsupported public error code")
         object.__setattr__(self, "issues", tuple(self.issues))
+        object.__setattr__(self, "changes", tuple(self.changes))
+        if len(set(self.changes)) != len(self.changes):
+            raise ValueError("changes must not contain duplicates")
+        if any(change not in ARTIFACT_DIFF_FIELDS for change in self.changes):
+            raise ValueError("unsupported artifact change field")
 
     @classmethod
     def create(
@@ -376,6 +410,7 @@ class BuilderEvent:
         revision: int | None = None,
         usage: TokenUsage | None = None,
         issues: tuple[ValidationIssue, ...] = (),
+        changes: tuple[str, ...] = (),
         error_code: str | None = None,
         diagnostic: str | None = None,
     ) -> "BuilderEvent":
@@ -390,6 +425,7 @@ class BuilderEvent:
             revision=revision,
             usage=usage or TokenUsage(),
             issues=issues,
+            changes=changes,
             error_code=error_code,
             diagnostic=diagnostic,
         )
@@ -413,6 +449,7 @@ class BuilderEvent:
             issues=tuple(
                 ValidationIssue.from_dict(issue) for issue in payload.get("issues", ())
             ),
+            changes=tuple(str(change) for change in payload.get("changes", ())),
             error_code=(str(payload["error_code"]) if payload.get("error_code") else None),
         )
 
@@ -428,6 +465,7 @@ class BuilderEvent:
             "revision": self.revision,
             "usage": self.usage.to_dict(),
             "issues": [issue.to_dict() for issue in self.issues],
+            "changes": list(self.changes),
             "error_code": self.error_code,
         }
 

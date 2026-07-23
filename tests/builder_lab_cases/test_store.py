@@ -76,6 +76,36 @@ class RunStoreTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ArtifactNotFound):
             await self.store.artifact(run.run_id, 3)
 
+    async def test_visual_commit_event_exposes_summary_and_changed_fields(self):
+        run = await self.store.create(self.request)
+        first = artifact(
+            revision=1,
+            stage=Stage.ART_DIRECTION,
+            change_summary="Создана первая визуальная концепция.",
+        )
+        second = artifact(
+            revision=2,
+            stage=Stage.FOUNDATION,
+            change_summary="Добавлены геометрия и интерактивное поведение.",
+            javascript="document.documentElement.dataset.ready = 'yes';",
+            layout_contract={"desktop": "panel 388px", "mobile": "safe inset 12px"},
+        )
+        await self.store.commit_artifact(run.run_id, first)
+        await self.store.stage_visual_candidate(run.run_id, second)
+
+        await self.store.commit_visual_candidate(run.run_id)
+
+        committed = [
+            event
+            for event in await self.store.events_after(run.run_id, 0)
+            if event.event_type == "artifact.committed"
+        ]
+        self.assertEqual(committed[-1].message, second.change_summary)
+        self.assertEqual(
+            committed[-1].changes,
+            ("javascript", "layout_contract"),
+        )
+
     async def test_waiter_wakes_for_new_events(self):
         run = await self.store.create(self.request)
         waiter = asyncio.create_task(self.store.wait_for_events(run.run_id, 1, timeout=1))

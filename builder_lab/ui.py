@@ -91,6 +91,7 @@ def render_builder_page(
     .event[data-status="failed"]::before {{ border-color:var(--danger); background:var(--danger); }}
     .event-meta {{ display:flex; justify-content:space-between; gap:12px; color:#8c877e; font:500 9px/1.3 "Cascadia Mono",monospace; letter-spacing:.06em; text-transform:uppercase; }}
     .event-message {{ margin-top:4px; color:#d6d1c7; font-size:12px; line-height:1.4; }}
+    .event-changes {{ margin-top:5px; color:#9c978e; font:500 9px/1.45 "Cascadia Mono",monospace; letter-spacing:.035em; }}
     @keyframes arrive {{ from {{ opacity:0; transform:translateY(7px); }} to {{ opacity:1; transform:translateY(0); }} }}
     .stage-head {{ display:grid; grid-template-columns:1fr auto; gap:18px; align-items:center; padding:3px 4px 1px; }}
     .stage-title {{ display:flex; align-items:center; gap:12px; min-width:0; }}
@@ -286,6 +287,20 @@ def render_builder_page(
       message.className = 'event-message';
       message.textContent = event.message || '';
       row.append(meta, message);
+      if (Array.isArray(event.changes) && event.changes.length) {{
+        const labels = {{
+          art_direction:'арт-направление',
+          body_html:'HTML',
+          css:'CSS',
+          javascript:'JavaScript',
+          layout_contract:'геометрия',
+          theme_tokens:'палитра'
+        }};
+        const changes = document.createElement('div');
+        changes.className = 'event-changes';
+        changes.textContent = `Изменено: ${{event.changes.map(item => labels[item] || item).join(' · ')}}`;
+        row.append(changes);
+      }}
       elements.timeline.append(row);
       elements.timeline.scrollTop = elements.timeline.scrollHeight;
       elements.status.textContent = `${{event.stage || 'run'}} · ${{event.status || ''}}`;

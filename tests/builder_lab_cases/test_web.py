@@ -108,6 +108,8 @@ class BuilderLabWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('sandbox="allow-scripts"', body)
         self.assertNotIn("allow-same-origin", body)
         self.assertIn("new EventSource", body)
+        self.assertIn("event.changes", body)
+        self.assertIn("Изменено:", body)
         self.assertNotIn("'/api/", body)
         self.assertNotIn("`/api/", body)
         self.assertIn("labUrl('api/runs')", body)

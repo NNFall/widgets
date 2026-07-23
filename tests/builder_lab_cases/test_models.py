@@ -147,12 +147,14 @@ class BuilderModelsTests(unittest.TestCase):
             revision=2,
             error_code="provider_unavailable",
             issues=(ValidationIssue("unsafe_html", "body_html", "Unsafe HTML"),),
+            changes=("body_html", "css", "javascript"),
         )
 
         payload = event.to_dict()
         self.assertEqual(payload["sequence"], 7)
         self.assertEqual(payload["stage"], "identity")
         self.assertEqual(payload["error_code"], "provider_unavailable")
+        self.assertEqual(payload["changes"], ["body_html", "css", "javascript"])
         self.assertNotIn("diagnostic", payload)
         self.assertEqual(BuilderEvent.from_dict(payload), event)
 

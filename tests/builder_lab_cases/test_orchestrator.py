@@ -70,6 +70,8 @@ class ScriptedEngine:
             artifact=artifact(
                 revision=kwargs["revision"],
                 stage=kwargs["stage"],
+                change_summary=f"Готов этап {kwargs['stage'].value}.",
+                layout_contract={"stage": kwargs["stage"].value},
             ),
             usage=TokenUsage(prompt_tokens=10, output_tokens=5),
             provider_request_id=f"request-{len(self.calls)}",
@@ -128,6 +130,24 @@ class BuilderOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         events = await self.store.events_after(snapshot.run_id, 0)
         committed = [event for event in events if event.event_type == "artifact.committed"]
         self.assertEqual([event.revision for event in committed], [1, 2, 3, 4, 5])
+        self.assertEqual(
+            [event.message for event in committed],
+            [f"Готов этап {stage.value}." for stage in DIRECT_STAGES],
+        )
+        self.assertEqual(
+            committed[0].changes,
+            (
+                "art_direction",
+                "body_html",
+                "css",
+                "javascript",
+                "layout_contract",
+                "theme_tokens",
+            ),
+        )
+        self.assertTrue(
+            all(event.changes == ("layout_contract",) for event in committed[1:])
+        )
         self.assertEqual(events[-1].event_type, "run.completed")
         self.assertTrue(engine.closed)
 

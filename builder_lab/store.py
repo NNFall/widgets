@@ -14,6 +14,8 @@ from .models import (
     TokenUsage,
     ValidationIssue,
     WidgetArtifact,
+    artifact_changed_fields,
+    artifact_commit_message,
 )
 
 
@@ -101,6 +103,7 @@ class RunStore:
         revision: int | None = None,
         usage: TokenUsage | None = None,
         issues: tuple[ValidationIssue, ...] = (),
+        changes: tuple[str, ...] = (),
         error_code: str | None = None,
         diagnostic: str | None = None,
     ) -> BuilderEvent:
@@ -115,6 +118,7 @@ class RunStore:
             revision=revision,
             usage=delta,
             issues=issues,
+            changes=changes,
             error_code=error_code,
             diagnostic=diagnostic,
         )
@@ -195,6 +199,7 @@ class RunStore:
         revision: int | None = None,
         usage: TokenUsage | None = None,
         issues: tuple[ValidationIssue, ...] = (),
+        changes: tuple[str, ...] = (),
         error_code: str | None = None,
         diagnostic: str | None = None,
     ) -> BuilderEvent:
@@ -211,6 +216,7 @@ class RunStore:
                 revision=revision,
                 usage=usage,
                 issues=issues,
+                changes=changes,
                 error_code=error_code,
                 diagnostic=diagnostic,
             )
@@ -267,6 +273,7 @@ class RunStore:
             if record.artifact and candidate.revision <= record.artifact.revision:
                 raise ValueError("artifact revision must increase monotonically")
             committed = _copy_artifact(candidate)
+            previous = _copy_artifact(record.artifact)
             record.artifact = committed
             record.artifacts[candidate.revision] = _copy_artifact(candidate)
             record.visual_candidate = None
@@ -275,8 +282,9 @@ class RunStore:
                 event_type="artifact.committed",
                 stage=candidate.stage,
                 status="completed",
-                message="Валидная ревизия передана в preview",
+                message=artifact_commit_message(candidate),
                 revision=candidate.revision,
+                changes=artifact_changed_fields(previous, candidate),
             )
             return _copy_artifact(committed)
 

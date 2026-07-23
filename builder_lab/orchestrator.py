@@ -22,6 +22,8 @@ from .models import (
     Stage,
     ValidationIssue,
     WidgetArtifact,
+    artifact_changed_fields,
+    artifact_commit_message,
 )
 from .store import RunStore, RunTerminal, TERMINAL_STATUSES
 from .validation import issue_fingerprint, validate_artifact
@@ -374,8 +376,9 @@ class BuilderOrchestrator:
                     event_type="artifact.committed",
                     stage=candidate.stage,
                     status="completed",
-                    message="Валидная ревизия передана в preview",
+                    message=artifact_commit_message(candidate),
                     revision=candidate.revision,
+                    changes=artifact_changed_fields(previous, candidate),
                 )
             previous = candidate
 
@@ -507,6 +510,7 @@ class BuilderOrchestrator:
             event_type="artifact.committed",
             stage=stage,
             status="completed",
-            message="Валидный Antigravity-артефакт передан в preview",
+            message=artifact_commit_message(result.artifact),
             revision=1,
+            changes=artifact_changed_fields(None, result.artifact),
         )
