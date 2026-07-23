@@ -85,10 +85,38 @@ class SnapshotCollectionTests(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(SnapshotRejected):
                 collect_declared_snapshot(valid_archive(((path, "x"),)))
 
-    def test_rejects_links_and_special_members(self):
+    def test_ignores_non_declared_links_and_special_members(self):
+        archive = valid_archive(
+            (
+                ("workspace/link", tarfile.SYMTYPE, "../target"),
+                ("scripts/__pycache__/removed.pyc", tarfile.CHRTYPE, ""),
+            )
+        )
+        artifact, report = collect_declared_snapshot(archive)
+        self.assertEqual(artifact.revision, 1)
+        self.assertEqual(report["validator"], "passed")
+
+    def test_rejects_links_and_special_members_at_declared_paths(self):
         for kind in (tarfile.SYMTYPE, tarfile.LNKTYPE, tarfile.CHRTYPE):
-            with self.subTest(kind=kind), self.assertRaises(SnapshotRejected):
-                collect_declared_snapshot(valid_archive((("out/link", kind, "target"),)))
+            archive = tar_bytes(
+                (
+                    ("out/widget-artifact.json", kind, "target"),
+                    (
+                        "out/build-report.json",
+                        json.dumps(
+                            {
+                                "validator": "passed",
+                                "schema_version": "1.0",
+                                "artifact_revision": 1,
+                            }
+                        ),
+                    ),
+                )
+            )
+            with self.subTest(kind=kind), self.assertRaisesRegex(
+                SnapshotRejected, "declared"
+            ):
+                collect_declared_snapshot(archive)
 
     def test_rejects_duplicate_declared_path(self):
         archive = valid_archive(

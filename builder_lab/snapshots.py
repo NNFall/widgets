@@ -66,8 +66,16 @@ def collect_declared_snapshot(
             path = _safe_member_path(member.name)
             if member.isdir():
                 continue
+            if path in DECLARED_PATHS and not member.isfile():
+                raise SnapshotRejected(
+                    f"declared snapshot path must be a regular file: {path}"
+                )
             if not member.isfile():
-                raise SnapshotRejected("snapshot links and special members are forbidden")
+                # Remote environment snapshots may represent deletion of an
+                # unrelated cache file as an overlay whiteout (a character
+                # device). Nothing is extracted here; only the two declared
+                # regular JSON files cross the import boundary.
+                continue
             if member.size < 0:
                 raise SnapshotRejected("snapshot member has an invalid size")
             total_bytes += member.size
