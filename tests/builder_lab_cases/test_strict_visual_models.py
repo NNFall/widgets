@@ -40,11 +40,16 @@ def finding(
 
 
 def action(
-    finding_id: str = "conversation-flat",
+    finding_id: str | tuple[str, ...] = "conversation-flat",
+    *,
+    action_id: str = "separate-authors",
 ) -> StrictVisualRevisionAction:
+    finding_ids = (
+        (finding_id,) if isinstance(finding_id, str) else finding_id
+    )
     return StrictVisualRevisionAction(
-        action_id="separate-authors",
-        finding_ids=(finding_id,),
+        action_id=action_id,
+        finding_ids=finding_ids,
         artifact_fields=("css",),
         instruction=(
             "Give user and assistant message surfaces visibly different alignment "
@@ -62,7 +67,11 @@ def assessments(
     values = []
     for dimension in STRICT_VISUAL_DIMENSIONS:
         score = overrides.get(dimension, default)
-        linked = ("conversation-flat",) if score in {1, 2, 3} else ()
+        linked = (
+            (f"defect-{dimension.value}",)
+            if score in {1, 2, 3}
+            else ()
+        )
         values.append(
             StrictVisualAssessment(
                 dimension=dimension,
@@ -77,7 +86,22 @@ def assessments(
 def critique(
     values: tuple[StrictVisualAssessment, ...],
 ) -> StrictVisualCritique:
-    linked = any(item.finding_ids for item in values)
+    low_assessments = tuple(item for item in values if item.finding_ids)
+    findings = tuple(
+        finding(
+            item.finding_ids[0],
+            dimension=item.dimension,
+        )
+        for item in low_assessments
+    )
+    finding_ids = tuple(item.finding_id for item in findings)
+    actions = tuple(
+        action(
+            finding_ids[index : index + 6],
+            action_id=f"repair-{index // 6 + 1}",
+        )
+        for index in range(0, len(finding_ids), 6)
+    )
     return StrictVisualCritique(
         observations=(
             StrictVisualObservation(
@@ -89,8 +113,8 @@ def critique(
             ),
         ),
         assessments=values,
-        findings=(finding(),) if linked else (),
-        revision_actions=(action(),) if linked else (),
+        findings=findings,
+        revision_actions=actions,
         summary="Evidence-bound strict visual inspection.",
     )
 
@@ -218,6 +242,62 @@ def test_critique_requires_every_dimension_once_and_real_links():
             assessments=values,
             findings=(),
             revision_actions=(),
+            summary="Strict inspection.",
+        )
+
+
+def test_low_assessment_rejects_finding_from_another_dimension():
+    values = assessments(
+        overrides={StrictVisualDimension.CONVERSATION_CLARITY: 3},
+    )
+    linked_id = next(
+        item.finding_ids[0] for item in values if item.finding_ids
+    )
+    with pytest.raises(ValueError, match="same dimension"):
+        StrictVisualCritique(
+            observations=(
+                StrictVisualObservation(
+                    screenshot_id="desktop.after_turn_2",
+                    observation="Two visually identical message surfaces sit above composer.",
+                ),
+            ),
+            assessments=values,
+            findings=(
+                finding(
+                    linked_id,
+                    dimension=StrictVisualDimension.CRAFT_POLISH,
+                ),
+            ),
+            revision_actions=(action(linked_id),),
+            summary="Strict inspection.",
+        )
+
+
+def test_action_must_cover_every_finding_linked_to_a_failing_assessment():
+    values = assessments(
+        overrides={StrictVisualDimension.CONVERSATION_CLARITY: 3},
+    )
+    linked_id = next(
+        item.finding_ids[0] for item in values if item.finding_ids
+    )
+    unrelated_id = "unrelated-spacing"
+    with pytest.raises(ValueError, match="revision action"):
+        StrictVisualCritique(
+            observations=(
+                StrictVisualObservation(
+                    screenshot_id="desktop.after_turn_2",
+                    observation="Two visually identical message surfaces sit above composer.",
+                ),
+            ),
+            assessments=values,
+            findings=(
+                finding(linked_id),
+                finding(
+                    unrelated_id,
+                    dimension=StrictVisualDimension.SPACING_ALIGNMENT,
+                ),
+            ),
+            revision_actions=(action(unrelated_id),),
             summary="Strict inspection.",
         )
 

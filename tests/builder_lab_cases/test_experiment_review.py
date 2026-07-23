@@ -248,6 +248,28 @@ async def test_unrelated_revision_field_is_rejected():
 
 
 @pytest.mark.asyncio
+async def test_change_summary_cannot_be_changed_by_visual_revision():
+    raw = artifact(revision=5)
+    revised = replace(
+        raw,
+        css=raw.css + "\n.kaigo-widget { --author-gap: 8px; }",
+        change_summary="Model rewrote provenance for an unrelated redesign.",
+    )
+    auditor = FakeAuditor([object(), object()])
+    critic = FakeCritic(
+        [visual_critique(repair=True), visual_critique(repair=False)]
+    )
+    engine = FakeEngine(revised)
+
+    with pytest.raises(ExperimentVisualQualityError) as caught:
+        await reviewer(auditor, critic, engine).review(raw)
+
+    assert caught.value.error_code == "unrelated_visual_revision"
+    assert "change_summary" in caught.value.diagnostic
+    assert len(auditor.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_initial_pass_keeps_raw_and_final_evidence_without_generation():
     raw = artifact(revision=5)
     audit = SimpleNamespace(name="raw-audit")

@@ -368,6 +368,7 @@ class StrictVisualCritique:
         finding_ids = tuple(item.finding_id for item in findings)
         if len(finding_ids) != len(set(finding_ids)) or len(findings) > 20:
             raise ValueError("strict critique finding ids are invalid")
+        finding_by_id = {item.finding_id: item for item in findings}
         linked_ids = {
             finding_id
             for assessment in assessments
@@ -378,6 +379,16 @@ class StrictVisualCritique:
             raise ValueError(
                 "assessment links an unknown finding: " + ",".join(sorted(unknown))
             )
+        for assessment in assessments:
+            if not 1 <= assessment.score <= 3:
+                continue
+            if any(
+                finding_by_id[finding_id].dimension is not assessment.dimension
+                for finding_id in assessment.finding_ids
+            ):
+                raise ValueError(
+                    "score 1..3 must link a finding from the same dimension"
+                )
         if len(revision_actions) > 3 or any(
             not isinstance(item, StrictVisualRevisionAction)
             for item in revision_actions
@@ -396,6 +407,12 @@ class StrictVisualCritique:
             raise ValueError(
                 "revision action links an unknown finding: "
                 + ",".join(sorted(unknown))
+            )
+        uncovered = linked_ids - action_links
+        if uncovered:
+            raise ValueError(
+                "every failing finding must be covered by a revision action: "
+                + ",".join(sorted(uncovered))
             )
         ordered = tuple(
             next(

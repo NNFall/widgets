@@ -31,6 +31,7 @@ from .visual_models import (
 _REVISION_FIELDS = (
     "art_direction",
     "body_html",
+    "change_summary",
     "css",
     "javascript",
     "layout_contract",
