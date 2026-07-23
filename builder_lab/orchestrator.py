@@ -496,21 +496,65 @@ class BuilderOrchestrator:
             usage=result.usage,
             diagnostic=result.diagnostic,
         )
-        issues = validate_artifact(result.artifact, previous_revision=0)
-        await self._record_validation(run_id, result.artifact, issues)
+        candidate = result.artifact
+        issues = validate_artifact(candidate, previous_revision=0)
+        await self._record_validation(run_id, candidate, issues)
+        seen = {(issue_fingerprint(issues), _artifact_fingerprint(candidate))}
+        for attempt in range(1, request.max_repairs + 1):
+            if not issues:
+                break
+            self._stages[run_id] = Stage.VALIDATION
+            await self.store.append_event(
+                run_id,
+                event_type="repair.started",
+                stage=Stage.VALIDATION,
+                status="running",
+                message=f"Antigravity исправляет серверные ошибки: попытка {attempt}",
+                revision=candidate.revision,
+                issues=issues,
+            )
+            repaired = await engine.generate(
+                request=request,
+                stage=Stage.AGENT_BUILD,
+                revision=1,
+                previous_artifact=candidate,
+                repair_issues=issues,
+            )
+            candidate = repaired.artifact
+            await self.store.append_event(
+                run_id,
+                event_type="repair.completed",
+                stage=Stage.VALIDATION,
+                status="completed",
+                message=f"Antigravity завершил исправление {attempt}",
+                revision=candidate.revision,
+                usage=repaired.usage,
+                diagnostic=repaired.diagnostic,
+            )
+            issues = validate_artifact(candidate, previous_revision=0)
+            await self._record_validation(run_id, candidate, issues)
+            if not issues:
+                break
+            fingerprint = (
+                issue_fingerprint(issues),
+                _artifact_fingerprint(candidate),
+            )
+            if fingerprint in seen:
+                break
+            seen.add(fingerprint)
         if issues:
             raise BuilderEngineError(
                 "invalid_artifact",
                 "Артефакт Antigravity не прошёл безопасную проверку",
                 diagnostic="; ".join(issue.code for issue in issues),
             )
-        await self.store.commit_artifact(run_id, result.artifact)
+        await self.store.commit_artifact(run_id, candidate)
         await self.store.append_event(
             run_id,
             event_type="artifact.committed",
             stage=stage,
             status="completed",
-            message=artifact_commit_message(result.artifact),
+            message=artifact_commit_message(candidate),
             revision=1,
-            changes=artifact_changed_fields(None, result.artifact),
+            changes=artifact_changed_fields(None, candidate),
         )

@@ -317,6 +317,51 @@ class BuilderOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(engine.calls), 1)
         self.assertEqual(engine.calls[0]["stage"], Stage.AGENT_BUILD)
 
+    async def test_antigravity_repairs_its_own_invalid_artifact_before_commit(self):
+        def handler(kwargs, _count):
+            if not kwargs.get("repair_issues"):
+                return EngineResult(
+                    artifact=artifact(
+                        revision=1,
+                        stage=Stage.AGENT_BUILD,
+                        css="body { color: red; }",
+                    ),
+                    usage=TokenUsage(prompt_tokens=30, output_tokens=10),
+                )
+            return EngineResult(
+                artifact=artifact(revision=1, stage=Stage.AGENT_BUILD),
+                usage=TokenUsage(prompt_tokens=20, output_tokens=5),
+            )
+
+        engine = ScriptedEngine(handler)
+        orchestrator = BuilderOrchestrator(
+            store=self.store,
+            engine_factories={EngineName.ANTIGRAVITY: lambda: engine},
+        )
+        run = await orchestrator.start(
+            BuilderRequest(engine=EngineName.ANTIGRAVITY, brief="Agent repair")
+        )
+        await orchestrator.wait(run.run_id)
+        snapshot = await self.store.snapshot(run.run_id)
+        generation_calls = [call for call in engine.calls if "stage" in call]
+
+        self.assertEqual(snapshot.status, RunStatus.COMPLETED)
+        self.assertEqual(len(generation_calls), 2)
+        self.assertTrue(generation_calls[1]["repair_issues"])
+        self.assertEqual(
+            generation_calls[1]["previous_artifact"],
+            generation_calls[0].get("previous_artifact")
+            or artifact(
+                revision=1,
+                stage=Stage.AGENT_BUILD,
+                css="body { color: red; }",
+            ),
+        )
+        events = await self.store.events_after(run.run_id, 0)
+        self.assertIn("repair.started", [event.event_type for event in events])
+        self.assertIn("repair.completed", [event.event_type for event in events])
+        self.assertEqual(snapshot.usage.prompt_tokens, 50)
+
     async def test_retry_copies_failed_request_into_new_run(self):
         engines = [
             ScriptedEngine(lambda *_: BuilderEngineError("provider_unavailable", "offline")),

@@ -1497,12 +1497,20 @@ class BrowserAudit:
                 continue
             if await suggestion.is_disabled():
                 raise ValueError("visible suggestion is disabled")
-            try:
-                await suggestion.click(trial=True, timeout=750)
-            except PlaywrightError as exc:
+            interactable = await suggestion.evaluate(
+                """node => {
+                  const rect = node.getBoundingClientRect();
+                  const hit = document.elementFromPoint(
+                    rect.left + rect.width / 2,
+                    rect.top + rect.height / 2
+                  );
+                  return Boolean(hit && (hit === node || node.contains(hit)));
+                }"""
+            )
+            if not interactable:
                 raise ValueError(
                     "visible suggestion is not pointer-interactable"
-                ) from exc
+                )
 
     async def _mount_action_probe(
         self,

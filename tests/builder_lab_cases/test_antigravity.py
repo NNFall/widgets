@@ -10,7 +10,7 @@ from pathlib import Path
 
 from builder_lab.engines.antigravity import AntigravityEngine, VALIDATE_OUTPUT_PY
 from builder_lab.engines.base import BuilderEngineError
-from builder_lab.models import BuilderRequest, EngineName, Stage
+from builder_lab.models import BuilderRequest, EngineName, Stage, ValidationIssue
 from tests.builder_lab_cases.test_snapshots import valid_archive
 from tests.builder_lab_cases.test_validation import artifact
 
@@ -267,6 +267,51 @@ class AntigravityEngineTests(unittest.IsolatedAsyncioTestCase):
         await engine.generate(request=self.request, stage=Stage.AGENT_BUILD, revision=1)
         second_environment = interactions.create_calls[1]["environment"]
         self.assertEqual(second_environment, {"type": "remote", "environment_id": "env-123", "network": "disabled"})
+
+    async def test_repair_reuses_environment_and_receives_server_validation_issues(self):
+        interactions = FakeInteractions(
+            [
+                interaction("completed", identifier="build"),
+                interaction("completed", identifier="repair"),
+            ]
+        )
+        engine = AntigravityEngine(
+            api_key="secret",
+            client=FakeClient(interactions),
+            download_client=FakeHTTPClient(valid_archive()),
+            poll_interval=0,
+        )
+        first = await engine.generate(
+            request=self.request,
+            stage=Stage.AGENT_BUILD,
+            revision=1,
+        )
+        await engine.generate(
+            request=self.request,
+            stage=Stage.AGENT_BUILD,
+            revision=1,
+            previous_artifact=first.artifact,
+            repair_issues=(
+                ValidationIssue(
+                    code="forbidden_element",
+                    field="body_html",
+                    message="Element <br> is not allowed",
+                ),
+            ),
+        )
+
+        repair_call = interactions.create_calls[1]
+        self.assertEqual(
+            repair_call["environment"],
+            {
+                "type": "remote",
+                "environment_id": "env-123",
+                "network": "disabled",
+            },
+        )
+        self.assertIn("forbidden_element", repair_call["input"])
+        self.assertIn("Element <br> is not allowed", repair_call["input"])
+        self.assertIn("out/widget-artifact.json", repair_call["input"])
 
     async def test_cancel_calls_interactions_api(self):
         interactions = FakeInteractions([interaction("in_progress")])

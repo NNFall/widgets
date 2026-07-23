@@ -105,6 +105,33 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
             SlowLauncher(), prefix="mobile"
         )
 
+    async def test_visible_suggestion_hit_test_does_not_use_trial_click(self):
+        class Suggestion:
+            async def is_visible(self):
+                return True
+
+            async def is_disabled(self):
+                return False
+
+            async def evaluate(self, _script):
+                return True
+
+            async def click(self, **_kwargs):
+                raise AssertionError("redundant trial click must not run")
+
+        class Suggestions:
+            async def count(self):
+                return 1
+
+            def nth(self, _index):
+                return Suggestion()
+
+        class Frame:
+            def locator(self, _selector):
+                return Suggestions()
+
+        await BrowserAudit._assert_visible_suggestions_actionable(Frame())
+
     async def test_real_chromium_captures_six_jpegs_and_eight_layout_states(self):
         report = await BrowserAudit().audit(audit_artifact())
 

@@ -172,7 +172,31 @@ def _source_files(request: BuilderRequest, revision: int) -> list[dict[str, str]
     ]
 
 
-def _agent_instruction(request: BuilderRequest, revision: int) -> str:
+def _agent_instruction(
+    request: BuilderRequest,
+    revision: int,
+    repair_issues: tuple[ValidationIssue, ...] = (),
+) -> str:
+    if repair_issues:
+        diagnostics = json.dumps(
+            [issue.to_dict() for issue in repair_issues],
+            ensure_ascii=False,
+            indent=2,
+        )
+        return f"""Repair the existing Kaigo artifact in this remote environment.
+
+Read the current `out/widget-artifact.json` and preserve its approved art
+direction unless an issue explicitly requires a structural change. The server
+validator rejected it with the following untrusted diagnostic data:
+
+{diagnostics}
+
+Fix every listed issue in the actual file, keep schema 1.0, revision {revision},
+and stage agent_build. Then run `python3 scripts/validate_output.py` again and
+inspect the resulting files. Finish only after `out/widget-artifact.json` and
+`out/build-report.json` both contain the corrected result. Do not merely explain
+the repair in prose. Do not install packages and do not use the network.
+"""
     return f"""Build the Kaigo widget described in BRIEF.md.
 
 Use your file and execution tools. Produce a visually bold but coherent premium
@@ -349,12 +373,16 @@ class AntigravityEngine:
         repair_issues: tuple[ValidationIssue, ...] = (),
         visual_findings: tuple[VisualFinding, ...] = (),
     ) -> EngineResult:
-        del previous_artifact, repair_issues, visual_findings
+        del previous_artifact, visual_findings
         if stage is not Stage.AGENT_BUILD:
             raise ValueError("Antigravity supports only the agent_build stage")
         try:
             async with asyncio.timeout(self.timeout_seconds):
-                return await self._generate_with_deadline(request, revision)
+                return await self._generate_with_deadline(
+                    request,
+                    revision,
+                    repair_issues,
+                )
         except asyncio.CancelledError:
             raise
         except (TimeoutError, asyncio.TimeoutError) as exc:
@@ -367,11 +395,12 @@ class AntigravityEngine:
         self,
         request: BuilderRequest,
         revision: int,
+        repair_issues: tuple[ValidationIssue, ...],
     ) -> EngineResult:
         self._creation_task = asyncio.create_task(
             self._client.aio.interactions.create(
                 agent=self.agent,
-                input=_agent_instruction(request, revision),
+                input=_agent_instruction(request, revision, repair_issues),
                 background=True,
                 store=True,
                 environment=self._environment(request, revision),
