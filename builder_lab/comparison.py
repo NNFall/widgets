@@ -199,7 +199,8 @@ def render_comparison_page(variants: Sequence[ComparisonVariant]) -> str:
               <dl><div><dt>Модель</dt><dd>{html.escape(variant.model)}</dd></div>
                 <div><dt>Thinking</dt><dd>{html.escape(variant.thinking)}</dd></div></dl>
               <iframe src="{slug}/" title="{html.escape(variant.title, quote=True)}"
-                loading="lazy" sandbox="allow-scripts allow-forms"></iframe>
+                loading="lazy"
+                sandbox="allow-scripts allow-forms allow-same-origin"></iframe>
             </article>"""
         )
     return f"""<!doctype html>

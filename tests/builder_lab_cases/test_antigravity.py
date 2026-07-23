@@ -8,7 +8,11 @@ import types as std_types
 import unittest
 from pathlib import Path
 
-from builder_lab.engines.antigravity import AntigravityEngine, VALIDATE_OUTPUT_PY
+from builder_lab.engines.antigravity import (
+    AGENTS_MD,
+    AntigravityEngine,
+    VALIDATE_OUTPUT_PY,
+)
 from builder_lab.engines.base import BuilderEngineError
 from builder_lab.models import BuilderRequest, EngineName, Stage, ValidationIssue
 from tests.builder_lab_cases.test_snapshots import valid_archive
@@ -122,6 +126,11 @@ class AntigravityEngineTests(unittest.IsolatedAsyncioTestCase):
             engine=EngineName.ANTIGRAVITY,
             brief="Собери необычного AI-сотрудника для школы архитектуры",
         )
+
+    def test_agent_contract_requires_snapshot_cache_cleanup(self):
+        self.assertIn("__pycache__", AGENTS_MD)
+        self.assertIn("*.pyc", AGENTS_MD)
+        self.assertIn("last filesystem action", AGENTS_MD)
 
     async def test_creates_remote_agent_polls_downloads_and_imports_artifact(self):
         interactions = FakeInteractions(

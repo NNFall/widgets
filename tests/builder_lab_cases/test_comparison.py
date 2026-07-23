@@ -104,6 +104,10 @@ class ComparisonBundleTests(unittest.TestCase):
         self.assertIn("Antigravity", page)
         self.assertIn('href="direct-3-6/"', page)
         self.assertIn('href="antigravity-3-6/"', page)
+        self.assertIn(
+            'sandbox="allow-scripts allow-forms allow-same-origin"',
+            page,
+        )
         self.assertNotIn("<script", page.lower())
         json.dumps(page)
 
