@@ -97,23 +97,48 @@ class PreviewDocumentTests(unittest.TestCase):
         self.assertIn("ПОВТОРИТЬ", document)
         self.assertFalse(any(marker in document for marker in MOJIBAKE_MARKERS))
 
-    def test_chat_runtime_posts_v2_request_and_preserves_retry_text_until_success(self):
+    def test_chat_runtime_separates_pending_and_failed_request_lifecycle(self):
         document = build_preview_document(
             artifact(revision=9), channel_id="channel-1234567890abcdef"
         )
+        self.assertIn("let pendingRequest = null", document)
+        self.assertIn("let failedRequest = null", document)
         self.assertIn("type: 'chat.request'", document)
-        self.assertIn("request_id: pending.requestId", document)
-        self.assertIn("text: pending.text", document)
+        self.assertIn("request_id: pendingRequest.requestId", document)
+        self.assertIn("text: pendingRequest.text", document)
         self.assertIn("composer.setAttribute('aria-busy', value ? 'true' : 'false')", document)
         self.assertIn("setBusy(true)", document)
         self.assertIn("setBusy(false)", document)
         self.assertIn("data-kaigo-runtime-status", document)
         self.assertIn("data-kaigo-runtime-retry", document)
-        self.assertIn("retry.addEventListener('click'", document)
-        self.assertIn("if (input.value === pending.text) input.value = ''", document)
+        self.assertIn("retryFailedRequest", document)
+        self.assertIn("pendingRequest = failedRequest", document)
+        self.assertIn("failedRequest = null", document)
+        self.assertIn(
+            "if (input && input.value === pendingRequest.text) input.value = ''",
+            document,
+        )
+        self.assertIn("failedRequest = pendingRequest", document)
+        self.assertIn("pendingRequest = null", document)
         error_index = document.index("type === 'chat.error'")
-        clear_index = document.index("if (input.value === pending.text) input.value = ''")
+        clear_index = document.index(
+            "if (input && input.value === pendingRequest.text) input.value = ''"
+        )
         self.assertLess(clear_index, error_index)
+
+    def test_attention_state_is_runtime_owned_one_shot_and_reduced_motion_safe(self):
+        document = build_preview_document(
+            artifact(revision=9), channel_id="channel-1234567890abcdef"
+        )
+        self.assertIn("const ATTENTION_DELAY_MS = 15000", document)
+        self.assertIn("kaigo-preview-attention", document)
+        self.assertIn("prefers-reduced-motion: reduce", document)
+        self.assertIn("document.visibilityState !== 'visible'", document)
+        self.assertIn("pointerdown", document)
+        self.assertIn("visibilitychange", document)
+        self.assertIn("attentionCancelled", document)
+        self.assertNotIn("new Audio(", document)
+        self.assertNotIn(".play()", document)
 
     def test_chat_runtime_handles_textarea_keyboard_focus_and_session_preserving_toggle(self):
         document = build_preview_document(

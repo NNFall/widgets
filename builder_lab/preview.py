@@ -100,7 +100,12 @@ try {{
   let input = composer && composer.querySelector('input, textarea');
   const toggle = root && root.querySelector('.kaigo-toggle, [data-action="toggle"], input[type="checkbox"]');
   const requestPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{{7,95}}$/;
-  let pending = null;
+  const ATTENTION_DELAY_MS = 15000;
+  const reducedMotionQuery = matchMedia('(prefers-reduced-motion: reduce)');
+  let pendingRequest = null;
+  let failedRequest = null;
+  let attentionTimer = null;
+  let attentionCancelled = false;
 
   if (input && input.tagName !== 'TEXTAREA') {{
     const replacement = document.createElement('textarea');
@@ -121,8 +126,40 @@ try {{
     messages.setAttribute('aria-relevant', 'additions');
   }}
 
+  function cancelAttention() {{
+    if (attentionCancelled) return;
+    attentionCancelled = true;
+    if (attentionTimer !== null) clearTimeout(attentionTimer);
+    attentionTimer = null;
+    if (root) root.classList.remove('kaigo-preview-attention');
+  }}
+
+  function scheduleAttention() {{
+    if (
+      !root
+      || attentionCancelled
+      || attentionTimer !== null
+      || document.visibilityState !== 'visible'
+      || root.dataset.state !== 'closed'
+      || root.dataset.chatStarted === 'true'
+      || reducedMotionQuery.matches
+    ) return;
+    attentionTimer = setTimeout(() => {{
+      attentionTimer = null;
+      if (
+        attentionCancelled
+        || document.visibilityState !== 'visible'
+        || root.dataset.state !== 'closed'
+        || root.dataset.chatStarted === 'true'
+        || reducedMotionQuery.matches
+      ) return;
+      root.classList.add('kaigo-preview-attention');
+    }}, ATTENTION_DELAY_MS);
+  }}
+
   const setOpen = (open, returnFocus = false) => {{
     if (!root) return;
+    if (open) cancelAttention();
     root.classList.toggle('kaigo-preview-open', Boolean(open));
     root.dataset.state = open ? 'open' : 'closed';
     if (panel) panel.toggleAttribute('data-open', Boolean(open));
@@ -192,7 +229,7 @@ try {{
       retry.type = 'button';
       retry.setAttribute('data-kaigo-runtime-retry', 'true');
       retry.textContent = 'ПОВТОРИТЬ';
-      retry.addEventListener('click', () => postPending());
+      retry.addEventListener('click', retryFailedRequest);
       status.append(retry);
     }}
     messages.append(status);
@@ -211,8 +248,8 @@ try {{
     return 'request-' + Array.from(crypto.getRandomValues(new Uint8Array(12)), value => value.toString(16).padStart(2, '0')).join('');
   }}
 
-  function postPending() {{
-    if (!pending) return;
+  function postPendingRequest() {{
+    if (!pendingRequest) return;
     clearStatus();
     setBusy(true);
     showStatus('pending', 'Gemini готовит ответ');
@@ -221,24 +258,34 @@ try {{
       version: 2,
       channel_id: channelId,
       type: 'chat.request',
-      request_id: pending.requestId,
+      request_id: pendingRequest.requestId,
       revision,
-      text: pending.text
+      text: pendingRequest.text
     }}, '*');
+  }}
+
+  function retryFailedRequest() {{
+    if (!failedRequest || pendingRequest) return;
+    pendingRequest = failedRequest;
+    failedRequest = null;
+    postPendingRequest();
   }}
 
   function sendText(text) {{
     const normalized = String(text || '').trim();
-    if (!normalized || normalized.length > 1000 || pending) return;
+    if (!normalized || normalized.length > 1000 || pendingRequest) return;
+    cancelAttention();
+    failedRequest = null;
+    clearStatus();
     if (root) root.dataset.chatStarted = 'true';
     if (suggestionsRegion) {{
       suggestionsRegion.hidden = true;
       suggestionsRegion.setAttribute('aria-hidden', 'true');
     }}
     suggestions.forEach(item => {{ item.disabled = true; }});
-    pending = {{ requestId: requestId(), text: normalized }};
+    pendingRequest = {{ requestId: requestId(), text: normalized }};
     appendMessage('user', normalized);
-    postPending();
+    postPendingRequest();
   }}
 
   suggestions.slice(2).forEach(item => {{ item.hidden = true; item.disabled = true; }});
@@ -288,25 +335,34 @@ try {{
     const data = event.data;
     if (event.source !== window.parent || !data || data.source !== 'kaigo-builder-parent' || data.version !== 2 || data.channel_id !== channelId || data.revision !== revision) return;
     if (data.type === 'set-open') {{ setOpen(Boolean(data.open)); return; }}
-    if (!pending || !requestPattern.test(data.request_id) || data.request_id !== pending.requestId) return;
+    if (!pendingRequest || !requestPattern.test(data.request_id) || data.request_id !== pendingRequest.requestId) return;
     if (data.type === 'chat.response') {{
       if (typeof data.text !== 'string' || !data.text.trim() || data.text.length > 4000) return;
       clearStatus();
       appendMessage('assistant', data.text.trim());
-      if (input.value === pending.text) input.value = '';
-      pending = null;
+      if (input && input.value === pendingRequest.text) input.value = '';
+      pendingRequest = null;
       setBusy(false);
       autosize();
       return;
     }}
     if (data.type === 'chat.error') {{
+      failedRequest = pendingRequest;
+      pendingRequest = null;
       clearStatus();
       setBusy(false);
       showStatus('error', typeof data.message === 'string' ? data.message.slice(0, 320) : 'Связь прервалась. Текст сохранён.', data.retryable !== false);
     }}
   }});
 
+  document.addEventListener('pointerdown', cancelAttention, {{capture: true, once: true}});
+  document.addEventListener('keydown', cancelAttention, {{capture: true, once: true}});
+  document.addEventListener('visibilitychange', cancelAttention, {{once: true}});
+  reducedMotionQuery.addEventListener('change', event => {{
+    if (event.matches) cancelAttention();
+  }});
   setOpen(false);
+  scheduleAttention();
   window.parent.postMessage({{
     source: 'kaigo-builder-preview',
     version: 2,

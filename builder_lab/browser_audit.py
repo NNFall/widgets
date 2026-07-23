@@ -625,8 +625,20 @@ class BrowserAudit:
                             screenshots=tuple(screenshots), layouts=tuple(layouts)
                         )
                         self._assert_release_gate(report)
-                        await self._retry_probe(
+                        await self._error_recovery_probe(
                             browser=browser, artifact=artifact, deadline=deadline
+                        )
+                        await self._attention_motion_probe(
+                            browser=browser,
+                            artifact=artifact,
+                            reduced_motion="no-preference",
+                            deadline=deadline,
+                        )
+                        await self._attention_motion_probe(
+                            browser=browser,
+                            artifact=artifact,
+                            reduced_motion="reduce",
+                            deadline=deadline,
                         )
                         return report
                 finally:
@@ -790,8 +802,11 @@ class BrowserAudit:
         width: int,
         height: int,
         *,
+        reduced_motion: str = "reduce",
         deadline: float | None = None,
     ) -> tuple[BrowserContext, Page, _RuntimeFailures]:
+        if reduced_motion not in {"reduce", "no-preference"}:
+            raise ValueError("reduced_motion is invalid")
         failures = _RuntimeFailures(console=[], page=[], requests=[], policy=[])
         is_mobile = width == 390
         context = await browser.new_context(
@@ -802,7 +817,7 @@ class BrowserAudit:
             java_script_enabled=True,
             is_mobile=is_mobile,
             has_touch=is_mobile,
-            reduced_motion="reduce",
+            reduced_motion=reduced_motion,
         )
         try:
             await context.add_init_script(_BLOCK_NETWORK_APIS)
@@ -838,8 +853,36 @@ class BrowserAudit:
             )
             raise
 
-    async def _mount(self, page: Page, artifact: WidgetArtifact, *, retry_mode: bool = False):
+    async def _mount(
+        self,
+        page: Page,
+        artifact: WidgetArtifact,
+        *,
+        retry_mode: bool = False,
+        attention_delay_ms: int | None = None,
+        freeze_motion: bool = True,
+    ):
         document = build_preview_document(artifact, channel_id=CHANNEL_ID)
+        if attention_delay_ms is not None:
+            if attention_delay_ms <= 0:
+                raise ValueError("attention_delay_ms is invalid")
+            marker = "const ATTENTION_DELAY_MS = 15000;"
+            if marker not in document:
+                raise ValueError("preview attention delay marker is missing")
+            document = document.replace(
+                marker,
+                f"const ATTENTION_DELAY_MS = {attention_delay_ms};",
+                1,
+            )
+            schedule_marker = "  scheduleAttention();"
+            if schedule_marker not in document:
+                raise ValueError("preview attention schedule marker is missing")
+            document = document.replace(
+                schedule_marker,
+                "  document.addEventListener("
+                "'kaigo-audit-attention-start', scheduleAttention);",
+                1,
+            )
         if re.search(r"<template\b[^>]*\bshadowroot(?:mode)?\s*=", document, re.IGNORECASE):
             raise ValueError("declarative shadow roots are disabled during browser audit")
         await page.set_content(_parent_fixture(), wait_until="load")
@@ -883,6 +926,8 @@ class BrowserAudit:
             "window.__auditEvents && window.__auditEvents.some(item => item.type === 'rendered')"
         )
         child_frame = page.frames[-1]
+        if not freeze_motion:
+            return page.frame_locator("#preview")
         await child_frame.evaluate(
             """() => {
               const originalAnimate = Element.prototype.animate;
@@ -1738,7 +1783,104 @@ class BrowserAudit:
                     first_page.pop().close(), self._cleanup_timeout(deadline)
                 )
 
-    async def _retry_probe(
+    async def _attention_motion_probe(
+        self,
+        *,
+        browser: Browser,
+        artifact: WidgetArtifact,
+        reduced_motion: str,
+        deadline: float | None = None,
+    ) -> None:
+        context, page, failures = await self._new_context(
+            browser,
+            390,
+            844,
+            reduced_motion=reduced_motion,
+            deadline=deadline,
+        )
+        try:
+            frame = await self._mount(
+                page,
+                artifact,
+                attention_delay_ms=25,
+                freeze_motion=False,
+            )
+            root = frame.locator('[data-region="root"]')
+            initial = await frame.locator("body").evaluate(
+                """() => {
+                  window.__kaigoAttentionInitialFocus = document.activeElement;
+                  const root = document.querySelector('[data-region="root"]');
+                  return {
+                    state: root?.dataset.state,
+                    attention: Boolean(root?.classList.contains('kaigo-preview-attention')),
+                    reduced: matchMedia('(prefers-reduced-motion: reduce)').matches
+                  };
+                }"""
+            )
+            if initial != {
+                "state": "closed",
+                "attention": False,
+                "reduced": reduced_motion == "reduce",
+            }:
+                raise ValueError(f"attention initial contract is invalid: {initial}")
+
+            await frame.locator("body").dispatch_event("kaigo-audit-attention-start")
+            await page.wait_for_timeout(100)
+
+            after_delay = await frame.locator("body").evaluate(
+                """() => {
+                  const root = document.querySelector('[data-region="root"]');
+                  return {
+                    state: root?.dataset.state,
+                    attention: Boolean(root?.classList.contains('kaigo-preview-attention')),
+                    focusStable: document.activeElement === window.__kaigoAttentionInitialFocus,
+                    panelHidden: document.querySelector('[data-region="panel"]')
+                      ?.getAttribute('aria-hidden')
+                  };
+                }"""
+            )
+            expected_attention = reduced_motion != "reduce"
+            if after_delay != {
+                "state": "closed",
+                "attention": expected_attention,
+                "focusStable": True,
+                "panelHidden": "true",
+            }:
+                raise ValueError(
+                    f"{reduced_motion} attention contract is invalid: {after_delay}"
+                )
+
+            await frame.locator("body").dispatch_event("pointerdown")
+            await frame.locator("body").dispatch_event("kaigo-audit-attention-start")
+            await page.wait_for_timeout(100)
+            after_cancel = await frame.locator("body").evaluate(
+                """() => {
+                  const root = document.querySelector('[data-region="root"]');
+                  return {
+                    state: root?.dataset.state,
+                    attention: Boolean(root?.classList.contains('kaigo-preview-attention')),
+                    focusStable: document.activeElement === window.__kaigoAttentionInitialFocus
+                  };
+                }"""
+            )
+            if after_cancel != {
+                "state": "closed",
+                "attention": False,
+                "focusStable": True,
+            }:
+                raise ValueError(
+                    f"{reduced_motion} attention cancellation is invalid: {after_cancel}"
+                )
+            self._raise_policy_failures(failures)
+        except PlaywrightError:
+            self._raise_policy_failures(failures)
+            raise
+        finally:
+            await self._bounded_cleanup(
+                context.close(), self._cleanup_timeout(deadline)
+            )
+
+    async def _error_recovery_probe(
         self,
         *,
         browser: Browser,
@@ -1752,13 +1894,15 @@ class BrowserAudit:
             frame = await self._mount(page, artifact, retry_mode=True)
             await frame.locator('[data-region="launcher"]').click()
             input_box = frame.locator('[data-kaigo-runtime-input="true"]')
-            await input_box.fill("Проверка повтора")
+            first_text = "Проверка повтора"
+            replacement_text = "Новый вопрос после ошибки"
+            await input_box.fill(first_text)
             await input_box.press("Enter")
             await self._assert_pending_turn(frame, ("user",))
             request_id = await self._assert_chat_request(
                 page,
                 expected_count=1,
-                expected_text="Проверка повтора",
+                expected_text=first_text,
                 expected_revision=artifact.revision,
             )
             await self._release_audit_response(page)
@@ -1785,12 +1929,49 @@ class BrowserAudit:
             )
             if error_payload != {
                 "roles": ["user"],
-                "userText": ["Проверка повтора"],
+                "userText": [first_text],
                 "status": "error",
                 "busy": "false",
                 "sendDisabled": False,
             }:
                 raise ValueError(f"retry error contract is invalid: {error_payload}")
+            await input_box.fill(replacement_text)
+            await frame.locator(
+                '[data-action="send"], [data-region="composer"] button'
+            ).click()
+            await self._assert_pending_turn(frame, ("user", "user"))
+            replacement_request_id = await self._assert_chat_request(
+                page,
+                expected_count=2,
+                expected_text=replacement_text,
+                expected_revision=artifact.revision,
+                forbidden_request_ids=frozenset({request_id}),
+            )
+            await self._release_audit_response(page)
+            retry = frame.locator('[data-kaigo-runtime-retry="true"]')
+            await retry.wait_for()
+            replacement_error_payload = await frame.locator("body").evaluate(
+                """() => ({
+                  roles: Array.from(document.querySelectorAll('[data-kaigo-runtime-message]')).map(
+                    node => node.dataset.kaigoRuntimeMessage
+                  ),
+                  status: document.querySelector('[data-kaigo-runtime-status]')?.dataset.kaigoRuntimeStatus,
+                  busy: document.querySelector('[data-region="composer"]')?.getAttribute('aria-busy'),
+                  sendDisabled: Boolean(document.querySelector(
+                    '[data-action="send"], [data-region="composer"] button'
+                  )?.disabled)
+                })"""
+            )
+            if replacement_error_payload != {
+                "roles": ["user", "user"],
+                "status": "error",
+                "busy": "false",
+                "sendDisabled": False,
+            }:
+                raise ValueError(
+                    "new-send error recovery contract is invalid: "
+                    f"{replacement_error_payload}"
+                )
             retry_layout = await self._measure(
                 frame=frame,
                 state=LayoutState.MOBILE_AFTER_TURN_1,
@@ -1876,19 +2057,20 @@ class BrowserAudit:
                     failures=(failure,),
                 )
             await retry.click()
-            await self._assert_pending_turn(frame, ("user",))
+            await self._assert_pending_turn(frame, ("user", "user"))
             await self._assert_chat_request(
                 page,
-                expected_count=2,
-                expected_text="Проверка повтора",
+                expected_count=3,
+                expected_text=replacement_text,
                 expected_revision=artifact.revision,
-                expected_request_id=request_id,
+                expected_request_id=replacement_request_id,
             )
             await self._release_audit_response(page)
             await frame.locator('[data-kaigo-runtime-message="assistant"]').wait_for()
-            await self._assert_completed_turn(frame, ("user", "assistant"))
+            await self._assert_completed_turn(frame, ("user", "user", "assistant"))
             retry_history = [
-                {"role": "user", "text": "Проверка повтора"},
+                {"role": "user", "text": first_text},
+                {"role": "user", "text": replacement_text},
                 {
                     "role": "assistant",
                     "text": "Опишите объект и задачу — бюро предложит следующий шаг и формат консультации.",
@@ -1896,7 +2078,7 @@ class BrowserAudit:
             ]
             if await self._transcript(frame) != retry_history:
                 raise ValueError("retry transcript content is invalid")
-            await self._assert_final_chat_ledger(page, expected_count=2)
+            await self._assert_final_chat_ledger(page, expected_count=3)
             self._raise_policy_failures(failures)
         except PlaywrightError:
             self._raise_policy_failures(failures)
@@ -1905,6 +2087,19 @@ class BrowserAudit:
             await self._bounded_cleanup(
                 context.close(), self._cleanup_timeout(deadline)
             )
+
+    async def _retry_probe(
+        self,
+        *,
+        browser: Browser,
+        artifact: WidgetArtifact,
+        deadline: float | None = None,
+    ) -> None:
+        await self._error_recovery_probe(
+            browser=browser,
+            artifact=artifact,
+            deadline=deadline,
+        )
 
     async def _capture(self, page: Page, state: ScreenshotState) -> CapturedScreenshot:
         child_frames = page.frames[1:]

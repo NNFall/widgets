@@ -115,6 +115,35 @@ class ScreenshotBundleContractTests(unittest.TestCase):
 
 
 class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
+    async def test_error_recovery_probe_covers_new_send_and_retry_contract(self):
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            try:
+                await BrowserAudit(browser=browser)._error_recovery_probe(
+                    browser=browser,
+                    artifact=audit_artifact(),
+                )
+            finally:
+                await browser.close()
+
+    async def test_attention_probes_cover_no_preference_and_reduced_motion(self):
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            try:
+                audit = BrowserAudit(browser=browser)
+                await audit._attention_motion_probe(
+                    browser=browser,
+                    artifact=audit_artifact(),
+                    reduced_motion="no-preference",
+                )
+                await audit._attention_motion_probe(
+                    browser=browser,
+                    artifact=audit_artifact(),
+                    reduced_motion="reduce",
+                )
+            finally:
+                await browser.close()
+
     async def test_launcher_hit_test_does_not_depend_on_a_flaky_trial_click(self):
         class SlowLauncher:
             async def evaluate(self, _script):
@@ -581,8 +610,8 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
     async def test_retry_must_not_duplicate_the_original_user_turn(self):
         def duplicate_retry(candidate, *, channel_id):
             return build_preview_document(candidate, channel_id=channel_id).replace(
-                "retry.addEventListener('click', () => postPending());",
-                "retry.addEventListener('click', () => { appendMessage('user', pending.text); postPending(); });",
+                "retry.addEventListener('click', retryFailedRequest);",
+                "retry.addEventListener('click', () => { appendMessage('user', failedRequest.text); retryFailedRequest(); });",
             )
 
         with patch(
@@ -597,23 +626,23 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
     async def test_each_user_action_emits_exactly_one_chat_request(self):
         def duplicate_second_send(candidate, *, channel_id):
             return build_preview_document(candidate, channel_id=channel_id).replace(
-                "appendMessage('user', normalized);\n    postPending();",
-                "appendMessage('user', normalized);\n    postPending();\n"
-                "    if (normalized === 'Как начать проект?') postPending();",
+                "appendMessage('user', normalized);\n    postPendingRequest();",
+                "appendMessage('user', normalized);\n    postPendingRequest();\n"
+                "    if (normalized === 'Как начать проект?') postPendingRequest();",
             )
 
         def duplicate_retry_request(candidate, *, channel_id):
             return build_preview_document(candidate, channel_id=channel_id).replace(
-                "retry.addEventListener('click', () => postPending());",
-                "retry.addEventListener('click', () => { postPending(); postPending(); });",
+                "retry.addEventListener('click', retryFailedRequest);",
+                "retry.addEventListener('click', () => { retryFailedRequest(); postPendingRequest(); });",
             )
 
         def delayed_duplicate_second_send(candidate, *, channel_id):
             return build_preview_document(candidate, channel_id=channel_id).replace(
-                "appendMessage('user', normalized);\n    postPending();",
-                "appendMessage('user', normalized);\n    postPending();\n"
+                "appendMessage('user', normalized);\n    postPendingRequest();",
+                "appendMessage('user', normalized);\n    postPendingRequest();\n"
                 "    if (normalized === 'Как начать проект?') {\n"
-                "      const duplicateRequestId = pending.requestId;\n"
+                "      const duplicateRequestId = pendingRequest.requestId;\n"
                 "      setTimeout(() => window.parent.postMessage({source:'kaigo-builder-preview',"
                 "version:2,channel_id:channelId,type:'chat.request',request_id:duplicateRequestId,"
                 "revision,text:normalized}, '*'), 2000);\n"
@@ -622,9 +651,9 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
 
         def delayed_duplicate_retry(candidate, *, channel_id):
             return build_preview_document(candidate, channel_id=channel_id).replace(
-                "retry.addEventListener('click', () => postPending());",
-                "retry.addEventListener('click', () => { const duplicateRequestId=pending.requestId; "
-                "const duplicateText=pending.text; postPending(); "
+                "retry.addEventListener('click', retryFailedRequest);",
+                "retry.addEventListener('click', () => { const duplicateRequestId=failedRequest.requestId; "
+                "const duplicateText=failedRequest.text; retryFailedRequest(); "
                 "setTimeout(() => window.parent.postMessage({source:'kaigo-builder-preview',"
                 "version:2,channel_id:channelId,type:'chat.request',request_id:duplicateRequestId,"
                 "revision,text:duplicateText}, '*'), 2000); });",
@@ -632,9 +661,9 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
 
         def abort_signal_duplicate_retry(candidate, *, channel_id):
             return build_preview_document(candidate, channel_id=channel_id).replace(
-                "retry.addEventListener('click', () => postPending());",
-                "retry.addEventListener('click', () => { const duplicateRequestId=pending.requestId; "
-                "const duplicateText=pending.text; postPending(); "
+                "retry.addEventListener('click', retryFailedRequest);",
+                "retry.addEventListener('click', () => { const duplicateRequestId=failedRequest.requestId; "
+                "const duplicateText=failedRequest.text; retryFailedRequest(); "
                 "AbortSignal.timeout(2000).addEventListener('abort', () => "
                 "window.parent.postMessage({source:'kaigo-builder-preview',version:2,"
                 "channel_id:channelId,type:'chat.request',request_id:duplicateRequestId,"
@@ -643,9 +672,9 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
 
         def scheduler_duplicate_retry(candidate, *, channel_id):
             return build_preview_document(candidate, channel_id=channel_id).replace(
-                "retry.addEventListener('click', () => postPending());",
-                "retry.addEventListener('click', () => { const duplicateRequestId=pending.requestId; "
-                "const duplicateText=pending.text; postPending(); "
+                "retry.addEventListener('click', retryFailedRequest);",
+                "retry.addEventListener('click', () => { const duplicateRequestId=failedRequest.requestId; "
+                "const duplicateText=failedRequest.text; retryFailedRequest(); "
                 "scheduler.postTask(() => window.parent.postMessage({source:'kaigo-builder-preview',"
                 "version:2,channel_id:channelId,type:'chat.request',request_id:duplicateRequestId,"
                 "revision,text:duplicateText}, '*'), {delay:2000}); });",
@@ -653,9 +682,9 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
 
         def message_channel_duplicate_retry(candidate, *, channel_id):
             return build_preview_document(candidate, channel_id=channel_id).replace(
-                "retry.addEventListener('click', () => postPending());",
-                "retry.addEventListener('click', () => { const duplicateRequestId=pending.requestId; "
-                "const duplicateText=pending.text; postPending(); const channel=new MessageChannel(); "
+                "retry.addEventListener('click', retryFailedRequest);",
+                "retry.addEventListener('click', () => { const duplicateRequestId=failedRequest.requestId; "
+                "const duplicateText=failedRequest.text; retryFailedRequest(); const channel=new MessageChannel(); "
                 "const deadline=performance.now()+15000; channel.port1.onmessage=() => { "
                 "if (performance.now() < deadline) { channel.port2.postMessage(0); return; } "
                 "window.parent.postMessage({source:'kaigo-builder-preview',version:2,"
@@ -695,9 +724,9 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
     async def test_additional_window_message_task_source_is_rejected(self):
         def same_window_post_message_duplicate_retry(candidate, *, channel_id):
             return build_preview_document(candidate, channel_id=channel_id).replace(
-                "retry.addEventListener('click', () => postPending());",
-                "retry.addEventListener('click', () => { const duplicateRequestId=pending.requestId; "
-                "const duplicateText=pending.text; postPending(); const deadline=performance.now()+10000; "
+                "retry.addEventListener('click', retryFailedRequest);",
+                "retry.addEventListener('click', () => { const duplicateRequestId=failedRequest.requestId; "
+                "const duplicateText=failedRequest.text; retryFailedRequest(); const deadline=performance.now()+10000; "
                 "const tick=event => { if (event.source !== window || event.data !== 'audit-tick') return; "
                 "if (performance.now() < deadline) { window.postMessage('audit-tick', '*'); return; } "
                 "window.parent.postMessage({source:'kaigo-builder-preview',version:2,"
@@ -785,7 +814,7 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         def corrupt_retry_answer(candidate, *, channel_id):
             return build_preview_document(candidate, channel_id=channel_id).replace(
                 "appendMessage('assistant', data.text.trim());",
-                "appendMessage('assistant', pending.text === 'Проверка повтора' "
+                "appendMessage('assistant', pendingRequest.text === 'Новый вопрос после ошибки' "
                 "? 'CORRUPTED RETRY ANSWER' : data.text.trim());",
             )
 
