@@ -1,16 +1,20 @@
+import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
 from builder_lab.browser_audit import BrowserAuditError
-from builder_lab.engines.base import EngineResult
+from builder_lab.engines.base import BuilderEngineError, EngineResult
 from builder_lab.experiment_review import (
     ExperimentReview,
     ExperimentVisualQualityError,
 )
 from builder_lab.models import BuilderRequest, EngineName, TokenUsage
-from builder_lab.strict_visual_critic import StrictVisualCriticResult
+from builder_lab.strict_visual_critic import (
+    StrictVisualCriticError,
+    StrictVisualCriticResult,
+)
 from builder_lab.strict_visual_models import (
     STRICT_VISUAL_DIMENSIONS,
     StrictVisualAssessment,
@@ -108,21 +112,27 @@ class FakeCritic:
 
     async def critique(self, **kwargs):
         self.calls.append(kwargs)
+        value = self.critiques.pop(0)
+        if isinstance(value, BaseException):
+            raise value
         return StrictVisualCriticResult(
-            critique=self.critiques.pop(0),
+            critique=value,
             usage=TokenUsage(prompt_tokens=7, output_tokens=3),
         )
 
 
 class FakeEngine:
-    def __init__(self, revised):
+    def __init__(self, revised, *, error=None):
         self.revised = revised
+        self.error = error
         self.visual_revision_calls = 0
         self.calls = []
 
     async def generate(self, **kwargs):
         self.visual_revision_calls += 1
         self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
         return EngineResult(
             artifact=self.revised,
             usage=TokenUsage(prompt_tokens=11, output_tokens=5),
@@ -283,3 +293,90 @@ async def test_initial_pass_keeps_raw_and_final_evidence_without_generation():
     assert result.raw is not result.final
     assert engine.visual_revision_calls == 0
     assert len(auditor.calls) == len(critic.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_final_critic_failure_aggregates_usage_and_preserves_raw_evidence():
+    raw = artifact(revision=5)
+    revised = replace(raw, css=raw.css + "\n.kaigo-widget { --author-gap: 8px; }")
+    failure = StrictVisualCriticError(
+        "strict_visual_critic_unavailable",
+        "critic unavailable",
+        diagnostic="provider request failed",
+        usage=TokenUsage(prompt_tokens=13, output_tokens=2),
+    )
+    auditor = FakeAuditor([object(), object()])
+    critic = FakeCritic([visual_critique(repair=True), failure])
+    engine = FakeEngine(revised)
+
+    with pytest.raises(ExperimentVisualQualityError) as caught:
+        await reviewer(auditor, critic, engine).review(raw)
+
+    assert caught.value.error_code == "strict_visual_critic_failed"
+    assert caught.value.raw is not None
+    assert caught.value.raw.artifact == raw
+    assert caught.value.raw.critique.verdict is StrictVisualVerdict.REPAIR
+    assert caught.value.usage == TokenUsage(prompt_tokens=31, output_tokens=10)
+    assert "provider request failed" in caught.value.diagnostic
+
+
+@pytest.mark.asyncio
+async def test_revision_engine_failure_aggregates_usage_and_preserves_raw_evidence():
+    raw = artifact(revision=5)
+    failure = BuilderEngineError(
+        "provider_unavailable",
+        "revision unavailable",
+        diagnostic="upstream reset",
+        usage=TokenUsage(prompt_tokens=17, output_tokens=4),
+    )
+    auditor = FakeAuditor([object()])
+    critic = FakeCritic([visual_critique(repair=True)])
+    engine = FakeEngine(raw, error=failure)
+
+    with pytest.raises(ExperimentVisualQualityError) as caught:
+        await reviewer(auditor, critic, engine).review(raw)
+
+    assert caught.value.error_code == "strict_visual_revision_unavailable"
+    assert caught.value.raw is not None
+    assert caught.value.raw.artifact == raw
+    assert caught.value.usage == TokenUsage(prompt_tokens=24, output_tokens=7)
+    assert "upstream reset" in caught.value.diagnostic
+
+
+@pytest.mark.asyncio
+async def test_cancellation_from_final_critic_propagates_unchanged():
+    raw = artifact(revision=5)
+    revised = replace(raw, css=raw.css + "\n.kaigo-widget { --author-gap: 8px; }")
+    cancellation = asyncio.CancelledError()
+    auditor = FakeAuditor([object(), object()])
+    critic = FakeCritic([visual_critique(repair=True), cancellation])
+    engine = FakeEngine(revised)
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await reviewer(auditor, critic, engine).review(raw)
+
+    assert caught.value is cancellation
+
+
+@pytest.mark.asyncio
+async def test_revision_engine_cannot_mutate_evidence_owned_raw_snapshot():
+    raw = artifact(revision=5)
+    original_tokens = dict(raw.theme_tokens)
+    revised = replace(raw, css=raw.css + "\n.kaigo-widget { --author-gap: 8px; }")
+
+    class MutatingEngine(FakeEngine):
+        async def generate(self, **kwargs):
+            kwargs["previous_artifact"].theme_tokens["malicious"] = "#ff00ff"
+            return await super().generate(**kwargs)
+
+    auditor = FakeAuditor([object(), object()])
+    critic = FakeCritic(
+        [visual_critique(repair=True), visual_critique(repair=False)]
+    )
+    engine = MutatingEngine(revised)
+
+    result = await reviewer(auditor, critic, engine).review(raw)
+
+    assert raw.theme_tokens == original_tokens
+    assert result.raw.artifact.theme_tokens == original_tokens
+    assert "malicious" not in result.raw.artifact.theme_tokens

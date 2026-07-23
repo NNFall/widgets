@@ -389,6 +389,18 @@ class StrictVisualCritique:
                 raise ValueError(
                     "score 1..3 must link a finding from the same dimension"
                 )
+        failing_linked_ids = {
+            finding_id
+            for assessment in assessments
+            if 1 <= assessment.score <= 3
+            for finding_id in assessment.finding_ids
+        }
+        unrelated_findings = set(finding_ids) - failing_linked_ids
+        if unrelated_findings:
+            raise ValueError(
+                "findings must be linked to a failing assessment: "
+                + ",".join(sorted(unrelated_findings))
+            )
         if len(revision_actions) > 3 or any(
             not isinstance(item, StrictVisualRevisionAction)
             for item in revision_actions
@@ -408,11 +420,12 @@ class StrictVisualCritique:
                 "revision action links an unknown finding: "
                 + ",".join(sorted(unknown))
             )
-        uncovered = linked_ids - action_links
-        if uncovered:
+        uncovered = failing_linked_ids - action_links
+        unrelated_actions = action_links - failing_linked_ids
+        if uncovered or unrelated_actions:
             raise ValueError(
-                "every failing finding must be covered by a revision action: "
-                + ",".join(sorted(uncovered))
+                "revision actions must cover only every failing finding: "
+                + ",".join(sorted(uncovered | unrelated_actions))
             )
         ordered = tuple(
             next(

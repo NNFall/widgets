@@ -321,6 +321,42 @@ def _compact_metrics(audit: BrowserAuditReport) -> str:
     return json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
 
 
+def _validate_audit_binding(
+    *,
+    critique: StrictVisualCritique,
+    audit: BrowserAuditReport,
+    usage: TokenUsage,
+) -> None:
+    expected = tuple(
+        screenshot.evidence.screenshot_id for screenshot in audit.screenshots
+    )
+    expected_ids = set(expected)
+    observed = tuple(item.screenshot_id for item in critique.observations)
+    observed_ids = set(observed)
+    finding_ids = {
+        finding.screenshot_id for finding in critique.findings
+    }
+    missing = expected_ids - observed_ids
+    hallucinated = (observed_ids | finding_ids) - expected_ids
+    duplicate_observations = len(observed) != len(observed_ids)
+    if missing or hallucinated or duplicate_observations:
+        details = []
+        if missing:
+            details.append("missing=" + ",".join(sorted(missing)))
+        if hallucinated:
+            details.append(
+                "hallucinated=" + ",".join(sorted(hallucinated))
+            )
+        if duplicate_observations:
+            details.append("duplicate_observations=true")
+        raise StrictVisualCriticError(
+            "visual_evidence_unproven",
+            "Gemini не привязал строгую оценку ко всем кадрам BrowserAudit",
+            diagnostic="; ".join(details),
+            usage=usage,
+        )
+
+
 class GeminiStrictVisualCritic:
     def __init__(
         self,
@@ -449,6 +485,11 @@ class GeminiStrictVisualCritic:
                 diagnostic=f"{type(exc).__name__}: {exc}",
                 usage=usage,
             ) from exc
+        _validate_audit_binding(
+            critique=critique,
+            audit=audit,
+            usage=usage,
+        )
         return StrictVisualCriticResult(critique=critique, usage=usage)
 
     async def aclose(self) -> None:

@@ -43,6 +43,7 @@ def action(
     finding_id: str | tuple[str, ...] = "conversation-flat",
     *,
     action_id: str = "separate-authors",
+    artifact_fields: tuple[str, ...] = ("css",),
 ) -> StrictVisualRevisionAction:
     finding_ids = (
         (finding_id,) if isinstance(finding_id, str) else finding_id
@@ -50,7 +51,7 @@ def action(
     return StrictVisualRevisionAction(
         action_id=action_id,
         finding_ids=finding_ids,
-        artifact_fields=("css",),
+        artifact_fields=artifact_fields,
         instruction=(
             "Give user and assistant message surfaces visibly different alignment "
             "and tone while preserving the selected direction."
@@ -280,8 +281,30 @@ def test_action_must_cover_every_finding_linked_to_a_failing_assessment():
     linked_id = next(
         item.finding_ids[0] for item in values if item.finding_ids
     )
-    unrelated_id = "unrelated-spacing"
     with pytest.raises(ValueError, match="revision action"):
+        StrictVisualCritique(
+            observations=(
+                StrictVisualObservation(
+                    screenshot_id="desktop.after_turn_2",
+                    observation="Two visually identical message surfaces sit above composer.",
+                ),
+            ),
+            assessments=values,
+            findings=(finding(linked_id),),
+            revision_actions=(),
+            summary="Strict inspection.",
+        )
+
+
+def test_passing_or_unrelated_finding_cannot_widen_revision_fields():
+    values = assessments(
+        overrides={StrictVisualDimension.CONVERSATION_CLARITY: 3},
+    )
+    linked_id = next(
+        item.finding_ids[0] for item in values if item.finding_ids
+    )
+    unrelated_id = "passing-distinctiveness"
+    with pytest.raises(ValueError, match="failing assessment"):
         StrictVisualCritique(
             observations=(
                 StrictVisualObservation(
@@ -294,10 +317,17 @@ def test_action_must_cover_every_finding_linked_to_a_failing_assessment():
                 finding(linked_id),
                 finding(
                     unrelated_id,
-                    dimension=StrictVisualDimension.SPACING_ALIGNMENT,
+                    dimension=StrictVisualDimension.DISTINCTIVENESS,
                 ),
             ),
-            revision_actions=(action(unrelated_id),),
+            revision_actions=(
+                action(linked_id, action_id="repair-chat"),
+                action(
+                    unrelated_id,
+                    action_id="redesign-brand",
+                    artifact_fields=("art_direction",),
+                ),
+            ),
             summary="Strict inspection.",
         )
 

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from .browser_audit import BrowserAuditError, BrowserAuditReport
-from .engines.base import EngineResult
+from .engines.base import BuilderEngineError, EngineResult
 from .models import (
     BuilderRequest,
     DirectionProposal,
@@ -13,7 +14,10 @@ from .models import (
     TokenUsage,
     WidgetArtifact,
 )
-from .strict_visual_critic import StrictVisualCriticResult
+from .strict_visual_critic import (
+    StrictVisualCriticError,
+    StrictVisualCriticResult,
+)
 from .strict_visual_models import (
     StrictVisualCritique,
     StrictVisualDimension,
@@ -223,13 +227,25 @@ class ExperimentReview:
                 diagnostic=exc.diagnostic or "; ".join(exc.failures),
             ) from exc
 
-        raw_critic_result = await self.critic.critique(
-            audit=raw_audit,
-            brief=self.request.brief,
-            art_direction=raw_snapshot.art_direction,
-            locale=self.request.locale,
-            phase="raw",
-        )
+        try:
+            raw_critic_result = await self.critic.critique(
+                audit=raw_audit,
+                brief=self.request.brief,
+                art_direction=raw_snapshot.art_direction,
+                locale=self.request.locale,
+                phase="raw",
+            )
+        except asyncio.CancelledError:
+            raise
+        except StrictVisualCriticError as exc:
+            usage = usage + exc.usage
+            raise self._error(
+                "strict_visual_critic_failed",
+                "Строгий визуальный критик не завершил проверку raw",
+                started_at=started_at,
+                diagnostic=exc.diagnostic or exc.error_code,
+                usage=usage,
+            ) from exc
         usage = usage + raw_critic_result.usage
         raw_evidence = ExperimentReviewEvidence(
             artifact=raw_snapshot,
@@ -266,15 +282,29 @@ class ExperimentReview:
                 raw=raw_evidence,
                 usage=usage,
             )
-        revision_result = await self.engine.generate(
-            request=self.request,
-            stage=Stage.MOTION_POLISH,
-            revision=raw_snapshot.revision,
-            previous_artifact=raw_snapshot,
-            repair_issues=(),
-            visual_findings=repair_findings,
-            selected_direction=self.selected_direction,
-        )
+        revision_input = _snapshot_artifact(raw_snapshot)
+        try:
+            revision_result = await self.engine.generate(
+                request=self.request,
+                stage=Stage.MOTION_POLISH,
+                revision=raw_snapshot.revision,
+                previous_artifact=revision_input,
+                repair_issues=(),
+                visual_findings=repair_findings,
+                selected_direction=self.selected_direction,
+            )
+        except asyncio.CancelledError:
+            raise
+        except BuilderEngineError as exc:
+            usage = usage + exc.usage
+            raise self._error(
+                "strict_visual_revision_unavailable",
+                "Модель не смогла выполнить единственную визуальную ревизию",
+                started_at=started_at,
+                diagnostic=exc.diagnostic or exc.error_code,
+                raw=raw_evidence,
+                usage=usage,
+            ) from exc
         usage = usage + revision_result.usage
         final_snapshot = _snapshot_artifact(revision_result.artifact)
         invariant_changes = []
@@ -326,13 +356,26 @@ class ExperimentReview:
                 raw=raw_evidence,
                 usage=usage,
             ) from exc
-        final_critic_result = await self.critic.critique(
-            audit=final_audit,
-            brief=self.request.brief,
-            art_direction=final_snapshot.art_direction,
-            locale=self.request.locale,
-            phase="final",
-        )
+        try:
+            final_critic_result = await self.critic.critique(
+                audit=final_audit,
+                brief=self.request.brief,
+                art_direction=final_snapshot.art_direction,
+                locale=self.request.locale,
+                phase="final",
+            )
+        except asyncio.CancelledError:
+            raise
+        except StrictVisualCriticError as exc:
+            usage = usage + exc.usage
+            raise self._error(
+                "strict_visual_critic_failed",
+                "Строгий визуальный критик не завершил проверку final",
+                started_at=started_at,
+                diagnostic=exc.diagnostic or exc.error_code,
+                raw=raw_evidence,
+                usage=usage,
+            ) from exc
         usage = usage + final_critic_result.usage
         final_evidence = ExperimentReviewEvidence(
             artifact=final_snapshot,
