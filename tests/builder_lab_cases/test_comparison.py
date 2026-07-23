@@ -111,6 +111,47 @@ class ComparisonBundleTests(unittest.TestCase):
         self.assertNotIn("<script", page.lower())
         json.dumps(page)
 
+    def test_comparison_page_can_render_raw_final_pair_and_metrics(self):
+        page = render_comparison_page(
+            (
+                ComparisonVariant(
+                    slug="product-chat/final",
+                    raw_slug="product-chat/raw",
+                    title="A · Product Chat",
+                    profile="product_chat",
+                    model="gemini-3.6-flash",
+                    thinking="high",
+                    status="completed",
+                    summary="Compact and familiar chat.",
+                    critique_summary="Raw 3.7 → final 4.3.",
+                    elapsed_seconds=87.4,
+                    total_tokens=12_345,
+                    cost_usd=0.0456,
+                ),
+            )
+        )
+
+        self.assertIn('href="product-chat/raw/"', page)
+        self.assertIn('href="product-chat/final/"', page)
+        self.assertIn('src="product-chat/raw/"', page)
+        self.assertIn('src="product-chat/final/"', page)
+        self.assertIn("product_chat", page)
+        self.assertIn("12 345", page)
+        self.assertIn("$0.0456", page)
+        self.assertIn("Raw 3.7 → final 4.3.", page)
+
+    def test_optional_experiment_fields_are_all_or_none_and_bounded(self):
+        with self.assertRaises(ValueError):
+            ComparisonVariant(
+                slug="product-chat/final",
+                raw_slug="product-chat/raw",
+                title="A",
+                model="gemini-3.6-flash",
+                thinking="high",
+                status="completed",
+                summary="Missing profile and metrics.",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

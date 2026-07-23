@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import math
 import os
 import shutil
 import tempfile
@@ -163,20 +164,81 @@ class ComparisonVariant:
     thinking: str
     status: str
     summary: str
+    raw_slug: str | None = None
+    profile: str | None = None
+    critique_summary: str | None = None
+    elapsed_seconds: float | None = None
+    total_tokens: int | None = None
+    cost_usd: float | None = None
 
     def __post_init__(self) -> None:
-        path = Path(self.slug)
-        if (
-            not self.slug
-            or path.is_absolute()
-            or ".." in path.parts
-            or "\\" in self.slug
-        ):
-            raise ValueError("comparison slug is invalid")
+        self._validate_slug(self.slug, "slug")
         for name in ("title", "model", "thinking", "status", "summary"):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip() or len(value) > 2000:
                 raise ValueError(f"comparison {name} is invalid")
+        experiment_fields = (
+            self.raw_slug,
+            self.profile,
+            self.critique_summary,
+            self.elapsed_seconds,
+            self.total_tokens,
+            self.cost_usd,
+        )
+        if any(value is not None for value in experiment_fields):
+            if any(value is None for value in experiment_fields):
+                raise ValueError("experiment comparison fields must be supplied together")
+            self._validate_slug(self.raw_slug, "raw_slug")
+            if self.raw_slug == self.slug:
+                raise ValueError("raw and final comparison slugs must differ")
+            if (
+                not isinstance(self.profile, str)
+                or not self.profile.strip()
+                or len(self.profile) > 80
+            ):
+                raise ValueError("comparison profile is invalid")
+            if (
+                not isinstance(self.critique_summary, str)
+                or not self.critique_summary.strip()
+                or len(self.critique_summary) > 2000
+            ):
+                raise ValueError("comparison critique_summary is invalid")
+            if (
+                isinstance(self.elapsed_seconds, bool)
+                or not isinstance(self.elapsed_seconds, (int, float))
+                or not math.isfinite(float(self.elapsed_seconds))
+                or not 0 <= float(self.elapsed_seconds) <= 7 * 24 * 60 * 60
+            ):
+                raise ValueError("comparison elapsed_seconds is invalid")
+            if (
+                type(self.total_tokens) is not int
+                or not 0 <= self.total_tokens <= 100_000_000
+            ):
+                raise ValueError("comparison total_tokens is invalid")
+            if (
+                isinstance(self.cost_usd, bool)
+                or not isinstance(self.cost_usd, (int, float))
+                or not math.isfinite(float(self.cost_usd))
+                or not 0 <= float(self.cost_usd) <= 100_000
+            ):
+                raise ValueError("comparison cost_usd is invalid")
+
+    @staticmethod
+    def _validate_slug(value: str | None, field_name: str) -> None:
+        if not isinstance(value, str):
+            raise ValueError(f"comparison {field_name} is invalid")
+        path = Path(value)
+        if (
+            not value
+            or path.is_absolute()
+            or ".." in path.parts
+            or "\\" in value
+        ):
+            raise ValueError(f"comparison {field_name} is invalid")
+
+    @property
+    def has_raw_final_pair(self) -> bool:
+        return self.raw_slug is not None
 
 
 def render_comparison_page(variants: Sequence[ComparisonVariant]) -> str:
@@ -187,20 +249,51 @@ def render_comparison_page(variants: Sequence[ComparisonVariant]) -> str:
     cards = []
     for variant in variants:
         slug = html.escape(variant.slug, quote=True)
+        link = f'<a href="{slug}/">Открыть отдельно ↗</a>'
+        metadata = ""
+        preview = f"""
+              <iframe src="{slug}/" title="{html.escape(variant.title, quote=True)}"
+                loading="lazy"
+                sandbox="allow-scripts allow-forms allow-same-origin"></iframe>"""
+        if variant.has_raw_final_pair:
+            raw_slug = html.escape(variant.raw_slug or "", quote=True)
+            tokens = f"{variant.total_tokens:,}".replace(",", " ")
+            link = (
+                f'<nav class="variant-links"><a href="{raw_slug}/">Raw ↗</a>'
+                f'<a href="{slug}/">Final ↗</a></nav>'
+            )
+            metadata = f"""
+              <div class="experiment-meta">
+                <span>Профиль · {html.escape(variant.profile or "")}</span>
+                <span>{float(variant.elapsed_seconds):.1f} с</span>
+                <span>{tokens} токенов</span>
+                <span>${float(variant.cost_usd):.4f}</span>
+              </div>
+              <p class="critique">{html.escape(variant.critique_summary or "")}</p>"""
+            preview = f"""
+              <div class="pair">
+                <section><strong>Raw</strong><iframe src="{raw_slug}/"
+                  title="{html.escape(variant.title, quote=True)} raw"
+                  loading="lazy"
+                  sandbox="allow-scripts allow-forms allow-same-origin"></iframe></section>
+                <section><strong>Final</strong><iframe src="{slug}/"
+                  title="{html.escape(variant.title, quote=True)} final"
+                  loading="lazy"
+                  sandbox="allow-scripts allow-forms allow-same-origin"></iframe></section>
+              </div>"""
         cards.append(
             f"""
             <article class="variant">
               <header>
                 <div><span class="status">{html.escape(variant.status)}</span>
                   <h2>{html.escape(variant.title)}</h2></div>
-                <a href="{slug}/">Открыть отдельно ↗</a>
+                {link}
               </header>
               <p>{html.escape(variant.summary)}</p>
               <dl><div><dt>Модель</dt><dd>{html.escape(variant.model)}</dd></div>
                 <div><dt>Thinking</dt><dd>{html.escape(variant.thinking)}</dd></div></dl>
-              <iframe src="{slug}/" title="{html.escape(variant.title, quote=True)}"
-                loading="lazy"
-                sandbox="allow-scripts allow-forms allow-same-origin"></iframe>
+              {metadata}
+              {preview}
             </article>"""
         )
     return f"""<!doctype html>
@@ -222,7 +315,13 @@ h2{{margin:6px 0 0;font-size:20px}}a{{color:var(--accent);text-decoration:none;w
 .variant>p{{min-height:48px;color:var(--muted)}}dl{{display:flex;gap:22px;margin:0 0 14px}}
 dl div{{min-width:0}}dt{{font-size:10px;color:var(--muted);text-transform:uppercase}}dd{{margin:2px 0 0;overflow-wrap:anywhere}}
 iframe{{display:block;width:100%;height:650px;border:1px solid var(--line);border-radius:16px;background:#fff}}
+.variant-links{{display:flex;gap:12px}}.experiment-meta{{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 10px}}
+.experiment-meta span{{padding:5px 8px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font:11px/1.2 ui-monospace,monospace}}
+.critique{{min-height:0!important;margin:0 0 14px!important}}.pair{{display:grid;grid-template-columns:1fr 1fr;gap:10px}}
+.pair section{{min-width:0}}.pair strong{{display:block;margin:0 0 7px;color:var(--muted);font:11px/1 ui-monospace,monospace;text-transform:uppercase}}
+.pair iframe{{height:650px}}
 @media(max-width:700px){{main{{width:min(100% - 16px,1580px);padding-top:20px}}.intro{{grid-template-columns:1fr}}iframe{{height:720px}}}}
+@media(max-width:980px){{.pair{{grid-template-columns:1fr}}}}
 </style></head><body><main>
 <section class="intro"><h1>Один сайт. Два новых генератора. Старый результат.</h1>
 <p>Все версии используют один и тот же бриф RAW BUREAU. Можно открыть каждую,
