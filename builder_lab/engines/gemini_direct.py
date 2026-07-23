@@ -91,8 +91,13 @@ _GEMINI_3X_SCHEMA_CONSTRAINTS = frozenset(
     {
         "additionalProperties",
         "maxItems",
-        "maximum",
         "minItems",
+    }
+)
+
+_GEMINI_35_EXTRA_SCHEMA_CONSTRAINTS = frozenset(
+    {
+        "maximum",
         "minimum",
     }
 )
@@ -103,12 +108,16 @@ def build_provider_json_schema(schema: dict[str, Any], model: str) -> dict[str, 
 
     normalized = model.strip().lower().removeprefix("models/")
     if normalized.startswith(("gemini-3.5-", "gemini-3.6-")):
+        unsupported = _GEMINI_3X_SCHEMA_CONSTRAINTS
+        if normalized.startswith("gemini-3.5-"):
+            unsupported = unsupported | _GEMINI_35_EXTRA_SCHEMA_CONSTRAINTS
+
         def simplify_3x(value: Any) -> Any:
             if isinstance(value, dict):
                 simplified = {
                     key: simplify_3x(item)
                     for key, item in value.items()
-                    if key not in _GEMINI_3X_SCHEMA_CONSTRAINTS
+                    if key not in unsupported
                 }
                 declared_type = simplified.get("type")
                 if (
