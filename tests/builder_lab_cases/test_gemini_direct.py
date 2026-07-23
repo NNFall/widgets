@@ -460,6 +460,7 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             "layout_contract",
             "change_summary",
             "unrestricted JavaScript",
+            "fixed runtime remains the sole owner",
             "fit entirely inside the viewport",
             "header, messages, suggestions and composer are peer panel regions",
             "box-sizing: border-box",

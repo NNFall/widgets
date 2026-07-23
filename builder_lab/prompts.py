@@ -248,6 +248,10 @@ def build_stage_prompt(
   весь исполняемый код возвращай отдельным полем javascript;
 - корневой класс всех CSS-селекторов — .kaigo-widget;
 - обязательны data-region: root, launcher, panel, header, messages, suggestions, composer;
+- fixed runtime remains the sole owner of launcher, close, send, suggestion, retry,
+  transcript, pending and chat-request behavior; unrestricted JavaScript must not add
+  competing click/keydown handlers to those reserved controls or manually append chat
+  turns; custom triggers may invoke the existing launcher control instead;
 - header, messages, suggestions and composer are peer panel regions with panel as their nearest data-region ancestor;
   never nest suggestions inside messages or composer; launcher and panel have root as their nearest data-region ancestor;
 - launcher и composer имеют понятный aria-label;

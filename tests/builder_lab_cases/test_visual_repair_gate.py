@@ -340,6 +340,7 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
             art_direction="MODEL TRIED TO REPLACE THE DIRECTION",
             theme_tokens={"surface": "#ff00ff"},
             css=self.candidate.css + "\n.kaigo-widget { overflow: clip; }",
+            javascript="document.documentElement.dataset.repaired = 'true';",
         )
         gate_error = BrowserAuditError(
             "browser_gate_failed",
@@ -364,6 +365,7 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.art_direction, self.candidate.art_direction)
         self.assertEqual(result.theme_tokens, self.candidate.theme_tokens)
         self.assertEqual(result.css, proposed.css)
+        self.assertEqual(result.javascript, proposed.javascript)
         self.assertEqual(auditor.calls[1], result)
         self.assertEqual((await self.store.visual_candidate(self.run_id)), result)
 

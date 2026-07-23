@@ -157,7 +157,18 @@ def forbidden_browser_repair_fields(
         for field_name in before_payload
         if before_payload[field_name] != after_payload[field_name]
     }
-    return tuple(sorted(changed - {"body_html", "css", "suggested_actions"}))
+    return tuple(
+        sorted(
+            changed
+            - {
+                "body_html",
+                "css",
+                "javascript",
+                "suggested_actions",
+                "layout_contract",
+            }
+        )
+    )
 
 
 def apply_browser_repair(
@@ -169,7 +180,9 @@ def apply_browser_repair(
         before,
         body_html=proposed.body_html,
         css=proposed.css,
+        javascript=proposed.javascript,
         suggested_actions=proposed.suggested_actions,
+        layout_contract=proposed.layout_contract,
     )
 
 
