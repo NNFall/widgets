@@ -1825,21 +1825,28 @@ class BrowserAudit:
                 outlineWidth: style.outlineWidth
               };
             }"""
-            active_motion_count = """node => node.getAnimations({subtree: true}).filter(
-              animation => {
-                const target = animation.effect?.target;
-                if (!(target instanceof Element)) return false;
-                const rect = target.getBoundingClientRect();
-                const style = getComputedStyle(target);
-                return ['pending', 'running'].includes(animation.playState)
-                  && rect.width > 0
-                  && rect.height > 0
-                  && style.display !== 'none'
-                  && style.visibility !== 'hidden';
-              }
-            ).length"""
             initial_visual = await launcher.evaluate(visual_snapshot)
-            initial_motion = await launcher.evaluate(active_motion_count)
+            initial_motion = await launcher.evaluate(
+                """node => {
+                  const animations = node.getAnimations({subtree: true});
+                  Object.defineProperty(
+                    globalThis,
+                    '__kaigoAttentionBaselineAnimations',
+                    {value: new WeakSet(animations), configurable: false}
+                  );
+                  return animations.filter(animation => {
+                    const target = animation.effect?.target;
+                    if (!(target instanceof Element)) return false;
+                    const rect = target.getBoundingClientRect();
+                    const style = getComputedStyle(target);
+                    return ['pending', 'running'].includes(animation.playState)
+                      && rect.width > 0
+                      && rect.height > 0
+                      && style.display !== 'none'
+                      && style.visibility !== 'hidden';
+                  }).length;
+                }"""
+            )
             initial = await frame.locator("body").evaluate(
                 """() => {
                   window.__kaigoAttentionInitialFocus = document.activeElement;
@@ -1861,7 +1868,73 @@ class BrowserAudit:
             await frame.locator("body").dispatch_event("kaigo-audit-attention-start")
             await page.wait_for_timeout(100)
             attention_visual = await launcher.evaluate(visual_snapshot)
-            attention_motion = await launcher.evaluate(active_motion_count)
+            attention_motion = await launcher.evaluate(
+                """async node => {
+                  const baseline = globalThis.__kaigoAttentionBaselineAnimations;
+                  if (!(baseline instanceof WeakSet)) {
+                    throw new Error('attention animation baseline is missing');
+                  }
+                  const introduced = node.getAnimations({subtree: true}).filter(
+                    animation => {
+                      const target = animation.effect?.target;
+                      if (baseline.has(animation) || !(target instanceof Element)) {
+                        return false;
+                      }
+                      const rect = target.getBoundingClientRect();
+                      const style = getComputedStyle(target);
+                      return ['pending', 'running'].includes(animation.playState)
+                        && rect.width > 0
+                        && rect.height > 0
+                        && style.display !== 'none'
+                        && style.visibility !== 'hidden';
+                    }
+                  );
+                  const subjects = [];
+                  for (const animation of introduced) {
+                    const target = animation.effect.target;
+                    const pseudo = animation.effect.pseudoElement || null;
+                    if (!subjects.some(
+                      item => item.target === target && item.pseudo === pseudo
+                    )) subjects.push({target, pseudo});
+                  }
+                  const capture = () => subjects.map(({target, pseudo}) => {
+                    const rect = target.getBoundingClientRect();
+                    const style = getComputedStyle(target, pseudo);
+                    return {
+                      pseudo,
+                      x: Math.round(rect.x * 100) / 100,
+                      y: Math.round(rect.y * 100) / 100,
+                      width: Math.round(rect.width * 100) / 100,
+                      height: Math.round(rect.height * 100) / 100,
+                      transform: style.transform,
+                      translate: style.translate,
+                      rotate: style.rotate,
+                      scale: style.scale,
+                      opacity: style.opacity,
+                      filter: style.filter,
+                      boxShadow: style.boxShadow,
+                      backgroundColor: style.backgroundColor,
+                      borderColor: style.borderColor,
+                      outlineColor: style.outlineColor,
+                      outlineWidth: style.outlineWidth,
+                      clipPath: style.clipPath
+                    };
+                  });
+                  const samples = [capture()];
+                  for (let index = 0; index < 4; index += 1) {
+                    await new Promise(resolve => requestAnimationFrame(resolve));
+                    samples.push(capture());
+                  }
+                  const first = JSON.stringify(samples[0]);
+                  return {
+                    introducedCount: introduced.length,
+                    sampleCount: samples.length,
+                    changing: samples.slice(1).some(
+                      sample => JSON.stringify(sample) !== first
+                    )
+                  };
+                }"""
+            )
 
             after_delay = await frame.locator("body").evaluate(
                 """() => {
@@ -1887,17 +1960,21 @@ class BrowserAudit:
                 )
             if reduced_motion == "no-preference":
                 if (
-                    attention_motion <= initial_motion
-                    and attention_visual == initial_visual
+                    attention_motion["introducedCount"] < 1
+                    or attention_motion["sampleCount"] < 3
+                    or not attention_motion["changing"]
                 ):
                     raise ValueError(
-                        "no-preference attention state has no visible visual cue: "
-                        "launcher has neither active rendered motion nor a computed "
-                        "style/geometry delta"
+                        "no-preference attention state has no visible visual cue or "
+                        "attention-linked motion: "
+                        "the launcher must introduce a new animation or transition "
+                        "whose rendered visual property or geometry changes across "
+                        f"multiple frames; evidence={attention_motion}"
                     )
             elif (
                 initial_motion != 0
-                or attention_motion != 0
+                or attention_motion["introducedCount"] != 0
+                or attention_motion["changing"]
                 or attention_visual != initial_visual
             ):
                 raise ValueError(
