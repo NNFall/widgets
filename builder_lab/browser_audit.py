@@ -1806,6 +1806,40 @@ class BrowserAudit:
                 freeze_motion=False,
             )
             root = frame.locator('[data-region="root"]')
+            launcher = frame.locator('[data-region="launcher"]')
+            visual_snapshot = """node => {
+              const rect = node.getBoundingClientRect();
+              const style = getComputedStyle(node);
+              return {
+                x: Math.round(rect.x * 100) / 100,
+                y: Math.round(rect.y * 100) / 100,
+                width: Math.round(rect.width * 100) / 100,
+                height: Math.round(rect.height * 100) / 100,
+                transform: style.transform,
+                opacity: style.opacity,
+                filter: style.filter,
+                boxShadow: style.boxShadow,
+                backgroundColor: style.backgroundColor,
+                borderColor: style.borderColor,
+                outlineColor: style.outlineColor,
+                outlineWidth: style.outlineWidth
+              };
+            }"""
+            active_motion_count = """node => node.getAnimations({subtree: true}).filter(
+              animation => {
+                const target = animation.effect?.target;
+                if (!(target instanceof Element)) return false;
+                const rect = target.getBoundingClientRect();
+                const style = getComputedStyle(target);
+                return ['pending', 'running'].includes(animation.playState)
+                  && rect.width > 0
+                  && rect.height > 0
+                  && style.display !== 'none'
+                  && style.visibility !== 'hidden';
+              }
+            ).length"""
+            initial_visual = await launcher.evaluate(visual_snapshot)
+            initial_motion = await launcher.evaluate(active_motion_count)
             initial = await frame.locator("body").evaluate(
                 """() => {
                   window.__kaigoAttentionInitialFocus = document.activeElement;
@@ -1826,6 +1860,8 @@ class BrowserAudit:
 
             await frame.locator("body").dispatch_event("kaigo-audit-attention-start")
             await page.wait_for_timeout(100)
+            attention_visual = await launcher.evaluate(visual_snapshot)
+            attention_motion = await launcher.evaluate(active_motion_count)
 
             after_delay = await frame.locator("body").evaluate(
                 """() => {
@@ -1848,6 +1884,25 @@ class BrowserAudit:
             }:
                 raise ValueError(
                     f"{reduced_motion} attention contract is invalid: {after_delay}"
+                )
+            if reduced_motion == "no-preference":
+                if (
+                    attention_motion <= initial_motion
+                    and attention_visual == initial_visual
+                ):
+                    raise ValueError(
+                        "no-preference attention state has no visible visual cue: "
+                        "launcher has neither active rendered motion nor a computed "
+                        "style/geometry delta"
+                    )
+            elif (
+                initial_motion != 0
+                or attention_motion != 0
+                or attention_visual != initial_visual
+            ):
+                raise ValueError(
+                    "reduced-motion attention state emitted visible motion or a "
+                    "computed style/geometry delta"
                 )
 
             await frame.locator("body").dispatch_event("pointerdown")

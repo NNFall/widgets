@@ -68,6 +68,20 @@ AUDIT_CSS = """
 [data-kaigo-runtime-label] { display: block; font-size: 10px; }
 [data-kaigo-runtime-content] { margin: 0; }
 [data-region="root"]:has([data-kaigo-runtime-status="error"]) [data-region="suggestions"] { display: none; }
+.kaigo.kaigo-preview-attention [data-region="launcher"] {
+  animation: kaigo-attention-pulse 600ms ease-in-out 2;
+}
+@keyframes kaigo-attention-pulse {
+  0%, 100% { transform: translateY(0) scale(1); box-shadow: 0 0 0 0 rgba(17,17,17,0); }
+  50% { transform: translateY(-4px) scale(1.025); box-shadow: 0 8px 24px rgba(17,17,17,.24); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kaigo.kaigo-preview-attention [data-region="launcher"] {
+    animation: none;
+    transform: none;
+    box-shadow: none;
+  }
+}
 button, textarea { min-height: 44px; }
 button { min-width: 44px; }
 textarea { flex: 1 1 auto; min-width: 0; width: auto; }
@@ -141,6 +155,39 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
                     artifact=audit_artifact(),
                     reduced_motion="reduce",
                 )
+            finally:
+                await browser.close()
+
+    async def test_attention_probe_rejects_class_without_visible_visual_cue(self):
+        css_without_attention_cue = AUDIT_CSS.replace(
+            """
+.kaigo.kaigo-preview-attention [data-region="launcher"] {
+  animation: kaigo-attention-pulse 600ms ease-in-out 2;
+}
+@keyframes kaigo-attention-pulse {
+  0%, 100% { transform: translateY(0) scale(1); box-shadow: 0 0 0 0 rgba(17,17,17,0); }
+  50% { transform: translateY(-4px) scale(1.025); box-shadow: 0 8px 24px rgba(17,17,17,.24); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kaigo.kaigo-preview-attention [data-region="launcher"] {
+    animation: none;
+    transform: none;
+    box-shadow: none;
+  }
+}
+""",
+            "",
+            1,
+        )
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            try:
+                with self.assertRaisesRegex(ValueError, "visible visual cue"):
+                    await BrowserAudit(browser=browser)._attention_motion_probe(
+                        browser=browser,
+                        artifact=audit_artifact(css=css_without_attention_cue),
+                        reduced_motion="no-preference",
+                    )
             finally:
                 await browser.close()
 
