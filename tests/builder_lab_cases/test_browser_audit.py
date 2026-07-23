@@ -187,6 +187,32 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertTrue(all("textarea" in item.active_element for item in mobile_after_turn))
 
+    async def test_after_turn_screenshot_restores_transcript_to_latest_message(self):
+        class TailInspectingAudit(BrowserAudit):
+            def __init__(self):
+                super().__init__()
+                self.tail_offsets = []
+
+            async def _capture(self, page, state):
+                if state.value.endswith("after_turn_2"):
+                    metrics = await page.frames[1].locator(
+                        '[data-region="messages"]'
+                    ).evaluate(
+                        """node => ({
+                          top: node.scrollTop,
+                          max: Math.max(0, node.scrollHeight - node.clientHeight)
+                        })"""
+                    )
+                    self.tail_offsets.append(metrics["max"] - metrics["top"])
+                return await super()._capture(page, state)
+
+        audit = TailInspectingAudit()
+
+        await audit.audit(audit_artifact())
+
+        self.assertEqual(len(audit.tail_offsets), 2)
+        self.assertTrue(all(offset <= 1 for offset in audit.tail_offsets))
+
     async def test_runtime_supports_generated_panel_data_open_state(self):
         data_open_css = AUDIT_CSS.replace(
             '.kaigo-preview-open [data-region="panel"]',

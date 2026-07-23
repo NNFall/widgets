@@ -1330,6 +1330,7 @@ class BrowserAudit:
                 after_scroll = await messages.evaluate("node => node.scrollTop")
                 if after_scroll >= before_scroll - 1:
                     raise ValueError("real wheel did not move the two-turn transcript")
+                await messages.evaluate("node => (node.scrollTop = node.scrollHeight)")
             after_state = ScreenshotState(f"{prefix}.after_turn_2")
             shots.append(await self._capture(page, after_state))
             layouts.append(
