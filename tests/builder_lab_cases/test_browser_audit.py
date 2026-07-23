@@ -1073,7 +1073,10 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
 
         diagnostic = caught.exception.diagnostic or ""
         self.assertIn("panel rect=(x=", diagnostic)
-        self.assertIn("viewport=1440x900", diagnostic)
+        self.assertIn(
+            f"viewport={layout.viewport_width}x{layout.viewport_height}",
+            diagnostic,
+        )
         self.assertIn("position: fixed", diagnostic)
         self.assertIn("right/bottom offsets", diagnostic)
 
