@@ -114,15 +114,30 @@ def forbidden_repair_fields(
 
 
 def browser_repair_issues(error: BrowserAuditError) -> tuple[ValidationIssue, ...]:
-    if error.error_code != "browser_gate_failed" or not error.failures:
+    if error.error_code != "browser_gate_failed":
         return ()
+    failures = error.failures
+    if not failures:
+        diagnostic = (error.diagnostic or str(error)).strip()
+        normalized = diagnostic.casefold()
+        repairable_runtime_failure = any(
+            marker in normalized
+            for marker in (
+                "page crashed",
+                "targetclosed",
+                "target page, context or browser has been closed",
+            )
+        )
+        if not diagnostic or not repairable_runtime_failure:
+            return ()
+        failures = (f"Browser audit runtime failure: {diagnostic}",)
     return tuple(
         ValidationIssue(
             code="browser_gate_failed",
             field="body_html/css",
             message=failure[:500],
         )
-        for failure in error.failures[:12]
+        for failure in failures[:12]
     )
 
 

@@ -253,6 +253,40 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("desktop panel width", call["repair_issues"][0].message)
         self.assertNotIn("private browser internals", call["repair_issues"][0].message)
 
+    async def test_browser_crash_without_structured_failures_is_sent_to_repair(self):
+        repaired = artifact(
+            revision=5,
+            stage=Stage.MOTION_POLISH,
+            javascript="",
+        )
+        gate_error = BrowserAuditError(
+            "browser_gate_failed",
+            "Widget browser audit could not complete",
+            diagnostic="Error: Page.wait_for_timeout: Page crashed",
+        )
+
+        class CrashOnceAuditor(FakeAuditor):
+            async def audit(self, candidate):
+                self.calls.append(candidate)
+                if len(self.calls) == 1:
+                    raise gate_error
+                return await FakeAuditor().audit(candidate)
+
+        auditor = CrashOnceAuditor()
+        engine = FakeEngine([repaired])
+
+        result = await self.evaluate(
+            auditor,
+            FakeCritic([critique()]),
+            engine,
+        )
+
+        self.assertEqual(result, repaired)
+        self.assertEqual(len(engine.calls), 1)
+        issue = engine.calls[0]["repair_issues"][0]
+        self.assertEqual(issue.code, "browser_gate_failed")
+        self.assertIn("Page crashed", issue.message)
+
     async def test_repeated_browser_issue_can_repair_again_after_artifact_changes(self):
         gate_error = BrowserAuditError(
             "browser_gate_failed",
