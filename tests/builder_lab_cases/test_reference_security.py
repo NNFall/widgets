@@ -102,6 +102,23 @@ class PublicLogTests(unittest.TestCase):
 
 
 class EvidenceStorageTests(unittest.TestCase):
+    def test_storage_module_imports_without_optional_gemini_dependencies(self):
+        workspace = Path(__file__).resolve().parents[2]
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-S",
+                "-c",
+                "import builder_lab.reference_storage",
+            ],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_cleanup_deletes_only_expired_marked_run_directories(self):
         now = datetime.now(timezone.utc)
         with TemporaryDirectory() as temp_dir:
