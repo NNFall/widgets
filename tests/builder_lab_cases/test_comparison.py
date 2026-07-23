@@ -124,6 +124,7 @@ class ComparisonBundleTests(unittest.TestCase):
                     status="completed",
                     summary="Compact and familiar chat.",
                     critique_summary="Raw 3.7 → final 4.3.",
+                    final_label="Rejected final",
                     elapsed_seconds=87.4,
                     total_tokens=12_345,
                     cost_usd=0.0456,
@@ -139,6 +140,7 @@ class ComparisonBundleTests(unittest.TestCase):
         self.assertIn("12 345", page)
         self.assertIn("$0.0456", page)
         self.assertIn("Raw 3.7 → final 4.3.", page)
+        self.assertIn("Rejected final", page)
 
     def test_optional_experiment_fields_are_all_or_none_and_bounded(self):
         with self.assertRaises(ValueError):

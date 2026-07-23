@@ -58,6 +58,23 @@ DEFAULT_BRIEF = (
 DEFAULT_PRICING_SOURCE = "https://ai.google.dev/gemini-api/docs/pricing"
 
 
+def resolve_single_pricing_policy(
+    *,
+    model: str,
+    thinking: str,
+    critic_model: str | None,
+    critic_thinking: str | None,
+) -> tuple[str, str]:
+    resolved_model = critic_model or model
+    resolved_thinking = critic_thinking or thinking
+    if (resolved_model, resolved_thinking) != (model, thinking):
+        raise ValueError(
+            "a single pricing snapshot requires critic model and thinking "
+            "to match the main generator"
+        )
+    return resolved_model, resolved_thinking
+
+
 def _json(data: object) -> str:
     return json.dumps(data, ensure_ascii=False, sort_keys=True)
 
@@ -295,12 +312,22 @@ class DirectVariantExecutor:
                 if exc.raw is not None
                 else None
             )
+            final = (
+                ExperimentEvidence(
+                    artifact=exc.final.artifact,
+                    audit=exc.final.audit,
+                    critique=exc.final.critique,
+                )
+                if exc.final is not None
+                else None
+            )
             raise VariantExecutionError(
                 exc.error_code,
                 str(exc),
                 usage=usage + exc.usage,
                 elapsed_seconds=time.perf_counter() - started,
                 raw=raw,
+                final=final,
                 role_events=role_events,
             ) from exc
         except BuilderEngineError as exc:
@@ -341,6 +368,15 @@ async def run(args: argparse.Namespace) -> int:
     )
     if not api_key or not api_key.strip():
         raise SystemExit("GEMINI_API_KEY is required for the paid A/B/C run")
+    try:
+        critic_model, critic_thinking = resolve_single_pricing_policy(
+            model=args.model,
+            thinking=args.thinking,
+            critic_model=args.critic_model,
+            critic_thinking=args.critic_thinking,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     request = BuilderRequest(
         engine=EngineName.DIRECT,
         brief=brief,
@@ -354,8 +390,8 @@ async def run(args: argparse.Namespace) -> int:
     executor = DirectVariantExecutor(
         api_key=api_key.strip(),
         base_url=args.base_url,
-        critic_model=args.critic_model,
-        critic_thinking=args.critic_thinking,
+        critic_model=critic_model,
+        critic_thinking=critic_thinking,
         critic_timeout_seconds=args.critic_timeout,
         browser_timeout_ms=args.browser_timeout_ms,
         browser_total_timeout_seconds=args.browser_total_timeout,
@@ -400,8 +436,8 @@ def parser() -> argparse.ArgumentParser:
     root.add_argument("--output", required=True, type=Path)
     root.add_argument("--model", default="gemini-3.6-flash")
     root.add_argument("--thinking", default="high")
-    root.add_argument("--critic-model", default="gemini-3.5-flash")
-    root.add_argument("--critic-thinking", default="high")
+    root.add_argument("--critic-model")
+    root.add_argument("--critic-thinking")
     root.add_argument("--critic-timeout", type=float, default=90)
     root.add_argument("--base-url", default="https://generativelanguage.googleapis.com")
     root.add_argument("--contract", default="chat-v1")

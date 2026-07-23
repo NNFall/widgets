@@ -97,6 +97,7 @@ class ExperimentVisualQualityError(RuntimeError):
         *,
         diagnostic: str = "",
         raw: ExperimentReviewEvidence | None = None,
+        final: ExperimentReviewEvidence | None = None,
         usage: TokenUsage | None = None,
         elapsed_seconds: float = 0,
     ) -> None:
@@ -104,6 +105,7 @@ class ExperimentVisualQualityError(RuntimeError):
         self.error_code = error_code
         self.diagnostic = diagnostic
         self.raw = raw
+        self.final = final
         self.usage = usage or TokenUsage()
         self.elapsed_seconds = elapsed_seconds
 
@@ -202,6 +204,7 @@ class ExperimentReview:
         started_at: float,
         diagnostic: str = "",
         raw: ExperimentReviewEvidence | None = None,
+        final: ExperimentReviewEvidence | None = None,
         usage: TokenUsage | None = None,
     ) -> ExperimentVisualQualityError:
         return ExperimentVisualQualityError(
@@ -209,6 +212,7 @@ class ExperimentReview:
             message,
             diagnostic=diagnostic,
             raw=raw,
+            final=final,
             usage=usage,
             elapsed_seconds=max(0, self._clock() - started_at),
         )
@@ -392,6 +396,7 @@ class ExperimentReview:
                     f"{final_critic_result.critique.weighted_score:.3f}"
                 ),
                 raw=raw_evidence,
+                final=final_evidence,
                 usage=usage,
             )
         return ExperimentReviewResult(

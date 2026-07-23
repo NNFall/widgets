@@ -1,5 +1,7 @@
 import asyncio
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
@@ -26,6 +28,7 @@ from builder_lab.models import (
 from tests.builder_lab_cases.test_experiment_review import visual_critique
 from tests.builder_lab_cases.test_validation import artifact
 from tests.builder_lab_cases.test_visual_critic import report
+from scripts.run_abc_comparison import resolve_single_pricing_policy
 
 
 def evidence(*, suffix: str) -> ExperimentEvidence:
@@ -55,6 +58,8 @@ def variant(
     profile: CreativeProfile,
     *,
     status: str = "completed",
+    rejected_final: bool = False,
+    pricing_snapshot: ExperimentPricingSnapshot | None = None,
 ) -> ExperimentVariant:
     raw = evidence(suffix=f"{profile.value}-raw")
     final = evidence(suffix=f"{profile.value}-final")
@@ -65,15 +70,15 @@ def variant(
         model="gemini-3.6-flash",
         thinking="high",
         status=status,
-        raw=raw if status == "completed" else None,
-        final=final if status == "completed" else None,
+        raw=raw if status == "completed" or rejected_final else None,
+        final=final if status == "completed" or rejected_final else None,
         usage=TokenUsage(
             prompt_tokens=1_000,
             output_tokens=200,
             thinking_tokens=300,
         ),
         elapsed_seconds=12.5,
-        pricing=pricing(),
+        pricing=pricing_snapshot or pricing(),
         role_events=(
             ExperimentRoleEvent(
                 role="site_brand_analyst",
@@ -136,6 +141,28 @@ def test_manifest_rejects_missing_duplicate_or_different_model_variants():
                 items[2],
             ),
         )
+    changed_pricing = ExperimentPricingSnapshot(
+        currency="USD",
+        prompt_per_million=0.51,
+        output_per_million=3.00,
+        thinking_per_million=3.00,
+        captured_at="2026-07-24T00:00:00+00:00",
+        source="https://ai.google.dev/gemini-api/docs/pricing",
+    )
+    with pytest.raises(ValueError, match="same pricing snapshot"):
+        AbcExperimentManifest.create(
+            source_digest="a" * 64,
+            common_input_digest="b" * 64,
+            contract_id="chat-v1",
+            variants=(
+                items[0],
+                variant(
+                    CreativeProfile.BRAND_MOTION,
+                    pricing_snapshot=changed_pricing,
+                ),
+                items[2],
+            ),
+        )
 
 
 def test_variant_keeps_raw_and_final_separate_and_records_exact_cost():
@@ -157,6 +184,18 @@ def test_failed_variant_is_kept_without_fabricated_evidence():
     assert item.raw is None and item.final is None
     assert item.error_code == "provider_unavailable"
     assert item.to_dict()["status"] == "failed"
+
+
+def test_failed_variant_can_preserve_raw_and_rejected_final_evidence():
+    item = variant(
+        CreativeProfile.BRAND_MOTION,
+        status="failed",
+        rejected_final=True,
+    )
+
+    assert item.raw is not None and item.final is not None
+    assert item.raw.artifact != item.final.artifact
+    assert item.error_code == "provider_unavailable"
 
 
 def test_common_digest_excludes_only_profile():
@@ -186,6 +225,22 @@ def test_common_digest_excludes_only_profile():
         model="gemini-3.6-flash",
         thinking="high",
     )
+
+
+def test_single_pricing_runner_defaults_critic_to_main_and_rejects_mixed_models():
+    assert resolve_single_pricing_policy(
+        model="gemini-3.6-flash",
+        thinking="high",
+        critic_model=None,
+        critic_thinking=None,
+    ) == ("gemini-3.6-flash", "high")
+    with pytest.raises(ValueError, match="single pricing snapshot"):
+        resolve_single_pricing_policy(
+            model="gemini-3.6-flash",
+            thinking="high",
+            critic_model="gemini-3.5-flash",
+            critic_thinking="high",
+        )
 
 
 @pytest.mark.asyncio
@@ -268,6 +323,37 @@ async def test_runner_records_one_failed_profile_honestly():
     assert failed.error_code == "provider_unavailable"
 
 
+@pytest.mark.asyncio
+async def test_runner_rejects_result_with_a_different_pricing_snapshot():
+    changed_pricing = ExperimentPricingSnapshot(
+        currency="USD",
+        prompt_per_million=0.75,
+        output_per_million=3.00,
+        thinking_per_million=3.00,
+        captured_at="2026-07-24T00:00:00+00:00",
+        source="https://ai.google.dev/gemini-api/docs/pricing",
+    )
+
+    async def execute(context):
+        return replace(
+            variant(
+                context.request.creative_profile,
+                pricing_snapshot=changed_pricing,
+            ),
+            run_id=context.run_id,
+        )
+
+    with pytest.raises(ValueError, match="immutable run context"):
+        await run_abc_experiment(
+            source_digest="a" * 64,
+            base_request=request(),
+            model="gemini-3.6-flash",
+            thinking="high",
+            pricing=pricing(),
+            execute_variant=execute,
+        )
+
+
 def test_package_writer_is_atomic_bounded_and_never_overwrites_existing_routes(
     tmp_path: Path,
 ):
@@ -291,3 +377,61 @@ def test_package_writer_is_atomic_bounded_and_never_overwrites_existing_routes(
     assert (sibling / "sentinel.txt").read_text(encoding="utf-8") == "keep"
     with pytest.raises(FileExistsError):
         write_experiment_package(output, manifest)
+
+
+def test_package_writer_reserves_destination_exclusively_under_a_race(
+    tmp_path: Path,
+):
+    manifest = AbcExperimentManifest.create(
+        source_digest="a" * 64,
+        common_input_digest="b" * 64,
+        contract_id="chat-v1",
+        variants=tuple(variant(profile) for profile in ABC_PROFILES),
+    )
+    output = tmp_path / "direct-abc-race"
+    barrier = threading.Barrier(2)
+
+    def attempt():
+        barrier.wait(timeout=3)
+        try:
+            return ("ok", write_experiment_package(output, manifest))
+        except FileExistsError as exc:
+            return ("exists", str(exc))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = tuple(pool.map(lambda _: attempt(), range(2)))
+
+    assert sorted(result[0] for result in results) == ["exists", "ok"]
+    payload = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert payload["source_digest"] == "a" * 64
+    assert not tuple(tmp_path.glob(".direct-abc-race-*"))
+
+
+def test_failed_revision_is_packaged_as_rejected_evidence_not_accepted_final(
+    tmp_path: Path,
+):
+    manifest = AbcExperimentManifest.create(
+        source_digest="a" * 64,
+        common_input_digest="b" * 64,
+        contract_id="chat-v1",
+        variants=(
+            variant(CreativeProfile.PRODUCT_CHAT),
+            variant(
+                CreativeProfile.BRAND_MOTION,
+                status="failed",
+                rejected_final=True,
+            ),
+            variant(CreativeProfile.AI_CHARACTER),
+        ),
+    )
+    output = tmp_path / "direct-abc-rejected"
+
+    write_experiment_package(output, manifest)
+
+    rejected = output / "brand-motion" / "rejected-final"
+    assert (rejected / "index.html").is_file()
+    assert (rejected / "critique.json").is_file()
+    assert not (output / "brand-motion" / "final").exists()
+    page = (output / "index.html").read_text(encoding="utf-8")
+    assert "Rejected final" in page
+    assert 'href="brand-motion/rejected-final/"' in page

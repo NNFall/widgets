@@ -170,6 +170,7 @@ class ComparisonVariant:
     elapsed_seconds: float | None = None
     total_tokens: int | None = None
     cost_usd: float | None = None
+    final_label: str = "Final"
 
     def __post_init__(self) -> None:
         self._validate_slug(self.slug, "slug")
@@ -177,6 +178,12 @@ class ComparisonVariant:
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip() or len(value) > 2000:
                 raise ValueError(f"comparison {name} is invalid")
+        if (
+            not isinstance(self.final_label, str)
+            or not self.final_label.strip()
+            or len(self.final_label) > 40
+        ):
+            raise ValueError("comparison final_label is invalid")
         experiment_fields = (
             self.raw_slug,
             self.profile,
@@ -258,9 +265,10 @@ def render_comparison_page(variants: Sequence[ComparisonVariant]) -> str:
         if variant.has_raw_final_pair:
             raw_slug = html.escape(variant.raw_slug or "", quote=True)
             tokens = f"{variant.total_tokens:,}".replace(",", " ")
+            final_label = html.escape(variant.final_label)
             link = (
                 f'<nav class="variant-links"><a href="{raw_slug}/">Raw ↗</a>'
-                f'<a href="{slug}/">Final ↗</a></nav>'
+                f'<a href="{slug}/">{final_label} ↗</a></nav>'
             )
             metadata = f"""
               <div class="experiment-meta">
@@ -276,7 +284,7 @@ def render_comparison_page(variants: Sequence[ComparisonVariant]) -> str:
                   title="{html.escape(variant.title, quote=True)} raw"
                   loading="lazy"
                   sandbox="allow-scripts allow-forms allow-same-origin"></iframe></section>
-                <section><strong>Final</strong><iframe src="{slug}/"
+                <section><strong>{final_label}</strong><iframe src="{slug}/"
                   title="{html.escape(variant.title, quote=True)} final"
                   loading="lazy"
                   sandbox="allow-scripts allow-forms allow-same-origin"></iframe></section>

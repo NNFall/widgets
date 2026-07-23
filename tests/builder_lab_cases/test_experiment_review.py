@@ -191,6 +191,10 @@ async def test_second_failure_is_terminal_without_another_generation():
         await reviewer(auditor, critic, engine).review(raw)
 
     assert caught.value.error_code == "strict_visual_revision_failed"
+    assert caught.value.raw is not None
+    assert caught.value.final is not None
+    assert caught.value.final.artifact == revised
+    assert caught.value.final.critique.verdict is StrictVisualVerdict.REPAIR
     assert engine.visual_revision_calls == 1
     assert len(auditor.calls) == 2
     assert len(critic.calls) == 2

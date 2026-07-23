@@ -249,7 +249,16 @@ class ExperimentVariant:
                 raise ValueError("completed variant cannot contain an error")
         else:
             if self.final is not None:
-                raise ValueError("failed variant cannot fabricate final evidence")
+                if not isinstance(self.raw, ExperimentEvidence):
+                    raise ValueError(
+                        "rejected final evidence requires preserved raw evidence"
+                    )
+                if not isinstance(self.final, ExperimentEvidence):
+                    raise ValueError("rejected final evidence is invalid")
+                if self.raw.artifact == self.final.artifact:
+                    raise ValueError(
+                        "rejected final artifact must differ from raw artifact"
+                    )
             error_code = _text(self.error_code, "error_code", 96)
             if not _IDENTIFIER.fullmatch(error_code):
                 raise ValueError("error_code is invalid")
@@ -355,6 +364,8 @@ class AbcExperimentManifest:
             raise ValueError("manifest run ids must be unique")
         if len({(item.model, item.thinking) for item in variants}) != 1:
             raise ValueError("manifest variants must use the same model and thinking")
+        if len({item.pricing for item in variants}) != 1:
+            raise ValueError("manifest variants must use the same pricing snapshot")
         object.__setattr__(self, "variants", variants)
 
     @classmethod
@@ -435,6 +446,7 @@ class VariantExecutionError(RuntimeError):
         usage: TokenUsage | None = None,
         elapsed_seconds: float = 0,
         raw: ExperimentEvidence | None = None,
+        final: ExperimentEvidence | None = None,
         role_events: Sequence[ExperimentRoleEvent] = (),
     ) -> None:
         super().__init__(message)
@@ -447,6 +459,7 @@ class VariantExecutionError(RuntimeError):
             maximum=7 * 24 * 60 * 60,
         )
         self.raw = raw
+        self.final = final
         self.role_events = tuple(role_events)
 
 
@@ -530,7 +543,7 @@ async def run_abc_experiment(
                 thinking=context.thinking,
                 status="failed",
                 raw=exc.raw,
-                final=None,
+                final=exc.final,
                 usage=exc.usage,
                 elapsed_seconds=exc.elapsed_seconds,
                 pricing=context.pricing,
@@ -560,6 +573,7 @@ async def run_abc_experiment(
             context.run_id,
             context.model,
             context.thinking,
+            context.pricing,
         )
         actual = (
             result.profile,
@@ -567,6 +581,7 @@ async def run_abc_experiment(
             result.run_id,
             result.model,
             result.thinking,
+            result.pricing,
         )
         if actual != expected:
             raise ValueError("variant result does not match its immutable run context")
@@ -627,12 +642,14 @@ def write_experiment_package(
     if not isinstance(manifest, AbcExperimentManifest):
         raise TypeError("manifest must be AbcExperimentManifest")
     output = Path(output_dir).resolve()
-    if output.exists() or output.is_symlink():
-        raise FileExistsError(f"refusing to overwrite experiment package: {output}")
     output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = Path(
-        tempfile.mkdtemp(prefix=f".{output.name}-", dir=str(output.parent))
-    )
+    try:
+        output.mkdir(mode=0o700)
+    except FileExistsError as exc:
+        raise FileExistsError(
+            f"refusing to overwrite experiment package: {output}"
+        ) from exc
+    temporary = Path(tempfile.mkdtemp(prefix=".building-", dir=str(output)))
     try:
         manifest_bytes = _json_bytes(manifest.to_dict())
         if len(manifest_bytes) > _MAX_MANIFEST_BYTES:
@@ -653,7 +670,9 @@ def write_experiment_package(
             )
             if variant.raw is not None:
                 _write_evidence(variant_root / "raw", variant.raw)
-            if variant.final is not None:
+            if variant.status == "completed":
+                if variant.final is None:
+                    raise ValueError("completed variant lost final evidence")
                 _write_evidence(variant_root / "final", variant.final)
                 critique_summary = (
                     f"Raw {variant.raw.critique.weighted_score:.2f} → "
@@ -683,16 +702,45 @@ def write_experiment_package(
                     variant_root / "index.html",
                     _failure_page(variant).encode("utf-8"),
                 )
-                cards.append(
-                    ComparisonVariant(
-                        slug=variant.public_slug,
-                        title=variant.profile.value.replace("_", " ").title(),
-                        model=variant.model,
-                        thinking=variant.thinking,
-                        status=variant.status,
-                        summary=f"{variant.error_code}: {variant.error_message}",
+                if variant.final is not None:
+                    _write_evidence(
+                        variant_root / "rejected-final",
+                        variant.final,
                     )
-                )
+                    cards.append(
+                        ComparisonVariant(
+                            slug=f"{variant.public_slug}/rejected-final",
+                            raw_slug=f"{variant.public_slug}/raw",
+                            title=variant.profile.value.replace("_", " ").title(),
+                            profile=variant.profile.value,
+                            model=variant.model,
+                            thinking=variant.thinking,
+                            status="failed · rejected after one revision",
+                            summary=(
+                                f"{variant.error_code}: {variant.error_message}"
+                            ),
+                            critique_summary=(
+                                f"Raw {variant.raw.critique.weighted_score:.2f} → "
+                                "rejected final "
+                                f"{variant.final.critique.weighted_score:.2f}."
+                            ),
+                            elapsed_seconds=variant.elapsed_seconds,
+                            total_tokens=variant.usage.total_tokens,
+                            cost_usd=variant.cost_usd,
+                            final_label="Rejected final",
+                        )
+                    )
+                else:
+                    cards.append(
+                        ComparisonVariant(
+                            slug=variant.public_slug,
+                            title=variant.profile.value.replace("_", " ").title(),
+                            model=variant.model,
+                            thinking=variant.thinking,
+                            status=variant.status,
+                            summary=f"{variant.error_code}: {variant.error_message}",
+                        )
+                    )
             _write(
                 variant_root / "report.json",
                 _json_bytes(
@@ -714,9 +762,17 @@ def write_experiment_package(
             temporary / "index.html",
             render_comparison_page(tuple(cards)).encode("utf-8"),
         )
-        os.replace(temporary, output)
+        for child in tuple(temporary.iterdir()):
+            if child.name == "manifest.json":
+                continue
+            os.replace(child, output / child.name)
+        os.replace(
+            temporary / "manifest.json",
+            output / "manifest.json",
+        )
+        temporary.rmdir()
     except BaseException:
-        shutil.rmtree(temporary, ignore_errors=True)
+        shutil.rmtree(output, ignore_errors=True)
         raise
     return output
 
