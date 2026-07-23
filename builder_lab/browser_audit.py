@@ -870,7 +870,9 @@ class BrowserAudit:
                   return;
                 }
                 const turn = window.__auditEvents.filter(item => item.type === 'chat.request').length;
-                const answer = turn === 1 ? 'RAW BUREAU помогает упаковать цифровой продукт и запустить его.' : 'Оставьте задачу и контакт — команда предложит следующий шаг.';
+                const answer = turn === 1
+                  ? 'RAW BUREAU проектирует квартиры и загородные дома, создавая минималистичные интерьеры.'
+                  : 'Опишите объект и задачу — бюро предложит следующий шаг и формат консультации.';
                 window.__auditReplies.push(() => event.source.postMessage({...base,type:'chat.response',text:answer}, '*'));
               });
               frame.srcdoc = previewDocument;
@@ -1297,12 +1299,12 @@ class BrowserAudit:
                 {"role": "user", "text": "Какие задачи решает RAW BUREAU?"},
                 {
                     "role": "assistant",
-                    "text": "RAW BUREAU помогает упаковать цифровой продукт и запустить его.",
+                    "text": "RAW BUREAU проектирует квартиры и загородные дома, создавая минималистичные интерьеры.",
                 },
                 {"role": "user", "text": "Как начать проект?"},
                 {
                     "role": "assistant",
-                    "text": "Оставьте задачу и контакт — команда предложит следующий шаг.",
+                    "text": "Опишите объект и задачу — бюро предложит следующий шаг и формат консультации.",
                 },
             ]
             if await self._transcript(frame) != expected_history:
@@ -1888,7 +1890,7 @@ class BrowserAudit:
                 {"role": "user", "text": "Проверка повтора"},
                 {
                     "role": "assistant",
-                    "text": "Оставьте задачу и контакт — команда предложит следующий шаг.",
+                    "text": "Опишите объект и задачу — бюро предложит следующий шаг и формат консультации.",
                 },
             ]
             if await self._transcript(frame) != retry_history:
