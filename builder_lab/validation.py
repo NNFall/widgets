@@ -11,10 +11,8 @@ from .models import ValidationIssue, WidgetArtifact
 
 MAX_HTML_BYTES = 64 * 1024
 MAX_CSS_BYTES = 96 * 1024
+MAX_JAVASCRIPT_BYTES = 256 * 1024
 MAX_DOM_NODES = 400
-MAX_ANIMATIONS = 8
-MAX_ANIMATION_SECONDS = 20.0
-MAX_ANIMATION_ITERATIONS = 12
 
 REQUIRED_REGIONS = frozenset(
     {"root", "launcher", "panel", "header", "messages", "suggestions", "composer"}
@@ -416,27 +414,6 @@ def _validate_css(css: str) -> list[ValidationIssue]:
             )
             break
 
-    animation_count = len(re.findall(r"@(?:-webkit-)?keyframes\b", lower))
-    if animation_count > MAX_ANIMATIONS:
-        add("too_many_animations", "Artifact defines too many animations")
-    animation_values = re.findall(r"animation(?:-duration|-iteration-count)?\s*:\s*([^;}]+)", lower)
-    if animation_count or animation_values:
-        if "prefers-reduced-motion" not in lower or not re.search(
-            r"prefers-reduced-motion\s*:\s*reduce", lower
-        ):
-            add("missing_reduced_motion", "Motion requires a prefers-reduced-motion fallback")
-    for value in animation_values:
-        for number, unit in re.findall(r"(?<![-\w.])(\d+(?:\.\d+)?)(ms|s)\b", value):
-            seconds = float(number) / 1000 if unit == "ms" else float(number)
-            if seconds > MAX_ANIMATION_SECONDS:
-                add("animation_too_long", "Animation duration exceeds the limit")
-                break
-        if "infinite" in value:
-            add("animation_iterations_exceeded", "Infinite animations are not allowed")
-        for number in re.findall(r"(?<![-\w.])(\d+)(?![\w.%])", value):
-            if int(number) > MAX_ANIMATION_ITERATIONS:
-                add("animation_iterations_exceeded", "Animation iteration count exceeds the limit")
-                break
     return issues
 
 
@@ -454,6 +431,33 @@ def validate_artifact(
         issues.append(_issue("art_direction_too_large", "art_direction", "Art direction exceeds the size limit"))
     if len(artifact.body_html.encode("utf-8")) > MAX_HTML_BYTES:
         issues.append(_issue("html_too_large", "body_html", "HTML exceeds the size limit"))
+    if len(artifact.javascript.encode("utf-8")) > MAX_JAVASCRIPT_BYTES:
+        issues.append(
+            _issue(
+                "javascript_too_large",
+                "javascript",
+                "JavaScript exceeds the size limit",
+            )
+        )
+    if len(artifact.change_summary.encode("utf-8")) > 2 * 1024:
+        issues.append(
+            _issue(
+                "change_summary_too_large",
+                "change_summary",
+                "Change summary exceeds the size limit",
+            )
+        )
+    if len(artifact.layout_contract) > 64 or any(
+        len(key.encode("utf-8")) > 160 or len(value.encode("utf-8")) > 512
+        for key, value in artifact.layout_contract.items()
+    ):
+        issues.append(
+            _issue(
+                "layout_contract_too_large",
+                "layout_contract",
+                "Layout contract exceeds the size limit",
+            )
+        )
 
     parser = _ArtifactHTMLParser()
     try:

@@ -172,7 +172,7 @@ class AntigravityEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Authorization", kwargs["headers"])
         self.assertTrue(kwargs["follow_redirects"])
 
-    def test_sandbox_validator_rejects_missing_regions_and_infinite_motion(self):
+    def test_sandbox_validator_rejects_missing_regions(self):
         candidate = artifact(revision=1, stage=Stage.AGENT_BUILD).to_dict()
         candidate["body_html"] = re.sub(
             r'\sdata-region="[^"]+"', "", candidate["body_html"]
@@ -198,6 +198,33 @@ class AntigravityEngineTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse((root / "out/build-report.json").exists())
+
+    def test_sandbox_validator_accepts_generated_javascript_and_infinite_motion(self):
+        candidate = artifact(revision=1, stage=Stage.AGENT_BUILD).to_dict()
+        candidate["javascript"] = (
+            "setInterval(() => document.body.classList.toggle('pulse'), 50)"
+        )
+        candidate["css"] += """
+.kaigo-widget .ambient { animation: agent-glow 100s linear infinite; }
+@keyframes agent-glow { from { opacity: .5; } to { opacity: 1; } }
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "out").mkdir()
+            (root / "out/widget-artifact.json").write_text(
+                json.dumps(candidate, ensure_ascii=False), encoding="utf-8"
+            )
+            script = root / "validate_output.py"
+            script.write_text(VALIDATE_OUTPUT_PY, encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(script)],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_sandbox_validator_accepts_safe_native_control_attributes(self):
         candidate = artifact(revision=1, stage=Stage.AGENT_BUILD).to_dict()

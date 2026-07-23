@@ -78,6 +78,54 @@ class BuilderModelsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             WidgetArtifact.from_dict({**artifact.to_dict(), "revision": 0})
 
+    def test_artifact_round_trips_experimental_fields(self):
+        artifact = WidgetArtifact.from_dict(
+            {
+                "schema_version": "1.0",
+                "revision": 4,
+                "stage": "motion_polish",
+                "art_direction": "Animated editorial concierge",
+                "body_html": '<section class="kaigo-widget"></section>',
+                "css": ".kaigo-widget { color: #111; }",
+                "theme_tokens": {"accent": "#ff5533"},
+                "suggested_actions": ["Начать"],
+                "change_summary": "Добавлено появление по прокрутке.",
+                "javascript": (
+                    "addEventListener('scroll', () => "
+                    "document.body.dataset.y = String(scrollY))"
+                ),
+                "layout_contract": {
+                    "desktop_panel_width": "428px",
+                    "mobile_panel_height": "68dvh",
+                },
+            }
+        )
+
+        self.assertEqual(
+            WidgetArtifact.from_dict(artifact.to_dict()),
+            artifact,
+        )
+        self.assertEqual(
+            artifact.layout_contract["desktop_panel_width"],
+            "428px",
+        )
+
+    def test_old_artifact_defaults_experimental_fields(self):
+        artifact = WidgetArtifact.from_dict(
+            {
+                "schema_version": "1.0",
+                "revision": 1,
+                "stage": "art_direction",
+                "art_direction": "Legacy baseline",
+                "body_html": '<section class="kaigo-widget"></section>',
+                "css": ".kaigo-widget{}",
+            }
+        )
+
+        self.assertEqual(artifact.change_summary, "")
+        self.assertEqual(artifact.javascript, "")
+        self.assertEqual(artifact.layout_contract, {})
+
     def test_usage_addition_includes_thinking_tokens(self):
         total = TokenUsage(prompt_tokens=10, output_tokens=4, thinking_tokens=3)
         total += TokenUsage(prompt_tokens=5, output_tokens=2, thinking_tokens=1)

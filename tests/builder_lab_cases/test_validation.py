@@ -249,12 +249,38 @@ class ArtifactValidationTests(unittest.TestCase):
         self.assertIn("css_too_large", self.codes(artifact(css=GOOD_CSS + (" " * 100_000))))
         motion = ".kaigo-widget { animation: pulse 30s linear 99; }\n@keyframes pulse {to{opacity:.5}}\n@media (prefers-reduced-motion: reduce){.kaigo-widget *{animation:none}}"
         codes = self.codes(artifact(css=motion))
-        self.assertIn("animation_too_long", codes)
-        self.assertIn("animation_iterations_exceeded", codes)
+        self.assertNotIn("animation_too_long", codes)
+        self.assertNotIn("animation_iterations_exceeded", codes)
 
-    def test_motion_requires_reduced_motion_fallback(self):
+    def test_free_javascript_and_infinite_motion_are_allowed(self):
+        candidate = artifact(
+            javascript=(
+                "setInterval(() => "
+                "document.querySelector('[data-region=root]')"
+                ".classList.toggle('pulse'), 50)"
+            ),
+            css=(
+                ".kaigo-widget{animation:spin 100s linear infinite}"
+                "@keyframes spin{to{rotate:1turn}}"
+            ),
+        )
+
+        codes = self.codes(candidate)
+        self.assertNotIn("animation_iterations_exceeded", codes)
+        self.assertNotIn("animation_too_long", codes)
+        self.assertNotIn("too_many_animations", codes)
+        self.assertNotIn("missing_reduced_motion", codes)
+        self.assertNotIn("generated_javascript", codes)
+
+    def test_generated_javascript_has_a_transport_size_limit(self):
+        self.assertIn(
+            "javascript_too_large",
+            self.codes(artifact(javascript="x" * (256 * 1024 + 1))),
+        )
+
+    def test_reduced_motion_fallback_is_recommended_not_required(self):
         css = GOOD_CSS.split("@media (prefers-reduced-motion", 1)[0]
-        self.assertIn("missing_reduced_motion", self.codes(artifact(css=css)))
+        self.assertNotIn("missing_reduced_motion", self.codes(artifact(css=css)))
 
     def test_fingerprint_is_stable_for_same_issue_set(self):
         first = validate_artifact(artifact(css="body {color:red}"), previous_revision=2)

@@ -20,15 +20,15 @@ AGENTS_MD = """# Kaigo Widget Builder Agent
 Work only inside this disposable environment. Read BRIEF.md and the JSON contract.
 Create exactly `out/widget-artifact.json` and `out/build-report.json`, then run
 `python3 scripts/validate_output.py`. The widget must be premium, distinctive,
-Russian-language, responsive, and coherent. Do not add JavaScript, external URLs,
-network calls, package dependencies, scripts, iframes, forms, or global CSS. Every
-CSS selector must be scoped under `.kaigo-widget`. Never treat your final prose as
+Russian-language, responsive, and coherent. Use the artifact's `javascript` field
+freely for interaction, timed behavior, scroll behavior, and motion. Do not add
+external URLs, network calls, package dependencies, script tags, iframes, forms,
+or global CSS. Every CSS selector must be scoped under `.kaigo-widget`. Never treat your final prose as
 the deliverable: the declared files are the deliverable. Use each exact
 `data-region` value once or more: root, launcher, panel, header, messages,
 suggestions, composer. Give launcher and composer an `aria-label`. Never use
-inline style or event attributes. Every animation must be finite (never
-`infinite`), use at most 12 iterations, and include a
-`prefers-reduced-motion: reduce` rule that disables animation and transition.
+inline style or event attributes. CSS animations may use any duration, count,
+timing function, and infinite iteration when that serves the concept.
 SVG path data must use only M/L/H/V/C/S/Q/T/Z commands; never use A/a arc
 commands. Use circle or ellipse elements for round geometry. Safe native control
 attributes such as `for`, `name`, `checked`, `open`, `selected`, `autocomplete`,
@@ -99,13 +99,22 @@ if not artifact_path.is_file():
 artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
 required = {
     "schema_version", "revision", "stage", "art_direction", "body_html",
-    "css", "theme_tokens", "suggested_actions"
+    "css", "theme_tokens", "suggested_actions", "change_summary",
+    "javascript", "layout_contract"
 }
 missing = sorted(required - artifact.keys())
 if missing:
     raise SystemExit("missing fields: " + ", ".join(missing))
 if artifact["schema_version"] != "1.0" or artifact["stage"] != "agent_build":
     raise SystemExit("schema_version or stage is invalid")
+if not isinstance(artifact["javascript"], str):
+    raise SystemExit("javascript must be text")
+if len(artifact["javascript"].encode("utf-8")) > 256 * 1024:
+    raise SystemExit("javascript exceeds 256 KiB")
+if not isinstance(artifact["change_summary"], str):
+    raise SystemExit("change_summary must be text")
+if not isinstance(artifact["layout_contract"], dict):
+    raise SystemExit("layout_contract must be an object")
 html = artifact["body_html"].lower()
 css = artifact["css"].lower()
 parser = ContractParser()
@@ -127,24 +136,6 @@ for forbidden in ("@import", "url(", "javascript:"):
         raise SystemExit("forbidden CSS token: " + forbidden)
 if ".kaigo-widget" not in css:
     raise SystemExit("CSS is not scoped")
-animation_values = re.findall(
-    r"animation(?:-duration|-iteration-count)?\s*:\s*([^;}]+)", css
-)
-if "@keyframes" in css or animation_values:
-    if "prefers-reduced-motion" not in css or not re.search(
-        r"prefers-reduced-motion\s*:\s*reduce", css
-    ):
-        raise SystemExit("motion requires prefers-reduced-motion: reduce")
-for value in animation_values:
-    if "infinite" in value:
-        raise SystemExit("infinite animation is forbidden")
-    for number in re.findall(r"(?<![-\w.])(\d+)(?![\w.%])", value):
-        if int(number) > 12:
-            raise SystemExit("animation iteration count exceeds 12")
-    for number, unit in re.findall(r"(?<![-\w.])(\d+(?:\.\d+)?)(ms|s)\b", value):
-        seconds = float(number) / 1000 if unit == "ms" else float(number)
-        if seconds > 20:
-            raise SystemExit("animation duration exceeds 20 seconds")
 report_path.parent.mkdir(parents=True, exist_ok=True)
 report_path.write_text(json.dumps({
     "validator": "passed",

@@ -25,6 +25,9 @@ ARTIFACT_JSON_SCHEMA = {
         "css",
         "theme_tokens",
         "suggested_actions",
+        "change_summary",
+        "javascript",
+        "layout_contract",
     ],
     "properties": {
         "schema_version": {"type": "string", "enum": ["1.0"]},
@@ -41,6 +44,12 @@ ARTIFACT_JSON_SCHEMA = {
             "type": "array",
             "maxItems": 8,
             "items": {"type": "string", "maxLength": 120},
+        },
+        "change_summary": {"type": "string", "maxLength": 1000},
+        "javascript": {"type": "string", "maxLength": 262144},
+        "layout_contract": {
+            "type": "object",
+            "additionalProperties": {"type": "string"},
         },
     },
 }

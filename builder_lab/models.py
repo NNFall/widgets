@@ -288,6 +288,9 @@ class WidgetArtifact:
     css: str
     theme_tokens: dict[str, str] = field(default_factory=dict)
     suggested_actions: tuple[str, ...] = ()
+    change_summary: str = ""
+    javascript: str = ""
+    layout_contract: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.revision < 1:
@@ -296,6 +299,7 @@ class WidgetArtifact:
             raise ValueError("schema_version must not be empty")
         object.__setattr__(self, "theme_tokens", dict(self.theme_tokens))
         object.__setattr__(self, "suggested_actions", tuple(self.suggested_actions))
+        object.__setattr__(self, "layout_contract", dict(self.layout_contract))
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "WidgetArtifact":
@@ -313,6 +317,12 @@ class WidgetArtifact:
             suggested_actions=tuple(
                 str(value) for value in payload.get("suggested_actions", ())
             ),
+            change_summary=str(payload.get("change_summary", "")),
+            javascript=str(payload.get("javascript", "")),
+            layout_contract={
+                str(key): str(value)
+                for key, value in dict(payload.get("layout_contract", {})).items()
+            },
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -325,6 +335,9 @@ class WidgetArtifact:
             "css": self.css,
             "theme_tokens": dict(self.theme_tokens),
             "suggested_actions": list(self.suggested_actions),
+            "change_summary": self.change_summary,
+            "javascript": self.javascript,
+            "layout_contract": dict(self.layout_contract),
         }
 
 
