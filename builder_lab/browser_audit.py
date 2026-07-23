@@ -1348,7 +1348,7 @@ class BrowserAudit:
                 raise ValueError("Escape did not close the widget")
             if not await launcher.evaluate("node => document.activeElement === node"):
                 raise ValueError("Escape did not restore focus to the launcher")
-            await launcher.click()
+            await launcher.press("Enter")
             if await input_box.input_value() != "Черновик сохраняется":
                 raise ValueError("close/reopen did not preserve the composer draft")
             if await self._transcript(frame) != expected_history:
@@ -1368,7 +1368,7 @@ class BrowserAudit:
                 raise ValueError("close button did not close the widget")
             if not await launcher.evaluate("node => document.activeElement === node"):
                 raise ValueError("close button did not restore focus to the launcher")
-            await launcher.click()
+            await launcher.press("Enter")
             if await input_box.input_value() != "Черновик сохраняется":
                 raise ValueError("button close/reopen did not preserve the composer draft")
             if await self._transcript(frame) != expected_history:
