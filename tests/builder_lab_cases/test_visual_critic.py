@@ -240,6 +240,7 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
         fake = FakeClient(response_payload())
         critic = GeminiVisualCritic(
             api_key="test-key",
+            thinking_level="high",
             client=fake,
         )
 
@@ -258,7 +259,7 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config.temperature, 0.1)
         self.assertEqual(config.top_p, 1.0)
         self.assertEqual(config.tools, [])
-        self.assertIn("LOW", str(config.thinking_config.thinking_level).upper())
+        self.assertIn("HIGH", str(config.thinking_config.thinking_level).upper())
         instruction = str(config.system_instruction).lower()
         self.assertIn("untrusted", instruction)
         self.assertIn("closed: name launcher, button, or control", instruction)

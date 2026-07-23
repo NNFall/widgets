@@ -7,6 +7,7 @@ from typing import Any
 from google import genai
 from google.genai import types
 
+from ..model_config import generation_policy, normalize_thinking_level
 from ..models import (
     BuilderRequest,
     DirectionJudgement,
@@ -57,20 +58,13 @@ def build_low_thinking_config(
     *,
     include_thoughts: bool | None = None,
 ) -> types.ThinkingConfig | None:
-    """Return the least-expensive supported thinking config for the model."""
+    """Backward-compatible low-thinking policy used by older callers."""
 
-    normalized = model.strip().lower().removeprefix("models/")
-    if normalized.startswith("gemini-2.5-flash"):
-        values: dict[str, Any] = {"thinking_budget": 0}
-        if include_thoughts is not None:
-            values["include_thoughts"] = include_thoughts
-        return types.ThinkingConfig(**values)
-    if normalized.startswith("gemini-2.5-"):
-        return None
-    values: dict[str, Any] = {"thinking_level": types.ThinkingLevel.LOW}
-    if include_thoughts is not None:
-        values["include_thoughts"] = include_thoughts
-    return types.ThinkingConfig(**values)
+    return generation_policy(
+        model,
+        "low",
+        include_thoughts=include_thoughts,
+    ).thinking_config
 
 
 _GEMINI_25_SCHEMA_CONSTRAINTS = frozenset(
@@ -177,7 +171,8 @@ class GeminiDirectEngine:
         self,
         *,
         api_key: str | None,
-        model: str = "gemini-3.5-flash",
+        model: str = "gemini-3.6-flash",
+        thinking_level: str = "high",
         base_url: str = "https://generativelanguage.googleapis.com",
         client: Any | None = None,
     ) -> None:
@@ -186,6 +181,7 @@ class GeminiDirectEngine:
                 "missing_api_key", "Для direct-режима не настроен ключ Gemini"
             )
         self.model = model
+        self.thinking_level = normalize_thinking_level(thinking_level)
         self._owned_client = client is None
         self._client = client or genai.Client(
             api_key=api_key.strip(),
@@ -200,14 +196,18 @@ class GeminiDirectEngine:
         temperature: float,
         max_output_tokens: int,
     ) -> Any:
-        config = types.GenerateContentConfig(
+        policy = generation_policy(
+            self.model,
+            self.thinking_level,
             temperature=temperature,
-            top_p=1.0,
+        )
+        config = types.GenerateContentConfig(
+            **policy.sampling_kwargs,
             max_output_tokens=max_output_tokens,
             response_mime_type="application/json",
             response_json_schema=build_provider_json_schema(schema, self.model),
             tools=[],
-            thinking_config=build_low_thinking_config(self.model),
+            thinking_config=policy.thinking_config,
         )
         retry_delays = (0.5, 1.5, 3.0, 5.0)
         for attempt in range(len(retry_delays) + 1):

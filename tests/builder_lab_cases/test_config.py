@@ -13,15 +13,21 @@ class BuilderLabConfigTests(unittest.TestCase):
             "KAIGO_BUILDER_LAB_ALLOW_REMOTE": None,
             "KAIGO_BUILDER_DEFAULT_ENGINE": None,
             "GEMINI_BUILDER_MODEL": None,
+            "GEMINI_BUILDER_THINKING_LEVEL": None,
             "GEMINI_BUILDER_TEMPERATURE": None,
             "GEMINI_BUILDER_MAX_REPAIRS": None,
             "GEMINI_API_KEY": None,
             "GOOGLE_AI_API_KEY": None,
             "GOOGLE_AI_NATIVE_BASE_URL": None,
             "GEMINI_CHAT_MODEL": None,
+            "GEMINI_CHAT_THINKING_LEVEL": None,
             "GEMINI_CHAT_TIMEOUT_SECONDS": None,
             "GEMINI_VISUAL_CRITIC_MODEL": None,
+            "GEMINI_VISUAL_CRITIC_THINKING_LEVEL": None,
             "GEMINI_VISUAL_CRITIC_TIMEOUT_SECONDS": None,
+            "GEMINI_REFERENCE_ANALYZER_MODEL": None,
+            "GEMINI_REFERENCE_ANALYZER_THINKING_LEVEL": None,
+            "GEMINI_ANTIGRAVITY_MAX_TOTAL_TOKENS": None,
             "KAIGO_BROWSER_AUDIT_TIMEOUT_MS": None,
             "KAIGO_BROWSER_AUDIT_TOTAL_TIMEOUT_SECONDS": None,
             "KAIGO_CHAT_SESSION_TTL_SECONDS": None,
@@ -57,13 +63,19 @@ class BuilderLabConfigTests(unittest.TestCase):
         config = self.load()
         self.assertEqual(config.host, "127.0.0.1")
         self.assertEqual(config.port, 8091)
-        self.assertEqual(config.direct_model, "gemini-3.5-flash")
+        self.assertEqual(config.direct_model, "gemini-3.6-flash")
+        self.assertEqual(config.builder_thinking_level, "high")
         self.assertEqual(config.temperature, 0.9)
         self.assertEqual(config.max_repairs, 3)
-        self.assertEqual(config.chat_model, "gemini-3.5-flash")
+        self.assertEqual(config.chat_model, "gemini-3.5-flash-lite")
+        self.assertEqual(config.chat_thinking_level, "medium")
         self.assertEqual(config.chat_timeout_seconds, 45)
         self.assertEqual(config.visual_critic_model, "gemini-3.5-flash")
+        self.assertEqual(config.visual_critic_thinking_level, "high")
         self.assertEqual(config.visual_critic_timeout_seconds, 60)
+        self.assertEqual(config.reference_analyzer_model, "gemini-3.5-flash")
+        self.assertEqual(config.reference_analyzer_thinking_level, "high")
+        self.assertEqual(config.antigravity_max_total_tokens, 500_000)
         self.assertEqual(config.browser_audit_timeout_ms, 10_000)
         self.assertEqual(config.browser_audit_total_timeout_seconds, 120)
         self.assertEqual(config.chat_ip_rate_limit_requests, 60)
@@ -79,19 +91,32 @@ class BuilderLabConfigTests(unittest.TestCase):
         config = self.load(
             KAIGO_BUILDER_LAB_PORT="9012",
             GEMINI_BUILDER_TEMPERATURE="1.25",
+            GEMINI_BUILDER_THINKING_LEVEL="medium",
             GEMINI_BUILDER_MAX_REPAIRS="1",
             GEMINI_API_KEY="secret",
             GOOGLE_AI_NATIVE_BASE_URL="https://example.test/v1beta",
             GEMINI_VISUAL_CRITIC_MODEL="gemini-3.5-flash",
+            GEMINI_VISUAL_CRITIC_THINKING_LEVEL="medium",
             GEMINI_VISUAL_CRITIC_TIMEOUT_SECONDS="75",
+            GEMINI_REFERENCE_ANALYZER_MODEL="gemini-3.6-flash",
+            GEMINI_REFERENCE_ANALYZER_THINKING_LEVEL="low",
+            GEMINI_CHAT_MODEL="gemini-3.5-flash-lite",
+            GEMINI_CHAT_THINKING_LEVEL="high",
+            GEMINI_ANTIGRAVITY_MAX_TOTAL_TOKENS="750000",
             KAIGO_BROWSER_AUDIT_TIMEOUT_MS="15000",
             KAIGO_BROWSER_AUDIT_TOTAL_TIMEOUT_SECONDS="150",
         )
         self.assertEqual(config.port, 9012)
         self.assertEqual(config.temperature, 1.25)
+        self.assertEqual(config.builder_thinking_level, "medium")
         self.assertEqual(config.max_repairs, 1)
         self.assertEqual(config.gemini_base_url, "https://example.test/v1beta")
         self.assertEqual(config.visual_critic_timeout_seconds, 75)
+        self.assertEqual(config.visual_critic_thinking_level, "medium")
+        self.assertEqual(config.reference_analyzer_model, "gemini-3.6-flash")
+        self.assertEqual(config.reference_analyzer_thinking_level, "low")
+        self.assertEqual(config.chat_thinking_level, "high")
+        self.assertEqual(config.antigravity_max_total_tokens, 750_000)
         self.assertEqual(config.browser_audit_timeout_ms, 15_000)
         self.assertEqual(config.browser_audit_total_timeout_seconds, 150)
 
@@ -117,6 +142,11 @@ class BuilderLabConfigTests(unittest.TestCase):
             ("KAIGO_REFERENCE_WARMUP_MS", "999"),
             ("GEMINI_CHAT_TIMEOUT_SECONDS", "181"),
             ("GEMINI_VISUAL_CRITIC_TIMEOUT_SECONDS", "181"),
+            ("GEMINI_BUILDER_THINKING_LEVEL", "maximum"),
+            ("GEMINI_CHAT_THINKING_LEVEL", "none"),
+            ("GEMINI_VISUAL_CRITIC_THINKING_LEVEL", "turbo"),
+            ("GEMINI_REFERENCE_ANALYZER_THINKING_LEVEL", ""),
+            ("GEMINI_ANTIGRAVITY_MAX_TOTAL_TOKENS", "9999"),
             ("KAIGO_BROWSER_AUDIT_TIMEOUT_MS", "999"),
             ("KAIGO_BROWSER_AUDIT_TIMEOUT_MS", "30001"),
             ("KAIGO_BROWSER_AUDIT_TOTAL_TIMEOUT_SECONDS", "29"),

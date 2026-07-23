@@ -105,6 +105,27 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("архитектурного бюро", call["contents"])
         self.assertIn('"revision":1', call["contents"])
 
+    async def test_gemini_36_uses_high_thinking_without_sampling(self):
+        client = FakeClient(response=fake_response())
+        engine = GeminiDirectEngine(
+            api_key="secret",
+            model="gemini-3.6-flash",
+            thinking_level="high",
+            client=client,
+        )
+
+        await engine.generate(
+            request=self.request,
+            stage=Stage.FOUNDATION,
+            revision=2,
+            previous_artifact=artifact(revision=1, stage=Stage.ART_DIRECTION),
+        )
+
+        config = client.models.calls[0]["config"]
+        self.assertEqual(config.thinking_config.thinking_level.value, "HIGH")
+        self.assertIsNone(config.temperature)
+        self.assertIsNone(config.top_p)
+
     async def test_gemini_2_5_uses_structural_provider_schema(self):
         client = FakeClient(response=fake_response())
         engine = GeminiDirectEngine(
@@ -185,7 +206,11 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         client = FakeClient(
             response=fake_response(artifact(revision=3, stage=Stage.IDENTITY))
         )
-        engine = GeminiDirectEngine(api_key="secret", client=client)
+        engine = GeminiDirectEngine(
+            api_key="secret",
+            model="gemini-3.5-flash",
+            client=client,
+        )
         await engine.generate(
             request=self.request,
             stage=Stage.IDENTITY,
@@ -230,7 +255,11 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         client = FakeClient(
             response=fake_response(artifact(revision=5, stage=Stage.MOTION_POLISH))
         )
-        engine = GeminiDirectEngine(api_key="secret", client=client)
+        engine = GeminiDirectEngine(
+            api_key="secret",
+            model="gemini-3.5-flash",
+            client=client,
+        )
         visual = VisualFinding(
             finding_id="major-1",
             severity=VisualSeverity.MAJOR,

@@ -5,6 +5,7 @@ import os
 import re
 from dataclasses import dataclass
 
+from .model_config import normalize_thinking_level
 from .models import EngineName
 
 
@@ -64,6 +65,7 @@ class BuilderLabConfig:
     allow_remote: bool
     default_engine: EngineName
     direct_model: str
+    builder_thinking_level: str
     temperature: float
     max_repairs: int
     enable_antigravity: bool
@@ -72,11 +74,16 @@ class BuilderLabConfig:
     antigravity_agent: str
     antigravity_timeout_seconds: int
     antigravity_max_snapshot_bytes: int
+    antigravity_max_total_tokens: int
     demo_path: str | None
     chat_model: str
+    chat_thinking_level: str
     chat_timeout_seconds: int
     visual_critic_model: str
+    visual_critic_thinking_level: str
     visual_critic_timeout_seconds: int
+    reference_analyzer_model: str
+    reference_analyzer_thinking_level: str
     browser_audit_timeout_ms: int
     browser_audit_total_timeout_seconds: int
     chat_session_ttl_seconds: int
@@ -140,7 +147,7 @@ class BuilderLabConfig:
             "GOOGLE_API_KEY",
         )
         direct_model = os.getenv(
-            "GEMINI_BUILDER_MODEL", "gemini-3.5-flash"
+            "GEMINI_BUILDER_MODEL", "gemini-3.6-flash"
         ).strip()
         return cls(
             host=host,
@@ -148,6 +155,9 @@ class BuilderLabConfig:
             allow_remote=allow_remote,
             default_engine=default_engine,
             direct_model=direct_model,
+            builder_thinking_level=normalize_thinking_level(
+                os.getenv("GEMINI_BUILDER_THINKING_LEVEL", "high")
+            ),
             temperature=_float("GEMINI_BUILDER_TEMPERATURE", 0.9, 0, 2),
             max_repairs=_int("GEMINI_BUILDER_MAX_REPAIRS", 3, 0, 4),
             enable_antigravity=_bool("KAIGO_BUILDER_ENABLE_ANTIGRAVITY", True),
@@ -168,14 +178,34 @@ class BuilderLabConfig:
                 1024,
                 100 * 1024 * 1024,
             ),
+            antigravity_max_total_tokens=_int(
+                "GEMINI_ANTIGRAVITY_MAX_TOTAL_TOKENS",
+                500_000,
+                10_000,
+                2_000_000,
+            ),
             demo_path=_first_nonblank("KAIGO_BUILDER_DEMO_PATH"),
-            chat_model=os.getenv("GEMINI_CHAT_MODEL", direct_model).strip(),
+            chat_model=os.getenv(
+                "GEMINI_CHAT_MODEL", "gemini-3.5-flash-lite"
+            ).strip(),
+            chat_thinking_level=normalize_thinking_level(
+                os.getenv("GEMINI_CHAT_THINKING_LEVEL", "medium")
+            ),
             chat_timeout_seconds=_int("GEMINI_CHAT_TIMEOUT_SECONDS", 45, 1, 180),
             visual_critic_model=os.getenv(
                 "GEMINI_VISUAL_CRITIC_MODEL", "gemini-3.5-flash"
             ).strip(),
+            visual_critic_thinking_level=normalize_thinking_level(
+                os.getenv("GEMINI_VISUAL_CRITIC_THINKING_LEVEL", "high")
+            ),
             visual_critic_timeout_seconds=_int(
                 "GEMINI_VISUAL_CRITIC_TIMEOUT_SECONDS", 60, 10, 180
+            ),
+            reference_analyzer_model=os.getenv(
+                "GEMINI_REFERENCE_ANALYZER_MODEL", "gemini-3.5-flash"
+            ).strip(),
+            reference_analyzer_thinking_level=normalize_thinking_level(
+                os.getenv("GEMINI_REFERENCE_ANALYZER_THINKING_LEVEL", "high")
             ),
             browser_audit_timeout_ms=_int(
                 "KAIGO_BROWSER_AUDIT_TIMEOUT_MS", 10_000, 1_000, 30_000

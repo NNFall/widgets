@@ -26,9 +26,9 @@ from PIL import Image, UnidentifiedImageError
 
 from builder_lab.engines.gemini_direct import (
     build_http_options,
-    build_low_thinking_config,
     build_provider_json_schema,
 )
+from builder_lab.model_config import generation_policy, normalize_thinking_level
 
 
 MAX_SCREENSHOT_BYTES = 1_500_000
@@ -509,6 +509,7 @@ async def analyze_reference_site(
     capture_manifest: str | Path | None,
     api_key: str | None,
     model: str = DEFAULT_MODEL,
+    thinking_level: str = "high",
     base_url: str | None = None,
     timeout_seconds: float = 60,
     client: Any | None = None,
@@ -551,9 +552,13 @@ async def analyze_reference_site(
     for screenshot in screenshots:
         contents.append(types.Part.from_text(text=f"EVIDENCE {screenshot.label}"))
         contents.append(types.Part.from_bytes(data=screenshot.data, mime_type="image/jpeg"))
-    config = types.GenerateContentConfig(
+    policy = generation_policy(
+        model,
+        normalize_thinking_level(thinking_level),
         temperature=0.1,
-        top_p=1.0,
+    )
+    config = types.GenerateContentConfig(
+        **policy.sampling_kwargs,
         max_output_tokens=3000,
         response_mime_type="application/json",
         response_json_schema=build_provider_json_schema(
@@ -561,7 +566,7 @@ async def analyze_reference_site(
             model,
         ),
         tools=[],
-        thinking_config=build_low_thinking_config(model),
+        thinking_config=policy.thinking_config,
     )
     request_id: str | None = None
     usage = {key: 0 for key in ("prompt_tokens", "output_tokens", "thinking_tokens", "total_tokens")}
@@ -678,7 +683,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--captured-at", required=True)
     parser.add_argument("--coverage-status", choices=("complete",), required=True)
     parser.add_argument("--capture-manifest", type=Path, required=True)
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--model",
+        default=os.environ.get("GEMINI_REFERENCE_ANALYZER_MODEL", DEFAULT_MODEL),
+    )
+    parser.add_argument(
+        "--thinking-level",
+        default=os.environ.get("GEMINI_REFERENCE_ANALYZER_THINKING_LEVEL", "high"),
+    )
     parser.add_argument("--output", required=True, type=Path)
     return parser
 
@@ -694,6 +706,7 @@ async def _run_cli(args: argparse.Namespace) -> None:
         capture_manifest=args.capture_manifest,
         api_key=os.environ.get("GOOGLE_AI_API_KEY") or os.environ.get("GEMINI_API_KEY"),
         model=args.model,
+        thinking_level=args.thinking_level,
     )
     args.output.write_text(serialize_reference(reference), encoding="utf-8")
 

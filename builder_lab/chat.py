@@ -13,7 +13,8 @@ from typing import Any, Callable
 from google import genai
 from google.genai import types
 
-from .engines.gemini_direct import build_http_options, build_low_thinking_config
+from .engines.gemini_direct import build_http_options
+from .model_config import generation_policy, normalize_thinking_level
 from .models import TokenUsage
 
 
@@ -164,7 +165,8 @@ class GeminiDemoChatService:
         self,
         *,
         api_key: str | None,
-        model: str = "gemini-3.5-flash",
+        model: str = "gemini-3.5-flash-lite",
+        thinking_level: str = "medium",
         base_url: str = "https://generativelanguage.googleapis.com",
         client: Any | None = None,
         timeout_seconds: float = 45,
@@ -200,6 +202,7 @@ class GeminiDemoChatService:
         self.model = model.strip()
         if not self.model:
             raise ValueError("model must not be empty")
+        self.thinking_level = normalize_thinking_level(thinking_level)
         self._owned_client = client is None
         self._client = client or genai.Client(
             api_key=api_key.strip(), http_options=build_http_options(base_url)
@@ -392,15 +395,17 @@ class GeminiDemoChatService:
                     role="user", parts=[types.Part.from_text(text=request_text)]
                 )
             )
-            config = types.GenerateContentConfig(
-                system_instruction=system_prompt,
+            policy = generation_policy(
+                self.model,
+                self.thinking_level,
                 temperature=0.35,
-                top_p=1.0,
+                include_thoughts=False,
+            )
+            config = types.GenerateContentConfig(
+                **policy.sampling_kwargs,
+                system_instruction=system_prompt,
                 max_output_tokens=384,
-                thinking_config=build_low_thinking_config(
-                    self.model,
-                    include_thoughts=False,
-                ),
+                thinking_config=policy.thinking_config,
             )
             try:
                 async with asyncio.timeout(self._timeout_seconds):

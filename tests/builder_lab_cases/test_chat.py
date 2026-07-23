@@ -66,14 +66,15 @@ class GeminiDemoChatServiceTests(unittest.IsolatedAsyncioTestCase):
     def service(self, outcomes, **changes):
         options = {
             "api_key": "secret",
-            "model": "gemini-3.5-flash",
+            "model": "gemini-3.5-flash-lite",
+            "thinking_level": "medium",
             "client": FakeClient(outcomes),
             "timeout_seconds": 2,
         }
         options.update(changes)
         return GeminiDemoChatService(**options)
 
-    async def test_sends_low_thinking_bounded_request_and_keeps_successful_history(self):
+    async def test_sends_medium_thinking_bounded_request_and_keeps_successful_history(self):
         service = self.service(
             [response("Первый ответ"), response("Ответ с учётом первого хода")]
         )
@@ -112,11 +113,11 @@ class GeminiDemoChatServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("generativelanguage", audit)
         call = service._client.models.calls[0]
         config = call["config"]
-        self.assertEqual(call["model"], "gemini-3.5-flash")
-        self.assertEqual(config.temperature, 0.35)
-        self.assertEqual(config.top_p, 1.0)
+        self.assertEqual(call["model"], "gemini-3.5-flash-lite")
+        self.assertIsNone(config.temperature)
+        self.assertIsNone(config.top_p)
         self.assertEqual(config.max_output_tokens, 384)
-        self.assertIn("LOW", str(config.thinking_config.thinking_level).upper())
+        self.assertIn("MEDIUM", str(config.thinking_config.thinking_level).upper())
         self.assertFalse(config.tools)
         second_contents = service._client.models.calls[1]["contents"]
         rendered = "\n".join(

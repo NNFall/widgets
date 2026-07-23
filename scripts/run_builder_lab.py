@@ -33,6 +33,7 @@ def make_engine_factories(config: BuilderLabConfig):
         factories[EngineName.DIRECT] = lambda: GeminiDirectEngine(
             api_key=config.gemini_api_key,
             model=config.direct_model,
+            thinking_level=config.builder_thinking_level,
             base_url=config.gemini_base_url,
         )
         if config.enable_antigravity:
@@ -42,6 +43,7 @@ def make_engine_factories(config: BuilderLabConfig):
                 base_url=config.gemini_base_url,
                 timeout_seconds=config.antigravity_timeout_seconds,
                 max_snapshot_bytes=config.antigravity_max_snapshot_bytes,
+                max_total_tokens=config.antigravity_max_total_tokens,
             )
     return factories
 
@@ -70,6 +72,7 @@ def build_app(config: BuilderLabConfig) -> web.Application:
         visual_critic_factory=lambda: GeminiVisualCritic(
             api_key=config.gemini_api_key,
             model=config.visual_critic_model,
+            thinking_level=config.visual_critic_thinking_level,
             base_url=config.gemini_base_url,
             timeout_seconds=config.visual_critic_timeout_seconds,
         ),
@@ -77,6 +80,7 @@ def build_app(config: BuilderLabConfig) -> web.Application:
     chat_service = GeminiDemoChatService(
         api_key=config.gemini_api_key,
         model=config.chat_model,
+        thinking_level=config.chat_thinking_level,
         base_url=config.gemini_base_url,
         timeout_seconds=config.chat_timeout_seconds,
         session_ttl_seconds=config.chat_session_ttl_seconds,

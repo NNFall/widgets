@@ -28,7 +28,8 @@ class BuilderLabRunnerTests(unittest.TestCase):
         self.assertEqual(set(factories), {EngineName.DIRECT, EngineName.ANTIGRAVITY})
         direct = factories[EngineName.DIRECT]()
         antigravity = factories[EngineName.ANTIGRAVITY]()
-        self.assertEqual(direct.model, "gemini-3.5-flash")
+        self.assertEqual(direct.model, "gemini-3.6-flash")
+        self.assertEqual(direct.thinking_level, "high")
         self.assertEqual(antigravity.agent, "antigravity-preview-05-2026")
         asyncio.run(direct.close())
         asyncio.run(antigravity.close())
@@ -60,6 +61,7 @@ class BuilderLabRunnerTests(unittest.TestCase):
     def test_configures_separate_bounded_demo_chat_service(self):
         config = self.config(
             GEMINI_CHAT_MODEL="gemini-3.5-flash",
+            GEMINI_CHAT_THINKING_LEVEL="high",
             GEMINI_CHAT_TIMEOUT_SECONDS="37",
             KAIGO_CHAT_SESSION_TTL_SECONDS="900",
             KAIGO_CHAT_MAX_SESSIONS="40",
@@ -74,6 +76,7 @@ class BuilderLabRunnerTests(unittest.TestCase):
         service = app[run_builder_lab.CHAT_SERVICE_KEY]
 
         self.assertEqual(service.model, "gemini-3.5-flash")
+        self.assertEqual(service.thinking_level, "high")
         self.assertEqual(service._timeout_seconds, 37)
         self.assertEqual(service._max_sessions, 40)
         self.assertEqual(service._rate_limit_requests, 5)
