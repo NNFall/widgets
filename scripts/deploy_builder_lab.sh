@@ -8,7 +8,15 @@ trap cleanup_on_error ERR
 
 docker compose --profile builder-lab build builder-lab
 
-builder_image="$(docker compose --profile builder-lab images -q builder-lab)"
+builder_image="$(
+  docker compose --profile builder-lab config --format json |
+    python3 -c 'import json, sys; print(json.load(sys.stdin)["services"]["builder-lab"]["image"])'
+)"
+if [[ -z "$builder_image" ]]; then
+  echo "builder image name is missing from the resolved compose config" >&2
+  exit 1
+fi
+docker image inspect "$builder_image" >/dev/null
 builder_uid="$(docker run --rm --network none --read-only --cap-drop ALL \
   --security-opt no-new-privileges --entrypoint id "$builder_image" -u)"
 builder_gid="$(docker run --rm --network none --read-only --cap-drop ALL \

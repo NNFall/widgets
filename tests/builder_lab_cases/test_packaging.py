@@ -35,6 +35,7 @@ class BuilderLabPackagingTests(unittest.TestCase):
         self.assertNotIn("MESSAGE_DATABASE_URL", builder)
         self.assertNotIn("POSTGRES_", builder)
         self.assertIn("dockerfile: Dockerfile.builder-lab", builder)
+        self.assertIn("image: ai_project-builder-lab", builder)
         self.assertIn("cap_drop:", builder)
         self.assertIn("no-new-privileges:true", builder)
         self.assertIn("kaigo_builder_research", builder)
@@ -135,6 +136,14 @@ class BuilderLabPackagingTests(unittest.TestCase):
         self.assertIn('[[ ! -L "$demo_path" ]]', deploy)
         self.assertIn('install -d -m 0700 "$demo_path"', deploy)
         self.assertIn('docker run --rm --network none --read-only --cap-drop ALL', deploy)
+        self.assertIn(
+            "docker compose --profile builder-lab config --format json",
+            deploy,
+        )
+        self.assertNotIn(
+            "docker compose --profile builder-lab images -q builder-lab",
+            deploy,
+        )
 
     def test_operations_document_exact_post_only_public_chat_route(self):
         operations = (ROOT / "docs" / "KAIGO_BUILDER_LAB_OPERATIONS.md").read_text(

@@ -24,6 +24,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.builder-lab
+    image: ai_project-builder-lab
     container_name: ai_project_builder_lab
     restart: "no"
     init: true
