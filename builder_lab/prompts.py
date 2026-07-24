@@ -59,6 +59,21 @@ ARTIFACT_JSON_SCHEMA = {
 }
 
 
+_VISUAL_REPAIR_FIELDS = (
+    "schema_version",
+    "revision",
+    "stage",
+    "art_direction",
+    "body_html",
+    "change_summary",
+    "css",
+    "javascript",
+    "layout_contract",
+    "suggested_actions",
+    "theme_tokens",
+)
+
+
 DIRECTION_PROPOSAL_JSON_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -350,6 +365,40 @@ def build_stage_prompt(
         else "null"
     )
     visual_payload = [finding.to_dict() for finding in visual_findings]
+    if visual_findings:
+        allowed_fields = tuple(
+            sorted(
+                {
+                    field_name
+                    for finding in visual_findings
+                    for field_name in finding.artifact_fields
+                }
+            )
+        )
+        locked_fields = tuple(
+            field_name
+            for field_name in _VISUAL_REPAIR_FIELDS
+            if field_name not in allowed_fields
+        )
+        visual_repair_field_contract = f"""
+VISUAL_REPAIR_ALLOWED_FIELDS_JSON: {json.dumps(allowed_fields, separators=(',', ':'))}
+VISUAL_REPAIR_LOCKED_FIELDS_JSON: {json.dumps(locked_fields, separators=(',', ':'))}
+В режиме visual_repair изменяй только поля из ALLOWED. Для каждого поля из LOCKED
+скопируй точное предыдущее JSON-значение byte-identical, без перефразирования,
+нормализации, перестановки элементов или обновления метаданных. В частности,
+не обновляй change_summary, если change_summary явно не входит в ALLOWED; сам факт
+визуальной ревизии не разрешает менять это поле.
+""".strip()
+        change_summary_contract = (
+            "- в visual_repair change_summary подчиняется спискам ALLOWED/LOCKED ниже; "
+            "не создавай новый отчёт об изменениях, если поле заблокировано;"
+        )
+    else:
+        visual_repair_field_contract = ""
+        change_summary_contract = (
+            "- change_summary в одном-двух предложениях объясняет пользователю, "
+            "что изменилось на этом этапе;"
+        )
     return f"""Ты — ведущий digital art director и frontend-дизайнер Kaigo.
 
 Создай премиальный, индивидуальный AI-виджет на русском языке. Он должен выглядеть
@@ -363,7 +412,7 @@ def build_stage_prompt(
 - body_html содержит полный HTML-фрагмент, css содержит полный stylesheet;
 - javascript содержит unrestricted JavaScript виджета: разрешены любые DOM-сценарии,
   таймеры, обработчики прокрутки, произвольные переходы состояний и запуск анимаций;
-- change_summary в одном-двух предложениях объясняет пользователю, что изменилось на этом этапе;
+{change_summary_contract}
 - layout_contract перечисляет выбранные моделью ключевые размеры и поведение desktop/mobile;
 - script-теги внутри body_html, iframe, form, внешние URL, @import и url() не нужны:
   весь исполняемый код возвращай отдельным полем javascript;
@@ -474,6 +523,8 @@ Viewport: {', '.join(request.viewport_targets)}
 системного уровня. Исправь только перечисленные наблюдаемые дефекты, сохрани выбранное
 направление и верни полный кандидат:
 {json.dumps(visual_payload, ensure_ascii=False, separators=(',', ':'))}
+
+{visual_repair_field_contract}
 
 Верни полный renderable-кандидат, а не фрагмент и не объяснение.
 """

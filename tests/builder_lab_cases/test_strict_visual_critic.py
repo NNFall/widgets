@@ -73,6 +73,9 @@ def test_russian_prompt_is_adversarial_evidence_bound_and_has_two_inspection_pas
     assert "выглядит чисто" in lowered
     assert "можно улучшить иерархию" in lowered
     assert "добавить воздуха" in lowered
+    assert "64–78%" in lowered
+    assert "видимый контекст страницы" in lowered
+    assert "не требуй fullscreen или bottom sheet" in lowered
     assert "raw" in lowered
 
 
@@ -83,6 +86,9 @@ def test_english_prompt_has_the_same_adversarial_guards():
     assert "two-second" in prompt
     assert "micro-detail" in prompt
     assert "do not return verdict" in prompt
+    assert "64–78%" in prompt
+    assert "host page remains visible" in prompt
+    assert "never require fullscreen or a bottom sheet" in prompt
     assert "final" in prompt
 
 

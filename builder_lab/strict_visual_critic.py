@@ -207,6 +207,12 @@ def build_strict_visual_critic_prompt(*, locale: str, phase: str) -> str:
 контраст, интервалы, выравнивание, маленькие края, брендовая специфичность,
 декоративные или фальшивые действия, desktop/mobile композиция.
 
+Мобильный продуктовый контракт намеренно компактен: открытая panel обычно занимает
+примерно 64–78% высоты viewport, остаётся внутри viewport, а видимый контекст страницы
+сохраняется. Если panel пригодна для работы, не обрезана и действия доступны,
+не требуй fullscreen или bottom sheet только из-за свободного поля над ней. Не штрафуй
+компактную panel за то, что она не перекрывает весь экран.
+
 Проверь все десять rubric dimensions. Score 0 означает not_observable и не является
 дефектом. Для любого observable score confidence должен быть >= 0.80. Каждый score
 1..3 обязан ссылаться на конкретный finding. Findings должны называть screenshot_id,
@@ -230,6 +236,12 @@ composer discoverability, page subordination, and truthful actions.
 2. A micro-detail inspection for typography, first-open density, wrapping, contrast,
 spacing, alignment, edge defects, brand specificity, fake decorative actions, and
 desktop/mobile composition.
+
+The mobile product contract is intentionally compact: an open panel usually occupies
+roughly 64–78% of viewport height, stays inside the viewport, and the host page remains visible.
+When the panel is usable, unclipped, and its actions are reachable,
+never require fullscreen or a bottom sheet merely because there is unused space above it.
+Do not penalize a compact panel for leaving the host page visible.
 
 Assess all ten rubric dimensions. Score 0 means not_observable, not a defect.
 Every observable score requires confidence >= 0.80. Every score 1..3 must link to a
