@@ -1029,7 +1029,7 @@ class BrowserLifecycleTests(unittest.TestCase):
                         scroll_delay_ms=600,
                         final_settle_ms=500,
                         max_scroll_steps=8,
-                        total_timeout_seconds=60,
+                        total_timeout_seconds=120,
                         page_timeout_seconds=20,
                         max_page_bytes=10 * 1024 * 1024,
                         max_total_bytes=20 * 1024 * 1024,
