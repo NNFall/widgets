@@ -24,7 +24,10 @@ from .browser_audit import BrowserAuditError
 from .visual_models import VisualFinding, VisualSeverity
 
 
-MAX_VISUAL_AUDITS = 6
+MAX_BROWSER_CAPTURE_ATTEMPTS = 6
+MAX_AI_REVIEW_ATTEMPTS = 3
+# Backwards-compatible export for callers that display the former limit.
+MAX_VISUAL_AUDITS = MAX_BROWSER_CAPTURE_ATTEMPTS
 MAX_VISUAL_REPAIRS = 5
 MIN_REPAIR_CONFIDENCE = 0.75
 LOGGER = logging.getLogger(__name__)
@@ -298,6 +301,14 @@ class VisualRepairGate:
             usage=usage,
         )
 
+    @staticmethod
+    def _inconclusive_error(diagnostic: str) -> BuilderEngineError:
+        return BuilderEngineError(
+            "visual_review_inconclusive",
+            "Визуальные критики не смогли завершить проверку",
+            diagnostic=diagnostic,
+        )
+
     async def evaluate(
         self,
         *,
@@ -317,6 +328,10 @@ class VisualRepairGate:
         critic: VisualCritic | None = None
         seen: set[str] = set()
         repair_count = 0
+        cached_audit: Any | None = None
+        screenshots_recorded = False
+        browser_attempt = 0
+        ai_review_attempt = 0
         try:
             try:
                 critic = self._critic_factory()
@@ -326,25 +341,42 @@ class VisualRepairGate:
                 raise self._quality_error(
                     f"visual_critic_init: {type(exc).__name__}"
                 ) from exc
-            for audit_attempt in range(1, MAX_VISUAL_AUDITS + 1):
+            while True:
+                is_browser_phase = cached_audit is None
+                phase_attempt = (
+                    browser_attempt + 1
+                    if is_browser_phase
+                    else ai_review_attempt + 1
+                )
                 await self._checkpoint(run_id)
                 await self._store.append_event(
                     run_id,
                     event_type="visual_audit.started",
                     stage=Stage.MOTION_POLISH,
                     status="running",
-                    message=f"Финальный visual audit: попытка {audit_attempt}",
+                    message=(
+                        "Browser visual audit"
+                        if is_browser_phase
+                        else "AI visual review"
+                    )
+                    + f": попытка {phase_attempt}",
                     revision=candidate.revision,
                 )
                 try:
-                    audit = await self._audit_factory().audit(candidate)
+                    if cached_audit is None:
+                        browser_attempt += 1
+                        audit = await self._audit_factory().audit(candidate)
+                        cached_audit = audit
+                        screenshots_recorded = False
+                    else:
+                        audit = cached_audit
                 except asyncio.CancelledError:
                     raise
                 except BrowserAuditError as exc:
                     LOGGER.warning(
                         "visual browser audit failed run_id=%s attempt=%s error_code=%s diagnostic=%s",
                         run_id,
-                        audit_attempt,
+                        browser_attempt,
                         exc.error_code,
                         exc.diagnostic or type(exc).__name__,
                     )
@@ -358,12 +390,12 @@ class VisualRepairGate:
                     )
                     repair_issues = browser_repair_issues(
                         exc,
-                        include_transient_runtime=audit_attempt > 1,
+                        include_transient_runtime=browser_attempt > 1,
                     )
                     if not repair_issues:
                         if (
                             exc.error_code == "browser_gate_failed"
-                            and audit_attempt < MAX_VISUAL_AUDITS
+                            and browser_attempt < MAX_BROWSER_CAPTURE_ATTEMPTS
                         ):
                             continue
                         raise self._quality_error(
@@ -389,10 +421,7 @@ class VisualRepairGate:
                             "repeated_browser_gate_fingerprint"
                         ) from exc
                     seen.add(fingerprint)
-                    if (
-                        repair_count >= MAX_VISUAL_REPAIRS
-                        or audit_attempt >= MAX_VISUAL_AUDITS
-                    ):
+                    if repair_count >= MAX_VISUAL_REPAIRS:
                         LOGGER.warning(
                             "visual browser candidate exhausted run_id=%s candidate=%s",
                             run_id,
@@ -589,6 +618,10 @@ class VisualRepairGate:
                             candidate, previous_revision=previous.revision
                         )
                         await self._record_validation(run_id, candidate, issues)
+                    cached_audit = None
+                    screenshots_recorded = False
+                    browser_attempt = 0
+                    ai_review_attempt = 0
                     continue
                 except Exception as exc:
                     usage = getattr(exc, "usage", TokenUsage())
@@ -608,19 +641,22 @@ class VisualRepairGate:
 
                 await self._checkpoint(run_id)
                 try:
-                    for screenshot in audit.screenshots:
-                        await self._store.append_event(
-                            run_id,
-                            event_type="screenshot.captured",
-                            stage=Stage.MOTION_POLISH,
-                            status="completed",
-                            message=(
-                                "Снимок visual audit: "
-                                f"{screenshot.evidence.screenshot_id} "
-                                f"({screenshot.evidence.byte_count} bytes)"
-                            ),
-                            revision=candidate.revision,
-                        )
+                    if not screenshots_recorded:
+                        for screenshot in audit.screenshots:
+                            await self._store.append_event(
+                                run_id,
+                                event_type="screenshot.captured",
+                                stage=Stage.MOTION_POLISH,
+                                status="completed",
+                                message=(
+                                    "Снимок visual audit: "
+                                    f"{screenshot.evidence.screenshot_id} "
+                                    f"({screenshot.evidence.byte_count} bytes)"
+                                ),
+                                revision=candidate.revision,
+                            )
+                        screenshots_recorded = True
+                    ai_review_attempt += 1
                     result = await critic.critique(
                         audit=audit,
                         brief=request.brief,
@@ -633,7 +669,7 @@ class VisualRepairGate:
                     LOGGER.warning(
                         "visual critic failed run_id=%s attempt=%s error_code=%s diagnostic=%s",
                         run_id,
-                        audit_attempt,
+                        ai_review_attempt,
                         getattr(exc, "error_code", type(exc).__name__),
                         str(getattr(exc, "diagnostic", None) or str(exc))[:2_000],
                     )
@@ -652,16 +688,57 @@ class VisualRepairGate:
                             "visual_evidence_unproven",
                             "invalid_visual_critique",
                             "visual_critic_unavailable",
+                            "visual_critic_timeout",
+                            "visual_review_inconclusive",
                         }
-                        and audit_attempt < MAX_VISUAL_AUDITS
+                        and ai_review_attempt < MAX_AI_REVIEW_ATTEMPTS
                     ):
                         continue
+                    if getattr(exc, "error_code", None) in {
+                        "visual_evidence_unproven",
+                        "invalid_visual_critique",
+                        "visual_critic_unavailable",
+                        "visual_critic_timeout",
+                        "visual_review_inconclusive",
+                    }:
+                        raise self._inconclusive_error(
+                            f"{getattr(exc, 'error_code', type(exc).__name__)}: "
+                            f"{getattr(exc, 'diagnostic', None) or str(exc)}"
+                        ) from exc
                     raise self._quality_error(
                         f"{getattr(exc, 'error_code', type(exc).__name__)}: "
                         f"{getattr(exc, 'diagnostic', None) or str(exc)}"
                     ) from exc
 
                 usage = getattr(result, "usage", TokenUsage())
+                role_results = getattr(result, "role_results", {})
+                role_failures = getattr(result, "role_failures", {})
+                if isinstance(role_results, dict):
+                    for role in role_results:
+                        role_name = getattr(role, "value", str(role))
+                        await self._store.append_event(
+                            run_id,
+                            event_type="visual_critic.completed",
+                            stage=Stage.MOTION_POLISH,
+                            status="completed",
+                            message=f"Визуальный критик {role_name} завершил проверку",
+                            revision=candidate.revision,
+                        )
+                if isinstance(role_failures, dict):
+                    for role, error_code in role_failures.items():
+                        role_name = getattr(role, "value", str(role))
+                        await self._store.append_event(
+                            run_id,
+                            event_type="visual_critic.completed",
+                            stage=Stage.MOTION_POLISH,
+                            status="failed",
+                            message=(
+                                f"Визуальный критик {role_name} не завершил ответ; "
+                                "проверяем кворум"
+                            ),
+                            revision=candidate.revision,
+                            diagnostic=str(error_code)[:160],
+                        )
                 await self._store.append_event(
                     run_id,
                     event_type="visual_audit.completed",
@@ -713,7 +790,7 @@ class VisualRepairGate:
                 if fingerprint in seen:
                     raise self._quality_error("repeated_visual_fingerprint")
                 seen.add(fingerprint)
-                if repair_count >= MAX_VISUAL_REPAIRS or audit_attempt >= MAX_VISUAL_AUDITS:
+                if repair_count >= MAX_VISUAL_REPAIRS:
                     raise self._quality_error("visual_repair_exhausted")
 
                 repair_count += 1
@@ -876,13 +953,18 @@ class VisualRepairGate:
                     )
                     await self._record_validation(run_id, candidate, issues)
 
-            raise self._quality_error("visual_repair_exhausted")
+                cached_audit = None
+                screenshots_recorded = False
+                browser_attempt = 0
+                ai_review_attempt = 0
         finally:
             if critic is not None:
                 await self._close_critic(critic)
 
 
 __all__ = [
+    "MAX_AI_REVIEW_ATTEMPTS",
+    "MAX_BROWSER_CAPTURE_ATTEMPTS",
     "MAX_VISUAL_AUDITS",
     "MAX_VISUAL_REPAIRS",
     "MIN_REPAIR_CONFIDENCE",

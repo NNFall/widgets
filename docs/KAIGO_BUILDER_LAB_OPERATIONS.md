@@ -11,9 +11,24 @@ Builder Lab — отдельная экспериментальная среда
 анимаций и сохраняет шесть временных кадров: desktop/mobile, верх/середина/низ.
 Gemini получает JPEG inline и возвращает grounded visual brief: только видимые
 факты и визуальные токены с привязкой к кадрам. Временные файлы удаляются после
-анализа. После генерации BrowserAudit и Gemini visual critic проверяют сам
+анализа. После генерации BrowserAudit и комитет Gemini visual critics проверяют сам
 виджет. Доработка сообщением создаёт новый run из последней принятой ревизии,
 а не запускает полную генерацию с нуля.
+
+Финальная проверка состоит из независимых слоёв:
+
+- BrowserAudit имеет до шести попыток снять и измерить один неизменённый
+  кандидат;
+- `conversation_ux`, `brand_motion` и `adversarial_customer` независимо
+  проверяют одни и те же шесть кадров и три приближённых crop;
+- каждая AI-роль один раз самостоятельно исправляет некорректный JSON или
+  недостаточно конкретное наблюдение;
+- для субъективного `major` нужен кворум двух ролей, а доказанный `blocker`
+  принимается от одной;
+- AI-проверка имеет три собственные попытки и не расходует browser-бюджет;
+- `visual_review_inconclusive` означает технически незавершённую проверку
+  моделей, а `visual_quality_failed` — доказанные дефекты или исчерпанный лимит
+  реальных ремонтов виджета.
 
 Доступны два режима:
 
@@ -71,6 +86,9 @@ KAIGO_BUILDER_MAX_RUNS=100
 KAIGO_BUILDER_DEMO_PATH=/app/data/builder-demo/latest.json
 GEMINI_REFERENCE_ANALYZER_MODEL=gemini-3.6-flash
 GEMINI_REFERENCE_ANALYZER_THINKING_LEVEL=high
+GEMINI_VISUAL_CRITIC_MODEL=gemini-3.6-flash
+GEMINI_VISUAL_CRITIC_THINKING_LEVEL=high
+GEMINI_VISUAL_CRITIC_TIMEOUT_SECONDS=180
 KAIGO_REFERENCE_MAX_PAGES=1
 KAIGO_REFERENCE_MAX_DEPTH=0
 KAIGO_REFERENCE_TIMEOUT_SECONDS=300

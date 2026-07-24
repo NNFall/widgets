@@ -16,6 +16,7 @@ from builder_lab.orchestrator import BuilderOrchestrator
 from builder_lab.store import RunStore, RunTerminal
 from builder_lab.browser_audit import BrowserAuditError
 from builder_lab.visual_gate import VisualRepairGate
+from builder_lab.visual_critic import VisualCriticRole
 from builder_lab.visual_models import (
     NormalizedRegion,
     VisualCategory,
@@ -189,6 +190,48 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
             event for event in visual if event.event_type == "visual_audit.completed"
         )
         self.assertIn("minor-ignored-report", completed.diagnostic)
+
+    async def test_committee_role_statuses_are_recorded_without_double_counting_usage(self):
+        class CommitteeCritic(FakeCritic):
+            async def critique(self, **kwargs):
+                self.calls.append(kwargs)
+                role_result = types.SimpleNamespace(usage=TokenUsage(prompt_tokens=3))
+                return types.SimpleNamespace(
+                    critique=critique(),
+                    usage=TokenUsage(prompt_tokens=9, output_tokens=3),
+                    role_results={
+                        VisualCriticRole.CONVERSATION_UX: role_result,
+                        VisualCriticRole.BRAND_MOTION: role_result,
+                    },
+                    role_failures={
+                        VisualCriticRole.ADVERSARIAL_CUSTOMER:
+                            "visual_critic_unavailable",
+                    },
+                )
+
+        result = await self.evaluate(FakeAuditor(), CommitteeCritic([]))
+
+        self.assertEqual(result, self.candidate)
+        events = await self.store.events_after(self.run_id, 0)
+        roles = [
+            event
+            for event in events
+            if event.event_type == "visual_critic.completed"
+        ]
+        self.assertEqual(len(roles), 3)
+        self.assertEqual(
+            {event.status for event in roles},
+            {"completed", "failed"},
+        )
+        self.assertEqual(sum(event.usage.total_tokens for event in roles), 0)
+        self.assertEqual(
+            sum(
+                event.usage.total_tokens
+                for event in events
+                if event.event_type == "visual_audit.completed"
+            ),
+            12,
+        )
 
     async def test_accepts_a_consecutive_refinement_revision_after_revision_five(self):
         accepted = self.candidate
@@ -726,7 +769,7 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         result = await self.evaluate(auditor, critic, engine)
 
         self.assertEqual(result, self.candidate)
-        self.assertEqual(len(auditor.calls), 2)
+        self.assertEqual(len(auditor.calls), 1)
         self.assertEqual(len(critic.calls), 2)
         self.assertEqual(len(engine.calls), 0)
         events = await self.store.events_after(self.run_id, 0)
@@ -734,6 +777,65 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(completed), 2)
         self.assertEqual(completed[0].status, "failed")
         self.assertNotIn("private state-marker diagnostic", completed[0].message)
+
+    async def test_browser_and_ai_retry_budgets_are_independent(self):
+        transient_browser = BrowserAuditError(
+            "browser_gate_failed",
+            "Widget browser audit could not complete",
+            diagnostic="visual DOM/style changed during settle",
+        )
+
+        class FourTransientCaptures(FakeAuditor):
+            async def audit(self, candidate):
+                self.calls.append(candidate)
+                if len(self.calls) <= 4:
+                    raise transient_browser
+                return await FakeAuditor().audit(candidate)
+
+        transient_critic = BuilderEngineError(
+            "visual_evidence_unproven",
+            "critic response did not prove all states",
+            usage=TokenUsage(prompt_tokens=13),
+        )
+
+        class TwiceInvalidCritic(FakeCritic):
+            async def critique(self, **kwargs):
+                self.calls.append(kwargs)
+                if len(self.calls) <= 2:
+                    raise transient_critic
+                return types.SimpleNamespace(
+                    critique=critique(),
+                    usage=TokenUsage(prompt_tokens=7, output_tokens=3),
+                )
+
+        auditor = FourTransientCaptures()
+        critic_instance = TwiceInvalidCritic([])
+
+        result = await self.evaluate(auditor, critic_instance)
+
+        self.assertEqual(result, self.candidate)
+        self.assertEqual(len(auditor.calls), 5)
+        self.assertEqual(len(critic_instance.calls), 3)
+
+    async def test_exhausted_ai_review_is_inconclusive_not_visual_quality_failure(self):
+        critic_error = BuilderEngineError(
+            "visual_evidence_unproven",
+            "critic response did not prove all states",
+            diagnostic="private model response detail",
+            usage=TokenUsage(prompt_tokens=13),
+        )
+        critic_instance = FakeCritic([], error=critic_error)
+
+        with self.assertRaises(BuilderEngineError) as caught:
+            await self.evaluate(FakeAuditor(), critic_instance)
+
+        self.assertEqual(caught.exception.error_code, "visual_review_inconclusive")
+        self.assertNotEqual(caught.exception.error_code, "visual_quality_failed")
+        self.assertEqual(len(critic_instance.calls), 3)
+        self.assertNotIn(
+            "private model response detail",
+            caught.exception.public_message,
+        )
 
     async def test_transient_visual_critic_unavailable_retries_without_model_repair(self):
         transient = BuilderEngineError(
@@ -760,7 +862,7 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         result = await self.evaluate(auditor, critic, engine)
 
         self.assertEqual(result, self.candidate)
-        self.assertEqual(len(auditor.calls), 2)
+        self.assertEqual(len(auditor.calls), 1)
         self.assertEqual(len(critic.calls), 2)
         self.assertEqual(len(engine.calls), 0)
         events = await self.store.events_after(self.run_id, 0)

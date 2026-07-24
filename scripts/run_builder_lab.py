@@ -19,7 +19,8 @@ from builder_lab.models import EngineName
 from builder_lab.orchestrator import BuilderOrchestrator
 from builder_lab.reference_pipeline import GeminiReferencePipeline
 from builder_lab.store import RunStore
-from builder_lab.visual_critic import GeminiVisualCritic
+from builder_lab.visual_committee import VisualCriticCommittee
+from builder_lab.visual_critic import GeminiVisualCritic, VisualCriticRole
 from builder_lab.web import (
     CHAT_SECURE_COOKIE_KEY as CHAT_SECURE_COOKIE_KEY,
     CHAT_SERVICE_KEY as CHAT_SERVICE_KEY,
@@ -50,6 +51,27 @@ def make_engine_factories(config: BuilderLabConfig):
     return factories
 
 
+def make_visual_critic_factory(config: BuilderLabConfig):
+    def make_committee() -> VisualCriticCommittee:
+        return VisualCriticCommittee(
+            {
+                role: (
+                    lambda role=role: GeminiVisualCritic(
+                        api_key=config.gemini_api_key,
+                        model=config.visual_critic_model,
+                        thinking_level=config.visual_critic_thinking_level,
+                        base_url=config.gemini_base_url,
+                        timeout_seconds=config.visual_critic_timeout_seconds,
+                        role=role,
+                    )
+                )
+                for role in VisualCriticRole
+            }
+        )
+
+    return make_committee
+
+
 def build_app(config: BuilderLabConfig) -> web.Application:
     factories = make_engine_factories(config)
     if not factories:
@@ -72,13 +94,7 @@ def build_app(config: BuilderLabConfig) -> web.Application:
             timeout_ms=config.browser_audit_timeout_ms,
             total_timeout_seconds=config.browser_audit_total_timeout_seconds,
         ),
-        visual_critic_factory=lambda: GeminiVisualCritic(
-            api_key=config.gemini_api_key,
-            model=config.visual_critic_model,
-            thinking_level=config.visual_critic_thinking_level,
-            base_url=config.gemini_base_url,
-            timeout_seconds=config.visual_critic_timeout_seconds,
-        ),
+        visual_critic_factory=make_visual_critic_factory(config),
         reference_analyzer=reference_pipeline.analyze,
     )
     chat_service = GeminiDemoChatService(

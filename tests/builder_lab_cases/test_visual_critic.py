@@ -14,6 +14,7 @@ from builder_lab.visual_critic import (
     GeminiVisualCritic,
     VISUAL_CRITIC_SCHEMA,
     VISUAL_PROBE_SCHEMA,
+    VisualCriticRole,
     VisualCriticError,
     _pixel_facts,
     _rasterize_proof,
@@ -198,7 +199,99 @@ class FakeClient:
         self.aio = SimpleNamespace(models=FakeModels(payload))
 
 
+class FakeSequenceModels:
+    def __init__(self, payloads):
+        self.payloads = list(payloads)
+        self.calls = []
+
+    async def generate_content(self, **kwargs):
+        self.calls.append(kwargs)
+        payload = self.payloads.pop(0)
+        return SimpleNamespace(
+            parsed=payload,
+            text=json.dumps(payload),
+            response_id=f"fake-response-{len(self.calls)}",
+            usage_metadata=SimpleNamespace(
+                prompt_token_count=101,
+                candidates_token_count=22,
+                thoughts_token_count=7,
+            ),
+        )
+
+
+class FakeSequenceClient:
+    def __init__(self, payloads):
+        self.aio = SimpleNamespace(models=FakeSequenceModels(payloads))
+
+
 class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
+    async def test_role_instruction_and_contract_retry_are_independent(self):
+        invalid = response_payload()
+        invalid["observations"][0]["observation"] = "Generic answer."
+        client = FakeSequenceClient([invalid, response_payload()])
+        critic = GeminiVisualCritic(
+            client=client,
+            role=VisualCriticRole.CONVERSATION_UX,
+        )
+
+        result = await critic.critique(
+            audit=report(),
+            brief="Compact AI assistant.",
+            art_direction="Brand-matched chat.",
+        )
+
+        self.assertEqual(result.critique.verdict.value, "pass")
+        self.assertEqual(result.usage.total_tokens, 260)
+        self.assertEqual(len(client.aio.models.calls), 2)
+        first_instruction = str(
+            client.aio.models.calls[0]["config"].system_instruction
+        ).casefold()
+        self.assertIn("conversation_ux", first_instruction)
+        correction_text = "\n".join(
+            str(getattr(part, "text", "") or "")
+            for part in client.aio.models.calls[1]["contents"]
+        ).casefold()
+        self.assertIn("previous response failed local validation", correction_text)
+
+    async def test_invalid_model_finding_id_is_replaced_by_safe_role_id(self):
+        payload = response_payload()
+        payload["findings"] = [
+            {
+                "finding_id": "Проблема интерфейса № 1",
+                "severity": "minor",
+                "category": "site_fit",
+                "screenshot_id": "desktop.open_initial",
+                "evidence": "The panel border is slightly brighter than the host card border.",
+                "region": {
+                    "x": 0.7,
+                    "y": 0.2,
+                    "width": 0.2,
+                    "height": 0.4,
+                    "semantic_region": "panel",
+                },
+                "artifact_fields": ["css"],
+                "repair_instruction": "Reduce the panel border luminance slightly.",
+                "confidence": 0.86,
+            }
+        ]
+        client = FakeClient(payload)
+        critic = GeminiVisualCritic(
+            client=client,
+            role=VisualCriticRole.CONVERSATION_UX,
+        )
+
+        result = await critic.critique(
+            audit=report(),
+            brief="Compact AI assistant.",
+            art_direction="Brand-matched chat.",
+        )
+
+        self.assertEqual(
+            result.critique.findings[0].finding_id,
+            "conversation_ux-1",
+        )
+        self.assertEqual(len(client.aio.models.calls), 1)
+
     def test_finding_schema_bounds_semantic_regions_and_repair_fields(self):
         finding = VISUAL_CRITIC_SCHEMA["properties"]["findings"]["items"][
             "properties"
