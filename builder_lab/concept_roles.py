@@ -31,10 +31,6 @@ class ConceptRoleEngine(Protocol):
     ) -> ConceptRoleResult: ...
 
 
-class ConceptRolesError(BuilderEngineError):
-    pass
-
-
 @dataclass(frozen=True)
 class ConceptRoleExecution:
     brief: ConceptRoleBrief
@@ -62,6 +58,80 @@ class ConceptRoleExecution:
             ):
                 raise ValueError(f"execution {field_name} is invalid")
             object.__setattr__(self, field_name, value.strip())
+
+
+def _safe_optional_text(value: object, *, limit: int) -> str | None:
+    if value is None:
+        return None
+    try:
+        text = value if isinstance(value, str) else str(value)
+    except Exception:
+        return None
+    text = text.replace("\x00", " ").strip()
+    if not text:
+        return None
+    return text[:limit].strip() or None
+
+
+@dataclass(frozen=True)
+class ConceptRoleFailure:
+    role: ConceptRole
+    summary: str
+    usage: TokenUsage
+    provider_request_id: str | None = None
+    diagnostic: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.role, ConceptRole):
+            raise ValueError("failed execution role must be ConceptRole")
+        summary = _safe_optional_text(self.summary, limit=1000)
+        if summary is None:
+            raise ValueError("failed execution summary is invalid")
+        if not isinstance(self.usage, TokenUsage):
+            raise ValueError("failed execution usage must be TokenUsage")
+        object.__setattr__(self, "summary", summary)
+        object.__setattr__(
+            self,
+            "provider_request_id",
+            _safe_optional_text(self.provider_request_id, limit=256),
+        )
+        object.__setattr__(
+            self,
+            "diagnostic",
+            _safe_optional_text(self.diagnostic, limit=2000),
+        )
+
+
+class ConceptRolesError(BuilderEngineError):
+    def __init__(
+        self,
+        error_code: str,
+        public_message: str,
+        *,
+        diagnostic: str | None = None,
+        usage: TokenUsage | None = None,
+        completed_executions: tuple[ConceptRoleExecution, ...] = (),
+        failed_execution: ConceptRoleFailure | None = None,
+    ) -> None:
+        super().__init__(
+            error_code,
+            public_message,
+            diagnostic=diagnostic,
+            usage=usage,
+        )
+        completed = tuple(completed_executions)
+        if len(completed) > len(CONCEPT_ROLES) or any(
+            not isinstance(item, ConceptRoleExecution) for item in completed
+        ):
+            raise ValueError("completed concept role executions are invalid")
+        if failed_execution is not None and not isinstance(
+            failed_execution,
+            ConceptRoleFailure,
+        ):
+            raise ValueError("failed concept role execution is invalid")
+        self.completed_executions = completed
+        self.executions = completed
+        self.failed_execution = failed_execution
 
 
 @dataclass(frozen=True)
@@ -107,33 +177,94 @@ async def run_concept_roles(
         except asyncio.CancelledError:
             raise
         except BuilderEngineError as exc:
+            failed_usage = (
+                exc.usage if isinstance(exc.usage, TokenUsage) else TokenUsage()
+            )
+            diagnostic = _safe_optional_text(exc.diagnostic, limit=2000)
+            public_message = _safe_optional_text(
+                exc.public_message,
+                limit=2000,
+            ) or "Gemini не завершил концептуальную роль"
             raise ConceptRolesError(
                 exc.error_code,
-                exc.public_message,
-                diagnostic=exc.diagnostic,
-                usage=usage + exc.usage,
+                public_message,
+                diagnostic=diagnostic,
+                usage=usage + failed_usage,
+                completed_executions=tuple(executions),
+                failed_execution=ConceptRoleFailure(
+                    role=role,
+                    summary=public_message,
+                    usage=failed_usage,
+                    provider_request_id=getattr(
+                        exc,
+                        "provider_request_id",
+                        None,
+                    ),
+                    diagnostic=diagnostic,
+                ),
             ) from exc
         except Exception as exc:
+            diagnostic = _safe_optional_text(
+                f"{type(exc).__name__}: {exc}",
+                limit=2000,
+            )
+            public_message = (
+                "Gemini вернул некорректный контракт концептуальной роли"
+            )
             raise ConceptRolesError(
                 "invalid_artifact",
-                "Gemini вернул некорректный контракт концептуальной роли",
-                diagnostic=f"{type(exc).__name__}: {exc}",
+                public_message,
+                diagnostic=diagnostic,
                 usage=usage,
+                completed_executions=tuple(executions),
+                failed_execution=ConceptRoleFailure(
+                    role=role,
+                    summary=public_message,
+                    usage=TokenUsage(),
+                    diagnostic=diagnostic,
+                ),
             ) from exc
         usage = usage + result.usage
         if result.brief.role is not role:
+            diagnostic = _safe_optional_text(
+                result.diagnostic
+                or (
+                    f"expected role {role.value}, "
+                    f"received {result.brief.role.value}"
+                ),
+                limit=2000,
+            )
+            public_message = (
+                "Gemini вернул некорректную последовательность "
+                "концептуальных ролей"
+            )
             raise ConceptRolesError(
                 "invalid_artifact",
-                "Gemini вернул некорректную последовательность концептуальных ролей",
+                public_message,
+                diagnostic=diagnostic,
                 usage=usage,
+                completed_executions=tuple(executions),
+                failed_execution=ConceptRoleFailure(
+                    role=role,
+                    summary=public_message,
+                    usage=result.usage,
+                    provider_request_id=result.provider_request_id,
+                    diagnostic=diagnostic,
+                ),
             )
         briefs.append(result.brief)
         executions.append(
             ConceptRoleExecution(
                 brief=result.brief,
                 usage=result.usage,
-                provider_request_id=result.provider_request_id,
-                diagnostic=result.diagnostic,
+                provider_request_id=_safe_optional_text(
+                    result.provider_request_id,
+                    limit=256,
+                ),
+                diagnostic=_safe_optional_text(
+                    result.diagnostic,
+                    limit=2000,
+                ),
             )
         )
 

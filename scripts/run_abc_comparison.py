@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 
 from builder_lab.browser_audit import BrowserAudit
 from builder_lab.comparison import FrozenBundle, verify_bundle
-from builder_lab.concept_roles import run_concept_roles
+from builder_lab.concept_roles import ConceptRolesError, run_concept_roles
 from builder_lab.engines.base import BuilderEngineError
 from builder_lab.engines.gemini_direct import GeminiDirectEngine
 from builder_lab.experiment_review import (
@@ -59,7 +59,42 @@ DEFAULT_PRICING_SOURCE = "https://ai.google.dev/gemini-api/docs/pricing"
 
 
 async def run_concept_roles_with_events(*, engine, request):
-    result = await run_concept_roles(engine=engine, request=request)
+    try:
+        result = await run_concept_roles(engine=engine, request=request)
+    except asyncio.CancelledError:
+        raise
+    except ConceptRolesError as exc:
+        events = [
+            ExperimentRoleEvent(
+                role=execution.brief.role.value,
+                status="completed",
+                summary=execution.brief.summary,
+                decisions=execution.brief.decisions,
+                safeguards=execution.brief.safeguards,
+                usage=execution.usage,
+                provider_request_id=execution.provider_request_id,
+                diagnostic=execution.diagnostic,
+            )
+            for execution in exc.completed_executions
+        ]
+        if exc.failed_execution is not None:
+            failure = exc.failed_execution
+            events.append(
+                ExperimentRoleEvent(
+                    role=failure.role.value,
+                    status="failed",
+                    summary=failure.summary,
+                    usage=failure.usage,
+                    provider_request_id=failure.provider_request_id,
+                    diagnostic=failure.diagnostic,
+                )
+            )
+        raise VariantExecutionError(
+            exc.error_code,
+            exc.public_message,
+            usage=exc.usage,
+            role_events=events,
+        ) from exc
     events = tuple(
         ExperimentRoleEvent(
             role=execution.brief.role.value,

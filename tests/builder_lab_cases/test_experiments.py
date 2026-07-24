@@ -28,7 +28,7 @@ from builder_lab.models import (
     EngineName,
     TokenUsage,
 )
-from builder_lab.engines.base import ConceptRoleResult
+from builder_lab.engines.base import BuilderEngineError, ConceptRoleResult
 from tests.builder_lab_cases.test_experiment_review import visual_critique
 from tests.builder_lab_cases.test_validation import artifact
 from tests.builder_lab_cases.test_visual_critic import report
@@ -351,6 +351,116 @@ async def test_role_pipeline_preserves_full_briefs_and_real_usage_without_double
 
 
 @pytest.mark.asyncio
+async def test_role_pipeline_converts_partial_failure_to_variant_events_once():
+    completed_usage = TokenUsage(prompt_tokens=11, output_tokens=3)
+    failed_usage = TokenUsage(
+        prompt_tokens=13,
+        output_tokens=5,
+        thinking_tokens=2,
+    )
+
+    class FailingEngine:
+        async def develop_concept_role(self, *, request, role, prior_briefs=()):
+            if role is ConceptRole.CONVERSATION_DESIGNER:
+                failure = BuilderEngineError(
+                    "invalid_artifact",
+                    "Conversation role returned malformed JSON.",
+                    usage=failed_usage,
+                    diagnostic="schema validation failed at decisions",
+                )
+                failure.provider_request_id = "provider-failed-conversation"
+                raise failure
+            return ConceptRoleResult(
+                brief=ConceptRoleBrief(
+                    role=role,
+                    summary="Brand evidence extracted.",
+                    decisions=("Keep the observed editorial grid.",),
+                    safeguards=("Do not invent services.",),
+                ),
+                usage=completed_usage,
+                provider_request_id="provider-completed-brand",
+                diagnostic="brand role complete",
+            )
+
+    with pytest.raises(VariantExecutionError) as caught:
+        await run_concept_roles_with_events(
+            engine=FailingEngine(),
+            request=request(),
+        )
+
+    error = caught.value
+    assert error.error_code == "invalid_artifact"
+    assert error.usage == completed_usage + failed_usage
+    assert [event.status for event in error.role_events] == [
+        "completed",
+        "failed",
+    ]
+    assert [event.role for event in error.role_events] == [
+        "site_brand_analyst",
+        "conversation_designer",
+    ]
+    assert error.role_events[0].decisions == (
+        "Keep the observed editorial grid.",
+    )
+    assert error.role_events[0].provider_request_id == "provider-completed-brand"
+    assert error.role_events[1].usage == failed_usage
+    assert (
+        error.role_events[1].provider_request_id
+        == "provider-failed-conversation"
+    )
+    assert (
+        error.role_events[1].diagnostic
+        == "schema validation failed at decisions"
+    )
+    assert (
+        sum((event.usage for event in error.role_events), TokenUsage())
+        == error.usage
+    )
+
+
+@pytest.mark.asyncio
+async def test_partial_role_failure_sanitizes_untrusted_provider_diagnostics():
+    class FailingEngine:
+        async def develop_concept_role(self, *, request, role, prior_briefs=()):
+            if role is ConceptRole.CONVERSATION_DESIGNER:
+                failure = BuilderEngineError(
+                    "invalid_artifact",
+                    "bad\x00response" * 300,
+                    usage=TokenUsage(prompt_tokens=7),
+                    diagnostic=("diagnostic\x00" * 500),
+                )
+                failure.provider_request_id = "request\x00id" * 100
+                raise failure
+            return ConceptRoleResult(
+                brief=ConceptRoleBrief(
+                    role=role,
+                    summary="Brand evidence extracted.",
+                    decisions=("Keep the observed editorial grid.",),
+                    safeguards=(),
+                ),
+                usage=TokenUsage(prompt_tokens=5),
+            )
+
+    with pytest.raises(VariantExecutionError) as caught:
+        await run_concept_roles_with_events(
+            engine=FailingEngine(),
+            request=request(),
+        )
+
+    error = caught.value
+    failed = error.role_events[-1]
+    assert failed.status == "failed"
+    assert "\x00" not in error.public_message
+    assert "\x00" not in failed.summary
+    assert "\x00" not in failed.provider_request_id
+    assert "\x00" not in failed.diagnostic
+    assert len(error.public_message) <= 2000
+    assert len(failed.summary) <= 1000
+    assert len(failed.provider_request_id) <= 256
+    assert len(failed.diagnostic) <= 2000
+
+
+@pytest.mark.asyncio
 async def test_runner_starts_three_independent_variants_and_serializes_audits():
     started: set[CreativeProfile] = set()
     all_started = asyncio.Event()
@@ -401,6 +511,24 @@ async def test_runner_starts_three_independent_variants_and_serializes_audits():
 
 @pytest.mark.asyncio
 async def test_runner_records_one_failed_profile_honestly():
+    partial_events = (
+        ExperimentRoleEvent(
+            role="site_brand_analyst",
+            status="completed",
+            summary="Brand evidence extracted.",
+            decisions=("Keep the observed editorial grid.",),
+            usage=TokenUsage(prompt_tokens=40),
+        ),
+        ExperimentRoleEvent(
+            role="conversation_designer",
+            status="failed",
+            summary="Conversation role failed.",
+            usage=TokenUsage(prompt_tokens=37),
+            provider_request_id="provider-failed-conversation",
+            diagnostic="schema validation failed",
+        ),
+    )
+
     async def execute(context):
         if context.request.creative_profile is CreativeProfile.BRAND_MOTION:
             raise VariantExecutionError(
@@ -408,6 +536,7 @@ async def test_runner_records_one_failed_profile_honestly():
                 "Gemini did not complete this profile.",
                 usage=TokenUsage(prompt_tokens=77),
                 elapsed_seconds=2.5,
+                role_events=partial_events,
             )
         return replace(
             variant(context.request.creative_profile),
@@ -428,6 +557,12 @@ async def test_runner_records_one_failed_profile_honestly():
     assert failed.raw is None and failed.final is None
     assert failed.usage.prompt_tokens == 77
     assert failed.error_code == "provider_unavailable"
+    assert failed.role_events == partial_events
+    assert failed.to_dict()["role_events"][-1]["status"] == "failed"
+    assert (
+        sum((event.usage for event in failed.role_events), TokenUsage())
+        == failed.usage
+    )
 
 
 @pytest.mark.asyncio
