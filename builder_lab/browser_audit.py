@@ -429,11 +429,15 @@ class BrowserAuditError(RuntimeError):
         *,
         diagnostic: str | None = None,
         failures: tuple[str, ...] = (),
+        report: BrowserAuditReport | None = None,
     ):
         super().__init__(message)
+        if report is not None and not isinstance(report, BrowserAuditReport):
+            raise TypeError("report must be a complete BrowserAuditReport")
         self.error_code = error_code
         self.diagnostic = diagnostic
         self.failures = tuple(str(item) for item in failures if str(item).strip())
+        self.report = report
 
 
 @dataclass(frozen=True)
@@ -3087,6 +3091,7 @@ class BrowserAudit:
                 "Виджет не прошёл детерминированную браузерную проверку: " + "; ".join(failures[:8]),
                 diagnostic="\n".join(failures),
                 failures=tuple(failures),
+                report=report,
             )
 
 

@@ -82,6 +82,21 @@ class ExperimentReviewEvidence:
 
 
 @dataclass(frozen=True)
+class ExperimentReviewFailureEvidence:
+    """Evidence captured at the exact phase where strict review stopped.
+
+    This type intentionally has no critique field: a missing or failed critic
+    response must never be represented as a completed visual assessment.
+    """
+
+    phase: str
+    kind: str
+    artifact: WidgetArtifact
+    audit: BrowserAuditReport | None = None
+    failure_details: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ExperimentReviewResult:
     raw: ExperimentReviewEvidence
     final: ExperimentReviewEvidence
@@ -98,6 +113,7 @@ class ExperimentVisualQualityError(RuntimeError):
         diagnostic: str = "",
         raw: ExperimentReviewEvidence | None = None,
         final: ExperimentReviewEvidence | None = None,
+        failure_evidence: ExperimentReviewFailureEvidence | None = None,
         usage: TokenUsage | None = None,
         elapsed_seconds: float = 0,
     ) -> None:
@@ -106,6 +122,7 @@ class ExperimentVisualQualityError(RuntimeError):
         self.diagnostic = diagnostic
         self.raw = raw
         self.final = final
+        self.failure_evidence = failure_evidence
         self.usage = usage or TokenUsage()
         self.elapsed_seconds = elapsed_seconds
 
@@ -205,6 +222,7 @@ class ExperimentReview:
         diagnostic: str = "",
         raw: ExperimentReviewEvidence | None = None,
         final: ExperimentReviewEvidence | None = None,
+        failure_evidence: ExperimentReviewFailureEvidence | None = None,
         usage: TokenUsage | None = None,
     ) -> ExperimentVisualQualityError:
         return ExperimentVisualQualityError(
@@ -213,6 +231,7 @@ class ExperimentReview:
             diagnostic=diagnostic,
             raw=raw,
             final=final,
+            failure_evidence=failure_evidence,
             usage=usage,
             elapsed_seconds=max(0, self._clock() - started_at),
         )
@@ -224,11 +243,23 @@ class ExperimentReview:
         try:
             raw_audit = await self.auditor.audit(raw_snapshot)
         except BrowserAuditError as exc:
+            details = exc.failures or tuple(
+                item
+                for item in (exc.diagnostic, exc.error_code)
+                if item and item.strip()
+            )
             raise self._error(
                 "initial_deterministic_failure",
                 "Исходный кандидат не прошёл детерминированную браузерную проверку",
                 started_at=started_at,
                 diagnostic=exc.diagnostic or "; ".join(exc.failures),
+                failure_evidence=ExperimentReviewFailureEvidence(
+                    phase="raw",
+                    kind="browser_audit_failure",
+                    artifact=_snapshot_artifact(raw_snapshot),
+                    audit=exc.report,
+                    failure_details=details,
+                ),
             ) from exc
 
         try:
@@ -248,6 +279,15 @@ class ExperimentReview:
                 "Строгий визуальный критик не завершил проверку raw",
                 started_at=started_at,
                 diagnostic=exc.diagnostic or exc.error_code,
+                failure_evidence=ExperimentReviewFailureEvidence(
+                    phase="raw",
+                    kind="strict_visual_critic_failure",
+                    artifact=_snapshot_artifact(raw_snapshot),
+                    audit=raw_audit,
+                    failure_details=(
+                        exc.diagnostic or exc.error_code,
+                    ),
+                ),
                 usage=usage,
             ) from exc
         usage = usage + raw_critic_result.usage
@@ -332,6 +372,17 @@ class ExperimentReview:
                 started_at=started_at,
                 diagnostic=diagnostic,
                 raw=raw_evidence,
+                failure_evidence=ExperimentReviewFailureEvidence(
+                    phase="final",
+                    kind="rejected_revision",
+                    artifact=_snapshot_artifact(final_snapshot),
+                    failure_details=tuple(
+                        f"changed_field:{field_name}"
+                        for field_name in sorted(
+                            set(invariant_changes) | set(unrelated)
+                        )
+                    ),
+                ),
                 usage=usage,
             )
         deterministic_issues = validate_artifact(
@@ -347,6 +398,15 @@ class ExperimentReview:
                     f"{item.code}:{item.field}" for item in deterministic_issues
                 ),
                 raw=raw_evidence,
+                failure_evidence=ExperimentReviewFailureEvidence(
+                    phase="final",
+                    kind="artifact_validation_failure",
+                    artifact=_snapshot_artifact(final_snapshot),
+                    failure_details=tuple(
+                        f"{item.code}:{item.field}"
+                        for item in deterministic_issues
+                    ),
+                ),
                 usage=usage,
             )
         try:
@@ -358,6 +418,14 @@ class ExperimentReview:
                 started_at=started_at,
                 diagnostic=exc.diagnostic or "; ".join(exc.failures),
                 raw=raw_evidence,
+                failure_evidence=ExperimentReviewFailureEvidence(
+                    phase="final",
+                    kind="browser_audit_failure",
+                    artifact=_snapshot_artifact(final_snapshot),
+                    audit=exc.report,
+                    failure_details=exc.failures
+                    or (exc.diagnostic or exc.error_code,),
+                ),
                 usage=usage,
             ) from exc
         try:
@@ -378,6 +446,15 @@ class ExperimentReview:
                 started_at=started_at,
                 diagnostic=exc.diagnostic or exc.error_code,
                 raw=raw_evidence,
+                failure_evidence=ExperimentReviewFailureEvidence(
+                    phase="final",
+                    kind="strict_visual_critic_failure",
+                    artifact=_snapshot_artifact(final_snapshot),
+                    audit=final_audit,
+                    failure_details=(
+                        exc.diagnostic or exc.error_code,
+                    ),
+                ),
                 usage=usage,
             ) from exc
         usage = usage + final_critic_result.usage
@@ -410,6 +487,7 @@ class ExperimentReview:
 __all__ = [
     "ExperimentReview",
     "ExperimentReviewEvidence",
+    "ExperimentReviewFailureEvidence",
     "ExperimentReviewResult",
     "ExperimentVisualQualityError",
 ]

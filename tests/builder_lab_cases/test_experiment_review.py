@@ -216,8 +216,38 @@ async def test_initial_deterministic_failure_calls_neither_critic_nor_generator(
         await reviewer(auditor, critic, engine).review(raw)
 
     assert caught.value.error_code == "initial_deterministic_failure"
+    assert caught.value.failure_evidence is not None
+    assert caught.value.failure_evidence.phase == "raw"
+    assert caught.value.failure_evidence.kind == "browser_audit_failure"
+    assert caught.value.failure_evidence.artifact == raw
+    assert caught.value.failure_evidence.artifact is not raw
+    assert caught.value.failure_evidence.audit is None
+    assert caught.value.failure_evidence.failure_details == (
+        "desktop.open_initial: panel outside viewport",
+    )
     assert len(critic.calls) == 0
     assert engine.visual_revision_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_initial_browser_failure_preserves_only_an_explicit_full_report():
+    from tests.builder_lab_cases.test_visual_critic import report
+
+    raw = artifact(revision=5)
+    completed_report = report()
+    failure = BrowserAuditError(
+        "browser_gate_failed",
+        "Policy checks failed after evidence capture.",
+        failures=("network request escaped policy",),
+        report=completed_report,
+    )
+    auditor = FakeAuditor([failure])
+
+    with pytest.raises(ExperimentVisualQualityError) as caught:
+        await reviewer(auditor, FakeCritic([]), FakeEngine(raw)).review(raw)
+
+    assert caught.value.failure_evidence is not None
+    assert caught.value.failure_evidence.audit is completed_report
 
 
 @pytest.mark.asyncio
@@ -258,6 +288,14 @@ async def test_unrelated_revision_field_is_rejected():
 
     assert caught.value.error_code == "unrelated_visual_revision"
     assert "art_direction" in caught.value.diagnostic
+    assert caught.value.failure_evidence is not None
+    assert caught.value.failure_evidence.phase == "final"
+    assert caught.value.failure_evidence.kind == "rejected_revision"
+    assert caught.value.failure_evidence.artifact == revised
+    assert caught.value.failure_evidence.audit is None
+    assert caught.value.failure_evidence.failure_details == (
+        "changed_field:art_direction",
+    )
     assert len(auditor.calls) == 1
 
 
@@ -297,6 +335,32 @@ async def test_initial_pass_keeps_raw_and_final_evidence_without_generation():
     assert result.raw is not result.final
     assert engine.visual_revision_calls == 0
     assert len(auditor.calls) == len(critic.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_raw_critic_failure_preserves_incomplete_audited_evidence():
+    raw = artifact(revision=5)
+    raw_audit = SimpleNamespace(name="raw-audit")
+    failure = StrictVisualCriticError(
+        "strict_visual_critic_unavailable",
+        "critic unavailable",
+        diagnostic="provider request failed",
+        usage=TokenUsage(prompt_tokens=13, output_tokens=2),
+    )
+    auditor = FakeAuditor([raw_audit])
+    critic = FakeCritic([failure])
+    engine = FakeEngine(raw)
+
+    with pytest.raises(ExperimentVisualQualityError) as caught:
+        await reviewer(auditor, critic, engine).review(raw)
+
+    assert caught.value.raw is None
+    assert caught.value.failure_evidence is not None
+    assert caught.value.failure_evidence.phase == "raw"
+    assert caught.value.failure_evidence.kind == "strict_visual_critic_failure"
+    assert caught.value.failure_evidence.artifact == raw
+    assert caught.value.failure_evidence.audit is raw_audit
+    assert not hasattr(caught.value.failure_evidence, "critique")
 
 
 @pytest.mark.asyncio

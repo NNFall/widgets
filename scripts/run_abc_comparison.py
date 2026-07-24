@@ -42,6 +42,7 @@ from builder_lab.experiment_review import (
 from builder_lab.experiments import (
     PUBLIC_SLUGS,
     ExperimentEvidence,
+    ExperimentFailureEvidence,
     ExperimentPricingSnapshot,
     ExperimentRoleEvent,
     ExperimentVariant,
@@ -112,6 +113,7 @@ async def run_concept_roles_with_events(*, engine, request):
         raise VariantExecutionError(
             exc.error_code,
             exc.public_message,
+            diagnostic=exc.diagnostic,
             usage=exc.usage,
             role_events=events,
         ) from exc
@@ -502,6 +504,8 @@ class DirectVariantExecutor:
                 elapsed_seconds=max(0, time.perf_counter() - started),
                 raw=exc.raw,
                 final=exc.final,
+                diagnostic=exc.diagnostic,
+                failure_evidence=exc.failure_evidence,
                 role_events=exc.role_events,
             ) from exc
         except ExperimentVisualQualityError as exc:
@@ -523,19 +527,33 @@ class DirectVariantExecutor:
                 if exc.final is not None
                 else None
             )
+            failure_evidence = (
+                ExperimentFailureEvidence(
+                    phase=exc.failure_evidence.phase,
+                    kind=exc.failure_evidence.kind,
+                    artifact=exc.failure_evidence.artifact,
+                    audit=exc.failure_evidence.audit,
+                    failure_details=exc.failure_evidence.failure_details,
+                )
+                if exc.failure_evidence is not None
+                else None
+            )
             raise VariantExecutionError(
                 exc.error_code,
                 str(exc),
+                diagnostic=exc.diagnostic,
                 usage=usage + exc.usage,
                 elapsed_seconds=time.perf_counter() - started,
                 raw=raw,
                 final=final,
+                failure_evidence=failure_evidence,
                 role_events=role_events,
             ) from exc
         except BuilderEngineError as exc:
             raise VariantExecutionError(
                 exc.error_code,
                 exc.public_message,
+                diagnostic=exc.diagnostic,
                 usage=usage + exc.usage,
                 elapsed_seconds=time.perf_counter() - started,
                 role_events=role_events,
@@ -544,6 +562,7 @@ class DirectVariantExecutor:
             raise VariantExecutionError(
                 "internal_error",
                 f"{type(exc).__name__}: {str(exc)[:1000]}",
+                diagnostic=f"{type(exc).__name__}: {str(exc)[:4000]}",
                 usage=usage,
                 elapsed_seconds=time.perf_counter() - started,
                 role_events=role_events,

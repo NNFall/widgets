@@ -1316,6 +1316,7 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
             BrowserAudit()._assert_release_gate(broken)
 
         diagnostic = caught.exception.diagnostic or ""
+        self.assertIs(caught.exception.report, broken)
         self.assertIn("panel rect=(x=", diagnostic)
         self.assertIn(
             f"viewport={layout.viewport_width}x{layout.viewport_height}",

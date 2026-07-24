@@ -16,6 +16,7 @@ from builder_lab.experiments import (
     ABC_PROFILES,
     AbcExperimentManifest,
     ExperimentEvidence,
+    ExperimentFailureEvidence,
     ExperimentPricingSnapshot,
     ExperimentRoleEvent,
     ExperimentVariant,
@@ -197,6 +198,22 @@ def test_variant_keeps_raw_and_final_separate_and_records_exact_cost():
     assert payload["cost_usd"] == pytest.approx(0.002)
 
 
+def test_role_event_uses_the_same_secret_redactor_for_operator_fields():
+    event = ExperimentRoleEvent(
+        role="site_brand_analyst",
+        status="failed",
+        summary="Role failed.",
+        provider_request_id="token=provider-request-secret",
+        diagnostic='"client_secret": "role-diagnostic-secret"',
+    )
+
+    payload = event.to_dict()
+    serialized = json.dumps(payload)
+    assert "provider-request-secret" not in serialized
+    assert "role-diagnostic-secret" not in serialized
+    assert "[REDACTED]" in serialized
+
+
 def test_completed_variant_requires_a_passing_final_critique():
     raw = evidence(suffix="raw")
     rejected = ExperimentEvidence(
@@ -239,6 +256,76 @@ def test_failed_variant_can_preserve_raw_and_rejected_final_evidence():
     assert item.raw is not None and item.final is not None
     assert item.raw.artifact != item.final.artifact
     assert item.error_code == "provider_unavailable"
+
+
+def test_failure_evidence_enforces_closed_phase_kind_audit_matrix():
+    candidate = artifact(revision=5)
+    complete_audit = report()
+
+    with pytest.raises(ValueError, match="kind is invalid"):
+        ExperimentFailureEvidence(
+            phase="raw",
+            kind="unknown_failure",
+            artifact=candidate,
+        )
+    with pytest.raises(ValueError, match="phase is invalid"):
+        ExperimentFailureEvidence(
+            phase="raw",
+            kind="rejected_revision",
+            artifact=candidate,
+        )
+    with pytest.raises(ValueError, match="requires a complete audit"):
+        ExperimentFailureEvidence(
+            phase="raw",
+            kind="strict_visual_critic_failure",
+            artifact=candidate,
+        )
+    with pytest.raises(ValueError, match="cannot contain an audit"):
+        ExperimentFailureEvidence(
+            phase="final",
+            kind="rejected_revision",
+            artifact=candidate,
+            audit=complete_audit,
+        )
+
+    assert ExperimentFailureEvidence(
+        phase="raw",
+        kind="browser_audit_failure",
+        artifact=candidate,
+    ).audit is None
+    assert ExperimentFailureEvidence(
+        phase="final",
+        kind="strict_visual_critic_failure",
+        artifact=candidate,
+        audit=complete_audit,
+    ).audit is complete_audit
+
+
+def test_final_phase_failure_evidence_requires_preserved_raw_evidence():
+    rejected = ExperimentFailureEvidence(
+        phase="final",
+        kind="rejected_revision",
+        artifact=artifact(revision=5),
+        failure_details=("changed_field:art_direction",),
+    )
+
+    with pytest.raises(ValueError, match="final failure evidence requires"):
+        ExperimentVariant.create(
+            profile=CreativeProfile.PRODUCT_CHAT,
+            public_slug="product-chat",
+            run_id="run-missing-raw",
+            model="gemini-3.6-flash",
+            thinking="high",
+            status="failed",
+            raw=None,
+            final=None,
+            failure_evidence=rejected,
+            usage=TokenUsage(),
+            elapsed_seconds=1,
+            pricing=pricing(),
+            error_code="unrelated_visual_revision",
+            error_message="Revision rejected.",
+        )
 
 
 def test_common_digest_excludes_only_profile():
@@ -643,6 +730,74 @@ async def test_runner_records_one_failed_profile_honestly():
 
 
 @pytest.mark.asyncio
+async def test_runner_sanitizes_diagnostic_and_preserves_incomplete_failure_evidence():
+    candidate = artifact(revision=5)
+    incomplete = ExperimentFailureEvidence(
+        phase="raw",
+        kind="browser_audit_failure",
+        artifact=candidate,
+        audit=None,
+        failure_details=(
+            "desktop.open_initial: panel outside viewport",
+            "Authorization: Bearer top-secret-token",
+        ),
+    )
+
+    async def execute(context):
+        if context.request.creative_profile is CreativeProfile.PRODUCT_CHAT:
+            raise VariantExecutionError(
+                "initial_deterministic_failure",
+                "Browser audit failed; token=public-message-secret",
+                diagnostic=(
+                    "api_key=AIzaSyDefinitelySecret1234567890\x00 "
+                    "\"client_secret\": \"quoted-secret-value\" "
+                    "https://operator:gateway-password@example.test/path "
+                    "https://example.test/api?key=query-secret-value "
+                    "key=plain-secret-value "
+                    "GEMINI_API_KEY=environment-secret-value "
+                    "\"chat_system_prompt\": \"private system instruction\" "
+                    "C:\\Users\\Operator\\private\\trace.json "
+                    "/root/ai_project/private/trace.json "
+                    "desktop.open_initial failed"
+                ),
+                failure_evidence=incomplete,
+            )
+        return replace(
+            variant(context.request.creative_profile),
+            run_id=context.run_id,
+        )
+
+    manifest = await run_abc_experiment(
+        source_digest="a" * 64,
+        base_request=request(),
+        model="gemini-3.6-flash",
+        thinking="high",
+        pricing=pricing(),
+        execute_variant=execute,
+    )
+
+    failed = manifest.variant(CreativeProfile.PRODUCT_CHAT)
+    assert failed.failure_evidence is not None
+    assert failed.failure_evidence.artifact == candidate
+    assert failed.diagnostic is not None
+    assert "desktop.open_initial failed" in failed.diagnostic
+    serialized = json.dumps(failed.to_dict())
+    assert "DefinitelySecret" not in serialized
+    assert "top-secret-token" not in serialized
+    assert "quoted-secret-value" not in serialized
+    assert "gateway-password" not in serialized
+    assert "query-secret-value" not in serialized
+    assert "plain-secret-value" not in serialized
+    assert "environment-secret-value" not in serialized
+    assert "private system instruction" not in serialized
+    assert "Operator" not in serialized
+    assert "/root/ai_project/private" not in serialized
+    assert "public-message-secret" not in serialized
+    assert "\u0000" not in serialized
+    assert "[REDACTED]" in serialized
+
+
+@pytest.mark.asyncio
 async def test_runner_rejects_result_with_a_different_pricing_snapshot():
     changed_pricing = ExperimentPricingSnapshot(
         currency="USD",
@@ -713,6 +868,134 @@ def test_package_writer_is_atomic_bounded_and_never_overwrites_existing_routes(
     assert (sibling / "sentinel.txt").read_text(encoding="utf-8") == "keep"
     with pytest.raises(FileExistsError):
         write_experiment_package(output, manifest)
+
+
+def test_package_writer_explicitly_writes_incomplete_failure_evidence(tmp_path: Path):
+    failure_evidence = ExperimentFailureEvidence(
+        phase="raw",
+        kind="strict_visual_critic_failure",
+        artifact=artifact(revision=5),
+        audit=report(),
+        failure_details=("critic response did not match the schema",),
+    )
+    failed = ExperimentVariant.create(
+        profile=CreativeProfile.PRODUCT_CHAT,
+        public_slug="product-chat",
+        run_id="run-product-chat-failed",
+        model="gemini-3.6-flash",
+        thinking="high",
+        status="failed",
+        raw=None,
+        final=None,
+        failure_evidence=failure_evidence,
+        usage=TokenUsage(prompt_tokens=100),
+        elapsed_seconds=3.5,
+        pricing=pricing(),
+        error_code="strict_visual_critic_failed",
+        error_message="Strict visual critic failed.",
+        diagnostic="schema mismatch at observations",
+    )
+    manifest = AbcExperimentManifest.create(
+        source_digest="a" * 64,
+        common_input_digest="b" * 64,
+        contract_id="chat-v1",
+        variants=(
+            failed,
+            variant(CreativeProfile.BRAND_MOTION),
+            variant(CreativeProfile.AI_CHARACTER),
+        ),
+    )
+    output = tmp_path / "direct-abc-failure-evidence"
+
+    write_experiment_package(output, manifest)
+
+    evidence_root = (
+        output
+        / "product-chat"
+        / "failure-evidence"
+        / "raw-strict_visual_critic_failure"
+    )
+    assert (evidence_root / "artifact.json").is_file()
+    assert (evidence_root / "audit.json").is_file()
+    assert not (evidence_root / "critique.json").exists()
+    assert not (evidence_root / "index.html").exists()
+    assert not (evidence_root / "viewer.html").exists()
+    failure_payload = json.loads(
+        (evidence_root / "failure.json").read_text(encoding="utf-8")
+    )
+    assert failure_payload["state"] == "incomplete"
+    assert failure_payload["failure_details"] == [
+        "critic response did not match the schema"
+    ]
+    report_payload = json.loads(
+        (output / "product-chat" / "report.json").read_text(encoding="utf-8")
+    )
+    assert report_payload["diagnostic"] == "schema mismatch at observations"
+    assert report_payload["failure_evidence"]["kind"] == (
+        "strict_visual_critic_failure"
+    )
+    failure_page = (
+        output / "product-chat" / "index.html"
+    ).read_text(encoding="utf-8")
+    assert (
+        "failure-evidence/raw-strict_visual_critic_failure/artifact.json"
+        in failure_page
+    )
+    assert "incomplete" in failure_page
+
+
+def test_package_writer_never_executes_unaudited_rejected_candidate(tmp_path: Path):
+    rejected = ExperimentFailureEvidence(
+        phase="final",
+        kind="rejected_revision",
+        artifact=artifact(revision=5),
+        audit=None,
+        failure_details=("changed_field:art_direction",),
+    )
+    failed = ExperimentVariant.create(
+        profile=CreativeProfile.PRODUCT_CHAT,
+        public_slug="product-chat",
+        run_id="run-product-chat-rejected",
+        model="gemini-3.6-flash",
+        thinking="high",
+        status="failed",
+        raw=evidence(suffix="product-chat-raw-before-rejected"),
+        final=None,
+        failure_evidence=rejected,
+        usage=TokenUsage(prompt_tokens=100),
+        elapsed_seconds=3.5,
+        pricing=pricing(),
+        error_code="unrelated_visual_revision",
+        error_message="Revision changed an unrelated field.",
+        diagnostic="art_direction",
+    )
+    manifest = AbcExperimentManifest.create(
+        source_digest="a" * 64,
+        common_input_digest="b" * 64,
+        contract_id="chat-v1",
+        variants=(
+            failed,
+            variant(CreativeProfile.BRAND_MOTION),
+            variant(CreativeProfile.AI_CHARACTER),
+        ),
+    )
+    output = tmp_path / "direct-abc-rejected"
+
+    write_experiment_package(output, manifest)
+
+    evidence_root = (
+        output
+        / "product-chat"
+        / "failure-evidence"
+        / "final-rejected_revision"
+    )
+    assert (evidence_root / "artifact.json").is_file()
+    assert not (evidence_root / "index.html").exists()
+    assert not (evidence_root / "viewer.html").exists()
+    failure_page = (
+        output / "product-chat" / "index.html"
+    ).read_text(encoding="utf-8")
+    assert "failure-evidence/final-rejected_revision/artifact.json" in failure_page
 
 
 def test_package_writer_reserves_destination_exclusively_under_a_race(

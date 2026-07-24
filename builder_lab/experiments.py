@@ -43,6 +43,46 @@ _STATUS_VALUES = frozenset({"completed", "failed"})
 _MAX_MANIFEST_BYTES = 12 * 1024 * 1024
 _MAX_EVENTS = 48
 _T = TypeVar("_T")
+_FAILURE_EVIDENCE_MATRIX = {
+    "browser_audit_failure": {
+        "phases": frozenset({"raw", "final"}),
+        "audit": "optional",
+    },
+    "strict_visual_critic_failure": {
+        "phases": frozenset({"raw", "final"}),
+        "audit": "required",
+    },
+    "rejected_revision": {
+        "phases": frozenset({"final"}),
+        "audit": "forbidden",
+    },
+    "artifact_validation_failure": {
+        "phases": frozenset({"final"}),
+        "audit": "forbidden",
+    },
+}
+_CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_BEARER_SECRET = re.compile(
+    r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"
+)
+_GOOGLE_API_KEY = re.compile(r"\bAIza[0-9A-Za-z_-]{16,}\b")
+_NAMED_SECRET = re.compile(
+    r"(?i)\b(gemini_api_key|google_ai_api_key|google_api_key|api[_ -]?key|key|"
+    r"authorization|password|passwd|secret|token|access[_ -]?token|"
+    r"client[_ -]?secret|chat[_ -]?system[_ -]?prompt)"
+    r"\b[\"']?\s*[:=]\s*"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"
+)
+_URL_USERINFO = re.compile(r"(https?://)[^/\s:@]+:[^/\s@]+@")
+_QUERY_SECRET = re.compile(
+    r"(?i)([?&](?:key|api_key|token|access_token|password|secret)=)"
+    r"[^&#\s]+"
+)
+_WINDOWS_ABSOLUTE_PATH = re.compile(r"\b[A-Za-z]:\\[^\s\"'<>|]+")
+_PRIVATE_UNIX_PATH = re.compile(
+    r"(?<![A-Za-z0-9])/(?:root|home|Users|var|etc|app|srv|opt|tmp)/"
+    r"[^\s\"'<>]*"
+)
 
 
 def _text(value: Any, field_name: str, limit: int) -> str:
@@ -73,6 +113,40 @@ def _digest(value: str, field_name: str) -> str:
     if not isinstance(value, str) or not _DIGEST.fullmatch(value):
         raise ValueError(f"{field_name} must be a lowercase 64hex digest")
     return value
+
+
+def _safe_diagnostic(value: object, *, limit: int = 4000) -> str | None:
+    if value is None:
+        return None
+    try:
+        text = value if isinstance(value, str) else str(value)
+    except Exception:
+        return None
+    text = _CONTROL_CHARACTERS.sub(" ", text)
+    text = _URL_USERINFO.sub(r"\1[REDACTED]@", text)
+    text = _QUERY_SECRET.sub(r"\1[REDACTED]", text)
+    text = _GOOGLE_API_KEY.sub("[REDACTED]", text)
+    text = _BEARER_SECRET.sub("Bearer [REDACTED]", text)
+    text = _NAMED_SECRET.sub(
+        lambda match: f"{match.group(1)}=[REDACTED]",
+        text,
+    )
+    text = _WINDOWS_ABSOLUTE_PATH.sub("[REDACTED_PATH]", text)
+    text = _PRIVATE_UNIX_PATH.sub("[REDACTED_PATH]", text)
+    text = " ".join(text.split())
+    return text[:limit].strip() or None
+
+
+def _safe_required_text(
+    value: object,
+    field_name: str,
+    *,
+    limit: int,
+) -> str:
+    text = _safe_diagnostic(value, limit=limit)
+    if text is None:
+        raise ValueError(f"{field_name} is invalid")
+    return text
 
 
 def _snapshot_artifact(artifact: WidgetArtifact) -> WidgetArtifact:
@@ -167,14 +241,18 @@ class ExperimentRoleEvent:
             raise ValueError("role usage must be TokenUsage")
         provider_request_id = self.provider_request_id
         if provider_request_id is not None:
-            provider_request_id = _text(
+            provider_request_id = _safe_required_text(
                 provider_request_id,
                 "provider_request_id",
-                256,
+                limit=256,
             )
         diagnostic = self.diagnostic
         if diagnostic is not None:
-            diagnostic = _text(diagnostic, "role diagnostic", 2000)
+            diagnostic = _safe_required_text(
+                diagnostic,
+                "role diagnostic",
+                limit=2000,
+            )
         object.__setattr__(self, "role", role)
         object.__setattr__(self, "status", status)
         object.__setattr__(self, "summary", summary)
@@ -227,6 +305,86 @@ class ExperimentEvidence:
 
 
 @dataclass(frozen=True)
+class ExperimentFailureEvidence:
+    """Incomplete or rejected evidence captured without inventing a critique."""
+
+    phase: str
+    kind: str
+    artifact: WidgetArtifact
+    audit: BrowserAuditReport | None = None
+    failure_details: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        phase = _text(self.phase, "failure evidence phase", 16)
+        if phase not in {"raw", "final"}:
+            raise ValueError("failure evidence phase is invalid")
+        kind = _text(self.kind, "failure evidence kind", 96)
+        if (
+            not _IDENTIFIER.fullmatch(kind)
+            or kind not in _FAILURE_EVIDENCE_MATRIX
+        ):
+            raise ValueError("failure evidence kind is invalid")
+        policy = _FAILURE_EVIDENCE_MATRIX[kind]
+        if phase not in policy["phases"]:
+            raise ValueError(
+                f"failure evidence phase is invalid for {kind}"
+            )
+        if not isinstance(self.artifact, WidgetArtifact):
+            raise ValueError("failure evidence artifact must be WidgetArtifact")
+        if self.audit is not None and not isinstance(
+            self.audit,
+            BrowserAuditReport,
+        ):
+            raise ValueError("failure evidence audit must be BrowserAuditReport")
+        if policy["audit"] == "required" and self.audit is None:
+            raise ValueError(
+                f"{kind} requires a complete audit"
+            )
+        if policy["audit"] == "forbidden" and self.audit is not None:
+            raise ValueError(f"{kind} cannot contain an audit")
+        details = tuple(
+            detail
+            for item in tuple(self.failure_details)[:32]
+            if (detail := _safe_diagnostic(item, limit=1000)) is not None
+        )
+        object.__setattr__(self, "phase", phase)
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "artifact", _snapshot_artifact(self.artifact))
+        object.__setattr__(self, "failure_details", details)
+
+    @property
+    def state(self) -> str:
+        if self.kind in {
+            "rejected_revision",
+            "artifact_validation_failure",
+        }:
+            return "rejected"
+        return "incomplete"
+
+    def to_dict(self) -> dict[str, Any]:
+        audit = None
+        if self.audit is not None:
+            audit = {
+                "total_bytes": self.audit.total_bytes,
+                "screenshots": [
+                    screenshot.evidence.to_dict()
+                    for screenshot in self.audit.screenshots
+                ],
+                "layouts": [
+                    layout.to_dict() for layout in self.audit.layouts
+                ],
+            }
+        return {
+            "state": self.state,
+            "phase": self.phase,
+            "kind": self.kind,
+            "artifact": self.artifact.to_dict(),
+            "audit": audit,
+            "failure_details": list(self.failure_details),
+        }
+
+
+@dataclass(frozen=True)
 class ExperimentVariant:
     profile: CreativeProfile
     public_slug: str
@@ -243,6 +401,8 @@ class ExperimentVariant:
     role_events: tuple[ExperimentRoleEvent, ...] = ()
     error_code: str | None = None
     error_message: str | None = None
+    diagnostic: str | None = None
+    failure_evidence: ExperimentFailureEvidence | None = None
 
     def __post_init__(self) -> None:
         if self.profile not in ABC_PROFILES:
@@ -285,6 +445,10 @@ class ExperimentVariant:
                 raise ValueError("completed variant final critique must pass")
             if self.error_code is not None or self.error_message is not None:
                 raise ValueError("completed variant cannot contain an error")
+            if self.diagnostic is not None or self.failure_evidence is not None:
+                raise ValueError(
+                    "completed variant cannot contain failure diagnostics"
+                )
         else:
             if self.final is not None:
                 if not isinstance(self.raw, ExperimentEvidence):
@@ -303,9 +467,31 @@ class ExperimentVariant:
             object.__setattr__(
                 self,
                 "error_message",
-                _text(self.error_message, "error_message", 2000),
+                _safe_required_text(
+                    self.error_message,
+                    "error_message",
+                    limit=2000,
+                ),
             )
             object.__setattr__(self, "error_code", error_code)
+            object.__setattr__(
+                self,
+                "diagnostic",
+                _safe_diagnostic(self.diagnostic),
+            )
+            if self.failure_evidence is not None and not isinstance(
+                self.failure_evidence,
+                ExperimentFailureEvidence,
+            ):
+                raise ValueError("variant failure evidence is invalid")
+            if (
+                self.failure_evidence is not None
+                and self.failure_evidence.phase == "final"
+                and not isinstance(self.raw, ExperimentEvidence)
+            ):
+                raise ValueError(
+                    "final failure evidence requires preserved raw evidence"
+                )
         object.__setattr__(self, "run_id", run_id)
         object.__setattr__(self, "model", model)
         object.__setattr__(self, "thinking", thinking)
@@ -332,6 +518,8 @@ class ExperimentVariant:
         role_events: Sequence[ExperimentRoleEvent] = (),
         error_code: str | None = None,
         error_message: str | None = None,
+        diagnostic: str | None = None,
+        failure_evidence: ExperimentFailureEvidence | None = None,
     ) -> "ExperimentVariant":
         return cls(
             profile=profile,
@@ -349,6 +537,8 @@ class ExperimentVariant:
             role_events=tuple(role_events),
             error_code=error_code,
             error_message=error_message,
+            diagnostic=diagnostic,
+            failure_evidence=failure_evidence,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -368,6 +558,12 @@ class ExperimentVariant:
             "role_events": [item.to_dict() for item in self.role_events],
             "error_code": self.error_code,
             "error_message": self.error_message,
+            "diagnostic": self.diagnostic,
+            "failure_evidence": (
+                self.failure_evidence.to_dict()
+                if self.failure_evidence is not None
+                else None
+            ),
         }
 
 
@@ -485,11 +681,17 @@ class VariantExecutionError(RuntimeError):
         elapsed_seconds: float = 0,
         raw: ExperimentEvidence | None = None,
         final: ExperimentEvidence | None = None,
+        diagnostic: str | None = None,
+        failure_evidence: ExperimentFailureEvidence | None = None,
         role_events: Sequence[ExperimentRoleEvent] = (),
     ) -> None:
-        super().__init__(message)
         self.error_code = _text(error_code, "error_code", 96)
-        self.public_message = _text(message, "error message", 2000)
+        self.public_message = _safe_required_text(
+            message,
+            "error message",
+            limit=2000,
+        )
+        super().__init__(self.public_message)
         self.usage = usage or TokenUsage()
         self.elapsed_seconds = _finite(
             elapsed_seconds,
@@ -498,6 +700,8 @@ class VariantExecutionError(RuntimeError):
         )
         self.raw = raw
         self.final = final
+        self.diagnostic = _safe_diagnostic(diagnostic)
+        self.failure_evidence = failure_evidence
         self.role_events = tuple(role_events)
 
 
@@ -588,6 +792,8 @@ async def run_abc_experiment(
                 role_events=exc.role_events,
                 error_code=exc.error_code,
                 error_message=exc.public_message,
+                diagnostic=exc.diagnostic,
+                failure_evidence=exc.failure_evidence,
             )
         except Exception as exc:
             return ExperimentVariant.create(
@@ -604,6 +810,7 @@ async def run_abc_experiment(
                 pricing=context.pricing,
                 error_code="internal_error",
                 error_message=f"{type(exc).__name__}: {str(exc)[:1000]}",
+                diagnostic=f"{type(exc).__name__}: {str(exc)[:4000]}",
             )
         expected = (
             context.request.creative_profile,
@@ -717,12 +924,53 @@ def _write_evidence(root: Path, evidence: ExperimentEvidence) -> None:
         )
 
 
+def _write_failure_evidence(
+    root: Path,
+    evidence: ExperimentFailureEvidence,
+) -> None:
+    payload = evidence.to_dict()
+    _write(root / "artifact.json", _json_bytes(evidence.artifact.to_dict()))
+    _write(
+        root / "failure.json",
+        _json_bytes(
+            {
+                "state": payload["state"],
+                "phase": payload["phase"],
+                "kind": payload["kind"],
+                "failure_details": payload["failure_details"],
+            }
+        ),
+    )
+    if evidence.audit is not None:
+        _write(root / "audit.json", _json_bytes(payload["audit"]))
+        for screenshot in evidence.audit.screenshots:
+            _write(
+                root
+                / "screenshots"
+                / f"{screenshot.evidence.screenshot_id}.jpg",
+                screenshot.data,
+            )
+
+
 def _failure_page(variant: ExperimentVariant) -> str:
     from html import escape
 
+    evidence_link = ""
+    if variant.failure_evidence is not None:
+        evidence = variant.failure_evidence
+        path = (
+            "failure-evidence/"
+            f"{evidence.phase}-{evidence.kind}/artifact.json"
+        )
+        evidence_link = (
+            f'<p><a href="{escape(path)}">'
+            f"{escape(evidence.state)} failure evidence"
+            "</a></p>"
+        )
     return f"""<!doctype html><meta charset="utf-8"><title>Variant failed</title>
 <main><h1>{escape(variant.profile.value)}</h1><p>Status: failed</p>
-<p>{escape(variant.error_code or "")}: {escape(variant.error_message or "")}</p></main>"""
+<p>{escape(variant.error_code or "")}: {escape(variant.error_message or "")}</p>
+{evidence_link}</main>"""
 
 
 def write_experiment_package(
@@ -778,6 +1026,14 @@ def write_experiment_package(
             )
             if variant.raw is not None:
                 _write_evidence(variant_root / "raw", variant.raw)
+            if variant.failure_evidence is not None:
+                failure = variant.failure_evidence
+                _write_failure_evidence(
+                    variant_root
+                    / "failure-evidence"
+                    / f"{failure.phase}-{failure.kind}",
+                    failure,
+                )
             if variant.status == "completed":
                 if variant.final is None:
                     raise ValueError("completed variant lost final evidence")
@@ -869,6 +1125,25 @@ def write_experiment_package(
                         "cost_usd": variant.cost_usd,
                         "error_code": variant.error_code,
                         "error_message": variant.error_message,
+                        "diagnostic": variant.diagnostic,
+                        "failure_evidence": (
+                            {
+                                "state": variant.failure_evidence.state,
+                                "phase": variant.failure_evidence.phase,
+                                "kind": variant.failure_evidence.kind,
+                                "path": (
+                                    "failure-evidence/"
+                                    f"{variant.failure_evidence.phase}-"
+                                    f"{variant.failure_evidence.kind}/"
+                                    "artifact.json"
+                                ),
+                                "failure_details": list(
+                                    variant.failure_evidence.failure_details
+                                ),
+                            }
+                            if variant.failure_evidence is not None
+                            else None
+                        ),
                     }
                 ),
             )
@@ -1012,6 +1287,7 @@ __all__ = [
     "PUBLIC_SLUGS",
     "AbcExperimentManifest",
     "ExperimentEvidence",
+    "ExperimentFailureEvidence",
     "ExperimentPricingSnapshot",
     "ExperimentRoleEvent",
     "ExperimentVariant",
