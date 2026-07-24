@@ -79,6 +79,10 @@ class BuilderLabPackagingTests(unittest.TestCase):
         self.assertIn("GEMINI_VISUAL_CRITIC_MODEL:", compose)
         self.assertIn("KAIGO_BROWSER_AUDIT_TIMEOUT_MS:", compose)
         self.assertIn("KAIGO_BROWSER_AUDIT_TOTAL_TIMEOUT_SECONDS:", compose)
+        self.assertIn(
+            "CRAWLEE_MEMORY_MBYTES: ${CRAWLEE_MEMORY_MBYTES:-4096}",
+            compose,
+        )
         env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
         self.assertIn(
             "KAIGO_BUILDER_DEMO_DIR=/app/data/builder-demo/direct-abc-v1",
@@ -87,6 +91,7 @@ class BuilderLabPackagingTests(unittest.TestCase):
         self.assertIn("GEMINI_VISUAL_CRITIC_MODEL=gemini-3.5-flash", env_example)
         self.assertIn("KAIGO_BROWSER_AUDIT_TIMEOUT_MS=10000", env_example)
         self.assertIn("KAIGO_BROWSER_AUDIT_TOTAL_TIMEOUT_SECONDS=120", env_example)
+        self.assertIn("CRAWLEE_MEMORY_MBYTES=4096", env_example)
         self.assertNotIn("playwright install", production_dockerfile)
 
     def test_production_chat_contract_is_explicit_in_compose_and_env_example(self):
