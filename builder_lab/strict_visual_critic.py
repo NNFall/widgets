@@ -18,6 +18,7 @@ from .model_config import (
     normalize_thinking_level,
 )
 from .models import TokenUsage
+from .redaction import redact_diagnostic
 from .strict_visual_models import (
     STRICT_VISUAL_DIMENSIONS,
     StrictVisualCritique,
@@ -308,10 +309,7 @@ def _sanitized_validation_error(
     diagnostic: str | None = None,
 ) -> str:
     raw = diagnostic or f"{type(error).__name__}: {error}"
-    printable = "".join(
-        character if character.isprintable() else " " for character in raw
-    )
-    return " ".join(printable.split())[:1000]
+    return redact_diagnostic(raw, limit=1000) or "validation failed"
 
 
 def _validation_correction(validation_error: str) -> types.Part:
@@ -474,12 +472,8 @@ class GeminiStrictVisualCritic:
                         ),
                     )
                     continue
-                raise StrictVisualCriticError(
-                    exc.error_code,
-                    exc.public_message,
-                    diagnostic=exc.diagnostic,
-                    usage=total_usage,
-                ) from exc
+                exc.usage = total_usage
+                raise
             return StrictVisualCriticResult(
                 critique=result.critique,
                 usage=total_usage + result.usage,

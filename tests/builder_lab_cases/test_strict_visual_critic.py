@@ -63,6 +63,16 @@ class SequencedClient:
         self.aio = SimpleNamespace(models=self.models)
 
 
+class SecretValidationPayload(dict):
+    def __contains__(self, _key):
+        raise ValueError(
+            "Authorization: Bearer top-secret-token "
+            "api_key=AIzaSyDefinitelySecret1234567890 "
+            "https://operator:gateway-password@example.test/path "
+            "client_secret=quoted-secret-value; safe score linkage mismatch"
+        )
+
+
 def passing_payload():
     screenshot_ids = [item.evidence.screenshot_id for item in report().screenshots]
     return {
@@ -376,3 +386,46 @@ async def test_critic_preserves_first_attempt_usage_on_retry_cancellation():
 
     assert caught.value.usage == first_usage
     assert len(client.models.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_critic_redacts_secrets_from_retry_validation_correction():
+    client = SequencedClient(
+        [
+            (SecretValidationPayload(), TokenUsage(prompt_tokens=10)),
+            (passing_payload(), TokenUsage(prompt_tokens=12)),
+        ]
+    )
+    critic = GeminiStrictVisualCritic(client=client)
+
+    await critic.critique(
+        audit=report(),
+        brief="Compact editorial chat.",
+        art_direction="Monochrome editorial assistant.",
+    )
+
+    correction = client.models.calls[1]["contents"][-1].text
+    assert "top-secret-token" not in correction
+    assert "DefinitelySecret" not in correction
+    assert "gateway-password" not in correction
+    assert "quoted-secret-value" not in correction
+    assert "[REDACTED]" in correction
+    assert "safe score linkage mismatch" in correction
+
+
+@pytest.mark.asyncio
+async def test_non_retry_provider_error_preserves_direct_cause():
+    provider_error = RuntimeError("provider exploded")
+    client = SequencedClient([provider_error])
+    critic = GeminiStrictVisualCritic(client=client)
+
+    with pytest.raises(StrictVisualCriticError) as caught:
+        await critic.critique(
+            audit=report(),
+            brief="Compact editorial chat.",
+            art_direction="Monochrome editorial assistant.",
+        )
+
+    assert caught.value.error_code == "strict_visual_critic_unavailable"
+    assert caught.value.__cause__ is provider_error
+    assert len(client.models.calls) == 1
