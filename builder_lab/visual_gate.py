@@ -772,11 +772,105 @@ class VisualRepairGate:
                 await self._store.stage_visual_candidate(run_id, candidate)
                 issues = validate_artifact(candidate, previous_revision=previous.revision)
                 await self._record_validation(run_id, candidate, issues)
-                if issues:
-                    raise self._quality_error(
-                        "deterministic_regression: "
-                        + "; ".join(issue.code for issue in issues)
+                while issues:
+                    fingerprint = (
+                        validation_repair_fingerprint(issues)
+                        + ":"
+                        + artifact_fingerprint(candidate)
                     )
+                    if fingerprint in seen:
+                        raise self._quality_error(
+                            "repeated_validation_repair_fingerprint"
+                        )
+                    seen.add(fingerprint)
+                    if repair_count >= MAX_VISUAL_REPAIRS:
+                        raise self._quality_error(
+                            "deterministic_regression: "
+                            + "; ".join(issue.code for issue in issues)
+                        )
+
+                    repair_count += 1
+                    await self._checkpoint(run_id)
+                    await self._store.append_event(
+                        run_id,
+                        event_type="visual_repair.started",
+                        stage=Stage.MOTION_POLISH,
+                        status="running",
+                        message=(
+                            "Deterministic repair after visual repair: "
+                            f"РїРѕРїС‹С‚РєР° {repair_count}"
+                        ),
+                        revision=candidate.revision,
+                        issues=issues,
+                    )
+                    try:
+                        repair = await engine.generate(
+                            request=request,
+                            stage=Stage.MOTION_POLISH,
+                            revision=candidate.revision,
+                            previous_artifact=candidate,
+                            repair_issues=issues,
+                            visual_findings=(),
+                            selected_direction=selected_direction,
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as repair_exc:
+                        usage = getattr(repair_exc, "usage", TokenUsage())
+                        await self._store.append_event(
+                            run_id,
+                            event_type="visual_repair.completed",
+                            stage=Stage.MOTION_POLISH,
+                            status="failed",
+                            message=(
+                                "Deterministic repair after visual repair "
+                                f"{repair_count} Р·Р°РІРµСЂС€РёР»СЃСЏ РѕС€РёР±РєРѕР№"
+                            ),
+                            revision=candidate.revision,
+                            usage=usage,
+                        )
+                        raise self._quality_error(
+                            "visual_validation_repair_error: "
+                            f"{getattr(repair_exc, 'error_code', type(repair_exc).__name__)}"
+                        ) from repair_exc
+
+                    proposed_candidate = repair.artifact
+                    ignored_fields = forbidden_browser_repair_fields(
+                        candidate, proposed_candidate
+                    )
+                    candidate = apply_browser_repair(
+                        candidate, proposed_candidate
+                    )
+                    repair_diagnostic = repair.diagnostic
+                    if ignored_fields:
+                        ignored_note = (
+                            "ignored_visual_validation_repair_fields: "
+                            + ",".join(ignored_fields)
+                        )
+                        repair_diagnostic = (
+                            f"{repair_diagnostic}; {ignored_note}"
+                            if repair_diagnostic
+                            else ignored_note
+                        )
+                    await self._store.append_event(
+                        run_id,
+                        event_type="visual_repair.completed",
+                        stage=Stage.MOTION_POLISH,
+                        status="completed",
+                        message=(
+                            "РњРѕРґРµР»СЊ Р·Р°РІРµСЂС€РёР»Р° deterministic repair after "
+                            f"visual repair {repair_count}"
+                        ),
+                        revision=candidate.revision,
+                        usage=repair.usage,
+                        diagnostic=repair_diagnostic,
+                    )
+                    await self._checkpoint(run_id)
+                    await self._store.stage_visual_candidate(run_id, candidate)
+                    issues = validate_artifact(
+                        candidate, previous_revision=previous.revision
+                    )
+                    await self._record_validation(run_id, candidate, issues)
 
             raise self._quality_error("visual_repair_exhausted")
         finally:

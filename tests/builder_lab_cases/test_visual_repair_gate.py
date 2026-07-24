@@ -510,21 +510,30 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.store.snapshot(self.run_id)).artifact.revision, 4)
         self.assertEqual((await self.store.visual_candidate(self.run_id)).revision, 5)
 
-    async def test_deterministic_regression_fails_without_ordinary_repair(self):
+    async def test_deterministic_regression_after_visual_repair_gets_ordinary_repair(self):
         invalid = artifact(
             revision=5,
             stage=Stage.MOTION_POLISH,
             css="body { color: red; }",
         )
-        engine = FakeEngine([invalid])
+        fixed = artifact(
+            revision=5,
+            stage=Stage.MOTION_POLISH,
+            css=self.candidate.css + "\n.kaigo-widget { color: red; }",
+        )
+        engine = FakeEngine([invalid, fixed])
 
-        with self.assertRaises(BuilderEngineError) as caught:
-            await self.evaluate(FakeAuditor(), FakeCritic([critique(finding())]), engine)
+        result = await self.evaluate(
+            FakeAuditor(),
+            FakeCritic([critique(finding()), critique()]),
+            engine,
+        )
 
-        self.assertEqual(caught.exception.error_code, "visual_quality_failed")
-        self.assertEqual(len(engine.calls), 1)
-        self.assertEqual((await self.store.snapshot(self.run_id)).artifact.revision, 4)
-        self.assertEqual((await self.store.visual_candidate(self.run_id)), invalid)
+        self.assertEqual(result, fixed)
+        self.assertEqual(len(engine.calls), 2)
+        self.assertTrue(engine.calls[1]["repair_issues"])
+        self.assertEqual(engine.calls[1]["visual_findings"], ())
+        self.assertEqual((await self.store.visual_candidate(self.run_id)), fixed)
 
     async def test_visual_repair_cannot_change_direction_or_unlisted_fields(self):
         hostile = artifact(
