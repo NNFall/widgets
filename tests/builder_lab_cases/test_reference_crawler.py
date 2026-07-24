@@ -223,6 +223,43 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(attempts, 2)
 
 
+class RunScopedStorageTests(unittest.IsolatedAsyncioTestCase):
+    async def test_same_domain_queue_is_fresh_for_each_crawl(self):
+        storage_type = getattr(
+            reference_crawler_module, "_RunScopedMemoryStorageClient", None
+        )
+        self.assertIsNotNone(
+            storage_type,
+            "reference crawls need run-scoped Crawlee storage isolation",
+        )
+
+        from crawlee import Request
+        from crawlee.storages import RequestQueue
+
+        first = await RequestQueue.open(
+            alias="throttled-qlean.ru",
+            storage_client=storage_type(),
+        )
+        second = await RequestQueue.open(
+            alias="throttled-qlean.ru",
+            storage_client=storage_type(),
+        )
+        try:
+            self.assertIsNot(first, second)
+            await first.add_request(Request.from_url("https://qlean.ru/"))
+            pending = await first.fetch_next_request()
+            self.assertIsNotNone(pending)
+            await first.mark_request_as_handled(pending)
+
+            repeated = await second.add_request(Request.from_url("https://qlean.ru/"))
+            self.assertIsNotNone(repeated)
+            self.assertFalse(repeated.was_already_present)
+            self.assertFalse(repeated.was_already_handled)
+        finally:
+            await first.drop()
+            await second.drop()
+
+
 class ReferenceCliTests(unittest.TestCase):
     def test_cli_fails_closed_before_browser_for_unsafe_url(self):
         with TemporaryDirectory() as temp_dir:

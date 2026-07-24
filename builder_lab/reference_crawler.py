@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
+from crawlee.storage_clients import MemoryStorageClient
 from PIL import Image, UnidentifiedImageError
 
 from .reference_models import (
@@ -31,6 +32,20 @@ from .reference_models import (
     TraceEvidence,
     public_url,
 )
+
+
+class _RunScopedMemoryStorageClient(MemoryStorageClient):
+    """Prevent Crawlee's global storage cache from leaking queues across runs."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._kaigo_run_scope = uuid.uuid4().hex
+
+    def get_storage_client_cache_key(self, configuration: Any) -> Any:
+        return (
+            super().get_storage_client_cache_key(configuration),
+            self._kaigo_run_scope,
+        )
 
 
 KAIGO_RESEARCH_USER_AGENT = "KaigoVisualResearch/1.0 (+https://kaigo.space)"
@@ -1986,7 +2001,6 @@ class VisualReferenceCrawler:
         from crawlee import ConcurrencySettings, Request
         from crawlee.crawlers import PlaywrightCrawler, PlaywrightCrawlingContext
         from crawlee.request_loaders import ThrottlingRequestManager
-        from crawlee.storage_clients import MemoryStorageClient
         from crawlee.storages import RequestQueue
 
         started_at = datetime.now(timezone.utc)
@@ -2076,7 +2090,7 @@ class VisualReferenceCrawler:
                 browser_context, self.limits.trace_ttl_seconds
             )
 
-        storage_client = MemoryStorageClient()
+        storage_client = _RunScopedMemoryStorageClient()
         request_queue = await RequestQueue.open(
             alias=f"kaigo-reference-{uuid.uuid4().hex}",
             storage_client=storage_client,

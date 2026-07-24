@@ -7,6 +7,7 @@ from .preview import preview_iframe_attributes
 
 
 DEFAULT_BRIEF = ""
+BUILDER_UI_RELEASE = "2026.07.24.2"
 
 
 def render_builder_page(
@@ -121,11 +122,11 @@ def render_builder_page(
     @media (max-width:560px) {{ .rail {{ padding:18px; }} .stage {{ padding:10px; grid-template-rows:auto auto minmax(620px,1fr); }} .control-grid {{ grid-template-columns:1fr; }} .field-wide {{ grid-column:auto; }} .actions {{ grid-template-columns:1fr 1fr; }} .button-primary {{ grid-column:1/-1; }} .stage-head {{ grid-template-columns:1fr; }} .view-toggle {{ width:max-content; }} .artifact-meta {{ grid-template-columns:1fr; gap:9px; }} .validation-badge {{ width:max-content; }} .telemetry {{ grid-template-columns:1fr; }} .metric+.metric {{ padding-left:0; border-left:0; border-top:1px solid var(--line); }} }}
   </style>
 </head>
-<body>
+<body data-builder-release="{escape(BUILDER_UI_RELEASE)}">
   <main class="shell">
     <section class="rail" aria-label="Настройки генерации">
       <header>
-        <p class="eyebrow">Kaigo / функциональный прототип</p>
+        <p class="eyebrow">Kaigo / функциональный прототип / build {escape(BUILDER_UI_RELEASE)}</p>
         <h1>Создайте AI-сотрудника для сайта.</h1>
         <p class="lede">Вставьте ссылку. Kaigo снимет страницу, соберёт визуальный бриф, создаст виджет и автоматически проверит результат.</p>
       </header>
