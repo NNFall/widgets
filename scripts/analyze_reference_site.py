@@ -107,10 +107,17 @@ REFERENCE_ANALYSIS_SCHEMA: dict[str, Any] = {
 
 
 class ReferenceAnalysisError(RuntimeError):
-    def __init__(self, error_code: str, public_message: str) -> None:
+    def __init__(
+        self,
+        error_code: str,
+        public_message: str,
+        *,
+        diagnostic: str | None = None,
+    ) -> None:
         super().__init__(public_message)
         self.error_code = error_code
         self.public_message = public_message
+        self.diagnostic = diagnostic
 
 
 @dataclass(frozen=True)
@@ -592,6 +599,8 @@ async def analyze_reference_site(
     request_id: str | None = None
     usage = {key: 0 for key in ("prompt_tokens", "output_tokens", "thinking_tokens", "total_tokens")}
     attempt_count = 0
+    semantic_attempt_limit = 4
+    last_semantic_error = ""
 
     async def generate(attempt_contents: Sequence[types.Part]) -> Any:
         retry_delays = (0.5, 1.5, 3.0, 5.0)
@@ -615,13 +624,18 @@ async def analyze_reference_site(
         raise AssertionError("unreachable reference provider retry loop")
 
     try:
-        for attempt_count in range(1, 3):
+        for attempt_count in range(1, semantic_attempt_limit + 1):
             attempt_contents = contents
             if attempt_count > 1:
                 retry_prompt = (
                     prompt
                     + "\nCORRECTION: The previous response violated the local JSON contract. Return a fresh, "
                     "complete object within every numeric budget above; do not repeat the invalid output."
+                    + (
+                        f"\nLOCAL VALIDATOR ERROR: {last_semantic_error}"
+                        if last_semantic_error
+                        else ""
+                    )
                 )
                 attempt_contents = [types.Part.from_text(text=retry_prompt), *contents[1:]]
             response = await generate(attempt_contents)
@@ -632,8 +646,9 @@ async def analyze_reference_site(
                 analysis = _validate_semantic_output(
                     _response_payload(response), {item.label for item in screenshots}
                 )
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-                if attempt_count < 2:
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                last_semantic_error = f"{type(exc).__name__}: {str(exc)[:500]}"
+                if attempt_count < semantic_attempt_limit:
                     continue
                 raise
             break
@@ -643,7 +658,9 @@ async def analyze_reference_site(
         raise
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise ReferenceAnalysisError(
-            "invalid_semantic_output", "Gemini returned an invalid grounded reference"
+            "invalid_semantic_output",
+            "Gemini returned an invalid grounded reference",
+            diagnostic=last_semantic_error or type(exc).__name__,
         ) from exc
     except TimeoutError as exc:
         raise ReferenceAnalysisError("analysis_timeout", "Gemini reference analysis timed out") from exc

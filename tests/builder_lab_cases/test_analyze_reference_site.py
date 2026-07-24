@@ -293,6 +293,42 @@ class ReferenceGeminiAnalysisTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("each visual token category: 0 to 16 items", retry_prompt)
             self.assertEqual(reference["provenance"]["attempt_count"], 2)
 
+    async def test_retries_semantic_failures_with_exact_validator_feedback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs, manifest_path = evidence_with_manifest(root)
+            invalid = valid_analysis(REQUIRED_LABELS)
+            invalid["public_facts"] = []
+            fake = FakeClient(
+                [
+                    invalid,
+                    invalid,
+                    invalid,
+                    valid_analysis(REQUIRED_LABELS),
+                ]
+            )
+
+            reference = await analyze_reference_site(
+                source_url="https://rawbureau.ru/",
+                allowed_hosts={"rawbureau.ru"},
+                screenshot_inputs=inputs,
+                evidence_root=root,
+                captured_at="2026-07-19T12:10:23.127441+00:00",
+                coverage_status="complete",
+                capture_manifest=manifest_path,
+                api_key="test-key",
+                model="gemini-3.6-flash",
+                client=fake,
+            )
+
+            self.assertEqual(len(fake.aio.models.calls), 4)
+            final_retry_prompt = fake.aio.models.calls[-1]["contents"][0].text
+            self.assertIn(
+                "public_facts is outside its item budget",
+                final_retry_prompt,
+            )
+            self.assertEqual(reference["provenance"]["attempt_count"], 4)
+
     async def test_gemini_2_5_omits_unsupported_thinking_level(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

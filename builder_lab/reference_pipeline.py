@@ -321,7 +321,9 @@ class GeminiReferencePipeline:
                 raise ReferencePipelineError(
                     error_code,
                     exc.public_message,
-                    diagnostic=str(exc)[:1_000],
+                    diagnostic=str(
+                        getattr(exc, "diagnostic", None) or str(exc)
+                    )[:1_000],
                 ) from exc
             except Exception as exc:
                 raise ReferencePipelineError(
