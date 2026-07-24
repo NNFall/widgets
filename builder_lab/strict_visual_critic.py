@@ -302,6 +302,40 @@ def _payload(response: Any) -> dict[str, Any]:
     return payload
 
 
+def _sanitized_validation_error(
+    error: BaseException,
+    *,
+    diagnostic: str | None = None,
+) -> str:
+    raw = diagnostic or f"{type(error).__name__}: {error}"
+    printable = "".join(
+        character if character.isprintable() else " " for character in raw
+    )
+    return " ".join(printable.split())[:1000]
+
+
+def _validation_correction(validation_error: str) -> types.Part:
+    return types.Part.from_text(
+        text=(
+            "CORRECTION AFTER DETERMINISTIC LOCAL VALIDATION:\n"
+            "The previous provider response was rejected. Return a fresh, complete "
+            "JSON object matching the original schema.\n"
+            f"SANITIZED EXACT VALIDATION ERROR: {validation_error}\n"
+            "CONSISTENCY RULES:\n"
+            "- Every score 1..3 assessment must link at least one concrete finding.\n"
+            "- Every finding must use the same dimension as the score 1..3 "
+            "assessment that links it.\n"
+            "- Every finding must be linked to a score 1..3 assessment; scores 4, "
+            "5, and 0 must not own findings.\n"
+            "- Revision actions must cover all and only findings linked by failing "
+            "assessments.\n"
+            "- Observations must name every supplied screenshot exactly once, and "
+            "findings may name only supplied screenshot IDs.\n"
+            "Do not add commentary or a model-owned verdict."
+        )
+    )
+
+
 def _compact_metrics(audit: BrowserAuditReport) -> str:
     rows: list[dict[str, Any]] = []
     for layout in audit.layouts:
@@ -403,6 +437,65 @@ class GeminiStrictVisualCritic:
         locale: str = "ru",
         phase: str = "raw",
     ) -> StrictVisualCriticResult:
+        total_usage = TokenUsage()
+        correction: str | None = None
+        for attempt in range(2):
+            try:
+                result = await self._critique_once(
+                    audit=audit,
+                    brief=brief,
+                    art_direction=art_direction,
+                    locale=locale,
+                    phase=phase,
+                    validation_correction=correction,
+                )
+            except asyncio.CancelledError as exc:
+                exc.usage = total_usage
+                raise
+            except StrictVisualCriticError as exc:
+                attempt_usage = (
+                    exc.usage if isinstance(exc.usage, TokenUsage) else TokenUsage()
+                )
+                total_usage = total_usage + attempt_usage
+                retryable_validation_error = exc.error_code in {
+                    "strict_visual_response_invalid",
+                    "visual_evidence_unproven",
+                }
+                if retryable_validation_error and attempt == 0:
+                    correction = _sanitized_validation_error(
+                        exc,
+                        diagnostic=(
+                            f"{type(exc.__cause__).__name__}: {exc.__cause__}"
+                            if exc.__cause__ is not None
+                            else (
+                                f"StrictVisualCriticError[{exc.error_code}]: "
+                                f"{exc.diagnostic or exc.public_message}"
+                            )
+                        ),
+                    )
+                    continue
+                raise StrictVisualCriticError(
+                    exc.error_code,
+                    exc.public_message,
+                    diagnostic=exc.diagnostic,
+                    usage=total_usage,
+                ) from exc
+            return StrictVisualCriticResult(
+                critique=result.critique,
+                usage=total_usage + result.usage,
+            )
+        raise AssertionError("unreachable strict visual critic retry loop")
+
+    async def _critique_once(
+        self,
+        *,
+        audit: BrowserAuditReport,
+        brief: str,
+        art_direction: str,
+        locale: str = "ru",
+        phase: str = "raw",
+        validation_correction: str | None = None,
+    ) -> StrictVisualCriticResult:
         if not isinstance(audit, BrowserAuditReport):
             raise TypeError("audit must be BrowserAuditReport")
         if not isinstance(brief, str) or not brief.strip() or len(brief) > 12_000:
@@ -447,6 +540,8 @@ class GeminiStrictVisualCritic:
             contents.append(
                 types.Part.from_bytes(data=data, mime_type="image/jpeg")
             )
+        if validation_correction is not None:
+            contents.append(_validation_correction(validation_correction))
         policy = generation_policy(
             self.model,
             self.thinking_level,

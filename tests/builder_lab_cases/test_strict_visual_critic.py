@@ -1,7 +1,10 @@
+import asyncio
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
 
+from builder_lab.models import TokenUsage
 from builder_lab.strict_visual_critic import (
     GeminiStrictVisualCritic,
     STRICT_VISUAL_CRITIC_SCHEMA,
@@ -30,6 +33,34 @@ class FakeModels:
 class FakeClient:
     def __init__(self, payload):
         self.aio = SimpleNamespace(models=FakeModels(payload))
+
+
+class SequencedModels:
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.calls = []
+
+    async def generate_content(self, **kwargs):
+        self.calls.append(kwargs)
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        payload, usage = outcome
+        return SimpleNamespace(
+            parsed=payload,
+            response_id=f"strict-fake-{len(self.calls)}",
+            usage_metadata=SimpleNamespace(
+                prompt_token_count=usage.prompt_tokens,
+                candidates_token_count=usage.output_tokens,
+                thoughts_token_count=usage.thinking_tokens,
+            ),
+        )
+
+
+class SequencedClient:
+    def __init__(self, outcomes):
+        self.models = SequencedModels(outcomes)
+        self.aio = SimpleNamespace(models=self.models)
 
 
 def passing_payload():
@@ -180,3 +211,168 @@ async def test_critic_requires_every_desktop_and_mobile_screenshot_state():
 
     assert caught.value.error_code == "visual_evidence_unproven"
     assert "mobile.closed" in caught.value.diagnostic
+
+
+def _payload_with_cross_dimension_finding():
+    payload = deepcopy(passing_payload())
+    assessment = next(
+        item
+        for item in payload["assessments"]
+        if item["dimension"] == "typography_legibility"
+    )
+    assessment["score"] = 3
+    assessment["finding_ids"] = ["finding-cross-dimension"]
+    payload["findings"] = [
+        {
+            "finding_id": "finding-cross-dimension",
+            "dimension": "conversation_clarity",
+            "screenshot_id": "desktop.open",
+            "evidence": "The message author treatment is visually ambiguous.",
+            "region": {
+                "x": 0.6,
+                "y": 0.4,
+                "width": 0.2,
+                "height": 0.2,
+                "semantic_region": "messages",
+            },
+            "confidence": 0.94,
+        }
+    ]
+    payload["revision_actions"] = [
+        {
+            "action_id": "fix-chat-authorship",
+            "finding_ids": ["finding-cross-dimension"],
+            "artifact_fields": ["css"],
+            "instruction": "Clarify chat authorship without redesigning the widget.",
+        }
+    ]
+    return payload
+
+
+@pytest.mark.asyncio
+async def test_critic_retries_one_semantically_invalid_response_and_sums_usage():
+    first_usage = TokenUsage(prompt_tokens=10, output_tokens=4, thinking_tokens=2)
+    second_usage = TokenUsage(prompt_tokens=12, output_tokens=5, thinking_tokens=3)
+    client = SequencedClient(
+        [
+            (_payload_with_cross_dimension_finding(), first_usage),
+            (passing_payload(), second_usage),
+        ]
+    )
+    critic = GeminiStrictVisualCritic(client=client)
+
+    result = await critic.critique(
+        audit=report(),
+        brief="Compact editorial chat.",
+        art_direction="Monochrome editorial assistant.",
+    )
+
+    assert result.usage == first_usage + second_usage
+    assert len(client.models.calls) == 2
+    correction = client.models.calls[1]["contents"][-1].text
+    assert (
+        "ValueError: score 1..3 must link a finding from the same dimension"
+        in correction
+    )
+    assert "Every finding must use the same dimension" in correction
+    assert "Every finding must be linked to a score 1..3 assessment" in correction
+
+
+@pytest.mark.asyncio
+async def test_critic_retries_one_audit_binding_failure():
+    incomplete = passing_payload()
+    incomplete["observations"] = [
+        item
+        for item in incomplete["observations"]
+        if item["screenshot_id"] != "mobile.closed"
+    ]
+    client = SequencedClient(
+        [
+            (incomplete, TokenUsage(prompt_tokens=10)),
+            (passing_payload(), TokenUsage(prompt_tokens=12)),
+        ]
+    )
+    critic = GeminiStrictVisualCritic(client=client)
+
+    result = await critic.critique(
+        audit=report(),
+        brief="Compact editorial chat.",
+        art_direction="Monochrome editorial assistant.",
+    )
+
+    assert result.usage == TokenUsage(prompt_tokens=22)
+    assert len(client.models.calls) == 2
+    correction = client.models.calls[1]["contents"][-1].text
+    assert "missing=mobile.closed" in correction
+
+
+@pytest.mark.asyncio
+async def test_critic_stops_after_two_semantic_failures_and_sums_usage():
+    first_usage = TokenUsage(prompt_tokens=10, output_tokens=4, thinking_tokens=2)
+    second_usage = TokenUsage(prompt_tokens=11, output_tokens=6, thinking_tokens=3)
+    client = SequencedClient(
+        [
+            (_payload_with_cross_dimension_finding(), first_usage),
+            (_payload_with_cross_dimension_finding(), second_usage),
+        ]
+    )
+    critic = GeminiStrictVisualCritic(client=client)
+
+    with pytest.raises(StrictVisualCriticError) as caught:
+        await critic.critique(
+            audit=report(),
+            brief="Compact editorial chat.",
+            art_direction="Monochrome editorial assistant.",
+        )
+
+    assert caught.value.error_code == "strict_visual_response_invalid"
+    assert caught.value.usage == first_usage + second_usage
+    assert len(client.models.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_critic_does_not_retry_provider_timeout():
+    class SlowModels:
+        def __init__(self):
+            self.calls = 0
+
+        async def generate_content(self, **_kwargs):
+            self.calls += 1
+            await asyncio.sleep(1)
+
+    models = SlowModels()
+    client = SimpleNamespace(aio=SimpleNamespace(models=models))
+    critic = GeminiStrictVisualCritic(client=client, timeout_seconds=0.001)
+
+    with pytest.raises(StrictVisualCriticError) as caught:
+        await critic.critique(
+            audit=report(),
+            brief="Compact editorial chat.",
+            art_direction="Monochrome editorial assistant.",
+        )
+
+    assert caught.value.error_code == "strict_visual_critic_timeout"
+    assert caught.value.usage == TokenUsage()
+    assert models.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_critic_preserves_first_attempt_usage_on_retry_cancellation():
+    first_usage = TokenUsage(prompt_tokens=10, output_tokens=4, thinking_tokens=2)
+    client = SequencedClient(
+        [
+            (_payload_with_cross_dimension_finding(), first_usage),
+            asyncio.CancelledError(),
+        ]
+    )
+    critic = GeminiStrictVisualCritic(client=client)
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await critic.critique(
+            audit=report(),
+            brief="Compact editorial chat.",
+            art_direction="Monochrome editorial assistant.",
+        )
+
+    assert caught.value.usage == first_usage
+    assert len(client.models.calls) == 2
