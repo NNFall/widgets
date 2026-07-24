@@ -75,6 +75,7 @@ services:
       KAIGO_BUILDER_LAB_PORT: 8091
       KAIGO_BUILDER_LAB_ALLOW_REMOTE: "true"
       KAIGO_BUILDER_DEMO_PATH: /app/data/builder-demo/latest.json
+      KAIGO_BUILDER_DEMO_DIR: ${KAIGO_BUILDER_DEMO_DIR:-/app/data/builder-demo/direct-abc-v1}
     command: ["python", "scripts/run_builder_lab.py"]
     ports:
       - "127.0.0.1:8091:8091"

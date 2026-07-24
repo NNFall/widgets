@@ -21,6 +21,7 @@ from typing import Any, TypeVar
 from .browser_audit import BrowserAuditReport
 from .comparison import ComparisonVariant, render_comparison_page
 from .contracts import resolve_widget_contract
+from .demo import save_demo
 from .models import BuilderRequest, CreativeProfile, TokenUsage, WidgetArtifact
 from .preview import build_preview_document
 from .strict_visual_models import StrictVisualCritique, StrictVisualVerdict
@@ -698,6 +699,15 @@ def _write_evidence(root: Path, evidence: ExperimentEvidence) -> None:
         root / "index.html",
         build_preview_document(evidence.artifact).encode("utf-8"),
     )
+    _write(
+        root / "viewer.html",
+        b"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<title>Kaigo evidence viewer</title>
+<style>*{box-sizing:border-box}html,body,iframe{width:100%;height:100%;margin:0}body{background:#fff}iframe{display:block;border:0}</style>
+</head><body><iframe src="index.html" title="Sandboxed widget evidence" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe></body></html>""",
+    )
     for screenshot in evidence.audit.screenshots:
         _write(
             root
@@ -718,6 +728,8 @@ def _failure_page(variant: ExperimentVariant) -> str:
 def write_experiment_package(
     output_dir: str | Path,
     manifest: AbcExperimentManifest,
+    *,
+    live_base_path: str | None = None,
 ) -> Path:
     if not isinstance(manifest, AbcExperimentManifest):
         raise TypeError("manifest must be AbcExperimentManifest")
@@ -791,6 +803,12 @@ def write_experiment_package(
                         elapsed_seconds=variant.elapsed_seconds,
                         total_tokens=variant.usage.total_tokens,
                         cost_usd=variant.cost_usd,
+                        live_slug=(
+                            f"{live_base_path.rstrip('/')}/{variant.public_slug}"
+                            if live_base_path is not None
+                            else None
+                        ),
+                        trusted_live=live_base_path is not None,
                     )
                 )
             else:
@@ -884,6 +902,111 @@ def write_experiment_package(
     return output
 
 
+def write_private_demo_registry(
+    output_dir: str | Path,
+    manifest: AbcExperimentManifest,
+    *,
+    base_request: BuilderRequest,
+    source_url: str,
+    chat_system_prompt: str,
+) -> Path:
+    if not isinstance(manifest, AbcExperimentManifest):
+        raise TypeError("manifest must be AbcExperimentManifest")
+    if not isinstance(base_request, BuilderRequest):
+        raise TypeError("base_request must be BuilderRequest")
+    if base_request.contract_id != manifest.contract_id:
+        raise ValueError("base request contract does not match the manifest")
+    for variant in manifest.variants:
+        expected_common_input_digest = canonical_common_input_digest(
+            source_digest=manifest.source_digest,
+            request=base_request,
+            model=variant.model,
+            thinking=variant.thinking,
+        )
+        if expected_common_input_digest != manifest.common_input_digest:
+            raise ValueError(
+                "base request does not match the manifest common input"
+            )
+    output = Path(output_dir).resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    reservation = output.parent / f".{output.name}.lock"
+    try:
+        descriptor = os.open(
+            reservation,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o600,
+        )
+    except FileExistsError as exc:
+        raise FileExistsError(
+            f"private demo registry destination is already reserved: {output}"
+        ) from exc
+    else:
+        os.close(descriptor)
+    temporary: Path | None = None
+    try:
+        if output.exists() or output.is_symlink():
+            raise FileExistsError(
+                f"refusing to overwrite private demo registry: {output}"
+            )
+        temporary = Path(
+            tempfile.mkdtemp(
+                prefix=f".{output.name}.staging-",
+                dir=str(output.parent),
+            )
+        )
+        os.chmod(temporary, 0o700)
+        for variant in manifest.variants:
+            if variant.status != "completed":
+                continue
+            final = variant.final
+            if (
+                final is None
+                or final.critique.verdict is not StrictVisualVerdict.PASS
+            ):
+                raise ValueError(
+                    "private demos require an accepted strict final artifact"
+                )
+            request = replace(
+                base_request,
+                creative_profile=variant.profile,
+            )
+            snapshot = {
+                "status": "completed",
+                "request": request.to_dict(),
+                "artifact": final.artifact.to_dict(),
+                "usage": variant.usage.to_dict(),
+                "elapsed_seconds": variant.elapsed_seconds,
+            }
+            target = temporary / f"{variant.public_slug}.json"
+            save_demo(
+                target,
+                snapshot,
+                model=variant.model,
+                source_url=source_url,
+                chat_system_prompt=chat_system_prompt,
+            )
+            os.chmod(target, 0o600)
+        if output.exists() or output.is_symlink():
+            raise FileExistsError(
+                f"refusing to overwrite private demo registry: {output}"
+            )
+        try:
+            _rename_directory_noreplace(temporary, output)
+        except FileExistsError as exc:
+            raise FileExistsError(
+                f"refusing to overwrite private demo registry: {output}"
+            ) from exc
+        temporary = None
+    finally:
+        if temporary is not None:
+            shutil.rmtree(temporary, ignore_errors=True)
+        try:
+            reservation.unlink()
+        except FileNotFoundError:
+            pass
+    return output
+
+
 __all__ = [
     "ABC_PROFILES",
     "PUBLIC_SLUGS",
@@ -897,4 +1020,5 @@ __all__ = [
     "canonical_common_input_digest",
     "run_abc_experiment",
     "write_experiment_package",
+    "write_private_demo_registry",
 ]

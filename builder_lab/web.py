@@ -464,7 +464,7 @@ async def _execute_chat(
 
 
 async def demo_chat(request: web.Request) -> web.Response:
-    _requested_demo_slug(request)
+    demo_slug = _requested_demo_slug(request)
     try:
         _require_chat_csrf(request)
         request_id, message, revision = await _chat_payload(request)
@@ -493,17 +493,18 @@ async def demo_chat(request: web.Request) -> web.Response:
         )
     return await _execute_chat(
         request,
-        scope=_demo_chat_scope(demo),
+        scope=_demo_chat_scope(demo, demo_slug=demo_slug),
         request_id=request_id,
         message=message,
         system_prompt=demo.chat_system_prompt,
     )
 
 
-def _demo_chat_scope(demo: Any) -> str:
+def _demo_chat_scope(demo: Any, *, demo_slug: str | None = None) -> str:
     grounding = json.dumps(
         {
             "artifact_identity": demo.artifact_identity,
+            "demo_slug": demo_slug,
             "source_url": demo.source_url,
             "chat_system_prompt": demo.chat_system_prompt,
         },

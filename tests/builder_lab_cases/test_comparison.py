@@ -135,8 +135,10 @@ class ComparisonBundleTests(unittest.TestCase):
             )
         )
 
-        self.assertIn('href="product-chat/raw/"', page)
-        self.assertIn('href="product-chat/final/"', page)
+        self.assertIn('href="product-chat/raw/viewer.html"', page)
+        self.assertIn('href="product-chat/final/viewer.html"', page)
+        self.assertNotIn('href="product-chat/raw/"', page)
+        self.assertNotIn('href="product-chat/final/"', page)
         self.assertIn('src="product-chat/raw/"', page)
         self.assertIn('src="product-chat/final/"', page)
         self.assertIn("product_chat", page)
@@ -144,6 +146,84 @@ class ComparisonBundleTests(unittest.TestCase):
         self.assertIn("$0.0456", page)
         self.assertIn("Raw 3.7 → final 4.3.", page)
         self.assertIn("Rejected final", page)
+
+    def test_trusted_live_wrapper_is_explicit_and_static_evidence_stays_opaque(self):
+        page = render_comparison_page(
+            (
+                ComparisonVariant(
+                    slug="product-chat/final",
+                    raw_slug="product-chat/raw",
+                    live_slug="/builder-comparison/direct-abc-v1/product-chat",
+                    trusted_live=True,
+                    title="A · Product Chat",
+                    profile="product_chat",
+                    model="gemini-3.6-flash",
+                    thinking="high",
+                    status="completed",
+                    summary="Accepted strict final with a live chat wrapper.",
+                    critique_summary="Raw 3.7 → final 4.3.",
+                    elapsed_seconds=87.4,
+                    total_tokens=12_345,
+                    cost_usd=0.0456,
+                ),
+            )
+        )
+
+        self.assertIn(
+            'href="/builder-comparison/direct-abc-v1/product-chat"', page
+        )
+        self.assertIn(
+            'src="/builder-comparison/direct-abc-v1/product-chat"', page
+        )
+        self.assertIn('href="product-chat/final/viewer.html"', page)
+        self.assertIn('href="product-chat/raw/viewer.html"', page)
+        self.assertNotIn('href="product-chat/final/"', page)
+        self.assertNotIn('href="product-chat/raw/"', page)
+        self.assertEqual(
+            page.count('sandbox="allow-scripts allow-same-origin"'), 1
+        )
+        self.assertIn('src="product-chat/raw/"', page)
+        self.assertIn('title="A · Product Chat raw"', page)
+        self.assertIn('sandbox="allow-scripts"></iframe>', page)
+        self.assertNotIn(
+            'src="product-chat/final/" title="A · Product Chat final"',
+            page,
+        )
+
+    def test_live_wrapper_flag_is_all_or_none_same_origin_and_completed_only(self):
+        common = dict(
+            slug="product-chat/final",
+            raw_slug="product-chat/raw",
+            title="A",
+            profile="product_chat",
+            model="gemini-3.6-flash",
+            thinking="high",
+            status="completed",
+            summary="Accepted.",
+            critique_summary="Passed.",
+            elapsed_seconds=1,
+            total_tokens=1,
+            cost_usd=0,
+        )
+        with self.assertRaises(ValueError):
+            ComparisonVariant(
+                **common,
+                live_slug="/builder-comparison/direct-abc-v1/product-chat",
+            )
+        with self.assertRaises(ValueError):
+            ComparisonVariant(**common, trusted_live=True)
+        with self.assertRaises(ValueError):
+            ComparisonVariant(
+                **common,
+                live_slug="https://attacker.example/widget",
+                trusted_live=True,
+            )
+        with self.assertRaises(ValueError):
+            ComparisonVariant(
+                **{**common, "status": "failed"},
+                live_slug="/builder-comparison/direct-abc-v1/product-chat",
+                trusted_live=True,
+            )
 
     def test_optional_experiment_fields_are_all_or_none_and_bounded(self):
         with self.assertRaises(ValueError):

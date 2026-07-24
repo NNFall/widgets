@@ -10,8 +10,10 @@ import argparse
 import asyncio
 import json
 import os
+import shutil
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 if __package__ in {None, ""}:
@@ -20,8 +22,17 @@ if __package__ in {None, ""}:
 from dotenv import load_dotenv
 
 from builder_lab.browser_audit import BrowserAudit
-from builder_lab.comparison import FrozenBundle, verify_bundle
+from builder_lab.comparison import (
+    FrozenBundle,
+    validate_trusted_live_path,
+    verify_bundle,
+)
 from builder_lab.concept_roles import ConceptRolesError, run_concept_roles
+from builder_lab.demo import (
+    DemoUnavailable,
+    _chat_system_prompt,
+    _verified_source_url,
+)
 from builder_lab.engines.base import BuilderEngineError
 from builder_lab.engines.gemini_direct import GeminiDirectEngine
 from builder_lab.experiment_review import (
@@ -38,6 +49,7 @@ from builder_lab.experiments import (
     VariantExecutionError,
     run_abc_experiment,
     write_experiment_package,
+    write_private_demo_registry,
 )
 from builder_lab.models import (
     BuilderRequest,
@@ -56,6 +68,14 @@ DEFAULT_BRIEF = (
     "Это должен быть узнаваемый с первого взгляда живой чат, а не карточка или лендинг."
 )
 DEFAULT_PRICING_SOURCE = "https://ai.google.dev/gemini-api/docs/pricing"
+
+
+@dataclass(frozen=True)
+class PrivateDemoOptions:
+    output_dir: Path
+    source_url: str
+    chat_system_prompt: str
+    live_demo_base_path: str
 
 
 async def run_concept_roles_with_events(*, engine, request):
@@ -175,6 +195,132 @@ def _bundle_inputs(bundle: FrozenBundle) -> tuple[str, str]:
             + json.dumps(metadata, ensure_ascii=False, sort_keys=True)[:7_500]
         )
     return brief, reference
+
+
+def resolve_private_demo_options(
+    args: argparse.Namespace,
+) -> PrivateDemoOptions | None:
+    private_demo_output_dir = getattr(args, "private_demo_output_dir", None)
+    chat_system_prompt_file = getattr(args, "chat_system_prompt_file", None)
+    source_url_value = getattr(args, "source_url", None)
+    live_demo_base_path_value = getattr(args, "live_demo_base_path", None)
+    values = (
+        private_demo_output_dir,
+        chat_system_prompt_file,
+        source_url_value,
+        live_demo_base_path_value,
+    )
+    if not any(value is not None for value in values):
+        return None
+    if any(value is None for value in values):
+        raise SystemExit(
+            "--private-demo-output-dir, --chat-system-prompt-file, "
+            "--source-url, and --live-demo-base-path must be supplied together"
+        )
+    output_dir = Path(private_demo_output_dir)
+    if output_dir.exists() or output_dir.is_symlink():
+        raise SystemExit(
+            f"private demo output already exists: {output_dir}"
+        )
+    prompt_path = Path(chat_system_prompt_file)
+    prompt = _read_bounded_text(prompt_path, limit=16_000)
+    if prompt is None:
+        raise SystemExit(
+            "chat system prompt file is missing, unsafe, empty, or too large"
+        )
+    try:
+        source_url = _verified_source_url(str(source_url_value))
+        prompt = _chat_system_prompt(prompt)
+        live_demo_base_path = validate_trusted_live_path(
+            str(live_demo_base_path_value)
+        )
+    except (DemoUnavailable, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
+    return PrivateDemoOptions(
+        output_dir=output_dir,
+        source_url=source_url,
+        chat_system_prompt=prompt,
+        live_demo_base_path=live_demo_base_path,
+    )
+
+
+def publish_experiment_outputs(
+    *,
+    public_output: Path,
+    manifest,
+    base_request: BuilderRequest,
+    private_options: PrivateDemoOptions | None,
+) -> tuple[Path, Path | None]:
+    public_resolved = Path(public_output).resolve(strict=False)
+    private_output = None
+    private_resolved: Path | None = None
+    private_identity: tuple[int, int, int | None] | None = None
+    if private_options is not None:
+        private_resolved = private_options.output_dir.resolve(strict=False)
+        if (
+            public_resolved == private_resolved
+            or public_resolved in private_resolved.parents
+            or private_resolved in public_resolved.parents
+        ):
+            raise ValueError(
+                "public and private experiment outputs must be disjoint"
+            )
+        private_output = write_private_demo_registry(
+            private_options.output_dir,
+            manifest,
+            base_request=base_request,
+            source_url=private_options.source_url,
+            chat_system_prompt=private_options.chat_system_prompt,
+        )
+        if Path(private_output).resolve(strict=False) != private_resolved:
+            raise RuntimeError(
+                "private demo publisher returned an unexpected destination"
+            )
+        private_stat = Path(private_output).stat()
+        private_identity = (
+            private_stat.st_dev,
+            private_stat.st_ino,
+            getattr(private_stat, "st_uid", None),
+        )
+    try:
+        public_path = write_experiment_package(
+            public_output,
+            manifest,
+            live_base_path=(
+                private_options.live_demo_base_path
+                if private_options is not None
+                else None
+            ),
+        )
+    except BaseException as exc:
+        if (
+            private_output is not None
+            and private_resolved is not None
+            and private_identity is not None
+        ):
+            private_path = Path(private_output)
+            try:
+                current = private_path.lstat()
+                if (
+                    not private_path.is_symlink()
+                    and private_path.resolve(strict=False) == private_resolved
+                    and (
+                        current.st_dev,
+                        current.st_ino,
+                        getattr(current, "st_uid", None),
+                    )
+                    == private_identity
+                ):
+                    shutil.rmtree(private_path)
+            except FileNotFoundError:
+                pass
+            except OSError as cleanup_error:
+                exc.add_note(
+                    "private demo rollback failed: "
+                    f"{type(cleanup_error).__name__}"
+                )
+        raise
+    return public_path, private_output
 
 
 async def _validated_stage(
@@ -346,8 +492,18 @@ class DirectVariantExecutor:
             )
         except asyncio.CancelledError:
             raise
-        except VariantExecutionError:
-            raise
+        except VariantExecutionError as exc:
+            if exc.elapsed_seconds > 0:
+                raise
+            raise VariantExecutionError(
+                exc.error_code,
+                exc.public_message,
+                usage=exc.usage,
+                elapsed_seconds=max(0, time.perf_counter() - started),
+                raw=exc.raw,
+                final=exc.final,
+                role_events=exc.role_events,
+            ) from exc
         except ExperimentVisualQualityError as exc:
             raw = (
                 ExperimentEvidence(
@@ -397,6 +553,7 @@ class DirectVariantExecutor:
 
 
 async def run(args: argparse.Namespace) -> int:
+    private_options = resolve_private_demo_options(args)
     bundle = _load_bundle(args.bundle)
     brief, reference_context = _bundle_inputs(bundle)
     pricing = ExperimentPricingSnapshot(
@@ -450,11 +607,19 @@ async def run(args: argparse.Namespace) -> int:
         pricing=pricing,
         execute_variant=executor,
     )
-    output = write_experiment_package(args.output, manifest)
+    output, private_output = publish_experiment_outputs(
+        public_output=args.output,
+        manifest=manifest,
+        base_request=request,
+        private_options=private_options,
+    )
     print(
         json.dumps(
             {
                 "output": str(output),
+                "private_demo_output": (
+                    str(private_output) if private_output is not None else None
+                ),
                 "source_digest": manifest.source_digest,
                 "common_input_digest": manifest.common_input_digest,
                 "total_cost_usd": manifest.total_cost_usd,
@@ -501,6 +666,10 @@ def parser() -> argparse.ArgumentParser:
         help="Timezone-aware ISO-8601 timestamp for the pricing snapshot.",
     )
     root.add_argument("--pricing-source", default=DEFAULT_PRICING_SOURCE)
+    root.add_argument("--private-demo-output-dir", type=Path)
+    root.add_argument("--chat-system-prompt-file", type=Path)
+    root.add_argument("--source-url")
+    root.add_argument("--live-demo-base-path")
     return root
 
 

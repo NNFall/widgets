@@ -5,6 +5,7 @@ import html
 import json
 import math
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -14,6 +15,21 @@ from typing import Any, Mapping, Sequence
 
 
 MANIFEST_NAME = "manifest.json"
+
+
+def validate_trusted_live_path(value: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) > 300
+        or re.fullmatch(
+            r"/[A-Za-z0-9_-]+(?:/[A-Za-z0-9._~-]+)*",
+            value,
+        )
+        is None
+        or any(part in {"", ".", ".."} for part in value.split("/")[1:])
+    ):
+        raise ValueError("comparison live_slug is invalid")
+    return value
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -171,6 +187,8 @@ class ComparisonVariant:
     total_tokens: int | None = None
     cost_usd: float | None = None
     final_label: str = "Final"
+    live_slug: str | None = None
+    trusted_live: bool = False
 
     def __post_init__(self) -> None:
         self._validate_slug(self.slug, "slug")
@@ -184,6 +202,20 @@ class ComparisonVariant:
             or len(self.final_label) > 40
         ):
             raise ValueError("comparison final_label is invalid")
+        if type(self.trusted_live) is not bool:
+            raise ValueError("comparison trusted_live must be boolean")
+        if (self.live_slug is None) != (not self.trusted_live):
+            raise ValueError(
+                "comparison live_slug and trusted_live must be supplied together"
+            )
+        if self.live_slug is not None:
+            object.__setattr__(
+                self,
+                "live_slug",
+                validate_trusted_live_path(self.live_slug),
+            )
+            if self.status != "completed":
+                raise ValueError("only a completed comparison may link a live wrapper")
         experiment_fields = (
             self.raw_slug,
             self.profile,
@@ -267,9 +299,20 @@ def render_comparison_page(variants: Sequence[ComparisonVariant]) -> str:
             raw_slug = html.escape(variant.raw_slug or "", quote=True)
             tokens = f"{variant.total_tokens:,}".replace(",", " ")
             final_label = html.escape(variant.final_label)
+            live_slug = (
+                html.escape(variant.live_slug, quote=True)
+                if variant.live_slug is not None
+                else None
+            )
             link = (
-                f'<nav class="variant-links"><a href="{raw_slug}/">Raw ↗</a>'
-                f'<a href="{slug}/">{final_label} ↗</a></nav>'
+                f'<nav class="variant-links"><a href="{raw_slug}/viewer.html">Raw ↗</a>'
+                f'<a href="{slug}/viewer.html">Static {final_label} ↗</a>'
+                + (
+                    f'<a href="{live_slug}">Live ↗</a>'
+                    if live_slug is not None
+                    else ""
+                )
+                + "</nav>"
             )
             metadata = f"""
               <div class="experiment-meta">
@@ -279,6 +322,14 @@ def render_comparison_page(variants: Sequence[ComparisonVariant]) -> str:
                 <span>${float(variant.cost_usd):.4f}</span>
               </div>
               <p class="critique">{html.escape(variant.critique_summary or "")}</p>"""
+            final_preview_slug = live_slug or f"{slug}/"
+            final_preview_label = "Live" if live_slug is not None else final_label
+            final_preview_sandbox = (
+                "allow-scripts allow-same-origin"
+                if variant.trusted_live
+                else "allow-scripts"
+            )
+            final_preview_kind = "live" if live_slug is not None else "final"
             preview = f"""
               <div class="pair">
                 <section><strong>Raw</strong><iframe src="{raw_slug}/"
@@ -286,11 +337,11 @@ def render_comparison_page(variants: Sequence[ComparisonVariant]) -> str:
                   loading="lazy"
                   referrerpolicy="no-referrer"
                   sandbox="allow-scripts"></iframe></section>
-                <section><strong>{final_label}</strong><iframe src="{slug}/"
-                  title="{html.escape(variant.title, quote=True)} final"
+                <section><strong>{final_preview_label}</strong><iframe src="{final_preview_slug}"
+                  title="{html.escape(variant.title, quote=True)} {final_preview_kind}"
                   loading="lazy"
                   referrerpolicy="no-referrer"
-                  sandbox="allow-scripts"></iframe></section>
+                  sandbox="{final_preview_sandbox}"></iframe></section>
               </div>"""
         cards.append(
             f"""
@@ -346,5 +397,6 @@ __all__ = [
     "FrozenBundle",
     "freeze_bundle",
     "render_comparison_page",
+    "validate_trusted_live_path",
     "verify_bundle",
 ]

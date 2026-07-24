@@ -657,6 +657,51 @@ class BuilderLabWebTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await client.close()
 
+    async def test_demo_registry_scope_isolates_profiles_with_identical_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            demo_dir = Path(directory)
+            prompt = "One shared verified prompt."
+            for slug in ("product-chat", "brand-motion"):
+                save_demo(
+                    demo_dir / f"{slug}.json",
+                    completed_snapshot(),
+                    model="gemini-3.6-flash",
+                    source_url="https://rawbureau.ru/",
+                    chat_system_prompt=prompt,
+                )
+            app = create_builder_lab_app(
+                store=RunStore(),
+                orchestrator=FakeOrchestrator(RunStore()),
+                enabled_engines=(EngineName.DIRECT,),
+                demo_dir=demo_dir,
+                chat_service=self.chat_service,
+                chat_secure_cookie=False,
+            )
+            client = TestClient(TestServer(app))
+            await client.start_server()
+            try:
+                origin = (
+                    f"{client.make_url('/').scheme}://"
+                    f"{client.make_url('/').host}:{client.make_url('/').port}"
+                )
+                headers = {"Origin": origin, "X-Kaigo-Chat": "v2"}
+                scopes = []
+                for index, slug in enumerate(("product-chat", "brand-motion"), 1):
+                    response = await client.post(
+                        f"/demos/{slug}/chat",
+                        json={
+                            "request_id": f"request-identical-{index}",
+                            "message": "Same question",
+                            "revision": 2,
+                        },
+                        headers=headers,
+                    )
+                    self.assertEqual(response.status, 200)
+                    scopes.append(self.chat_service.calls[-1]["scope"])
+                self.assertNotEqual(scopes[0], scopes[1])
+            finally:
+                await client.close()
+
 
 if __name__ == "__main__":
     unittest.main()

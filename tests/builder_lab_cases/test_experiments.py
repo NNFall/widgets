@@ -1,13 +1,17 @@
 import asyncio
 import json
+import os
+import stat
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
+from builder_lab import experiments as experiment_module
 from builder_lab.experiments import (
     ABC_PROFILES,
     AbcExperimentManifest,
@@ -15,6 +19,7 @@ from builder_lab.experiments import (
     ExperimentPricingSnapshot,
     ExperimentRoleEvent,
     ExperimentVariant,
+    ExperimentVariantContext,
     VariantExecutionError,
     canonical_common_input_digest,
     run_abc_experiment,
@@ -32,7 +37,9 @@ from builder_lab.engines.base import BuilderEngineError, ConceptRoleResult
 from tests.builder_lab_cases.test_experiment_review import visual_critique
 from tests.builder_lab_cases.test_validation import artifact
 from tests.builder_lab_cases.test_visual_critic import report
+from scripts import run_abc_comparison as abc_script
 from scripts.run_abc_comparison import (
+    DirectVariantExecutor,
     resolve_single_pricing_policy,
     run_concept_roles_with_events,
 )
@@ -461,6 +468,76 @@ async def test_partial_role_failure_sanitizes_untrusted_provider_diagnostics():
 
 
 @pytest.mark.asyncio
+async def test_direct_executor_records_elapsed_time_for_partial_role_failure():
+    class FailingEngine:
+        def __init__(self):
+            self.closed = False
+
+        async def develop_concept_role(self, *, request, role, prior_briefs=()):
+            if role is ConceptRole.CONVERSATION_DESIGNER:
+                raise BuilderEngineError(
+                    "provider_unavailable",
+                    "Conversation role failed.",
+                    usage=TokenUsage(prompt_tokens=7),
+                )
+            return ConceptRoleResult(
+                brief=ConceptRoleBrief(
+                    role=role,
+                    summary="Brand evidence extracted.",
+                    decisions=("Keep the observed editorial grid.",),
+                    safeguards=(),
+                ),
+                usage=TokenUsage(prompt_tokens=5),
+            )
+
+        async def close(self):
+            self.closed = True
+
+    engine = FailingEngine()
+    executor = DirectVariantExecutor(
+        api_key="test-key",
+        base_url="https://generativelanguage.googleapis.com",
+        critic_model="gemini-3.6-flash",
+        critic_thinking="high",
+        critic_timeout_seconds=90,
+        browser_timeout_ms=10_000,
+        browser_total_timeout_seconds=120,
+    )
+    context = ExperimentVariantContext(
+        source_digest="a" * 64,
+        common_input_digest="b" * 64,
+        request=request(),
+        run_id="run-partial-role-failure",
+        model="gemini-3.6-flash",
+        thinking="high",
+        pricing=pricing(),
+        audit_semaphore=asyncio.Semaphore(1),
+    )
+
+    with (
+        patch(
+            "scripts.run_abc_comparison.GeminiDirectEngine",
+            return_value=engine,
+        ),
+        patch(
+            "scripts.run_abc_comparison.time.perf_counter",
+            side_effect=(100.0, 104.25),
+        ),
+        pytest.raises(VariantExecutionError) as caught,
+    ):
+        await executor(context)
+
+    error = caught.value
+    assert error.elapsed_seconds == pytest.approx(4.25)
+    assert error.usage == TokenUsage(prompt_tokens=12)
+    assert [event.status for event in error.role_events] == [
+        "completed",
+        "failed",
+    ]
+    assert engine.closed
+
+
+@pytest.mark.asyncio
 async def test_runner_starts_three_independent_variants_and_serializes_audits():
     started: set[CreativeProfile] = set()
     all_started = asyncio.Event()
@@ -615,6 +692,14 @@ def test_package_writer_is_atomic_bounded_and_never_overwrites_existing_routes(
     payload = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
     assert payload["common_input_digest"] == "b" * 64
     assert (output / "product-chat" / "final" / "index.html").is_file()
+    viewer = (
+        output / "product-chat" / "final" / "viewer.html"
+    ).read_text(encoding="utf-8")
+    assert 'src="index.html"' in viewer
+    assert 'sandbox="allow-scripts"' in viewer
+    assert "allow-same-origin" not in viewer
+    assert 'referrerpolicy="no-referrer"' in viewer
+    assert "<script" not in viewer.lower()
     assert (output / "product-chat" / "raw" / "critique.json").is_file()
     role_payload = json.loads(
         (output / "product-chat" / "role-events.json").read_text(
@@ -779,4 +864,410 @@ def test_failed_revision_is_packaged_as_rejected_evidence_not_accepted_final(
     assert not (output / "brand-motion" / "final").exists()
     page = (output / "index.html").read_text(encoding="utf-8")
     assert "Rejected final" in page
-    assert 'href="brand-motion/rejected-final/"' in page
+    assert 'href="brand-motion/rejected-final/viewer.html"' in page
+    assert 'href="brand-motion/rejected-final/"' not in page
+
+
+def test_private_demo_registry_exports_only_strictly_accepted_final_artifacts(
+    tmp_path: Path,
+):
+    failed = variant(
+        CreativeProfile.BRAND_MOTION,
+        status="failed",
+        rejected_final=True,
+    )
+    base_request = request(CreativeProfile.BRAND_MOTION)
+    accepted_variants = (
+        variant(CreativeProfile.PRODUCT_CHAT),
+        failed,
+        variant(CreativeProfile.AI_CHARACTER),
+    )
+    manifest = AbcExperimentManifest.create(
+        source_digest="a" * 64,
+        common_input_digest=canonical_common_input_digest(
+            source_digest="a" * 64,
+            request=base_request,
+            model=accepted_variants[0].model,
+            thinking=accepted_variants[0].thinking,
+        ),
+        contract_id="chat-v1",
+        variants=accepted_variants,
+    )
+    output = tmp_path / "private-abc"
+    chat_prompt = "Answer only from verified RAW BUREAU evidence."
+
+    experiment_module.write_private_demo_registry(
+        output,
+        manifest,
+        base_request=base_request,
+        source_url="https://rawbureau.ru/",
+        chat_system_prompt=chat_prompt,
+    )
+
+    product_path = output / "product-chat.json"
+    character_path = output / "ai-character.json"
+    assert product_path.is_file()
+    assert character_path.is_file()
+    assert not (output / "brand-motion.json").exists()
+    assert set(path.name for path in output.iterdir()) == {
+        "product-chat.json",
+        "ai-character.json",
+    }
+    product = json.loads(product_path.read_text(encoding="utf-8"))
+    accepted = manifest.variant(CreativeProfile.PRODUCT_CHAT)
+    assert product["schema_version"] == 2
+    assert product["model"] == accepted.model
+    assert product["elapsed_seconds"] == accepted.elapsed_seconds
+    assert product["usage"] == accepted.usage.to_dict()
+    assert product["artifact"] == accepted.final.artifact.to_dict()
+    assert product["request"]["creative_profile"] == "product_chat"
+    assert product["chat_system_prompt"] == chat_prompt
+    assert product["source_url"] == "https://rawbureau.ru/"
+    if os.name != "nt":
+        assert stat.S_IMODE(product_path.stat().st_mode) == 0o600
+        assert stat.S_IMODE(character_path.stat().st_mode) == 0o600
+    assert not tuple(output.rglob("*raw*"))
+    assert not tuple(output.rglob("*rejected*"))
+
+    with pytest.raises(FileExistsError):
+        experiment_module.write_private_demo_registry(
+            output,
+            manifest,
+            base_request=request(),
+            source_url="https://rawbureau.ru/",
+            chat_system_prompt=chat_prompt,
+        )
+
+
+def test_private_demo_registry_rejects_a_mismatched_base_request(tmp_path: Path):
+    manifest = AbcExperimentManifest.create(
+        source_digest="a" * 64,
+        common_input_digest=canonical_common_input_digest(
+            source_digest="a" * 64,
+            request=request(),
+            model="gemini-3.6-flash",
+            thinking="high",
+        ),
+        contract_id="chat-v1",
+        variants=tuple(variant(profile) for profile in ABC_PROFILES),
+    )
+    output = tmp_path / "private-mismatch"
+
+    with pytest.raises(ValueError, match="common input"):
+        experiment_module.write_private_demo_registry(
+            output,
+            manifest,
+            base_request=replace(request(), brief="Different brief"),
+            source_url="https://rawbureau.ru/",
+            chat_system_prompt="Verified prompt.",
+        )
+
+    assert not output.exists()
+
+
+def test_private_demo_registry_rejects_a_mismatched_contract_before_writing(
+    tmp_path: Path,
+):
+    base_request = request()
+    manifest = AbcExperimentManifest.create(
+        source_digest="a" * 64,
+        common_input_digest=canonical_common_input_digest(
+            source_digest="a" * 64,
+            request=base_request,
+            model="gemini-3.6-flash",
+            thinking="high",
+        ),
+        contract_id="chat-v1",
+        variants=tuple(variant(profile) for profile in ABC_PROFILES),
+    )
+    output = tmp_path / "private-contract-mismatch"
+    mismatched_request = request()
+    object.__setattr__(
+        mismatched_request,
+        "contract_id",
+        "corrupted-contract",
+    )
+
+    with pytest.raises(ValueError, match="contract"):
+        experiment_module.write_private_demo_registry(
+            output,
+            manifest,
+            base_request=mismatched_request,
+            source_url="https://rawbureau.ru/",
+            chat_system_prompt="Verified prompt.",
+        )
+
+    assert not output.exists()
+
+
+def test_public_package_links_accepted_profiles_to_trusted_live_wrappers(
+    tmp_path: Path,
+):
+    manifest = AbcExperimentManifest.create(
+        source_digest="a" * 64,
+        common_input_digest="b" * 64,
+        contract_id="chat-v1",
+        variants=tuple(variant(profile) for profile in ABC_PROFILES),
+    )
+    output = tmp_path / "direct-abc-live"
+
+    write_experiment_package(
+        output,
+        manifest,
+        live_base_path="/builder-comparison/direct-abc-v1",
+    )
+
+    page = (output / "index.html").read_text(encoding="utf-8")
+    assert (
+        'href="/builder-comparison/direct-abc-v1/product-chat"' in page
+    )
+    assert (
+        'src="/builder-comparison/direct-abc-v1/product-chat"' in page
+    )
+    assert 'href="product-chat/raw/viewer.html"' in page
+    assert 'href="product-chat/final/viewer.html"' in page
+    assert 'href="product-chat/raw/"' not in page
+    assert 'href="product-chat/final/"' not in page
+    assert page.count('sandbox="allow-scripts allow-same-origin"') == 3
+    assert page.count('referrerpolicy="no-referrer"') == 6
+
+
+def test_private_demo_cli_options_are_all_or_none_and_prompt_is_loaded_once(
+    tmp_path: Path,
+):
+    prompt_file = tmp_path / "chat-system-prompt.txt"
+    prompt_file.write_text("Verified RAW BUREAU chat prompt.", encoding="utf-8")
+    partial = SimpleNamespace(
+        private_demo_output_dir=tmp_path / "private",
+        chat_system_prompt_file=None,
+        source_url=None,
+        live_demo_base_path=None,
+    )
+    with pytest.raises(SystemExit, match="must be supplied together"):
+        abc_script.resolve_private_demo_options(partial)
+
+    complete = SimpleNamespace(
+        private_demo_output_dir=tmp_path / "private",
+        chat_system_prompt_file=prompt_file,
+        source_url="https://rawbureau.ru",
+        live_demo_base_path="/builder-comparison/direct-abc-v1",
+    )
+    with patch(
+        "scripts.run_abc_comparison._read_bounded_text",
+        return_value="Verified RAW BUREAU chat prompt.",
+    ) as read_prompt:
+        options = abc_script.resolve_private_demo_options(complete)
+
+    read_prompt.assert_called_once_with(prompt_file, limit=16_000)
+    assert options.output_dir == tmp_path / "private"
+    assert options.source_url == "https://rawbureau.ru/"
+    assert options.chat_system_prompt == "Verified RAW BUREAU chat prompt."
+    assert options.live_demo_base_path == "/builder-comparison/direct-abc-v1"
+
+
+def test_publish_outputs_makes_private_registry_before_public_live_links(
+    tmp_path: Path,
+):
+    manifest = AbcExperimentManifest.create(
+        source_digest="a" * 64,
+        common_input_digest="b" * 64,
+        contract_id="chat-v1",
+        variants=tuple(variant(profile) for profile in ABC_PROFILES),
+    )
+    private = abc_script.PrivateDemoOptions(
+        output_dir=tmp_path / "private",
+        source_url="https://rawbureau.ru/",
+        chat_system_prompt="Verified prompt.",
+        live_demo_base_path="/builder-comparison/direct-abc-v1",
+    )
+    calls = []
+
+    def write_private(path, manifest_value, **kwargs):
+        calls.append(("private", path, kwargs))
+        Path(path).mkdir()
+        return Path(path)
+
+    def write_public(path, manifest_value, **kwargs):
+        calls.append(("public", path, kwargs))
+        assert calls[0][0] == "private"
+        return Path(path)
+
+    with (
+        patch(
+            "scripts.run_abc_comparison.write_private_demo_registry",
+            side_effect=write_private,
+        ),
+        patch(
+            "scripts.run_abc_comparison.write_experiment_package",
+            side_effect=write_public,
+        ),
+    ):
+        public_output, private_output = abc_script.publish_experiment_outputs(
+            public_output=tmp_path / "public",
+            manifest=manifest,
+            base_request=request(),
+            private_options=private,
+        )
+
+    assert public_output == tmp_path / "public"
+    assert private_output == tmp_path / "private"
+    assert [call[0] for call in calls] == ["private", "public"]
+    assert (
+        calls[1][2]["live_base_path"]
+        == "/builder-comparison/direct-abc-v1"
+    )
+
+
+def test_publish_outputs_rejects_equal_or_nested_public_private_paths(
+    tmp_path: Path,
+):
+    manifest = AbcExperimentManifest.create(
+        source_digest="a" * 64,
+        common_input_digest="b" * 64,
+        contract_id="chat-v1",
+        variants=tuple(variant(profile) for profile in ABC_PROFILES),
+    )
+    with patch(
+        "scripts.run_abc_comparison.write_private_demo_registry"
+    ) as write_private:
+        for public_path, private_path in (
+            (tmp_path / "same", tmp_path / "same"),
+            (tmp_path / "public", tmp_path / "public" / "private"),
+            (tmp_path / "private" / "public", tmp_path / "private"),
+        ):
+            with pytest.raises(ValueError, match="disjoint"):
+                abc_script.publish_experiment_outputs(
+                    public_output=public_path,
+                    manifest=manifest,
+                    base_request=request(),
+                    private_options=abc_script.PrivateDemoOptions(
+                        output_dir=private_path,
+                        source_url="https://rawbureau.ru/",
+                        chat_system_prompt="Verified.",
+                        live_demo_base_path="/builder-comparison/direct-abc-v1",
+                    ),
+                )
+        write_private.assert_not_called()
+
+
+def test_publish_outputs_rolls_back_new_private_registry_when_public_fails(
+    tmp_path: Path,
+):
+    manifest = AbcExperimentManifest.create(
+        source_digest="a" * 64,
+        common_input_digest="b" * 64,
+        contract_id="chat-v1",
+        variants=tuple(variant(profile) for profile in ABC_PROFILES),
+    )
+    private_path = tmp_path / "private"
+
+    def create_private(path, *args, **kwargs):
+        Path(path).mkdir()
+        (Path(path) / "product-chat.json").write_text("private", encoding="utf-8")
+        return Path(path).resolve()
+
+    with (
+        patch(
+            "scripts.run_abc_comparison.write_private_demo_registry",
+            side_effect=create_private,
+        ),
+        patch(
+            "scripts.run_abc_comparison.write_experiment_package",
+            side_effect=RuntimeError("public failed"),
+        ),
+        pytest.raises(RuntimeError, match="public failed"),
+    ):
+        abc_script.publish_experiment_outputs(
+            public_output=tmp_path / "public",
+            manifest=manifest,
+            base_request=request(),
+            private_options=abc_script.PrivateDemoOptions(
+                output_dir=private_path,
+                source_url="https://rawbureau.ru/",
+                chat_system_prompt="Verified.",
+                live_demo_base_path="/builder-comparison/direct-abc-v1",
+            ),
+        )
+
+    assert not private_path.exists()
+
+
+def test_publish_rollback_does_not_remove_a_replaced_foreign_directory(
+    tmp_path: Path,
+):
+    manifest = AbcExperimentManifest.create(
+        source_digest="a" * 64,
+        common_input_digest="b" * 64,
+        contract_id="chat-v1",
+        variants=tuple(variant(profile) for profile in ABC_PROFILES),
+    )
+    private_path = tmp_path / "private"
+
+    def create_private(path, *args, **kwargs):
+        Path(path).mkdir()
+        return Path(path).resolve()
+
+    def replace_then_fail(*args, **kwargs):
+        private_path.rmdir()
+        private_path.mkdir()
+        (private_path / "foreign.txt").write_text("keep", encoding="utf-8")
+        raise RuntimeError("public failed after replacement")
+
+    with (
+        patch(
+            "scripts.run_abc_comparison.write_private_demo_registry",
+            side_effect=create_private,
+        ),
+        patch(
+            "scripts.run_abc_comparison.write_experiment_package",
+            side_effect=replace_then_fail,
+        ),
+        pytest.raises(RuntimeError, match="after replacement"),
+    ):
+        abc_script.publish_experiment_outputs(
+            public_output=tmp_path / "public",
+            manifest=manifest,
+            base_request=request(),
+            private_options=abc_script.PrivateDemoOptions(
+                output_dir=private_path,
+                source_url="https://rawbureau.ru/",
+                chat_system_prompt="Verified.",
+                live_demo_base_path="/builder-comparison/direct-abc-v1",
+            ),
+        )
+
+    assert (private_path / "foreign.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_abc_cli_parser_exposes_opt_in_private_demo_group():
+    args = abc_script.parser().parse_args(
+        [
+            "--bundle",
+            "bundle",
+            "--output",
+            "public",
+            "--prompt-price",
+            "1.5",
+            "--output-price",
+            "7.5",
+            "--thinking-price",
+            "7.5",
+            "--pricing-captured-at",
+            "2026-07-24T00:00:00+00:00",
+            "--private-demo-output-dir",
+            "private",
+            "--chat-system-prompt-file",
+            "chat-prompt.txt",
+            "--source-url",
+            "https://rawbureau.ru/",
+            "--live-demo-base-path",
+            "/builder-comparison/direct-abc-v1",
+        ]
+    )
+
+    assert args.private_demo_output_dir == Path("private")
+    assert args.chat_system_prompt_file == Path("chat-prompt.txt")
+    assert args.source_url == "https://rawbureau.ru/"
+    assert (
+        args.live_demo_base_path == "/builder-comparison/direct-abc-v1"
+    )
