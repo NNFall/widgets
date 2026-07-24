@@ -261,7 +261,8 @@ def render_comparison_page(variants: Sequence[ComparisonVariant]) -> str:
         preview = f"""
               <iframe src="{slug}/" title="{html.escape(variant.title, quote=True)}"
                 loading="lazy"
-                sandbox="allow-scripts allow-forms allow-same-origin"></iframe>"""
+                referrerpolicy="no-referrer"
+                sandbox="allow-scripts"></iframe>"""
         if variant.has_raw_final_pair:
             raw_slug = html.escape(variant.raw_slug or "", quote=True)
             tokens = f"{variant.total_tokens:,}".replace(",", " ")
@@ -283,11 +284,13 @@ def render_comparison_page(variants: Sequence[ComparisonVariant]) -> str:
                 <section><strong>Raw</strong><iframe src="{raw_slug}/"
                   title="{html.escape(variant.title, quote=True)} raw"
                   loading="lazy"
-                  sandbox="allow-scripts allow-forms allow-same-origin"></iframe></section>
+                  referrerpolicy="no-referrer"
+                  sandbox="allow-scripts"></iframe></section>
                 <section><strong>{final_label}</strong><iframe src="{slug}/"
                   title="{html.escape(variant.title, quote=True)} final"
                   loading="lazy"
-                  sandbox="allow-scripts allow-forms allow-same-origin"></iframe></section>
+                  referrerpolicy="no-referrer"
+                  sandbox="allow-scripts"></iframe></section>
               </div>"""
         cards.append(
             f"""

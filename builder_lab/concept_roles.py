@@ -36,10 +36,40 @@ class ConceptRolesError(BuilderEngineError):
 
 
 @dataclass(frozen=True)
+class ConceptRoleExecution:
+    brief: ConceptRoleBrief
+    usage: TokenUsage
+    provider_request_id: str | None = None
+    diagnostic: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.brief, ConceptRoleBrief):
+            raise ValueError("execution brief must be ConceptRoleBrief")
+        if not isinstance(self.usage, TokenUsage):
+            raise ValueError("execution usage must be TokenUsage")
+        for field_name, limit in (
+            ("provider_request_id", 256),
+            ("diagnostic", 2000),
+        ):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            if (
+                not isinstance(value, str)
+                or not value.strip()
+                or len(value) > limit
+                or "\x00" in value
+            ):
+                raise ValueError(f"execution {field_name} is invalid")
+            object.__setattr__(self, field_name, value.strip())
+
+
+@dataclass(frozen=True)
 class ConceptRolesResult:
     briefs: tuple[ConceptRoleBrief, ...]
     selected_direction: DirectionProposal
     usage: TokenUsage
+    executions: tuple[ConceptRoleExecution, ...] = ()
 
 
 def _direction_from_briefs(
@@ -65,6 +95,7 @@ async def run_concept_roles(
     request: BuilderRequest,
 ) -> ConceptRolesResult:
     briefs: list[ConceptRoleBrief] = []
+    executions: list[ConceptRoleExecution] = []
     usage = TokenUsage()
     for role in CONCEPT_ROLES:
         try:
@@ -97,10 +128,19 @@ async def run_concept_roles(
                 usage=usage,
             )
         briefs.append(result.brief)
+        executions.append(
+            ConceptRoleExecution(
+                brief=result.brief,
+                usage=result.usage,
+                provider_request_id=result.provider_request_id,
+                diagnostic=result.diagnostic,
+            )
+        )
 
     bounded_briefs = tuple(briefs)
     return ConceptRolesResult(
         briefs=bounded_briefs,
         selected_direction=_direction_from_briefs(bounded_briefs),
         usage=usage,
+        executions=tuple(executions),
     )

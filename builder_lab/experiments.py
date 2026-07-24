@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import errno
 import hashlib
 import json
 import math
@@ -8,6 +10,7 @@ import os
 import re
 import secrets
 import shutil
+import sys
 import tempfile
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -20,7 +23,7 @@ from .comparison import ComparisonVariant, render_comparison_page
 from .contracts import resolve_widget_contract
 from .models import BuilderRequest, CreativeProfile, TokenUsage, WidgetArtifact
 from .preview import build_preview_document
-from .strict_visual_models import StrictVisualCritique
+from .strict_visual_models import StrictVisualCritique, StrictVisualVerdict
 
 
 ABC_PROFILES = (
@@ -135,7 +138,11 @@ class ExperimentRoleEvent:
     role: str
     status: str
     summary: str
+    decisions: tuple[str, ...] = ()
+    safeguards: tuple[str, ...] = ()
     usage: TokenUsage = field(default_factory=TokenUsage)
+    provider_request_id: str | None = None
+    diagnostic: str | None = None
 
     def __post_init__(self) -> None:
         role = _text(self.role, "role", 96)
@@ -145,18 +152,46 @@ class ExperimentRoleEvent:
         if status not in {"started", "completed", "failed"}:
             raise ValueError("role status is invalid")
         summary = _text(self.summary, "role summary", 1000)
+        decisions = tuple(
+            _text(item, "role decision", 160) for item in self.decisions
+        )
+        safeguards = tuple(
+            _text(item, "role safeguard", 160) for item in self.safeguards
+        )
+        if len(decisions) > 4 or (status == "completed" and not decisions):
+            raise ValueError("role decisions are invalid")
+        if len(safeguards) > 8:
+            raise ValueError("role safeguards are invalid")
         if not isinstance(self.usage, TokenUsage):
             raise ValueError("role usage must be TokenUsage")
+        provider_request_id = self.provider_request_id
+        if provider_request_id is not None:
+            provider_request_id = _text(
+                provider_request_id,
+                "provider_request_id",
+                256,
+            )
+        diagnostic = self.diagnostic
+        if diagnostic is not None:
+            diagnostic = _text(diagnostic, "role diagnostic", 2000)
         object.__setattr__(self, "role", role)
         object.__setattr__(self, "status", status)
         object.__setattr__(self, "summary", summary)
+        object.__setattr__(self, "decisions", decisions)
+        object.__setattr__(self, "safeguards", safeguards)
+        object.__setattr__(self, "provider_request_id", provider_request_id)
+        object.__setattr__(self, "diagnostic", diagnostic)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "role": self.role,
             "status": self.status,
             "summary": self.summary,
+            "decisions": list(self.decisions),
+            "safeguards": list(self.safeguards),
             "usage": self.usage.to_dict(),
+            "provider_request_id": self.provider_request_id,
+            "diagnostic": self.diagnostic,
         }
 
 
@@ -245,6 +280,8 @@ class ExperimentVariant:
                 raise ValueError("completed variant requires raw and final evidence")
             if self.raw.artifact == self.final.artifact:
                 raise ValueError("completed variant raw and final artifacts must differ")
+            if self.final.critique.verdict is not StrictVisualVerdict.PASS:
+                raise ValueError("completed variant final critique must pass")
             if self.error_code is not None or self.error_message is not None:
                 raise ValueError("completed variant cannot contain an error")
         else:
@@ -607,6 +644,49 @@ def _write(path: Path, data: bytes) -> None:
     path.write_bytes(data)
 
 
+def _rename_directory_noreplace(source: Path, destination: Path) -> None:
+    if sys.platform.startswith("linux"):
+        libc = ctypes.CDLL(None, use_errno=True)
+        renameat2 = getattr(libc, "renameat2", None)
+        if renameat2 is None:
+            raise RuntimeError("atomic no-replace directory rename is unavailable")
+        renameat2.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        renameat2.restype = ctypes.c_int
+        result = renameat2(
+            -100,
+            os.fsencode(source),
+            -100,
+            os.fsencode(destination),
+            1,
+        )
+        if result == 0:
+            return
+        error_number = ctypes.get_errno()
+        if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+            raise FileExistsError(
+                error_number,
+                os.strerror(error_number),
+                str(destination),
+            )
+        raise OSError(
+            error_number,
+            os.strerror(error_number),
+            str(destination),
+        )
+    if os.name == "nt":
+        os.rename(source, destination)
+        return
+    if destination.exists() or destination.is_symlink():
+        raise FileExistsError(f"destination already exists: {destination}")
+    os.rename(source, destination)
+
+
 def _write_evidence(root: Path, evidence: ExperimentEvidence) -> None:
     _write(root / "artifact.json", _json_bytes(evidence.artifact.to_dict()))
     _write(root / "critique.json", _json_bytes(evidence.critique.to_dict()))
@@ -643,18 +723,34 @@ def write_experiment_package(
         raise TypeError("manifest must be AbcExperimentManifest")
     output = Path(output_dir).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
+    reservation = output.parent / f".{output.name}.lock"
     try:
-        output.mkdir(mode=0o700)
+        descriptor = os.open(
+            reservation,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o600,
+        )
     except FileExistsError as exc:
         raise FileExistsError(
-            f"refusing to overwrite experiment package: {output}"
+            f"experiment package destination is already reserved: {output}"
         ) from exc
-    temporary = Path(tempfile.mkdtemp(prefix=".building-", dir=str(output)))
+    else:
+        os.close(descriptor)
+    temporary: Path | None = None
     try:
+        if output.exists() or output.is_symlink():
+            raise FileExistsError(
+                f"refusing to overwrite experiment package: {output}"
+            )
+        temporary = Path(
+            tempfile.mkdtemp(
+                prefix=f".{output.name}.staging-",
+                dir=str(output.parent),
+            )
+        )
         manifest_bytes = _json_bytes(manifest.to_dict())
         if len(manifest_bytes) > _MAX_MANIFEST_BYTES:
             raise ValueError("experiment manifest exceeds the package limit")
-        _write(temporary / "manifest.json", manifest_bytes)
         cards: list[ComparisonVariant] = []
         for variant in manifest.variants:
             variant_root = temporary / variant.public_slug
@@ -762,18 +858,29 @@ def write_experiment_package(
             temporary / "index.html",
             render_comparison_page(tuple(cards)).encode("utf-8"),
         )
-        for child in tuple(temporary.iterdir()):
-            if child.name == "manifest.json":
-                continue
-            os.replace(child, output / child.name)
-        os.replace(
-            temporary / "manifest.json",
-            output / "manifest.json",
-        )
-        temporary.rmdir()
+        # A package is verifiable only after this last file exists. The complete
+        # staging directory is still private at this point.
+        _write(temporary / "manifest.json", manifest_bytes)
+        if output.exists() or output.is_symlink():
+            raise FileExistsError(
+                f"refusing to overwrite experiment package: {output}"
+            )
+        try:
+            _rename_directory_noreplace(temporary, output)
+        except FileExistsError as exc:
+            raise FileExistsError(
+                f"refusing to overwrite experiment package: {output}"
+            ) from exc
+        temporary = None
     except BaseException:
-        shutil.rmtree(output, ignore_errors=True)
         raise
+    finally:
+        if temporary is not None:
+            shutil.rmtree(temporary, ignore_errors=True)
+        try:
+            reservation.unlink()
+        except FileNotFoundError:
+            pass
     return output
 
 

@@ -4,6 +4,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -21,14 +22,20 @@ from builder_lab.experiments import (
 )
 from builder_lab.models import (
     BuilderRequest,
+    ConceptRole,
+    ConceptRoleBrief,
     CreativeProfile,
     EngineName,
     TokenUsage,
 )
+from builder_lab.engines.base import ConceptRoleResult
 from tests.builder_lab_cases.test_experiment_review import visual_critique
 from tests.builder_lab_cases.test_validation import artifact
 from tests.builder_lab_cases.test_visual_critic import report
-from scripts.run_abc_comparison import resolve_single_pricing_policy
+from scripts.run_abc_comparison import (
+    resolve_single_pricing_policy,
+    run_concept_roles_with_events,
+)
 
 
 def evidence(*, suffix: str) -> ExperimentEvidence:
@@ -84,6 +91,11 @@ def variant(
                 role="site_brand_analyst",
                 status="completed",
                 summary="Brand evidence extracted.",
+                decisions=("Use the observed editorial grid.",),
+                safeguards=("Keep the chat subordinate to the page.",),
+                usage=TokenUsage(prompt_tokens=10, output_tokens=4),
+                provider_request_id="provider-role-1",
+                diagnostic="model=gemini-3.6-flash",
             ),
         ),
         error_code="provider_unavailable" if status == "failed" else None,
@@ -178,6 +190,30 @@ def test_variant_keeps_raw_and_final_separate_and_records_exact_cost():
     assert payload["cost_usd"] == pytest.approx(0.002)
 
 
+def test_completed_variant_requires_a_passing_final_critique():
+    raw = evidence(suffix="raw")
+    rejected = ExperimentEvidence(
+        artifact=evidence(suffix="rejected").artifact,
+        audit=report(),
+        critique=visual_critique(repair=True),
+    )
+
+    with pytest.raises(ValueError, match="final critique must pass"):
+        ExperimentVariant.create(
+            profile=CreativeProfile.PRODUCT_CHAT,
+            public_slug="product-chat",
+            run_id="run-rejected-as-completed",
+            model="gemini-3.6-flash",
+            thinking="high",
+            status="completed",
+            raw=raw,
+            final=rejected,
+            usage=TokenUsage(prompt_tokens=100),
+            elapsed_seconds=1,
+            pricing=pricing(),
+        )
+
+
 def test_failed_variant_is_kept_without_fabricated_evidence():
     item = variant(CreativeProfile.AI_CHARACTER, status="failed")
 
@@ -241,6 +277,77 @@ def test_single_pricing_runner_defaults_critic_to_main_and_rejects_mixed_models(
             critic_model="gemini-3.5-flash",
             critic_thinking="high",
         )
+
+
+@pytest.mark.asyncio
+async def test_role_pipeline_preserves_full_briefs_and_real_usage_without_double_count():
+    calls = []
+    role_usage = {
+        ConceptRole.SITE_BRAND_ANALYST: TokenUsage(prompt_tokens=11, output_tokens=3),
+        ConceptRole.CONVERSATION_DESIGNER: TokenUsage(
+            prompt_tokens=13,
+            output_tokens=5,
+        ),
+        ConceptRole.ART_DIRECTOR_FRONTEND_DEVELOPER: TokenUsage(
+            prompt_tokens=17,
+            output_tokens=7,
+            thinking_tokens=2,
+        ),
+    }
+
+    class FakeEngine:
+        async def develop_concept_role(self, *, request, role, prior_briefs=()):
+            calls.append((role, tuple(item.role for item in prior_briefs)))
+            return ConceptRoleResult(
+                brief=ConceptRoleBrief(
+                    role=role,
+                    summary=f"{role.value} summary",
+                    decisions=(f"{role.value} decision",),
+                    safeguards=(f"{role.value} safeguard",),
+                ),
+                usage=role_usage[role],
+                provider_request_id=f"request-{role.value}",
+                diagnostic=f"diagnostic-{role.value}",
+            )
+
+    result, events = await run_concept_roles_with_events(
+        engine=FakeEngine(),
+        request=request(),
+    )
+
+    assert calls == [
+        (ConceptRole.SITE_BRAND_ANALYST, ()),
+        (
+            ConceptRole.CONVERSATION_DESIGNER,
+            (ConceptRole.SITE_BRAND_ANALYST,),
+        ),
+        (
+            ConceptRole.ART_DIRECTOR_FRONTEND_DEVELOPER,
+            (
+                ConceptRole.SITE_BRAND_ANALYST,
+                ConceptRole.CONVERSATION_DESIGNER,
+            ),
+        ),
+    ]
+    assert tuple(event.usage for event in events) == tuple(
+        role_usage[role] for role in role_usage
+    )
+    assert result.usage == sum(role_usage.values(), TokenUsage())
+    assert sum((event.usage for event in events), TokenUsage()) == result.usage
+    assert events[-1].decisions == (
+        "art_director_frontend_developer decision",
+    )
+    assert events[-1].safeguards == (
+        "art_director_frontend_developer safeguard",
+    )
+    assert (
+        events[-1].provider_request_id
+        == "request-art_director_frontend_developer"
+    )
+    assert (
+        events[-1].diagnostic
+        == "diagnostic-art_director_frontend_developer"
+    )
 
 
 @pytest.mark.asyncio
@@ -374,6 +481,15 @@ def test_package_writer_is_atomic_bounded_and_never_overwrites_existing_routes(
     assert payload["common_input_digest"] == "b" * 64
     assert (output / "product-chat" / "final" / "index.html").is_file()
     assert (output / "product-chat" / "raw" / "critique.json").is_file()
+    role_payload = json.loads(
+        (output / "product-chat" / "role-events.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert role_payload["events"][0]["decisions"] == [
+        "Use the observed editorial grid."
+    ]
+    assert role_payload["events"][0]["usage"]["prompt_tokens"] == 10
     assert (sibling / "sentinel.txt").read_text(encoding="utf-8") == "keep"
     with pytest.raises(FileExistsError):
         write_experiment_package(output, manifest)
@@ -404,7 +520,101 @@ def test_package_writer_reserves_destination_exclusively_under_a_race(
     assert sorted(result[0] for result in results) == ["exists", "ok"]
     payload = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
     assert payload["source_digest"] == "a" * 64
-    assert not tuple(tmp_path.glob(".direct-abc-race-*"))
+    assert not tuple(tmp_path.glob(".direct-abc-race*"))
+
+
+def test_package_final_directory_is_invisible_until_atomic_publish(tmp_path: Path):
+    manifest = AbcExperimentManifest.create(
+        source_digest="a" * 64,
+        common_input_digest="b" * 64,
+        contract_id="chat-v1",
+        variants=tuple(variant(profile) for profile in ABC_PROFILES),
+    )
+    output = tmp_path / "direct-abc-invisible"
+    entered = threading.Event()
+    release = threading.Event()
+    from builder_lab import experiments as experiment_module
+
+    original = experiment_module._write_evidence
+
+    def delayed(root, item):
+        if not entered.is_set():
+            entered.set()
+            assert release.wait(timeout=5)
+        return original(root, item)
+
+    with patch("builder_lab.experiments._write_evidence", side_effect=delayed):
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(write_experiment_package, output, manifest)
+            assert entered.wait(timeout=5)
+            assert not output.exists()
+            release.set()
+            assert future.result(timeout=15) == output.resolve()
+
+    assert (output / "manifest.json").is_file()
+    assert not tuple(tmp_path.glob(".direct-abc-invisible*"))
+
+
+def test_package_manifest_is_the_last_file_written_before_publish(tmp_path: Path):
+    manifest = AbcExperimentManifest.create(
+        source_digest="a" * 64,
+        common_input_digest="b" * 64,
+        contract_id="chat-v1",
+        variants=tuple(variant(profile) for profile in ABC_PROFILES),
+    )
+    output = tmp_path / "direct-abc-manifest-last"
+    from builder_lab import experiments as experiment_module
+
+    original = experiment_module._write
+    written: list[str] = []
+
+    def recording(path, data):
+        written.append(path.name)
+        return original(path, data)
+
+    with patch("builder_lab.experiments._write", side_effect=recording):
+        write_experiment_package(output, manifest)
+
+    assert written[-1] == "manifest.json"
+    assert (output / "manifest.json").is_file()
+
+
+def test_package_failure_cleans_reservation_and_does_not_remove_foreign_final(
+    tmp_path: Path,
+):
+    manifest = AbcExperimentManifest.create(
+        source_digest="a" * 64,
+        common_input_digest="b" * 64,
+        contract_id="chat-v1",
+        variants=tuple(variant(profile) for profile in ABC_PROFILES),
+    )
+    output = tmp_path / "direct-abc-foreign"
+    entered = threading.Event()
+    release = threading.Event()
+    from builder_lab import experiments as experiment_module
+
+    original = experiment_module._write_evidence
+
+    def delayed(root, item):
+        if not entered.is_set():
+            entered.set()
+            assert release.wait(timeout=5)
+        return original(root, item)
+
+    with patch("builder_lab.experiments._write_evidence", side_effect=delayed):
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(write_experiment_package, output, manifest)
+            assert entered.wait(timeout=5)
+            output.mkdir()
+            foreign_inode = output.stat().st_ino
+            release.set()
+            with pytest.raises(FileExistsError):
+                future.result(timeout=15)
+
+    assert output.is_dir()
+    assert output.stat().st_ino == foreign_inode
+    assert not tuple(output.iterdir())
+    assert not tuple(tmp_path.glob(".direct-abc-foreign*"))
 
 
 def test_failed_revision_is_packaged_as_rejected_evidence_not_accepted_final(

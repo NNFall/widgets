@@ -105,9 +105,12 @@ class ComparisonBundleTests(unittest.TestCase):
         self.assertIn('href="direct-3-6/"', page)
         self.assertIn('href="antigravity-3-6/"', page)
         self.assertIn(
-            'sandbox="allow-scripts allow-forms allow-same-origin"',
+            'sandbox="allow-scripts"',
             page,
         )
+        self.assertIn('referrerpolicy="no-referrer"', page)
+        self.assertNotIn("allow-same-origin", page)
+        self.assertNotIn("allow-forms", page)
         self.assertNotIn("<script", page.lower())
         json.dumps(page)
 

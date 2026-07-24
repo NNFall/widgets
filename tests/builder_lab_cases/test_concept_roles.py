@@ -55,6 +55,8 @@ class RecordingConceptRoleEngine:
         return ConceptRoleResult(
             brief=brief(role),
             usage=TokenUsage(prompt_tokens=10, output_tokens=2, thinking_tokens=1),
+            provider_request_id=f"request-{role.value}",
+            diagnostic=f"diagnostic-{role.value}",
         )
 
 
@@ -158,6 +160,29 @@ class ConceptRoleSequenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.usage.prompt_tokens, 30)
         self.assertEqual(result.usage.output_tokens, 6)
         self.assertEqual(result.usage.thinking_tokens, 3)
+        self.assertEqual(
+            tuple(item.brief for item in result.executions),
+            result.briefs,
+        )
+        self.assertEqual(
+            tuple(item.usage for item in result.executions),
+            (
+                TokenUsage(prompt_tokens=10, output_tokens=2, thinking_tokens=1),
+            )
+            * 3,
+        )
+        self.assertEqual(
+            result.executions[-1].provider_request_id,
+            "request-art_director_frontend_developer",
+        )
+        self.assertEqual(
+            result.executions[-1].diagnostic,
+            "diagnostic-art_director_frontend_developer",
+        )
+        self.assertEqual(
+            sum((item.usage for item in result.executions), TokenUsage()),
+            result.usage,
+        )
 
     async def test_failure_usage_includes_completed_and_failed_call_exactly_once(self):
         class FailingEngine(RecordingConceptRoleEngine):

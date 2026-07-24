@@ -58,6 +58,24 @@ DEFAULT_BRIEF = (
 DEFAULT_PRICING_SOURCE = "https://ai.google.dev/gemini-api/docs/pricing"
 
 
+async def run_concept_roles_with_events(*, engine, request):
+    result = await run_concept_roles(engine=engine, request=request)
+    events = tuple(
+        ExperimentRoleEvent(
+            role=execution.brief.role.value,
+            status="completed",
+            summary=execution.brief.summary,
+            decisions=execution.brief.decisions,
+            safeguards=execution.brief.safeguards,
+            usage=execution.usage,
+            provider_request_id=execution.provider_request_id,
+            diagnostic=execution.diagnostic,
+        )
+        for execution in result.executions
+    )
+    return result, events
+
+
 def resolve_single_pricing_policy(
     *,
     model: str,
@@ -219,19 +237,12 @@ class DirectVariantExecutor:
                 return await context.run_browser_audit(operation)
 
         try:
-            concepts = await run_concept_roles(
+            concepts, concept_events = await run_concept_roles_with_events(
                 engine=engine,
                 request=context.request,
             )
             usage = usage + concepts.usage
-            for role_brief in concepts.briefs:
-                role_events.append(
-                    ExperimentRoleEvent(
-                        role=role_brief.role.value,
-                        status="completed",
-                        summary=role_brief.summary,
-                    )
-                )
+            role_events.extend(concept_events)
             previous = None
             for stage in DIRECT_STAGES:
                 candidate, stage_usage = await _validated_stage(
