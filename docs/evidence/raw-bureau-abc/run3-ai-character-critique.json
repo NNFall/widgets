@@ -1,0 +1,123 @@
+{
+  "assessments": [
+    {
+      "confidence": 0.95,
+      "dimension": "direction_fidelity",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.95,
+      "dimension": "page_subordination",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.95,
+      "dimension": "visual_hierarchy",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.95,
+      "dimension": "conversation_clarity",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.95,
+      "dimension": "typography_legibility",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.92,
+      "dimension": "spacing_alignment",
+      "finding_ids": [],
+      "score": 4
+    },
+    {
+      "confidence": 0.95,
+      "dimension": "system_coherence",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.95,
+      "dimension": "responsive_composition",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.92,
+      "dimension": "craft_polish",
+      "finding_ids": [
+        "finding_scroll_clip"
+      ],
+      "score": 3
+    },
+    {
+      "confidence": 0.95,
+      "dimension": "distinctiveness",
+      "finding_ids": [],
+      "score": 5
+    }
+  ],
+  "findings": [
+    {
+      "confidence": 0.92,
+      "dimension": "craft_polish",
+      "evidence": "При прокрутке переписки верхняя строка текста первого сообщения 'разработке.' упирается в край контейнера и срезается верхней границей сообщения без отступа.",
+      "finding_id": "finding_scroll_clip",
+      "region": {
+        "height": 0.03,
+        "semantic_region": "messages",
+        "width": 0.18,
+        "x": 0.8,
+        "y": 0.56
+      },
+      "screenshot_id": "desktop.after_turn_2"
+    }
+  ],
+  "observations": [
+    {
+      "observation": "Лаунчер RAW AI расположен в правом нижнем углу, выполнен в бруталистском монохромном стиле с зеленым статусом ONLINE и двойной рамкой с жесткой тенью.",
+      "screenshot_id": "desktop.closed"
+    },
+    {
+      "observation": "Панель виджета открывается над лаунчером, содержит технический заголовок SYS//v2.4, приветствие от ИИ и интерактивные кнопки быстрых ответов.",
+      "screenshot_id": "desktop.open_initial"
+    },
+    {
+      "observation": "Диалог наглядно разделяет сообщения пользователя и ИИ с помощью контрастных цветовых полос-акцентов и выравнивания. При прокрутке верхний текст частично срезается границей блока.",
+      "screenshot_id": "desktop.after_turn_2"
+    },
+    {
+      "observation": "Мобильный лаунчер аккуратно позиционируется внизу экрана, сохраняя читаемость и бруталистские элементы оформления.",
+      "screenshot_id": "mobile.closed"
+    },
+    {
+      "observation": "Мобильная панель открывается примерно на 70% высоты экрана, оставляя видимым контекст страницы и обеспечивая удобство взаимодействия.",
+      "screenshot_id": "mobile.open_initial"
+    },
+    {
+      "observation": "История сообщений на мобильном устройстве сохраняет пропорции, контрастность и моноширинную типографику без горизонтального переполнения.",
+      "screenshot_id": "mobile.after_turn_2"
+    }
+  ],
+  "revision_actions": [
+    {
+      "action_id": "action_fix_messages_padding",
+      "artifact_fields": [
+        "css"
+      ],
+      "finding_ids": [
+        "finding_scroll_clip"
+      ],
+      "instruction": "Добавить внутренний отступ padding-top для контейнера сообщений в CSS, чтобы предотвратить прилипание и срезание текста при прокрутке истории диалога к верхнему краю."
+    }
+  ],
+  "summary": "Виджет RAW AI демонстрирует отличное соответствие бруталистскому эстетическому коду бюро, хорошую контрастность, понятную структуру диалога и грамотную адаптацию под мобильные устройства. Единственным мелким дефектом является срезание верхнего текста при прокрутке сообщений.",
+  "verdict": "pass",
+  "weighted_score": 4.76
+}
