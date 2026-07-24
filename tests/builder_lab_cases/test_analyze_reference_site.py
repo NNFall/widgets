@@ -329,6 +329,43 @@ class ReferenceGeminiAnalysisTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(reference["provenance"]["attempt_count"], 4)
 
+    async def test_normalizes_safe_duplicate_items_from_provider(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs, manifest_path = evidence_with_manifest(root)
+            payload = valid_analysis(REQUIRED_LABELS)
+            payload["public_facts"][0]["evidence"] = [
+                "desktop.top",
+                "desktop.top",
+            ]
+            payload["public_facts"].append(dict(payload["public_facts"][0]))
+            payload["visual_tokens"]["palette"].append(
+                dict(payload["visual_tokens"]["palette"][0])
+            )
+            fake = FakeClient(payload)
+
+            reference = await analyze_reference_site(
+                source_url="https://rawbureau.ru/",
+                allowed_hosts={"rawbureau.ru"},
+                screenshot_inputs=inputs,
+                evidence_root=root,
+                captured_at="2026-07-19T12:10:23.127441+00:00",
+                coverage_status="complete",
+                capture_manifest=manifest_path,
+                api_key="test-key",
+                model="gemini-3.6-flash",
+                client=fake,
+            )
+
+            analysis = reference["analysis"]
+            self.assertEqual(len(fake.aio.models.calls), 1)
+            self.assertEqual(len(analysis["public_facts"]), 1)
+            self.assertEqual(
+                analysis["public_facts"][0]["evidence"],
+                ["desktop.top"],
+            )
+            self.assertEqual(len(analysis["visual_tokens"]["palette"]), 1)
+
     async def test_gemini_2_5_omits_unsupported_thinking_level(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

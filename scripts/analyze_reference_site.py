@@ -431,12 +431,14 @@ def _bounded_text(value: Any, *, minimum: int, maximum: int, field: str) -> str:
 def _validate_evidence(values: Any, labels: set[str]) -> list[str]:
     if (
         not isinstance(values, list)
-        or not 1 <= len(values) <= 6
-        or len(values) != len(set(values))
+        or not 1 <= len(values) <= 24
         or any(not isinstance(value, str) or value not in labels for value in values)
     ):
         raise ValueError("unknown or invalid evidence label")
-    return list(values)
+    normalized = list(dict.fromkeys(values))
+    if len(normalized) > 6:
+        raise ValueError("evidence list is outside its item budget")
+    return normalized
 
 
 def _validate_semantic_output(payload: dict[str, Any], labels: set[str]) -> dict[str, Any]:
@@ -454,7 +456,7 @@ def _validate_semantic_output(payload: dict[str, Any], labels: set[str]) -> dict
         statement = _bounded_text(raw["statement"], minimum=8, maximum=500, field="statement")
         folded = statement.casefold()
         if folded in seen_facts:
-            raise ValueError("public facts must be unique")
+            continue
         seen_facts.add(folded)
         facts.append({"statement": statement, "evidence": _validate_evidence(raw["evidence"], labels)})
 
@@ -474,7 +476,7 @@ def _validate_semantic_output(payload: dict[str, Any], labels: set[str]) -> dict
                 raise ValueError("visual token fields do not match contract")
             token = _bounded_text(raw["token"], minimum=2, maximum=80, field="token")
             if token.casefold() in seen_tokens:
-                raise ValueError("visual tokens must be unique within a category")
+                continue
             seen_tokens.add(token.casefold())
             items.append(
                 {
