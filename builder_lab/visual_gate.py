@@ -648,7 +648,11 @@ class VisualRepairGate:
                     )
                     if (
                         getattr(exc, "error_code", None)
-                        in {"visual_evidence_unproven", "invalid_visual_critique"}
+                        in {
+                            "visual_evidence_unproven",
+                            "invalid_visual_critique",
+                            "visual_critic_unavailable",
+                        }
                         and audit_attempt < MAX_VISUAL_AUDITS
                     ):
                         continue
