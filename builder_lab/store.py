@@ -184,9 +184,64 @@ class RunStore:
             )
             return self._snapshot(record)
 
+    async def create_seeded(
+        self,
+        request: BuilderRequest,
+        artifact: WidgetArtifact,
+    ) -> BuilderRunSnapshot:
+        now = datetime.now(timezone.utc)
+        async with self._changed:
+            self._prune_expired_locked(now)
+            self._prune_capacity_locked(self._max_runs - 1)
+            if len(self._runs) >= self._max_runs:
+                raise RunCapacityExceeded("all builder run slots are active")
+            run_id = secrets.token_urlsafe(24)
+            while run_id in self._runs:
+                run_id = secrets.token_urlsafe(24)
+            seed = _copy_artifact(artifact)
+            record = _RunRecord(
+                run_id=run_id,
+                request=request,
+                status=RunStatus.CREATED,
+                created_at=now,
+                updated_at=now,
+                artifact=seed,
+                artifacts={artifact.revision: _copy_artifact(artifact)},
+            )
+            self._runs[run_id] = record
+            self._append_locked(
+                record,
+                event_type="run.created",
+                stage=None,
+                status="created",
+                message="Запуск создан",
+            )
+            self._append_locked(
+                record,
+                event_type="artifact.seeded",
+                stage=artifact.stage,
+                status="completed",
+                message="Принятая версия перенесена в доработку",
+                revision=artifact.revision,
+            )
+            return self._snapshot(record)
+
     async def snapshot(self, run_id: str) -> BuilderRunSnapshot:
         async with self._lock:
             return self._snapshot(self._record(run_id))
+
+    async def update_request(
+        self,
+        run_id: str,
+        request: BuilderRequest,
+    ) -> None:
+        async with self._changed:
+            record = self._record(run_id)
+            if record.status in TERMINAL_STATUSES or record.cancel_requested:
+                raise RunTerminal(run_id)
+            record.request = request
+            record.updated_at = datetime.now(timezone.utc)
+            self._changed.notify_all()
 
     async def append_event(
         self,

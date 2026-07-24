@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any, cast
 
 from .directions import DirectionBoardError, run_direction_board
@@ -17,6 +18,7 @@ from .models import (
     BuilderRequest,
     BuilderRunSnapshot,
     DirectionProposal,
+    DirectionRole,
     EngineName,
     RunStatus,
     Stage,
@@ -28,6 +30,7 @@ from .models import (
 from .store import RunStore, RunTerminal, TERMINAL_STATUSES
 from .validation import issue_fingerprint, validate_artifact
 from .visual_gate import VisualRepairGate
+from .reference_pipeline import ReferenceAnalysisResult, ReferencePipelineError
 
 
 DIRECT_STAGES = (
@@ -56,6 +59,9 @@ class BuilderOrchestrator:
         engine_factories: dict[EngineName, Callable[[], BuilderEngine]],
         visual_audit_factory: Callable[[], Any] | None = None,
         visual_critic_factory: Callable[[], Any] | None = None,
+        reference_analyzer: (
+            Callable[[str], Any] | None
+        ) = None,
     ) -> None:
         if (visual_audit_factory is None) != (visual_critic_factory is None):
             raise ValueError("visual audit and critic factories must be configured together")
@@ -65,6 +71,7 @@ class BuilderOrchestrator:
         self._cancel_tasks: dict[str, asyncio.Task[None]] = {}
         self._engines: dict[str, BuilderEngine] = {}
         self._stages: dict[str, Stage | None] = {}
+        self._reference_analyzer = reference_analyzer
         self._visual_gate = (
             VisualRepairGate(
                 store=store,
@@ -149,6 +156,64 @@ class BuilderOrchestrator:
             raise ValueError("only a failed or cancelled run can be retried")
         return await self.start(snapshot.request)
 
+    async def refine(
+        self,
+        source_run_id: str,
+        message: str,
+    ) -> BuilderRunSnapshot:
+        if not isinstance(message, str):
+            raise ValueError("refinement message must be text")
+        instruction = message.strip()
+        if not instruction or len(instruction) > 2_000 or "\x00" in instruction:
+            raise ValueError("refinement message is invalid")
+        source = await self.store.snapshot(source_run_id)
+        if (
+            source.status is not RunStatus.COMPLETED
+            or source.request.engine is not EngineName.DIRECT
+            or source.artifact is None
+            or source.artifact.stage is not Stage.MOTION_POLISH
+        ):
+            raise ValueError("only a completed direct widget can be refined")
+        factory = self._factories.get(EngineName.DIRECT)
+        if factory is None:
+            raise BuilderEngineError(
+                "provider_unavailable",
+                "Direct-режим не настроен в этом запуске",
+            )
+        separator = "\n\nПОЖЕЛАНИЕ ПОЛЬЗОВАТЕЛЯ К СЛЕДУЮЩЕЙ РЕВИЗИИ:\n"
+        available = max(0, 12_000 - len(separator) - len(instruction))
+        request = replace(
+            source.request,
+            brief=source.request.brief[:available] + separator + instruction,
+        )
+        engine = factory()
+        try:
+            snapshot = await self.store.create_seeded(request, source.artifact)
+        except Exception:
+            try:
+                await engine.close()
+            except Exception:
+                pass
+            raise
+        self._engines[snapshot.run_id] = engine
+        self._stages[snapshot.run_id] = Stage.MOTION_POLISH
+        task = asyncio.create_task(
+            self._run_refinement(
+                snapshot.run_id,
+                request,
+                cast(DirectBuilderEngine, engine),
+                source.artifact,
+            ),
+            name=f"kaigo-builder-refinement-{snapshot.run_id}",
+        )
+        self._tasks[snapshot.run_id] = task
+        task.add_done_callback(
+            lambda completed, run_id=snapshot.run_id: self._discard_task(
+                run_id, completed
+            )
+        )
+        return snapshot
+
     async def close(self) -> None:
         tasks = list(self._tasks.values())
         await asyncio.gather(
@@ -170,6 +235,7 @@ class BuilderOrchestrator:
         started = time.monotonic()
         try:
             await self.store.set_running(run_id)
+            request = await self._prepare_reference(run_id, request)
             if request.engine is EngineName.DIRECT:
                 await self._run_direct(run_id, request, engine)
             else:
@@ -210,6 +276,191 @@ class BuilderOrchestrator:
             cancel_task = self._cancel_tasks.get(run_id)
             if cancel_task is not None and cancel_task is not asyncio.current_task():
                 await asyncio.gather(asyncio.shield(cancel_task), return_exceptions=True)
+            try:
+                await engine.close()
+            except Exception:
+                pass
+            self._cancel_tasks.pop(run_id, None)
+            self._engines.pop(run_id, None)
+            self._stages.pop(run_id, None)
+
+    async def _prepare_reference(
+        self,
+        run_id: str,
+        request: BuilderRequest,
+    ) -> BuilderRequest:
+        if not request.source_url or request.reference_context:
+            return request
+        if self._reference_analyzer is None:
+            raise BuilderEngineError(
+                "provider_unavailable",
+                "Автоматический анализ сайта не настроен",
+            )
+        await self.store.append_event(
+            run_id,
+            event_type="reference.started",
+            stage=None,
+            status="running",
+            message="Открываем сайт и делаем desktop/mobile снимки",
+        )
+        try:
+            analysis = await self._reference_analyzer(request.source_url)
+        except asyncio.CancelledError:
+            raise
+        except ReferencePipelineError as exc:
+            await self.store.append_event(
+                run_id,
+                event_type="reference.failed",
+                stage=None,
+                status="failed",
+                message=exc.public_message,
+                error_code=exc.error_code,
+                diagnostic=exc.diagnostic,
+            )
+            raise BuilderEngineError(
+                exc.error_code,
+                exc.public_message,
+                diagnostic=exc.diagnostic,
+            ) from exc
+        if not isinstance(analysis, ReferenceAnalysisResult):
+            raise BuilderEngineError(
+                "reference_analysis_invalid",
+                "Автоматический анализ сайта вернул некорректный результат",
+            )
+        grounded = replace(request, reference_context=analysis.context)
+        await self.store.update_request(run_id, grounded)
+        await self.store.append_event(
+            run_id,
+            event_type="reference.completed",
+            stage=None,
+            status="completed",
+            message="Визуальный стиль и подтверждённые факты сайта собраны",
+            usage=analysis.usage,
+            diagnostic=analysis.summary[:1_000],
+        )
+        return grounded
+
+    async def _run_refinement(
+        self,
+        run_id: str,
+        request: BuilderRequest,
+        engine: DirectBuilderEngine,
+        previous: WidgetArtifact,
+    ) -> None:
+        started = time.monotonic()
+        direction = DirectionProposal(
+            proposal_id="candidate-1",
+            role=DirectionRole.INTERACTION_INVENTOR,
+            title="Сохранить принятое направление",
+            art_direction=(
+                previous.art_direction[:1_200]
+                or "Сохранить визуальный язык принятой версии."
+            ),
+            interaction_model=(
+                "Изменить только то, что просит пользователь, сохранив работающий чат."
+            ),
+            safeguards=(
+                "Не превращать доработку в новую несвязанную концепцию.",
+                "Сохранить все реальные chat controls.",
+            ),
+        )
+        try:
+            await self.store.set_running(run_id)
+            revision = previous.revision + 1
+            self._stages[run_id] = Stage.MOTION_POLISH
+            await self.store.append_event(
+                run_id,
+                event_type="refinement.started",
+                stage=Stage.MOTION_POLISH,
+                status="running",
+                message="Gemini дорабатывает принятую версию по сообщению",
+                revision=revision,
+            )
+            result = await engine.generate(
+                request=request,
+                stage=Stage.MOTION_POLISH,
+                revision=revision,
+                previous_artifact=previous,
+                selected_direction=direction,
+            )
+            await self.store.append_event(
+                run_id,
+                event_type="stage.completed",
+                stage=Stage.MOTION_POLISH,
+                status="completed",
+                message="Gemini завершил пользовательскую доработку",
+                revision=revision,
+                usage=result.usage,
+                diagnostic=result.diagnostic,
+            )
+            candidate = await self._validate_and_repair(
+                run_id=run_id,
+                request=request,
+                engine=engine,
+                candidate=result.artifact,
+                previous=previous,
+                selected_direction=direction,
+            )
+            self._stages[run_id] = Stage.MOTION_POLISH
+            if self._visual_gate is not None:
+                candidate = await self._visual_gate.evaluate(
+                    run_id=run_id,
+                    request=request,
+                    engine=engine,
+                    candidate=candidate,
+                    previous=previous,
+                    selected_direction=direction,
+                )
+                await self.store.commit_visual_candidate(run_id)
+            else:
+                await self.store.commit_artifact(run_id, candidate)
+                await self.store.append_event(
+                    run_id,
+                    event_type="artifact.committed",
+                    stage=candidate.stage,
+                    status="completed",
+                    message=artifact_commit_message(candidate),
+                    revision=candidate.revision,
+                    changes=artifact_changed_fields(previous, candidate),
+                )
+            await self.store.finish(
+                run_id,
+                RunStatus.COMPLETED,
+                event_type="run.completed",
+                stage=Stage.MOTION_POLISH,
+                message="Доработка завершена и проверена",
+                revision=candidate.revision,
+                elapsed_seconds=time.monotonic() - started,
+            )
+        except asyncio.CancelledError:
+            await self._mark_cancelled(run_id, started)
+        except BuilderEngineError as exc:
+            if exc.error_code == "run_cancelled" or await self._cancelled(run_id):
+                await self._mark_cancelled(run_id, started)
+            else:
+                await self._mark_failed(run_id, exc, started)
+        except RunTerminal:
+            if await self._cancelled(run_id):
+                await self._mark_cancelled(run_id, started)
+            else:
+                raise
+        except Exception as exc:
+            await self._mark_failed(
+                run_id,
+                BuilderEngineError(
+                    "internal_error",
+                    "Внутренняя ошибка доработки",
+                    diagnostic=f"{type(exc).__name__}: {exc}",
+                ),
+                started,
+            )
+        finally:
+            cancel_task = self._cancel_tasks.get(run_id)
+            if cancel_task is not None and cancel_task is not asyncio.current_task():
+                await asyncio.gather(
+                    asyncio.shield(cancel_task),
+                    return_exceptions=True,
+                )
             try:
                 await engine.close()
             except Exception:

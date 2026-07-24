@@ -210,7 +210,7 @@ def apply_browser_repair(
 
 
 class VisualRepairGate:
-    """Keep revision 5 private until browser and Gemini visual checks pass."""
+    """Keep a motion-polish revision private until visual checks pass."""
 
     _cleanup_orphans: set[asyncio.Task[Any]] = set()
 
@@ -308,10 +308,10 @@ class VisualRepairGate:
         previous: WidgetArtifact,
         selected_direction: DirectionProposal,
     ) -> WidgetArtifact:
-        if candidate.stage is not Stage.MOTION_POLISH or candidate.revision != 5:
-            raise ValueError("visual gate accepts only motion_polish revision 5")
-        if previous.revision != 4:
-            raise ValueError("visual gate requires committed revision 4")
+        if candidate.stage is not Stage.MOTION_POLISH:
+            raise ValueError("visual gate accepts only motion_polish artifacts")
+        if candidate.revision != previous.revision + 1:
+            raise ValueError("visual gate requires consecutive revisions")
 
         await self._store.stage_visual_candidate(run_id, candidate)
         critic: VisualCritic | None = None

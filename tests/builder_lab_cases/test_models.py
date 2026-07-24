@@ -76,6 +76,42 @@ class BuilderModelsTests(unittest.TestCase):
                     {"engine": "direct", "brief": "x", "reference_context": invalid}
                 )
 
+    def test_request_round_trips_optional_public_https_source_url(self):
+        request = BuilderRequest.from_dict(
+            {
+                "engine": "direct",
+                "brief": "Сделай консультанта",
+                "source_url": "  https://example.com/services  ",
+            }
+        )
+
+        self.assertEqual(request.source_url, "https://example.com/services")
+        self.assertEqual(
+            BuilderRequest.from_dict(request.to_dict()).source_url,
+            "https://example.com/services",
+        )
+
+    def test_request_rejects_unsafe_or_ambiguous_source_urls(self):
+        invalid_urls = (
+            "http://example.com/",
+            "https://user:pass@example.com/",
+            "https://example.com:8443/",
+            "https://example.com/#fragment",
+            "https://example.com/?token=secret",
+            "file:///etc/passwd",
+            "x" * 2_049,
+        )
+
+        for source_url in invalid_urls:
+            with self.subTest(source_url=source_url), self.assertRaises(ValueError):
+                BuilderRequest.from_dict(
+                    {
+                        "engine": "direct",
+                        "brief": "x",
+                        "source_url": source_url,
+                    }
+                )
+
     def test_request_rejects_invalid_inputs(self):
         invalid = [
             {"engine": "unknown", "brief": "valid brief"},

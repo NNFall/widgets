@@ -6,14 +6,7 @@ from .models import EngineName
 from .preview import preview_iframe_attributes
 
 
-DEFAULT_BRIEF = """Создай премиального AI-сотрудника для архитектурного бюро.
-
-Он должен встречать посетителя как спокойный куратор проекта: понимать задачу,
-помогать выбрать формат работы и предлагать следующий конкретный шаг. Нужна
-выразительная визуальная метафора, связанная с чертежами, материалами и светом,
-русский текст, сильная типографическая иерархия и аккуратное движение.
-
-Виджет должен ощущаться частью дорогого сайта, а не стандартным чат-пузырём."""
+DEFAULT_BRIEF = ""
 
 
 def render_builder_page(
@@ -50,10 +43,10 @@ def render_builder_page(
     button {{ color:inherit; }}
     .shell {{ width:min(1680px,100%); min-height:100dvh; margin:0 auto; padding:18px; display:grid; grid-template-columns:minmax(330px,.78fr) minmax(520px,1.45fr); gap:18px; }}
     .rail,.stage {{ min-width:0; border:1px solid var(--line); background:rgba(33,31,27,.91); box-shadow:inset 0 1px rgba(255,255,255,.035),0 24px 60px rgba(9,8,6,.22); }}
-    .rail {{ border-radius:26px; padding:24px; display:flex; flex-direction:column; gap:24px; overflow:auto; }}
+    .rail {{ border-radius:26px; padding:24px; display:flex; flex-direction:column; gap:18px; overflow:auto; }}
     .stage {{ border-radius:34px; padding:20px; display:grid; grid-template-rows:auto auto minmax(520px,1fr); gap:14px; overflow:hidden; }}
     .eyebrow {{ margin:0 0 10px; color:var(--accent); font:600 11px/1.2 "Cascadia Mono",monospace; letter-spacing:.15em; text-transform:uppercase; }}
-    h1 {{ margin:0; max-width:13ch; font-size:clamp(30px,3.1vw,52px); line-height:.98; letter-spacing:-.052em; font-weight:650; }}
+    h1 {{ margin:0; max-width:15ch; font-size:clamp(28px,2.7vw,46px); line-height:1; letter-spacing:-.045em; font-weight:650; }}
     .lede {{ margin:15px 0 0; max-width:44ch; color:var(--muted); font-size:14px; line-height:1.55; }}
     .control-grid {{ display:grid; grid-template-columns:1fr 112px; gap:12px; }}
     .field {{ display:grid; gap:8px; }}
@@ -61,10 +54,13 @@ def render_builder_page(
     label {{ color:#d9d4ca; font-size:12px; font-weight:600; }}
     select,input,textarea {{ width:100%; border:1px solid var(--line); border-radius:13px; color:var(--text); background:#191814; outline:none; transition:border-color .22s ease,transform .22s ease; }}
     select,input {{ min-height:42px; padding:0 12px; }}
-    textarea {{ min-height:220px; resize:vertical; padding:13px; line-height:1.5; }}
+    textarea {{ min-height:88px; resize:vertical; padding:13px; line-height:1.5; }}
     select:focus,input:focus,textarea:focus {{ border-color:var(--accent); }}
     .helper {{ margin:0; color:#837f77; font-size:11px; line-height:1.45; }}
     .actions {{ display:grid; grid-template-columns:1fr auto auto; gap:9px; }}
+    details {{ grid-column:1/-1; border-top:1px solid var(--line); padding-top:10px; }}
+    summary {{ color:#9b968d; cursor:pointer; font-size:11px; }}
+    .advanced-controls {{ margin-top:12px; display:grid; grid-template-columns:1fr 112px; gap:12px; }}
     .button {{ min-height:43px; border:1px solid var(--line); border-radius:13px; padding:0 15px; background:#292721; cursor:pointer; transition:transform .2s cubic-bezier(.16,1,.3,1),background .2s ease,border-color .2s ease; }}
     .button:hover {{ border-color:#625e55; background:#302e28; }}
     .button:active {{ transform:translateY(1px) scale(.985); }}
@@ -83,15 +79,19 @@ def render_builder_page(
     .pulse {{ width:7px; height:7px; border-radius:50%; background:#67635b; }}
     .pulse.running {{ background:var(--accent); animation:pulse 1.8s ease-in-out 6; }}
     @keyframes pulse {{ 50% {{ opacity:.35; transform:scale(.82); }} }}
-    .timeline {{ min-height:132px; max-height:280px; overflow:auto; display:grid; align-content:start; gap:0; border-top:1px solid var(--line); }}
+    .timeline {{ min-height:150px; max-height:320px; overflow:auto; display:grid; align-content:start; gap:9px; padding:12px; border:1px solid var(--line); border-radius:14px; background:#191814; }}
     .empty {{ padding:28px 0; color:#77736c; font-size:12px; line-height:1.55; }}
-    .event {{ position:relative; padding:11px 0 11px 22px; border-bottom:1px solid rgba(59,56,50,.72); animation:arrive .36s cubic-bezier(.16,1,.3,1) both; }}
-    .event::before {{ content:""; position:absolute; left:1px; top:16px; width:6px; height:6px; border:1px solid #77736c; border-radius:50%; background:var(--surface); }}
+    .event {{ position:relative; width:min(92%,360px); padding:10px 12px; border:1px solid rgba(59,56,50,.9); border-radius:13px 13px 13px 4px; background:#24221e; animation:arrive .36s cubic-bezier(.16,1,.3,1) both; }}
+    .event.user {{ justify-self:end; border-color:rgba(216,131,96,.45); border-radius:13px 13px 4px 13px; background:rgba(216,131,96,.13); }}
+    .event::before {{ content:""; position:absolute; left:-4px; top:15px; width:6px; height:6px; border:1px solid #77736c; border-radius:50%; background:var(--surface); }}
+    .event.user::before {{ display:none; }}
     .event[data-status="completed"]::before {{ border-color:var(--accent); background:var(--accent); }}
     .event[data-status="failed"]::before {{ border-color:var(--danger); background:var(--danger); }}
     .event-meta {{ display:flex; justify-content:space-between; gap:12px; color:#8c877e; font:500 9px/1.3 "Cascadia Mono",monospace; letter-spacing:.06em; text-transform:uppercase; }}
     .event-message {{ margin-top:4px; color:#d6d1c7; font-size:12px; line-height:1.4; }}
     .event-changes {{ margin-top:5px; color:#9c978e; font:500 9px/1.45 "Cascadia Mono",monospace; letter-spacing:.035em; }}
+    .refinement-box {{ display:grid; grid-template-columns:1fr auto; gap:8px; margin-top:10px; }}
+    .refinement-box textarea {{ min-height:48px; max-height:120px; resize:vertical; }}
     @keyframes arrive {{ from {{ opacity:0; transform:translateY(7px); }} to {{ opacity:1; transform:translateY(0); }} }}
     .stage-head {{ display:grid; grid-template-columns:1fr auto; gap:18px; align-items:center; padding:3px 4px 1px; }}
     .stage-title {{ display:flex; align-items:center; gap:12px; min-width:0; }}
@@ -125,42 +125,55 @@ def render_builder_page(
   <main class="shell">
     <section class="rail" aria-label="Настройки генерации">
       <header>
-        <p class="eyebrow">Kaigo / controlled experiment</p>
-        <h1>AI-сотрудник собирается на глазах.</h1>
-        <p class="lede">Каждая смена preview — завершённая моделью и проверенная Kaigo ревизия. Никаких нарисованных стадий.</p>
+        <p class="eyebrow">Kaigo / функциональный прототип</p>
+        <h1>Создайте AI-сотрудника для сайта.</h1>
+        <p class="lede">Вставьте ссылку. Kaigo снимет страницу, соберёт визуальный бриф, создаст виджет и автоматически проверит результат.</p>
       </header>
       <div class="control-grid">
-        <div class="field">
-          <label for="engine">Движок</label>
-          <select id="engine">{options}</select>
-          <p class="helper">Staged — быстрый управляемый цикл. Agent — автономная сборка в remote environment.</p>
-        </div>
-        <div class="field" id="creativity-field">
-          <label for="creativity">Творчество</label>
-          <input id="creativity" type="number" min="0" max="2" step="0.05" value="{temperature}">
-          <p class="helper">0–2</p>
+        <div class="field field-wide">
+          <label for="source-url">Ссылка на сайт</label>
+          <input id="source-url" type="url" inputmode="url" autocomplete="url" placeholder="https://example.com" required>
+          <p class="helper">Пока анализируется одна публичная HTTPS-страница: desktop и mobile, верх, середина и низ.</p>
         </div>
         <div class="field field-wide">
-          <label for="brief">Что должен создать AI</label>
-          <textarea id="brief" spellcheck="true">{escape(DEFAULT_BRIEF)}</textarea>
-          <p class="helper">Опишите бизнес, роль сотрудника, характер и желаемое впечатление. Модель сама выберет цельную визуальную метафору.</p>
+          <label for="brief">Пожелание к AI-сотруднику <span class="helper">· необязательно</span></label>
+          <textarea id="brief" maxlength="12000" spellcheck="true" placeholder="Например: спокойный консультант, который помогает выбрать услугу">{escape(DEFAULT_BRIEF)}</textarea>
         </div>
+        <details>
+          <summary>Дополнительные параметры прототипа</summary>
+          <div class="advanced-controls">
+            <div class="field">
+              <label for="engine">Движок</label>
+              <select id="engine">{options}</select>
+            </div>
+            <div class="field" id="creativity-field">
+              <label for="creativity">Творчество</label>
+              <input id="creativity" type="number" min="0" max="2" step="0.05" value="{temperature}">
+            </div>
+          </div>
+        </details>
       </div>
       <div class="actions">
-        <button class="button button-primary" id="generate" type="button">Собрать виджет</button>
+        <button class="button button-primary" id="generate" type="button">Создать виджет</button>
         <button class="button" id="cancel" type="button" disabled>Отмена</button>
         <button class="button" id="retry" type="button" disabled>Повторить</button>
       </div>
       <div class="error" id="error" role="alert"></div>
+      <section>
+        <div class="timeline-head"><h2>Диалог с генератором</h2><span class="pulse" id="pulse"></span></div>
+        <div id="builder-messages">
+          <div class="timeline" id="timeline"><div class="empty">После запуска здесь появятся реальные этапы анализа, генерации и проверки.</div></div>
+        </div>
+        <div class="refinement-box">
+          <textarea id="refinement" maxlength="2000" placeholder="Что изменить в готовом виджете?" disabled></textarea>
+          <button class="button" id="refine" type="button" disabled>Изменить</button>
+        </div>
+      </section>
       <div class="telemetry" aria-label="Метрики запуска">
         <div class="metric"><span class="metric-label">Ревизия</span><span class="metric-value" id="revision">—</span></div>
         <div class="metric"><span class="metric-label">Токены</span><span class="metric-value" id="tokens">—</span></div>
         <div class="metric"><span class="metric-label">Время</span><span class="metric-value" id="elapsed">—</span></div>
       </div>
-      <section>
-        <div class="timeline-head"><h2>Реальный журнал стадий</h2><span class="pulse" id="pulse"></span></div>
-        <div class="timeline" id="timeline"><div class="empty">Здесь появятся запросы модели, проверка и зафиксированные preview-ревизии.</div></div>
-      </section>
     </section>
 
     <section class="stage" aria-label="Предпросмотр виджета">
@@ -187,7 +200,7 @@ def render_builder_page(
   <script>
   (() => {{
     'use strict';
-    const elements = Object.fromEntries(['engine','creativity','creativity-field','brief','generate','cancel','retry','error','revision','tokens','elapsed','timeline','pulse','status','preview','preview-empty','viewport','art-direction','validation-badge'].map(id => [id, document.getElementById(id)]));
+    const elements = Object.fromEntries(['source-url','engine','creativity','creativity-field','brief','generate','cancel','retry','error','revision','tokens','elapsed','builder-messages','timeline','pulse','status','preview','preview-empty','viewport','art-direction','validation-badge','refinement','refine'].map(id => [id, document.getElementById(id)]));
     const defaultMaxRepairs = {int(default_max_repairs)};
     let currentRun = null;
     let stream = null;
@@ -195,11 +208,12 @@ def render_builder_page(
     let snapshotTimer = null;
     let previewChannel = null;
     let previewRevision = null;
+    let previewRun = null;
     const previewRequests = new Set();
 
     const labUrl = path => new URL(path, document.baseURI).toString();
     const showError = (message) => {{ elements.error.textContent = message || ''; elements.error.classList.toggle('visible', Boolean(message)); }};
-    const setRunning = (running) => {{ elements.generate.disabled = running; elements.cancel.disabled = !running; elements.pulse.classList.toggle('running', running); }};
+    const setRunning = (running) => {{ elements.generate.disabled = running; elements.cancel.disabled = !running; elements.refinement.disabled = running || !terminal; elements.refine.disabled = running || !terminal; elements.pulse.classList.toggle('running', running); }};
     const formatNumber = value => new Intl.NumberFormat('ru-RU').format(value || 0);
     const requestPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{{7,95}}$/;
 
@@ -209,6 +223,7 @@ def render_builder_page(
 
     function loadPreview(revision) {{
       previewRevision = Number(revision);
+      previewRun = currentRun;
       previewChannel = createChannel();
       previewRequests.clear();
       elements.preview.src = labUrl(`api/runs/${{currentRun}}/preview?revision=${{previewRevision}}&channel=${{encodeURIComponent(previewChannel)}}`);
@@ -264,17 +279,32 @@ def render_builder_page(
       elements.timeline.replaceChildren();
       const skeleton = document.createElement('div');
       skeleton.className = 'empty';
-      skeleton.textContent = 'Gemini получает бриф и начинает первую реальную стадию…';
+      skeleton.textContent = 'Kaigo готовит анализ сайта…';
       elements.timeline.append(skeleton);
       elements['art-direction'].textContent = 'Появится после первой валидной ревизии';
       elements['validation-badge'].textContent = 'Не проверено';
       elements['validation-badge'].className = 'validation-badge';
     }}
 
+    function addBuilderMessage(role, text) {{
+      if (elements.timeline.firstElementChild?.classList.contains('empty')) elements.timeline.replaceChildren();
+      const row = document.createElement('article');
+      row.className = `event ${{role === 'user' ? 'user' : 'assistant'}}`;
+      const meta = document.createElement('div');
+      meta.className = 'event-meta';
+      meta.textContent = role === 'user' ? 'Вы' : 'Kaigo';
+      const message = document.createElement('div');
+      message.className = 'event-message';
+      message.textContent = text;
+      row.append(meta, message);
+      elements.timeline.append(row);
+      elements.timeline.scrollTop = elements.timeline.scrollHeight;
+    }}
+
     function appendEvent(event) {{
       if (elements.timeline.firstElementChild?.classList.contains('empty')) elements.timeline.replaceChildren();
       const row = document.createElement('article');
-      row.className = 'event';
+      row.className = 'event assistant';
       row.dataset.status = event.status || '';
       const meta = document.createElement('div');
       meta.className = 'event-meta';
@@ -304,7 +334,7 @@ def render_builder_page(
       elements.timeline.append(row);
       elements.timeline.scrollTop = elements.timeline.scrollHeight;
       elements.status.textContent = `${{event.stage || 'run'}} · ${{event.status || ''}}`;
-      if (event.type === 'artifact.committed' && event.revision) {{
+      if ((event.type === 'artifact.committed' || event.type === 'artifact.seeded') && event.revision) {{
         loadPreview(event.revision);
       }}
       if (event.type === 'artifact.validated') {{
@@ -331,9 +361,13 @@ def render_builder_page(
         elements.tokens.textContent = formatNumber(usage.total_tokens);
         elements.elapsed.textContent = snapshot.elapsed_seconds ? `${{snapshot.elapsed_seconds.toFixed(1)}} с` : 'в процессе';
         terminal = ['completed','failed','cancelled'].includes(snapshot.status);
+        if (snapshot.artifact?.revision && (previewRun !== currentRun || previewRevision !== snapshot.artifact.revision)) loadPreview(snapshot.artifact.revision);
         if (terminal) {{
           setRunning(false);
           elements.retry.disabled = snapshot.status === 'completed';
+          const refinable = snapshot.status === 'completed' && snapshot.request?.engine === 'direct';
+          elements.refinement.disabled = !refinable;
+          elements.refine.disabled = !refinable;
           elements.status.textContent = snapshot.status === 'completed' ? 'Готово · артефакт проверен' : `Остановлено · ${{snapshot.error_code || snapshot.status}}`;
         }}
       }} catch (error) {{ showError(error.message); }}
@@ -350,14 +384,19 @@ def render_builder_page(
 
     async function generate() {{
       showError('');
-      const brief = elements.brief.value.trim();
-      if (!brief) {{ showError('Сначала опишите будущего AI-сотрудника.'); return; }}
+      const sourceUrl = elements['source-url'].value.trim();
+      if (!sourceUrl) {{ showError('Сначала вставьте HTTPS-ссылку на сайт.'); elements['source-url'].focus(); return; }}
+      let parsedUrl;
+      try {{ parsedUrl = new URL(sourceUrl); }} catch (_) {{ showError('Ссылка на сайт некорректна.'); return; }}
+      if (parsedUrl.protocol !== 'https:' || parsedUrl.username || parsedUrl.password || parsedUrl.port || parsedUrl.search || parsedUrl.hash) {{ showError('Нужна публичная HTTPS-ссылка без параметров и авторизации.'); return; }}
+      const brief = elements.brief.value.trim() || 'Создай компактного AI-сотрудника, который консультирует посетителей по подтверждённым данным этого сайта.';
       setRunning(true);
       elements.retry.disabled = true;
       elements.status.textContent = 'Создаём запуск';
       resetTimeline();
+      addBuilderMessage('user', elements.brief.value.trim() ? `${{sourceUrl}}\n${{elements.brief.value.trim()}}` : sourceUrl);
       try {{
-        const run = await requestJSON(labUrl('api/runs'), {{ method:'POST', body:JSON.stringify({{ engine:elements.engine.value, brief, creativity:Number(elements.creativity.value), max_repairs:defaultMaxRepairs, locale:'ru' }}) }});
+        const run = await requestJSON(labUrl('api/runs'), {{ method:'POST', body:JSON.stringify({{ engine:elements.engine.value, brief, source_url:elements['source-url'].value.trim(), creativity:Number(elements.creativity.value), max_repairs:defaultMaxRepairs, locale:'ru' }}) }});
         currentRun = run.run_id;
         terminal = false;
         connectEvents(currentRun);
@@ -365,7 +404,28 @@ def render_builder_page(
       }} catch (error) {{ setRunning(false); showError(error.message); }}
     }}
 
+    async function refineWidget() {{
+      showError('');
+      const message = elements.refinement.value.trim();
+      if (!currentRun || !terminal) {{ showError('Сначала дождитесь проверенной версии.'); return; }}
+      if (!message) {{ showError('Напишите, что изменить в виджете.'); elements.refinement.focus(); return; }}
+      addBuilderMessage('user', message);
+      elements.refinement.value = '';
+      setRunning(true);
+      elements.status.textContent = 'Создаём проверяемую доработку';
+      try {{
+        const run = await requestJSON(labUrl(`api/runs/${{currentRun}}/refine`), {{ method:'POST', body:JSON.stringify({{message}}) }});
+        currentRun = run.run_id;
+        terminal = false;
+        if (run.artifact?.revision) loadPreview(run.artifact.revision);
+        connectEvents(currentRun);
+        await refreshSnapshot();
+      }} catch (error) {{ terminal = true; setRunning(false); showError(error.message); }}
+    }}
+
     elements.generate.addEventListener('click', generate);
+    elements.refine.addEventListener('click', refineWidget);
+    elements.refinement.addEventListener('keydown', event => {{ if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) refineWidget(); }});
     elements.cancel.addEventListener('click', async () => {{ if (!currentRun) return; try {{ await requestJSON(labUrl(`api/runs/${{currentRun}}/cancel`), {{ method:'POST', body:'{{}}' }}); }} catch (error) {{ showError(error.message); }} }});
     elements.retry.addEventListener('click', async () => {{ if (!currentRun) return; showError(''); setRunning(true); resetTimeline(); try {{ const run = await requestJSON(labUrl(`api/runs/${{currentRun}}/retry`), {{ method:'POST', body:'{{}}' }}); currentRun=run.run_id; terminal=false; connectEvents(currentRun); }} catch (error) {{ setRunning(false); showError(error.message); }} }});
     elements.engine.addEventListener('change', () => {{ elements['creativity-field'].style.opacity = elements.engine.value === 'direct' ? '1' : '.42'; elements.creativity.disabled = elements.engine.value !== 'direct'; }});

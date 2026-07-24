@@ -190,6 +190,24 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("minor-ignored-report", completed.diagnostic)
 
+    async def test_accepts_a_consecutive_refinement_revision_after_revision_five(self):
+        accepted = self.candidate
+        await self.store.commit_artifact(self.run_id, accepted)
+        self.previous = accepted
+        self.candidate = artifact(
+            revision=6,
+            stage=Stage.MOTION_POLISH,
+            change_summary="Уточнена шапка по просьбе пользователя.",
+        )
+
+        result = await self.evaluate(FakeAuditor(), FakeCritic([critique()]))
+
+        self.assertEqual(result.revision, 6)
+        self.assertEqual(
+            (await self.store.visual_candidate(self.run_id)).revision,
+            6,
+        )
+
     async def test_major_finding_repairs_full_candidate_then_revalidates_and_reaudits(self):
         repaired = artifact(
             revision=5,

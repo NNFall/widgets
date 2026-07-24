@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from builder_lab.config import BuilderLabConfig
 from builder_lab.models import EngineName
+from builder_lab.web import ORCHESTRATOR_KEY
 from scripts import run_builder_lab
 
 
@@ -96,6 +97,21 @@ class BuilderLabRunnerTests(unittest.TestCase):
         self.assertEqual(service._ip_rate_limit_requests, 25)
         self.assertEqual(service._max_requests_per_session, 16)
         self.assertFalse(app[run_builder_lab.CHAT_SECURE_COOKIE_KEY])
+        asyncio.run(app.cleanup())
+
+    def test_wires_bounded_reference_pipeline_into_orchestrator(self):
+        pipeline = unittest.mock.Mock()
+        pipeline.analyze = unittest.mock.AsyncMock()
+        with patch.object(
+            run_builder_lab.GeminiReferencePipeline,
+            "from_config",
+            return_value=pipeline,
+        ) as factory:
+            config = self.config()
+            app = run_builder_lab.build_app(config)
+
+        factory.assert_called_once_with(config)
+        self.assertIs(app[ORCHESTRATOR_KEY]._reference_analyzer, pipeline.analyze)
         asyncio.run(app.cleanup())
 
     def test_secure_cookie_fails_closed_without_independent_session_secret(self):

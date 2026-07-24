@@ -55,6 +55,28 @@ class RunStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.usage.total_tokens, 15)
         self.assertEqual([e.sequence for e in await self.store.events_after(run.run_id, 1)], [2, 3])
 
+    async def test_update_request_persists_grounded_context_before_generation(self):
+        run = await self.store.create(
+            BuilderRequest(
+                engine=EngineName.DIRECT,
+                brief="Premium widget",
+                source_url="https://example.com/",
+            )
+        )
+        grounded = BuilderRequest(
+            engine=EngineName.DIRECT,
+            brief="Premium widget",
+            source_url="https://example.com/",
+            reference_context='{"visual_summary":"grounded context"}',
+        )
+
+        await self.store.update_request(run.run_id, grounded)
+
+        self.assertEqual(
+            (await self.store.snapshot(run.run_id)).request.reference_context,
+            grounded.reference_context,
+        )
+
     async def test_commits_only_monotonic_artifacts_and_returns_isolated_copy(self):
         run = await self.store.create(self.request)
         await self.store.commit_artifact(run.run_id, artifact(revision=2))
@@ -64,6 +86,25 @@ class RunStoreTests(unittest.IsolatedAsyncioTestCase):
         snapshot.artifact.theme_tokens["accent"] = "changed"
         fresh = await self.store.snapshot(run.run_id)
         self.assertNotEqual(fresh.artifact.theme_tokens["accent"], "changed")
+
+    async def test_create_seeded_starts_a_new_run_from_an_isolated_artifact(self):
+        seed = artifact(revision=5, stage=Stage.MOTION_POLISH)
+
+        run = await self.store.create_seeded(self.request, seed)
+
+        snapshot = await self.store.snapshot(run.run_id)
+        self.assertEqual(snapshot.artifact, seed)
+        self.assertEqual(await self.store.artifact(run.run_id, 5), seed)
+        events = await self.store.events_after(run.run_id, 0)
+        self.assertEqual(
+            [event.event_type for event in events],
+            ["run.created", "artifact.seeded"],
+        )
+        snapshot.artifact.theme_tokens["accent"] = "changed"
+        self.assertNotEqual(
+            (await self.store.snapshot(run.run_id)).artifact.theme_tokens["accent"],
+            "changed",
+        )
 
     async def test_keeps_each_valid_revision_for_event_replay_preview(self):
         run = await self.store.create(self.request)

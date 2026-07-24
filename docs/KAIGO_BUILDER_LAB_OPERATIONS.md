@@ -2,9 +2,18 @@
 
 ## Назначение
 
-Builder Lab — отдельная экспериментальная среда, которая по текстовому заданию
-собирает виджет через Gemini, показывает реальные промежуточные ревизии и
-пропускает каждую из них через детерминированную проверку Kaigo.
+Builder Lab — отдельная экспериментальная среда с минимальным пользовательским
+интерфейсом. Пользователь вводит публичную HTTPS-ссылку и необязательное
+пожелание. Слева отображаются реальные сообщения анализа, генерации и проверки,
+справа — live preview принятой ревизии.
+
+Перед генерацией Kaigo прокручивает одну главную страницу с задержками для
+анимаций и сохраняет шесть временных кадров: desktop/mobile, верх/середина/низ.
+Gemini получает JPEG inline и возвращает grounded visual brief: только видимые
+факты и визуальные токены с привязкой к кадрам. Временные файлы удаляются после
+анализа. После генерации BrowserAudit и Gemini visual critic проверяют сам
+виджет. Доработка сообщением создаёт новый run из последней принятой ревизии,
+а не запускает полную генерацию с нуля.
 
 Доступны два режима:
 
@@ -16,6 +25,16 @@ Builder Lab — отдельная экспериментальная среда
 Lab не импортирует production-сервер, не подключается к PostgreSQL, не изменяет
 таблицы виджетов и не умеет публиковать embed-код. Запуски хранятся в памяти.
 Отдельно может сохраняться один финальный проверенный демо-артефакт.
+
+Текущие ограничения функционального MVP:
+
+- анализируется одна главная HTTPS-страница без query, fragment, credentials и
+  нестандартного порта;
+- ссылка должна быть публичной и проходить SSRF/robots/egress проверки;
+- после перезапуска контейнера пользовательские запуски исчезают;
+- кнопки публикации и embed-кода пока нет;
+- интерфейс временный: он доказывает сценарий, а не фиксирует будущий дизайн
+  платформы.
 
 ## Публичный доступ
 
@@ -50,6 +69,17 @@ KAIGO_BUILDER_ENABLE_ANTIGRAVITY=true
 KAIGO_BUILDER_RUN_TTL_SECONDS=3600
 KAIGO_BUILDER_MAX_RUNS=100
 KAIGO_BUILDER_DEMO_PATH=/app/data/builder-demo/latest.json
+GEMINI_REFERENCE_ANALYZER_MODEL=gemini-3.5-flash
+GEMINI_REFERENCE_ANALYZER_THINKING_LEVEL=high
+KAIGO_REFERENCE_MAX_PAGES=1
+KAIGO_REFERENCE_MAX_DEPTH=0
+KAIGO_REFERENCE_TIMEOUT_SECONDS=300
+KAIGO_REFERENCE_PAGE_TIMEOUT_SECONDS=45
+KAIGO_REFERENCE_MAX_SCROLL_STEPS=40
+KAIGO_REFERENCE_SCROLL_DELAY_MS=750
+KAIGO_REFERENCE_WARMUP_MS=5000
+KAIGO_REFERENCE_FINAL_SETTLE_MS=1500
+KAIGO_REFERENCE_RESPECT_ROBOTS=true
 GEMINI_CHAT_MODEL=gemini-3.5-flash
 GEMINI_CHAT_TIMEOUT_SECONDS=45
 KAIGO_CHAT_SESSION_TTL_SECONDS=3600

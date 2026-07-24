@@ -7,7 +7,7 @@ from pathlib import Path
 
 from aiohttp.test_utils import TestClient, TestServer
 
-from builder_lab.models import BuilderRequest, EngineName, RunStatus, Stage
+from builder_lab.models import EngineName, RunStatus, Stage
 from builder_lab.chat import ChatReply, ChatServiceError
 from builder_lab.demo import save_demo
 from builder_lab.store import RunStore
@@ -21,6 +21,7 @@ class FakeOrchestrator:
     def __init__(self, store):
         self.store = store
         self.cancelled = []
+        self.refinements = []
 
     async def start(self, request):
         return await self.store.create(request)
@@ -31,6 +32,11 @@ class FakeOrchestrator:
 
     async def retry(self, run_id):
         snapshot = await self.store.snapshot(run_id)
+        return await self.store.create(snapshot.request)
+
+    async def refine(self, run_id, message):
+        snapshot = await self.store.snapshot(run_id)
+        self.refinements.append((run_id, message))
         return await self.store.create(snapshot.request)
 
     async def close(self):
@@ -124,6 +130,12 @@ class BuilderLabWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("data.revision!==previewRevision", body)
         self.assertIn("&channel=${encodeURIComponent(previewChannel)}", body)
         self.assertIn("api/runs/${currentRun}/chat", body)
+        self.assertIn('id="source-url"', body)
+        self.assertIn('id="builder-messages"', body)
+        self.assertIn('id="refinement"', body)
+        self.assertIn('id="refine"', body)
+        self.assertIn("source_url:elements['source-url'].value.trim()", body)
+        self.assertIn("api/runs/${currentRun}/refine", body)
         self.assertIn("'X-Kaigo-Chat':'v2'", body)
         self.assertNotIn("system_prompt", body)
         self.assertIn("Экспериментальный черновик", body)
@@ -161,6 +173,65 @@ class BuilderLabWebTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(retry.status, 202)
         retried = await retry.json()
         self.assertNotEqual(retried["run_id"], run_id)
+
+    async def test_create_run_preserves_source_url_and_optional_user_wish(self):
+        response = await self.client.post(
+            "/api/runs",
+            json={
+                "engine": "direct",
+                "brief": "Хочу спокойного консультанта по услугам",
+                "source_url": "https://example.com/",
+            },
+        )
+
+        self.assertEqual(response.status, 202)
+        payload = await response.json()
+        snapshot = await self.store.snapshot(payload["run_id"])
+        self.assertEqual(snapshot.request.source_url, "https://example.com/")
+        self.assertEqual(
+            snapshot.request.brief,
+            "Хочу спокойного консультанта по услугам",
+        )
+
+    async def test_refine_route_accepts_one_bounded_user_message(self):
+        created = await self.create_run()
+        run_id = created["run_id"]
+
+        response = await self.client.post(
+            f"/api/runs/{run_id}/refine",
+            json={"message": "  Сделай шапку спокойнее  "},
+        )
+
+        self.assertEqual(response.status, 202)
+        refined = await response.json()
+        self.assertNotEqual(refined["run_id"], run_id)
+        self.assertEqual(
+            self.orchestrator.refinements,
+            [(run_id, "Сделай шапку спокойнее")],
+        )
+
+    async def test_refine_route_rejects_invalid_message_and_unknown_run(self):
+        created = await self.create_run()
+        run_id = created["run_id"]
+
+        for message in ("", "x" * 2_001, "safe\x00unsafe"):
+            with self.subTest(length=len(message)):
+                response = await self.client.post(
+                    f"/api/runs/{run_id}/refine",
+                    json={"message": message},
+                )
+                self.assertEqual(response.status, 400)
+                self.assertEqual(
+                    (await response.json())["error"]["code"],
+                    "invalid_refinement",
+                )
+
+        unknown = await self.client.post(
+            "/api/runs/not-a-run/refine",
+            json={"message": "Сделай спокойнее"},
+        )
+        self.assertEqual(unknown.status, 404)
+        self.assertEqual((await unknown.json())["error"]["code"], "run_not_found")
 
     async def test_invalid_requests_and_unknown_runs_have_public_json_errors(self):
         invalid = await self.client.post("/api/runs", json={"engine": "bad", "brief": ""})

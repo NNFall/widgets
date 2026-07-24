@@ -11,13 +11,16 @@ from builder_lab.models import (
     BuilderRequest,
     DirectionJudgement,
     DirectionProposal,
-    DirectionRole,
     EngineName,
     RunStatus,
     Stage,
     TokenUsage,
 )
 from builder_lab.orchestrator import BuilderOrchestrator, DIRECT_STAGES
+from builder_lab.reference_pipeline import (
+    ReferenceAnalysisResult,
+    ReferencePipelineError,
+)
 from builder_lab.store import RunCapacityExceeded, RunStore
 from tests.builder_lab_cases.test_validation import artifact
 
@@ -166,6 +169,94 @@ class BuilderOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(judged.usage.prompt_tokens, 9)
         self.assertEqual(judged.usage.output_tokens, 4)
         self.assertEqual(snapshot.usage.prompt_tokens, 59)
+
+    async def test_reference_analysis_runs_before_direction_board_and_updates_request(self):
+        engine = ScriptedEngine()
+        analyzed_urls = []
+
+        async def analyze(source_url):
+            analyzed_urls.append(source_url)
+            return ReferenceAnalysisResult(
+                context='{"visual_summary":"grounded context"}',
+                summary="Grounded visual summary",
+                usage=TokenUsage(
+                    prompt_tokens=7,
+                    output_tokens=3,
+                    thinking_tokens=2,
+                ),
+            )
+
+        orchestrator = BuilderOrchestrator(
+            store=self.store,
+            engine_factories={EngineName.DIRECT: lambda: engine},
+            reference_analyzer=analyze,
+        )
+        run = await orchestrator.start(
+            BuilderRequest(
+                engine=EngineName.DIRECT,
+                brief="Premium AI employee",
+                source_url="https://example.com/",
+            )
+        )
+
+        await orchestrator.wait(run.run_id)
+
+        snapshot = await self.store.snapshot(run.run_id)
+        self.assertEqual(analyzed_urls, ["https://example.com/"])
+        self.assertEqual(
+            snapshot.request.reference_context,
+            '{"visual_summary":"grounded context"}',
+        )
+        self.assertTrue(
+            all(
+                call["request"].reference_context
+                == '{"visual_summary":"grounded context"}'
+                for call in engine.calls
+                if "request" in call
+            )
+        )
+        events = await self.store.events_after(run.run_id, 0)
+        event_types = [event.event_type for event in events]
+        self.assertLess(
+            event_types.index("reference.completed"),
+            event_types.index("direction.judged"),
+        )
+        reference_event = next(
+            event for event in events if event.event_type == "reference.completed"
+        )
+        self.assertEqual(reference_event.usage.total_tokens, 12)
+        self.assertEqual(snapshot.usage.prompt_tokens, 66)
+
+    async def test_reference_failure_becomes_stable_failed_run(self):
+        engine = ScriptedEngine()
+
+        async def analyze(_source_url):
+            raise ReferencePipelineError(
+                "reference_capture_failed",
+                "Не удалось снять сайт",
+                diagnostic="browser timeout",
+            )
+
+        orchestrator = BuilderOrchestrator(
+            store=self.store,
+            engine_factories={EngineName.DIRECT: lambda: engine},
+            reference_analyzer=analyze,
+        )
+        run = await orchestrator.start(
+            BuilderRequest(
+                engine=EngineName.DIRECT,
+                brief="Premium AI employee",
+                source_url="https://example.com/",
+            )
+        )
+
+        await orchestrator.wait(run.run_id)
+
+        snapshot = await self.store.snapshot(run.run_id)
+        self.assertEqual(snapshot.status, RunStatus.FAILED)
+        self.assertEqual(snapshot.error_code, "reference_capture_failed")
+        self.assertFalse(engine.calls)
+        self.assertTrue(engine.closed)
 
     async def test_failed_judge_records_completed_proposal_usage(self):
         class FailedJudgeEngine(ScriptedEngine):
@@ -379,6 +470,60 @@ class BuilderOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         await orchestrator.wait(second.run_id)
         self.assertNotEqual(first.run_id, second.run_id)
         self.assertEqual((await self.store.snapshot(second.run_id)).status, RunStatus.COMPLETED)
+
+    async def test_refinement_seeds_last_artifact_and_generates_one_reviewable_revision(self):
+        source_request = BuilderRequest(
+            engine=EngineName.DIRECT,
+            brief="Сделай спокойного консультанта",
+            source_url="https://example.com/",
+            reference_context='{"visual_summary":"grounded"}',
+        )
+        source = await self.store.create(source_request)
+        accepted = artifact(revision=5, stage=Stage.MOTION_POLISH)
+        await self.store.commit_artifact(source.run_id, accepted)
+        await self.store.finish(
+            source.run_id,
+            RunStatus.COMPLETED,
+            event_type="run.completed",
+            stage=Stage.MOTION_POLISH,
+            message="done",
+            revision=5,
+        )
+        engine = ScriptedEngine()
+        orchestrator = BuilderOrchestrator(
+            store=self.store,
+            engine_factories={EngineName.DIRECT: lambda: engine},
+        )
+
+        refined = await orchestrator.refine(
+            source.run_id,
+            "Сделай шапку спокойнее",
+        )
+        seeded = await self.store.snapshot(refined.run_id)
+        self.assertEqual(seeded.artifact, accepted)
+
+        await orchestrator.wait(refined.run_id)
+
+        snapshot = await self.store.snapshot(refined.run_id)
+        self.assertEqual(snapshot.status, RunStatus.COMPLETED)
+        self.assertEqual(snapshot.artifact.revision, 6)
+        self.assertEqual(snapshot.artifact.stage, Stage.MOTION_POLISH)
+        self.assertIn("Сделай шапку спокойнее", snapshot.request.brief)
+        self.assertEqual(snapshot.request.source_url, source_request.source_url)
+        self.assertEqual(
+            snapshot.request.reference_context,
+            source_request.reference_context,
+        )
+        generation_calls = [call for call in engine.calls if "stage" in call]
+        self.assertEqual(len(generation_calls), 1)
+        self.assertEqual(generation_calls[0]["revision"], 6)
+        self.assertEqual(generation_calls[0]["previous_artifact"], accepted)
+        events = await self.store.events_after(refined.run_id, 0)
+        self.assertEqual(events[0].event_type, "run.created")
+        self.assertEqual(events[1].event_type, "artifact.seeded")
+        self.assertIn("refinement.started", [event.event_type for event in events])
+        self.assertEqual(events[-1].event_type, "run.completed")
+        self.assertTrue(engine.closed)
 
     async def test_capacity_rejection_closes_unadmitted_engine(self):
         store = RunStore(max_runs=1)

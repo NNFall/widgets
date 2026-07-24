@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Mapping
+from urllib.parse import urlsplit, urlunsplit
 
 from .contracts import resolve_widget_contract
 
@@ -64,6 +65,12 @@ PUBLIC_ERROR_CODES = frozenset(
         "visual_quality_failed",
         "snapshot_download_failed",
         "snapshot_rejected",
+        "reference_url_unsafe",
+        "reference_capture_failed",
+        "reference_capture_incomplete",
+        "reference_analysis_invalid",
+        "reference_analysis_too_large",
+        "reference_analysis_failed",
         "run_cancelled",
         "internal_error",
     }
@@ -77,11 +84,42 @@ def _enum(enum_type: type[Enum], value: Any, field_name: str):
         raise ValueError(f"Unsupported {field_name}: {value!r}") from exc
 
 
+def _source_url(value: Any) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError("source_url must be text")
+    raw = value.strip()
+    if not raw:
+        return ""
+    if len(raw) > 2_048:
+        raise ValueError("source_url is too large")
+    try:
+        parsed = urlsplit(raw)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("source_url is invalid") from exc
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if (
+        parsed.scheme.lower() != "https"
+        or not host
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("source_url must be a public-style HTTPS URL")
+    path = parsed.path or "/"
+    return urlunsplit(("https", host, path, "", ""))
+
+
 @dataclass(frozen=True)
 class BuilderRequest:
     engine: EngineName
     brief: str
     reference_context: str = ""
+    source_url: str = ""
     locale: str = "ru"
     creativity: float = 0.9
     viewport_targets: tuple[str, ...] = ("desktop", "mobile")
@@ -93,6 +131,7 @@ class BuilderRequest:
     def __post_init__(self) -> None:
         brief = self.brief.strip()
         reference_context = self.reference_context.strip()
+        source_url = _source_url(self.source_url)
         locale = self.locale.strip().lower()
         if not brief:
             raise ValueError("brief must not be empty")
@@ -122,6 +161,7 @@ class BuilderRequest:
             raise ValueError("viewport_targets contains an unsupported viewport")
         object.__setattr__(self, "brief", brief)
         object.__setattr__(self, "reference_context", reference_context)
+        object.__setattr__(self, "source_url", source_url)
         object.__setattr__(self, "locale", locale)
 
     @classmethod
@@ -129,6 +169,9 @@ class BuilderRequest:
         reference_context = payload.get("reference_context", "")
         if not isinstance(reference_context, str):
             raise ValueError("reference_context must be text")
+        source_url = payload.get("source_url", "")
+        if not isinstance(source_url, str):
+            raise ValueError("source_url must be text")
         contract_id = payload.get("contract_id", "chat-v1")
         if not isinstance(contract_id, str):
             raise ValueError("contract_id must be text")
@@ -142,6 +185,7 @@ class BuilderRequest:
             engine=_enum(EngineName, payload.get("engine", "direct"), "engine"),
             brief=str(payload.get("brief", "")),
             reference_context=reference_context,
+            source_url=source_url,
             locale=str(payload.get("locale", "ru")),
             creativity=float(payload.get("creativity", 0.9)),
             viewport_targets=tuple(payload.get("viewport_targets", ("desktop", "mobile"))),
@@ -160,6 +204,7 @@ class BuilderRequest:
             "engine": self.engine.value,
             "brief": self.brief,
             "reference_context": self.reference_context,
+            "source_url": self.source_url,
             "locale": self.locale,
             "creativity": self.creativity,
             "viewport_targets": list(self.viewport_targets),

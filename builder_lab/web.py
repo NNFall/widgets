@@ -219,6 +219,49 @@ async def retry_run(request: web.Request) -> web.Response:
     return web.json_response(snapshot.to_dict(), status=202)
 
 
+async def refine_run(request: web.Request) -> web.Response:
+    try:
+        if request.content_length is not None and request.content_length > 4_096:
+            raise ValueError("request body is too large")
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise ValueError("JSON object is required")
+        message = payload.get("message")
+        if not isinstance(message, str):
+            raise ValueError("message must be text")
+        message = message.strip()
+        if not message or len(message) > 2_000 or "\x00" in message:
+            raise ValueError("message is invalid")
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return _error(
+            "invalid_refinement",
+            "Сообщение для доработки некорректно",
+            status=400,
+        )
+    try:
+        snapshot = await request.app[ORCHESTRATOR_KEY].refine(
+            request.match_info["run_id"],
+            message,
+        )
+    except RunNotFound:
+        return _error("run_not_found", "Запуск не найден", status=404)
+    except ValueError:
+        return _error(
+            "run_not_refinable",
+            "Эту версию пока нельзя доработать",
+            status=409,
+        )
+    except BuilderEngineError as exc:
+        return _error(exc.error_code, exc.public_message, status=503)
+    except RunCapacityExceeded:
+        return _error(
+            "run_capacity",
+            "Все слоты генерации заняты; повторите запрос позже",
+            status=429,
+        )
+    return web.json_response(snapshot.to_dict(), status=202)
+
+
 async def preview(request: web.Request) -> web.Response:
     requested_revision = request.query.get("revision")
     channel = request.query.get("channel", "")
@@ -663,5 +706,6 @@ def create_builder_lab_app(
     app.router.add_post("/api/runs/{run_id}/chat", run_chat)
     app.router.add_post("/api/runs/{run_id}/cancel", cancel_run)
     app.router.add_post("/api/runs/{run_id}/retry", retry_run)
+    app.router.add_post("/api/runs/{run_id}/refine", refine_run)
     app.on_cleanup.append(_cleanup)
     return app

@@ -17,13 +17,14 @@ from builder_lab.engines.antigravity import AntigravityEngine
 from builder_lab.engines.gemini_direct import GeminiDirectEngine
 from builder_lab.models import EngineName
 from builder_lab.orchestrator import BuilderOrchestrator
+from builder_lab.reference_pipeline import GeminiReferencePipeline
 from builder_lab.store import RunStore
 from builder_lab.visual_critic import GeminiVisualCritic
 from builder_lab.web import (
-    CHAT_SECURE_COOKIE_KEY,
-    CHAT_SERVICE_KEY,
-    DEMO_DIR_KEY,
-    DEMO_PATH_KEY,
+    CHAT_SECURE_COOKIE_KEY as CHAT_SECURE_COOKIE_KEY,
+    CHAT_SERVICE_KEY as CHAT_SERVICE_KEY,
+    DEMO_DIR_KEY as DEMO_DIR_KEY,
+    DEMO_PATH_KEY as DEMO_PATH_KEY,
     create_builder_lab_app,
 )
 
@@ -63,6 +64,7 @@ def build_app(config: BuilderLabConfig) -> web.Application:
         ttl_seconds=config.run_ttl_seconds,
         max_runs=config.max_runs,
     )
+    reference_pipeline = GeminiReferencePipeline.from_config(config)
     orchestrator = BuilderOrchestrator(
         store=store,
         engine_factories=factories,
@@ -77,6 +79,7 @@ def build_app(config: BuilderLabConfig) -> web.Application:
             base_url=config.gemini_base_url,
             timeout_seconds=config.visual_critic_timeout_seconds,
         ),
+        reference_analyzer=reference_pipeline.analyze,
     )
     chat_service = GeminiDemoChatService(
         api_key=config.gemini_api_key,
