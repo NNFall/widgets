@@ -439,8 +439,13 @@ class ExperimentVariant:
                 or not isinstance(self.final, ExperimentEvidence)
             ):
                 raise ValueError("completed variant requires raw and final evidence")
-            if self.raw.artifact == self.final.artifact:
-                raise ValueError("completed variant raw and final artifacts must differ")
+            if (
+                self.raw.artifact == self.final.artifact
+                and self.raw.critique.verdict is not StrictVisualVerdict.PASS
+            ):
+                raise ValueError(
+                    "completed variant unchanged raw critique must pass"
+                )
             if self.final.critique.verdict is not StrictVisualVerdict.PASS:
                 raise ValueError("completed variant final critique must pass")
             if self.error_code is not None or self.error_message is not None:
@@ -500,6 +505,13 @@ class ExperimentVariant:
         object.__setattr__(self, "cost_usd", cost)
         object.__setattr__(self, "role_events", events)
 
+    @property
+    def visual_revision_performed(self) -> bool | None:
+        if self.status != "completed":
+            return None
+        assert self.raw is not None and self.final is not None
+        return self.raw.artifact != self.final.artifact
+
     @classmethod
     def create(
         cls,
@@ -549,6 +561,7 @@ class ExperimentVariant:
             "model": self.model,
             "thinking": self.thinking,
             "status": self.status,
+            "visual_revision_performed": self.visual_revision_performed,
             "raw": self.raw.to_dict() if self.raw else None,
             "final": self.final.to_dict() if self.final else None,
             "usage": self.usage.to_dict(),
@@ -1038,12 +1051,16 @@ def write_experiment_package(
                 if variant.final is None:
                     raise ValueError("completed variant lost final evidence")
                 _write_evidence(variant_root / "final", variant.final)
-                critique_summary = (
-                    f"Raw {variant.raw.critique.weighted_score:.2f} → "
-                    f"final {variant.final.critique.weighted_score:.2f}."
-                    if variant.raw is not None
-                    else variant.final.critique.summary
-                )
+                if variant.visual_revision_performed:
+                    critique_summary = (
+                        f"Raw {variant.raw.critique.weighted_score:.2f} → "
+                        f"final {variant.final.critique.weighted_score:.2f}."
+                    )
+                else:
+                    critique_summary = (
+                        "Raw candidate passed strict review; "
+                        "no visual revision was performed."
+                    )
                 cards.append(
                     ComparisonVariant(
                         slug=f"{variant.public_slug}/final",
@@ -1119,6 +1136,9 @@ def write_experiment_package(
                         "status": variant.status,
                         "model": variant.model,
                         "thinking": variant.thinking,
+                        "visual_revision_performed": (
+                            variant.visual_revision_performed
+                        ),
                         "usage": variant.usage.to_dict(),
                         "elapsed_seconds": variant.elapsed_seconds,
                         "pricing": variant.pricing.to_dict(),

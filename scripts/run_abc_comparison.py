@@ -466,18 +466,6 @@ class DirectVariantExecutor:
                 audit=review.final.audit,
                 critique=review.final.critique,
             )
-            if raw.artifact == final.artifact:
-                raise VariantExecutionError(
-                    "visual_revision_not_required",
-                    (
-                        "The raw candidate passed strict review unchanged; this bounded "
-                        "raw/final comparison therefore has no honest final revision."
-                    ),
-                    usage=usage,
-                    elapsed_seconds=time.perf_counter() - started,
-                    raw=raw,
-                    role_events=role_events,
-                )
             return ExperimentVariant.create(
                 profile=context.request.creative_profile,
                 public_slug=PUBLIC_SLUGS[context.request.creative_profile],

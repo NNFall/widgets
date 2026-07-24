@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -191,11 +191,58 @@ def test_variant_keeps_raw_and_final_separate_and_records_exact_cost():
     assert item.raw is not None and item.final is not None
     assert item.raw.artifact.revision == item.final.artifact.revision == 5
     assert item.raw.artifact != item.final.artifact
+    assert item.visual_revision_performed is True
     assert item.cost_usd == pytest.approx(0.002)
     payload = item.to_dict()
+    assert payload["visual_revision_performed"] is True
     assert payload["pricing"]["captured_at"] == "2026-07-24T00:00:00+00:00"
     assert payload["usage"]["thinking_tokens"] == 300
     assert payload["cost_usd"] == pytest.approx(0.002)
+
+
+def test_completed_variant_accepts_an_unchanged_strict_pass_and_records_no_revision():
+    accepted = evidence(suffix="strict-pass-unchanged")
+
+    item = ExperimentVariant.create(
+        profile=CreativeProfile.AI_CHARACTER,
+        public_slug="ai-character",
+        run_id="run-ai-character-unchanged-pass",
+        model="gemini-3.6-flash",
+        thinking="high",
+        status="completed",
+        raw=accepted,
+        final=accepted,
+        usage=TokenUsage(prompt_tokens=100),
+        elapsed_seconds=1,
+        pricing=pricing(),
+    )
+
+    assert item.visual_revision_performed is False
+    assert item.to_dict()["visual_revision_performed"] is False
+
+
+def test_completed_unchanged_variant_requires_the_raw_critique_to_pass():
+    candidate = evidence(suffix="unchanged-but-raw-repair")
+    raw_repair = ExperimentEvidence(
+        artifact=candidate.artifact,
+        audit=candidate.audit,
+        critique=visual_critique(repair=True),
+    )
+
+    with pytest.raises(ValueError, match="unchanged raw critique must pass"):
+        ExperimentVariant.create(
+            profile=CreativeProfile.AI_CHARACTER,
+            public_slug="ai-character",
+            run_id="run-ai-character-invalid-unchanged",
+            model="gemini-3.6-flash",
+            thinking="high",
+            status="completed",
+            raw=raw_repair,
+            final=candidate,
+            usage=TokenUsage(prompt_tokens=100),
+            elapsed_seconds=1,
+            pricing=pricing(),
+        )
 
 
 def test_role_event_uses_the_same_secret_redactor_for_operator_fields():
@@ -621,6 +668,91 @@ async def test_direct_executor_records_elapsed_time_for_partial_role_failure():
         "completed",
         "failed",
     ]
+    assert engine.closed
+
+
+@pytest.mark.asyncio
+async def test_direct_executor_completes_when_raw_candidate_passes_unchanged():
+    candidate = artifact(revision=5)
+    accepted = SimpleNamespace(
+        artifact=candidate,
+        audit=report(),
+        critique=visual_critique(repair=False),
+    )
+    review_result = SimpleNamespace(
+        raw=accepted,
+        final=accepted,
+        usage=TokenUsage(prompt_tokens=13, output_tokens=5),
+    )
+
+    class FakeEngine:
+        def __init__(self):
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    engine = FakeEngine()
+    concepts = SimpleNamespace(
+        usage=TokenUsage(prompt_tokens=7),
+        selected_direction=None,
+    )
+    executor = DirectVariantExecutor(
+        api_key="test-key",
+        base_url="https://generativelanguage.googleapis.com",
+        critic_model="gemini-3.6-flash",
+        critic_thinking="high",
+        critic_timeout_seconds=90,
+        browser_timeout_ms=10_000,
+        browser_total_timeout_seconds=120,
+    )
+    context = ExperimentVariantContext(
+        source_digest="a" * 64,
+        common_input_digest="b" * 64,
+        request=request(CreativeProfile.AI_CHARACTER),
+        run_id="run-ai-character-unchanged-pass",
+        model="gemini-3.6-flash",
+        thinking="high",
+        pricing=pricing(),
+        audit_semaphore=asyncio.Semaphore(1),
+    )
+
+    with (
+        patch(
+            "scripts.run_abc_comparison.GeminiDirectEngine",
+            return_value=engine,
+        ),
+        patch(
+            "scripts.run_abc_comparison.run_concept_roles_with_events",
+            new=AsyncMock(return_value=(concepts, ())),
+        ),
+        patch(
+            "scripts.run_abc_comparison._validated_stage",
+            new=AsyncMock(return_value=(candidate, TokenUsage())),
+        ),
+        patch(
+            "scripts.run_abc_comparison.GeminiStrictVisualCritic",
+            return_value=object(),
+        ),
+        patch(
+            "scripts.run_abc_comparison.ExperimentReview"
+        ) as review_factory,
+    ):
+        review_factory.return_value.review = AsyncMock(
+            return_value=review_result
+        )
+        result = await executor(context)
+
+    assert result.status == "completed"
+    assert result.raw is not None and result.final is not None
+    assert result.raw.artifact == result.final.artifact == candidate
+    assert result.final.critique.verdict.value == "pass"
+    assert result.visual_revision_performed is False
+    assert result.error_code is None
+    assert result.usage == TokenUsage(
+        prompt_tokens=20,
+        output_tokens=5,
+    )
     assert engine.closed
 
 
@@ -1220,6 +1352,73 @@ def test_private_demo_registry_exports_only_strictly_accepted_final_artifacts(
             source_url="https://rawbureau.ru/",
             chat_system_prompt=chat_prompt,
         )
+
+
+def test_package_and_private_registry_export_an_unchanged_strict_pass(
+    tmp_path: Path,
+):
+    accepted = evidence(suffix="strict-pass-unchanged")
+    unchanged = ExperimentVariant.create(
+        profile=CreativeProfile.AI_CHARACTER,
+        public_slug="ai-character",
+        run_id="run-ai-character-unchanged-pass",
+        model="gemini-3.6-flash",
+        thinking="high",
+        status="completed",
+        raw=accepted,
+        final=accepted,
+        usage=TokenUsage(prompt_tokens=100),
+        elapsed_seconds=1,
+        pricing=pricing(),
+    )
+    base_request = request()
+    variants = (
+        variant(CreativeProfile.PRODUCT_CHAT),
+        variant(CreativeProfile.BRAND_MOTION),
+        unchanged,
+    )
+    manifest = AbcExperimentManifest.create(
+        source_digest="a" * 64,
+        common_input_digest=canonical_common_input_digest(
+            source_digest="a" * 64,
+            request=base_request,
+            model="gemini-3.6-flash",
+            thinking="high",
+        ),
+        contract_id="chat-v1",
+        variants=variants,
+    )
+    public_output = tmp_path / "public"
+    private_output = tmp_path / "private"
+
+    write_experiment_package(public_output, manifest)
+    experiment_module.write_private_demo_registry(
+        private_output,
+        manifest,
+        base_request=base_request,
+        source_url="https://rawbureau.ru/",
+        chat_system_prompt="Answer only from verified RAW BUREAU evidence.",
+    )
+
+    manifest_payload = json.loads(
+        (public_output / "manifest.json").read_text(encoding="utf-8")
+    )
+    character_manifest = next(
+        item
+        for item in manifest_payload["variants"]
+        if item["profile"] == "ai_character"
+    )
+    character_report = json.loads(
+        (public_output / "ai-character" / "report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert character_manifest["status"] == "completed"
+    assert character_manifest["visual_revision_performed"] is False
+    assert character_report["visual_revision_performed"] is False
+    assert (public_output / "ai-character" / "raw" / "index.html").is_file()
+    assert (public_output / "ai-character" / "final" / "index.html").is_file()
+    assert (private_output / "ai-character.json").is_file()
 
 
 def test_private_demo_registry_rejects_a_mismatched_base_request(tmp_path: Path):
