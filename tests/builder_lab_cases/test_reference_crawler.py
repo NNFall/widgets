@@ -408,6 +408,23 @@ class LazyFixtureHandler(BaseHTTPRequestHandler):
               },{passive:true});
             </script>"""
             content_type = "text/html; charset=utf-8"
+        elif path == "/lazy-prewarm":
+            body = b"""<!doctype html><meta charset='utf-8'>
+            <style>
+              body{margin:0}.spacer{height:7200px}
+              img{display:block;width:120px;height:120px}.tail{height:900px}
+            </style>
+            <h1>Lazy prewarm fixture</h1><div class='spacer'></div>
+            <img id='late' loading='lazy' src='/lazy.png' alt='late'>
+            <div class='tail'></div>
+            <script>
+              addEventListener('wheel',()=>{
+                document.body.dataset.wheels=String(
+                  1 + +(document.body.dataset.wheels || 0)
+                );
+              },{passive:true});
+            </script>"""
+            content_type = "text/html; charset=utf-8"
         elif path == "/lazy-once":
             body = b"""<!doctype html><meta charset='utf-8'><style>body{margin:0}.spacer{height:500px}img{display:block;width:100px;height:100px}.tail{height:900px}</style>
             <h1>Lazy image fixture</h1><div class='spacer'></div><img id='late' loading='lazy' alt='late'><div class='tail'></div>
@@ -1285,6 +1302,64 @@ class BrowserLifecycleTests(unittest.TestCase):
         positions = {shot.position for shot in evidence.screenshots}
         self.assertIn("last_observed", positions)
         self.assertNotIn("bottom", positions)
+
+    def test_two_pass_warmup_loads_offscreen_lazy_image_before_top_capture(self):
+        reason = browser_unavailable_reason()
+        if reason:
+            self.skipTest(f"Playwright Chromium unavailable: {reason}")
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), LazyFixtureHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        first_top = {}
+        original_screenshot = reference_crawler_module._take_screenshot
+
+        async def recording_screenshot(page, **kwargs):
+            if kwargs["position"] == "top" and not first_top:
+                first_top.update(
+                    await page.evaluate(
+                        """() => ({
+                          y: scrollY,
+                          wheels: +(document.body.dataset.wheels || 0),
+                          complete: late.complete,
+                          naturalWidth: late.naturalWidth
+                        })"""
+                    )
+                )
+            return await original_screenshot(page, **kwargs)
+
+        try:
+            with patch.object(
+                reference_crawler_module, "_take_screenshot", recording_screenshot
+            ):
+                evidence = asyncio.run(
+                    capture_reference_page(
+                        f"http://127.0.0.1:{server.server_port}/lazy-prewarm",
+                        page_id="lazy-prewarm",
+                        category="home",
+                        viewport="desktop",
+                        settings=CaptureSettings(
+                            width=1440,
+                            height=900,
+                            warmup_ms=1000,
+                            scroll_delay_ms=600,
+                            final_settle_ms=500,
+                            max_scroll_steps=20,
+                            page_timeout_seconds=5,
+                        ),
+                        guard=None,
+                    )
+                )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(first_top["y"], 0)
+        self.assertGreater(first_top["wheels"], 0)
+        self.assertTrue(first_top["complete"])
+        self.assertGreater(first_top["naturalWidth"], 0)
+        self.assertEqual(evidence.reset_strategy, "wheel-prewarm-return-top")
 
     def test_warmup_incremental_scroll_and_tiles_reveal_lazy_content(self):
         reason = browser_unavailable_reason()
