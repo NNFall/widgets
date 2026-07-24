@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from io import BytesIO
 import ipaddress
 import json
 import re
@@ -19,6 +20,8 @@ from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 from urllib.parse import urljoin, urlsplit, urlunsplit
+
+from PIL import Image, UnidentifiedImageError
 
 from .reference_models import (
     CrawlFailure,
@@ -1315,6 +1318,16 @@ async def _take_screenshot(
     telemetry: CaptureTelemetry | None = None,
 ) -> ScreenshotEvidence:
     data = await page.screenshot(type="jpeg", quality=82, full_page=False, animations="disabled")
+    try:
+        with Image.open(BytesIO(data)) as image:
+            actual_width, actual_height = image.size
+            image.verify()
+    except (OSError, UnidentifiedImageError) as exc:
+        raise ReferenceCaptureError("screenshot JPEG cannot be decoded") from exc
+    if (actual_width, actual_height) != (width, height):
+        raise ReferenceCaptureError(
+            "screenshot dimensions do not match the requested viewport"
+        )
     evidence = ScreenshotEvidence(
         screenshot_id=f"{page_id}-{viewport}-{position}",
         page_id=page_id,
@@ -2011,6 +2024,7 @@ class VisualReferenceCrawler:
             max_total_bytes=self.limits.max_total_bytes,
             selected_urls={home_url},
         )
+        desktop_settings = self._settings("desktop")
         telemetry_by_page: dict[int, CaptureTelemetry] = {}
         attempt_by_request: dict[str, tuple[CaptureTelemetry, Any, int]] = {}
         trace_active: set[int] = set()
@@ -2064,7 +2078,10 @@ class VisualReferenceCrawler:
             use_incognito_pages=True,
             fingerprint_generator=None,
             browser_new_context_options={
-                "viewport": {"width": 1440, "height": 900},
+                "viewport": {
+                    "width": desktop_settings.width,
+                    "height": desktop_settings.height,
+                },
                 "device_scale_factor": 1,
                 "user_agent": KAIGO_RESEARCH_USER_AGENT,
                 "locale": "ru-RU",
@@ -2130,7 +2147,7 @@ class VisualReferenceCrawler:
                 page_id=page_id,
                 category=category,
                 viewport="desktop",
-                settings=self._settings("desktop"),
+                settings=desktop_settings,
                 guard=self.guard,
                 telemetry=telemetry,
             )
@@ -2199,8 +2216,6 @@ class VisualReferenceCrawler:
         @crawler.error_handler
         async def on_retry(context: Any, _error: Exception) -> None:
             nonlocal failure_trace
-            attempt = attempt_by_request.get(context.request.unique_key)
-            telemetry = attempt[0] if attempt is not None else None
             trace = await stop_failure_trace(context.request)
             if trace is not None:
                 failure_trace = trace

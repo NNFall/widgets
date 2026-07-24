@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import gzip
+from io import BytesIO
 import json
 import os
 import subprocess
@@ -15,6 +16,7 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 
 import builder_lab.reference_crawler as reference_crawler_module
+from PIL import Image
 
 from builder_lab.reference_crawler import (
     CaptureSettings,
@@ -652,6 +654,29 @@ class BrowserLifecycleTests(unittest.TestCase):
     def test_default_desktop_capture_uses_wide_full_context_viewport(self):
         settings = VisualReferenceCrawler()._settings("desktop")
         self.assertEqual((settings.width, settings.height), (1920, 1080))
+
+    def test_screenshot_manifest_rejects_dimension_drift(self):
+        output = BytesIO()
+        Image.new("RGB", (11, 7), "white").save(output, format="JPEG")
+
+        class FakePage:
+            async def screenshot(self, **_kwargs):
+                return output.getvalue()
+
+        with self.assertRaisesRegex(
+            reference_crawler_module.ReferenceCaptureError,
+            "dimensions",
+        ):
+            asyncio.run(
+                reference_crawler_module._take_screenshot(
+                    FakePage(),
+                    page_id="home",
+                    viewport="desktop",
+                    position="top",
+                    width=1920,
+                    height=1080,
+                )
+            )
 
     def test_chunked_response_is_aborted_near_byte_cap_without_full_buffering(self):
         reason = browser_unavailable_reason()
