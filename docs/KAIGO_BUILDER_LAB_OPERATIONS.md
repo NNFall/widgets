@@ -81,6 +81,7 @@ KAIGO_REFERENCE_WARMUP_MS=5000
 KAIGO_REFERENCE_FINAL_SETTLE_MS=1500
 KAIGO_REFERENCE_RESPECT_ROBOTS=true
 CRAWLEE_MEMORY_MBYTES=4096
+CRAWLEE_DISABLE_BROWSER_SANDBOX=true
 GEMINI_CHAT_MODEL=gemini-3.5-flash
 GEMINI_CHAT_TIMEOUT_SECONDS=45
 KAIGO_CHAT_SESSION_TTL_SECONDS=3600
@@ -96,6 +97,11 @@ KAIGO_CHAT_SECURE_COOKIE=true
 `CRAWLEE_MEMORY_MBYTES` задаёт Crawlee рабочий бюджет RAM + swap. На сервере с
 2 ГБ RAM нужен активный swap не меньше 2 ГБ, иначе autoscaler не запустит
 Chromium при высокой общей загрузке памяти.
+
+`CRAWLEE_DISABLE_BROWSER_SANDBOX=true` нужен только контейнеру Builder Lab:
+Ubuntu запрещает user namespace sandbox для непривилегированного Chromium, а
+сам контейнер уже изолирован `cap_drop: ALL`, `no-new-privileges` и отдельной
+egress-сетью.
 
 Ключи нельзя передавать в URL, записывать в Git или выводить в логи. На рабочем
 сервере `GOOGLE_AI_NATIVE_BASE_URL` может указывать на защищённый Gemini-only
