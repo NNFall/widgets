@@ -1143,7 +1143,7 @@ def browser_unavailable_reason() -> str | None:
     return None
 
 
-async def _wait_for_fonts_and_visible_images(page: Any, timeout_ms: int) -> None:
+async def _wait_for_fonts_and_viewport_images(page: Any, timeout_ms: int) -> None:
     await page.evaluate(
         "() => document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()"
     )
@@ -1152,14 +1152,22 @@ async def _wait_for_fonts_and_visible_images(page: Any, timeout_ms: int) -> None
           const images = [...document.images].slice(0, 500).filter((img) => {
             const r = img.getBoundingClientRect();
             const s = getComputedStyle(img);
-            return r.width > 1 && r.height > 1 && s.display !== 'none' && s.visibility !== 'hidden';
+            const intersectsViewport =
+              r.bottom >= -200 && r.top <= innerHeight + 200 &&
+              r.right >= -200 && r.left <= innerWidth + 200;
+            return intersectsViewport &&
+              r.width > 1 && r.height > 1 &&
+              s.display !== 'none' && s.visibility !== 'hidden';
           });
-          return images.every((img) =>
-            !img.getAttribute('src') ||
-            (img.complete && (
-              (img.naturalWidth > 0 && img.naturalHeight > 0) || Boolean(img.currentSrc)
-            ))
-          );
+          return images.every((img) => {
+            const source =
+              img.currentSrc ||
+              img.getAttribute('src') ||
+              img.getAttribute('srcset');
+            return !source ||
+              (img.naturalWidth > 0 && img.naturalHeight > 0) ||
+              img.complete;
+          });
         }""",
         timeout=timeout_ms,
     )
@@ -1182,9 +1190,25 @@ async def _wait_for_visual_quiet(
           observer.observe(document.documentElement, {
             attributes:true, childList:true, characterData:true, subtree:true
           });
+          const viewportImages = () => [...document.images].slice(0,500).filter(img => {
+            const rect = img.getBoundingClientRect();
+            const style = getComputedStyle(img);
+            return rect.bottom >= -200 && rect.top <= innerHeight + 200
+              && rect.right >= -200 && rect.left <= innerWidth + 200
+              && rect.width > 1 && rect.height > 1
+              && style.display !== 'none' && style.visibility !== 'hidden';
+          });
+          const imageReady = (img) => {
+            const source = img.currentSrc
+              || img.getAttribute('src')
+              || img.getAttribute('srcset');
+            return !source
+              || (img.naturalWidth > 0 && img.naturalHeight > 0)
+              || img.complete;
+          };
           const signature = () => {
             const root = document.scrollingElement || document.documentElement;
-            const pendingImages = [...document.images].slice(0,500).filter(img => !img.complete).length;
+            const pendingImages = viewportImages().filter(img => !imageReady(img)).length;
             const sample = [...document.querySelectorAll('body *')].slice(0,1200)
               .map(node => {
                 const rect = node.getBoundingClientRect();
@@ -1210,7 +1234,7 @@ async def _wait_for_visual_quiet(
             const quietFor = now - lastMutation;
             const ready = document.readyState === 'complete'
               && (!document.fonts || document.fonts.status === 'loaded')
-              && [...document.images].slice(0,500).every(img => img.complete);
+              && viewportImages().every(imageReady);
             if (
               elapsed >= minimumMs
               && quietFor >= quietMs
@@ -1327,6 +1351,174 @@ async def _scroll_once(page: Any, state: Mapping[str, Any], step: int) -> str:
             return "script_fallback"
         return "stalled"
     return "wheel"
+
+
+def _scroll_state_changed(
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+) -> bool:
+    return (
+        int(after["top"]) != int(before["top"])
+        or after.get("transformSignature") != before.get("transformSignature")
+        or after.get("visibleSignature") != before.get("visibleSignature")
+    )
+
+
+async def _settle_scrolled_viewport(
+    page: Any,
+    *,
+    settings: CaptureSettings,
+    skipped_reasons: list[str],
+    image_timeout_reason: str,
+) -> None:
+    timeout_ms = settings.page_timeout_seconds * 1000
+    await page.wait_for_timeout(settings.scroll_delay_ms)
+    await _wait_for_visual_quiet(
+        page,
+        minimum_ms=600,
+        quiet_ms=450,
+        maximum_ms=min(2500, timeout_ms),
+    )
+    try:
+        await _wait_for_fonts_and_viewport_images(page, min(2500, timeout_ms))
+    except Exception:
+        if image_timeout_reason not in skipped_reasons:
+            skipped_reasons.append(image_timeout_reason)
+
+
+async def _warm_reference_page(
+    page: Any,
+    *,
+    settings: CaptureSettings,
+) -> tuple[Mapping[str, Any], tuple[str, ...]]:
+    initial_state = await page.evaluate(_SCROLL_STATE_SCRIPT)
+    state = initial_state
+    skipped_reasons: list[str] = []
+    step_px = max(1, int(settings.height * 0.7))
+    stable_steps = 0
+    native_end_stable_steps = 0
+    progressed = False
+    native_progressed = False
+    virtual = bool(state.get("potentialVirtual"))
+    exhausted = True
+
+    for _step_index in range(settings.max_scroll_steps):
+        if int(state["height"]) > settings.max_scroll_height:
+            skipped_reasons.append("warmup_scroll_height_cap_reached")
+            exhausted = False
+            break
+        previous = state
+        await _scroll_once(page, previous, step_px)
+        await _settle_scrolled_viewport(
+            page,
+            settings=settings,
+            skipped_reasons=skipped_reasons,
+            image_timeout_reason="warmup_lazy_image_settle_timeout",
+        )
+        state = await page.evaluate(_SCROLL_STATE_SCRIPT)
+        meaningful_change = _scroll_state_changed(previous, state)
+        if meaningful_change:
+            progressed = True
+            stable_steps = 0
+        else:
+            stable_steps += 1
+
+        top_changed = int(state["top"]) != int(previous["top"])
+        transform_changed = (
+            state.get("transformSignature")
+            != previous.get("transformSignature")
+        )
+        visible_changed = (
+            state.get("visibleSignature")
+            != previous.get("visibleSignature")
+        )
+        if top_changed:
+            native_progressed = True
+            virtual = False
+        elif not native_progressed and (transform_changed or visible_changed):
+            virtual = True
+
+        if virtual:
+            if state.get("endProven"):
+                exhausted = False
+                break
+        else:
+            max_native_scroll = max(
+                0,
+                int(state["height"]) - int(state["client"]),
+            )
+            at_end = (
+                max_native_scroll == 0
+                or int(state["top"]) >= max_native_scroll - 2
+            )
+            if (
+                at_end
+                and int(state["top"]) == int(previous["top"])
+                and int(state["height"]) == int(previous["height"])
+            ):
+                native_end_stable_steps += 1
+            else:
+                native_end_stable_steps = 0
+            if (
+                progressed
+                and at_end
+                and native_end_stable_steps >= 2
+            ) or (not progressed and stable_steps >= 2):
+                exhausted = False
+                break
+
+    if exhausted:
+        skipped_reasons.append("warmup_scroll_step_cap_reached")
+    return initial_state, tuple(skipped_reasons)
+
+
+def _scroll_state_is_restored(
+    state: Mapping[str, Any],
+    initial_state: Mapping[str, Any],
+) -> bool:
+    if abs(int(state["top"]) - int(initial_state["top"])) > 2:
+        return False
+    if initial_state.get("potentialVirtual"):
+        return (
+            state.get("transformSignature")
+            == initial_state.get("transformSignature")
+        )
+    return True
+
+
+async def _restore_reference_start(
+    page: Any,
+    *,
+    initial_state: Mapping[str, Any],
+    settings: CaptureSettings,
+) -> tuple[str, ...]:
+    state = await page.evaluate(_SCROLL_STATE_SCRIPT)
+    skipped_reasons: list[str] = []
+    if _scroll_state_is_restored(state, initial_state):
+        return ()
+
+    step_px = -max(1, int(settings.height * 0.7))
+    stable_steps = 0
+    for _step_index in range(settings.max_scroll_steps):
+        previous = state
+        await _scroll_once(page, previous, step_px)
+        await _settle_scrolled_viewport(
+            page,
+            settings=settings,
+            skipped_reasons=skipped_reasons,
+            image_timeout_reason="reset_lazy_image_settle_timeout",
+        )
+        state = await page.evaluate(_SCROLL_STATE_SCRIPT)
+        if _scroll_state_is_restored(state, initial_state):
+            return tuple(skipped_reasons)
+        if _scroll_state_changed(previous, state):
+            stable_steps = 0
+        else:
+            stable_steps += 1
+        if stable_steps >= 2:
+            break
+
+    raise ReferenceCaptureError("reference scroll position could not be restored")
 
 
 async def _take_screenshot(
@@ -1549,7 +1741,7 @@ async def _capture_loaded_page(
     telemetry.raise_if_oversize()
     if guard is not None:
         await asyncio.to_thread(guard.validate_redirect, page.url)
-    await _wait_for_fonts_and_visible_images(page, timeout_ms)
+    await _wait_for_fonts_and_viewport_images(page, min(timeout_ms, 5000))
     await page.wait_for_timeout(settings.warmup_ms)
     await _wait_for_visual_quiet(page)
     telemetry.raise_if_oversize()
@@ -1559,6 +1751,29 @@ async def _capture_loaded_page(
           return /reveal|animate|hidden/i.test(el.className || '') && r.width>1 && r.height>1 && (s.opacity==='0' || s.visibility==='hidden');
         }).length"""
     )
+    initial_state, warmup_reasons = await _warm_reference_page(
+        page,
+        settings=settings,
+    )
+    skipped_reasons.extend(warmup_reasons)
+    reset_reasons = await _restore_reference_start(
+        page,
+        initial_state=initial_state,
+        settings=settings,
+    )
+    skipped_reasons.extend(reset_reasons)
+    try:
+        await _wait_for_fonts_and_viewport_images(page, min(timeout_ms, 2500))
+    except Exception:
+        if "reset_lazy_image_settle_timeout" not in skipped_reasons:
+            skipped_reasons.append("reset_lazy_image_settle_timeout")
+    await _wait_for_visual_quiet(
+        page,
+        minimum_ms=600,
+        quiet_ms=450,
+        maximum_ms=min(2500, timeout_ms),
+    )
+    telemetry.raise_if_oversize()
 
     screenshots: dict[str, ScreenshotEvidence] = {}
     state = await page.evaluate(_SCROLL_STATE_SCRIPT)
@@ -1605,7 +1820,7 @@ async def _capture_loaded_page(
             maximum_ms=min(5000, timeout_ms),
         )
         try:
-            await _wait_for_fonts_and_visible_images(page, 2500)
+            await _wait_for_fonts_and_viewport_images(page, 2500)
         except Exception:
             if "lazy_image_settle_timeout" not in skipped_reasons:
                 skipped_reasons.append("lazy_image_settle_timeout")
@@ -1750,7 +1965,7 @@ async def _capture_loaded_page(
         timings_ms={"total": round((time.monotonic() - started) * 1000, 1)},
         transferred_bytes=transferred_bytes,
         scroll_strategy=scroll_strategy,
-        reset_strategy="not-required-top-first",
+        reset_strategy="wheel-prewarm-return-top",
         skipped_reasons=tuple(skipped_reasons),
         coverage_status=coverage_status,
     )

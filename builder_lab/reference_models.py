@@ -249,6 +249,7 @@ class ReferencePageEvidence:
             "none",
             "not_captured",
             "not-required-top-first",
+            "wheel-prewarm-return-top",
         }:
             raise ValueError("reset_strategy is invalid")
         if self.coverage_status not in {"complete", "partial", "not_captured"}:

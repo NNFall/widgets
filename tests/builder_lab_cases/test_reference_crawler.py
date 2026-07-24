@@ -440,12 +440,17 @@ class LazyFixtureHandler(BaseHTTPRequestHandler):
               <section id='real' hidden><h2>Real virtual end</h2></section>
               <div class='tail'>Tail</div></main>
             <script>
-              let wheels=0; const scene=document.querySelector('#scene');
-              addEventListener('wheel',()=>{
+              let wheels=0, offset=0;
+              const scene=document.querySelector('#scene');
+              addEventListener('wheel',(event)=>{
                 wheels += 1;
-                if(wheels >= 4) {
+                offset=Math.max(0,Math.min(500,offset+event.deltaY));
+                if(wheels >= 4 && offset >= 500) {
                   real.hidden=false;
                   scene.style.transform='translateY(-500px)';
+                } else if(offset === 0) {
+                  real.hidden=true;
+                  scene.style.transform='none';
                 }
               },{passive:true});
             </script>"""
@@ -490,10 +495,16 @@ class LazyFixtureHandler(BaseHTTPRequestHandler):
             <script>
               let offset=0; const scene=document.querySelector('#scene');
               addEventListener('wheel',(event)=>{
-                offset=Math.min(1200,offset+Math.max(0,event.deltaY));
-                scene.style.transform=`translateY(${-offset}px)`;
+                offset=Math.max(0,Math.min(1200,offset+event.deltaY));
+                scene.style.transform=offset === 0
+                  ? 'none'
+                  : `translateY(${-offset}px)`;
                 if(offset>400) document.querySelector('.reveal').classList.add('seen');
-                if(offset>=1200) document.body.dataset.kaigoScrollEnd='true';
+                if(offset>=1200) {
+                  document.body.dataset.kaigoScrollEnd='true';
+                } else {
+                  delete document.body.dataset.kaigoScrollEnd;
+                }
               },{passive:true});
             </script>"""
             content_type = "text/html; charset=utf-8"
@@ -515,7 +526,6 @@ class LazyFixtureHandler(BaseHTTPRequestHandler):
           addEventListener('scroll', () => {
             if (scrollY > 400 && document.body.dataset.warmed === 'yes') {
               document.querySelector('#lazy').classList.add('seen');
-              document.querySelector('.top-motion')?.remove();
               if (!document.querySelector('.bottom-motion')) document.querySelector('.bottom').insertAdjacentHTML('beforebegin','<div class="bottom-motion">Bottom motion</div>');
             }
           });
@@ -1413,8 +1423,10 @@ class BrowserLifecycleTests(unittest.TestCase):
         positions = {shot.position for shot in evidence.screenshots}
         self.assertTrue({"top", "middle", "bottom"}.issubset(positions))
         self.assertTrue(all(shot.data for shot in evidence.screenshots))
-        self.assertEqual(captures[0], ("top", {"y": 0, "wheels": 0}))
-        self.assertEqual(evidence.reset_strategy, "not-required-top-first")
+        self.assertEqual(captures[0][0], "top")
+        self.assertEqual(captures[0][1]["y"], 0)
+        self.assertGreater(captures[0][1]["wheels"], 0)
+        self.assertEqual(evidence.reset_strategy, "wheel-prewarm-return-top")
         motion_text = " ".join(
             item.get("text", "") for item in evidence.style_sample["motionInventory"]
         )
