@@ -22,6 +22,7 @@ from builder_lab.visual_critic import GeminiVisualCritic
 from builder_lab.web import (
     CHAT_SECURE_COOKIE_KEY,
     CHAT_SERVICE_KEY,
+    DEMO_DIR_KEY,
     DEMO_PATH_KEY,
     create_builder_lab_app,
 )
@@ -99,6 +100,7 @@ def build_app(config: BuilderLabConfig) -> web.Application:
         default_temperature=config.temperature,
         default_max_repairs=config.max_repairs,
         demo_path=Path(config.demo_path) if config.demo_path else None,
+        demo_dir=Path(config.demo_dir) if config.demo_dir else None,
         chat_service=chat_service,
         chat_secure_cookie=config.chat_secure_cookie,
         chat_session_secret=config.chat_session_secret,

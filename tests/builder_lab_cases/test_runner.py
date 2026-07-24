@@ -58,6 +58,19 @@ class BuilderLabRunnerTests(unittest.TestCase):
         self.assertEqual(app[run_builder_lab.DEMO_PATH_KEY], Path(config.demo_path))
         asyncio.run(app.cleanup())
 
+    def test_demo_registry_directory_is_optional_and_passed_to_web_app(self):
+        config = self.config(
+            KAIGO_BUILDER_DEMO_DIR="data/builder-demo/direct-abc-v1/private"
+        )
+        self.assertEqual(
+            config.demo_dir, "data/builder-demo/direct-abc-v1/private"
+        )
+        app = run_builder_lab.build_app(config)
+        self.assertEqual(
+            app[run_builder_lab.DEMO_DIR_KEY], Path(config.demo_dir)
+        )
+        asyncio.run(app.cleanup())
+
     def test_configures_separate_bounded_demo_chat_service(self):
         config = self.config(
             GEMINI_CHAT_MODEL="gemini-3.5-flash",

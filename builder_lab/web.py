@@ -34,6 +34,7 @@ ORCHESTRATOR_KEY = web.AppKey("builder_orchestrator", BuilderOrchestrator)
 ENGINES_KEY = web.AppKey("builder_enabled_engines", tuple)
 UI_DEFAULTS_KEY = web.AppKey("builder_ui_defaults", tuple)
 DEMO_PATH_KEY = web.AppKey("builder_demo_path", object)
+DEMO_DIR_KEY = web.AppKey("builder_demo_dir", object)
 CHAT_SERVICE_KEY = web.AppKey("builder_chat_service", object)
 CHAT_SECURE_COOKIE_KEY = web.AppKey("builder_chat_secure_cookie", bool)
 CHAT_SESSION_SECRET_KEY = web.AppKey("builder_chat_session_secret", bytes)
@@ -42,6 +43,7 @@ _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{7,95}$")
 _SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 CHAT_COOKIE = "kaigo_chat_session"
 CHAT_SECURE_COOKIE = "__Host-kaigo_chat_session"
+DEMO_SLUGS = frozenset({"product-chat", "brand-motion", "ai-character"})
 
 
 def _error(code: str, message: str, *, status: int) -> web.Response:
@@ -96,10 +98,31 @@ async def page(request: web.Request) -> web.Response:
     )
 
 
+def _requested_demo_slug(request: web.Request) -> str | None:
+    slug = request.match_info.get("demo_slug")
+    if slug is not None and slug not in DEMO_SLUGS:
+        raise web.HTTPNotFound()
+    return slug
+
+
 def _configured_demo(request: web.Request):
-    path = request.app[DEMO_PATH_KEY]
-    if path is None:
-        raise DemoUnavailable("demo path is not configured")
+    slug = _requested_demo_slug(request)
+    if slug is None:
+        path = request.app[DEMO_PATH_KEY]
+        if path is None:
+            raise DemoUnavailable("demo path is not configured")
+        return load_demo(path)
+
+    directory = request.app[DEMO_DIR_KEY]
+    if directory is None:
+        raise DemoUnavailable("demo registry is not configured")
+    try:
+        root = Path(directory).resolve(strict=False)
+        path = (root / f"{slug}.json").resolve(strict=False)
+    except OSError as exc:
+        raise DemoUnavailable("demo registry is unavailable") from exc
+    if path.parent != root:
+        raise web.HTTPNotFound()
     return load_demo(path)
 
 
@@ -441,6 +464,7 @@ async def _execute_chat(
 
 
 async def demo_chat(request: web.Request) -> web.Response:
+    _requested_demo_slug(request)
     try:
         _require_chat_csrf(request)
         request_id, message, revision = await _chat_payload(request)
@@ -594,6 +618,7 @@ def create_builder_lab_app(
     default_temperature: float = 0.9,
     default_max_repairs: int = 3,
     demo_path: Path | None = None,
+    demo_dir: Path | None = None,
     chat_service: GeminiDemoChatService | None = None,
     chat_secure_cookie: bool = True,
     chat_session_secret: str | bytes | None = None,
@@ -611,6 +636,7 @@ def create_builder_lab_app(
         default_max_repairs,
     )
     app[DEMO_PATH_KEY] = demo_path
+    app[DEMO_DIR_KEY] = demo_dir
     app[CHAT_SERVICE_KEY] = chat_service
     app[CHAT_SECURE_COOKIE_KEY] = chat_secure_cookie
     if chat_session_secret is None:
@@ -626,6 +652,9 @@ def create_builder_lab_app(
     app.router.add_get("/demo", demo_page)
     app.router.add_get("/demo/preview", demo_preview)
     app.router.add_post("/demo/chat", demo_chat)
+    app.router.add_get("/demos/{demo_slug}", demo_page)
+    app.router.add_get("/demos/{demo_slug}/preview", demo_preview)
+    app.router.add_post("/demos/{demo_slug}/chat", demo_chat)
     app.router.add_post("/api/runs", create_run)
     app.router.add_get("/api/runs/{run_id}", get_run)
     app.router.add_get("/api/runs/{run_id}/events", event_stream)

@@ -514,6 +514,149 @@ class BuilderLabWebTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await client.close()
 
+    async def test_whitelisted_demo_registry_routes_are_live_and_history_isolated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            demo_dir = Path(directory)
+            prompt = "SERVER ONLY: use verified RAW BUREAU facts."
+            save_demo(
+                demo_dir / "product-chat.json",
+                completed_snapshot(
+                    artifact=artifact(
+                        art_direction="Product chat identity"
+                    ).to_dict()
+                ),
+                model="gemini-3.6-flash",
+                source_url="https://rawbureau.ru/",
+                chat_system_prompt=prompt,
+            )
+            save_demo(
+                demo_dir / "brand-motion.json",
+                completed_snapshot(
+                    artifact=artifact(
+                        art_direction="Brand motion identity"
+                    ).to_dict()
+                ),
+                model="gemini-3.6-flash",
+                source_url="https://rawbureau.ru/",
+                chat_system_prompt=prompt,
+            )
+            app = create_builder_lab_app(
+                store=RunStore(),
+                orchestrator=FakeOrchestrator(RunStore()),
+                enabled_engines=(EngineName.DIRECT,),
+                demo_dir=demo_dir,
+                chat_service=self.chat_service,
+                chat_secure_cookie=False,
+            )
+            client = TestClient(TestServer(app))
+            await client.start_server()
+            try:
+                product_page = await client.get("/demos/product-chat")
+                product_body = await product_page.text()
+                self.assertEqual(product_page.status, 200)
+                self.assertIn("Product chat identity", product_body)
+                self.assertNotIn(prompt, product_body)
+                self.assertNotIn("rawbureau.ru", product_body)
+
+                preview = await client.get(
+                    "/demos/product-chat/preview"
+                    "?channel=channel-1234567890abcdef"
+                )
+                preview_body = await preview.text()
+                self.assertEqual(preview.status, 200)
+                self.assertIn("kaigo-builder-preview", preview_body)
+                self.assertNotIn(prompt, preview_body)
+
+                origin = (
+                    f"{client.make_url('/').scheme}://"
+                    f"{client.make_url('/').host}:{client.make_url('/').port}"
+                )
+                headers = {"Origin": origin, "X-Kaigo-Chat": "v2"}
+                product_chat = await client.post(
+                    "/demos/product-chat/chat",
+                    json={
+                        "request_id": "request-profile-001",
+                        "message": "What is this bureau?",
+                        "revision": 2,
+                    },
+                    headers=headers,
+                )
+                self.assertEqual(product_chat.status, 200)
+                product_scope = self.chat_service.calls[-1]["scope"]
+                self.assertEqual(self.chat_service.calls[-1]["system_prompt"], prompt)
+
+                brand_chat = await client.post(
+                    "/demos/brand-motion/chat",
+                    json={
+                        "request_id": "request-profile-002",
+                        "message": "What is this bureau?",
+                        "revision": 2,
+                    },
+                    headers=headers,
+                )
+                self.assertEqual(brand_chat.status, 200)
+                brand_scope = self.chat_service.calls[-1]["scope"]
+                self.assertNotEqual(product_scope, brand_scope)
+                self.assertTrue(product_scope.startswith("demo:"))
+                self.assertTrue(brand_scope.startswith("demo:"))
+            finally:
+                await client.close()
+
+    async def test_demo_registry_rejects_unknown_paths_and_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            demo_dir = Path(directory)
+            (demo_dir / "secret.json").write_text(
+                '{"chat_system_prompt":"must-not-leak"}', encoding="utf-8"
+            )
+            (demo_dir / "ai-character.json").write_text(
+                '{"schema_version":2,"chat_system_prompt":"must-not-leak"}',
+                encoding="utf-8",
+            )
+            app = create_builder_lab_app(
+                store=RunStore(),
+                orchestrator=FakeOrchestrator(RunStore()),
+                enabled_engines=(EngineName.DIRECT,),
+                demo_dir=demo_dir,
+                chat_service=self.chat_service,
+                chat_secure_cookie=False,
+            )
+            client = TestClient(TestServer(app))
+            await client.start_server()
+            try:
+                unknown = await client.get("/demos/secret")
+                extension = await client.get("/demos/product-chat.json")
+                traversal = await client.get("/demos/%2e%2e%2fsecret")
+                self.assertEqual(unknown.status, 404)
+                self.assertEqual(extension.status, 404)
+                self.assertEqual(traversal.status, 404)
+                self.assertNotIn("must-not-leak", await unknown.text())
+
+                missing = await client.get("/demos/brand-motion")
+                corrupt = await client.get("/demos/ai-character")
+                self.assertEqual(missing.status, 503)
+                self.assertEqual(corrupt.status, 503)
+                self.assertNotIn("must-not-leak", await corrupt.text())
+
+                calls_before = len(self.chat_service.calls)
+                origin = (
+                    f"{client.make_url('/').scheme}://"
+                    f"{client.make_url('/').host}:{client.make_url('/').port}"
+                )
+                for slug in ("brand-motion", "ai-character"):
+                    chat = await client.post(
+                        f"/demos/{slug}/chat",
+                        json={
+                            "request_id": f"request-{slug}",
+                            "message": "Should not execute",
+                            "revision": 2,
+                        },
+                        headers={"Origin": origin, "X-Kaigo-Chat": "v2"},
+                    )
+                    self.assertEqual(chat.status, 503)
+                self.assertEqual(len(self.chat_service.calls), calls_before)
+            finally:
+                await client.close()
+
 
 if __name__ == "__main__":
     unittest.main()

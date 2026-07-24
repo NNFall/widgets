@@ -76,6 +76,7 @@ class BuilderLabConfig:
     antigravity_max_snapshot_bytes: int
     antigravity_max_total_tokens: int
     demo_path: str | None
+    demo_dir: str | None
     chat_model: str
     chat_thinking_level: str
     chat_timeout_seconds: int
@@ -185,6 +186,7 @@ class BuilderLabConfig:
                 2_000_000,
             ),
             demo_path=_first_nonblank("KAIGO_BUILDER_DEMO_PATH"),
+            demo_dir=_first_nonblank("KAIGO_BUILDER_DEMO_DIR"),
             chat_model=os.getenv(
                 "GEMINI_CHAT_MODEL", "gemini-3.5-flash-lite"
             ).strip(),
