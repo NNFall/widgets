@@ -89,7 +89,7 @@ class BuilderLabPackagingTests(unittest.TestCase):
             "KAIGO_BUILDER_DEMO_DIR=/app/data/builder-demo/direct-abc-v1",
             env_example,
         )
-        self.assertIn("GEMINI_VISUAL_CRITIC_MODEL=gemini-3.5-flash", env_example)
+        self.assertIn("GEMINI_VISUAL_CRITIC_MODEL=gemini-3.6-flash", env_example)
         self.assertIn("KAIGO_BROWSER_AUDIT_TIMEOUT_MS=10000", env_example)
         self.assertIn("KAIGO_BROWSER_AUDIT_TOTAL_TIMEOUT_SECONDS=120", env_example)
         self.assertIn("CRAWLEE_MEMORY_MBYTES=4096", env_example)

@@ -195,7 +195,7 @@ class BuilderLabConfig:
             ),
             chat_timeout_seconds=_int("GEMINI_CHAT_TIMEOUT_SECONDS", 45, 1, 180),
             visual_critic_model=os.getenv(
-                "GEMINI_VISUAL_CRITIC_MODEL", "gemini-3.5-flash"
+                "GEMINI_VISUAL_CRITIC_MODEL", "gemini-3.6-flash"
             ).strip(),
             visual_critic_thinking_level=normalize_thinking_level(
                 os.getenv("GEMINI_VISUAL_CRITIC_THINKING_LEVEL", "high")

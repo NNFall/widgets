@@ -70,7 +70,7 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertEqual(config.chat_model, "gemini-3.5-flash-lite")
         self.assertEqual(config.chat_thinking_level, "medium")
         self.assertEqual(config.chat_timeout_seconds, 45)
-        self.assertEqual(config.visual_critic_model, "gemini-3.5-flash")
+        self.assertEqual(config.visual_critic_model, "gemini-3.6-flash")
         self.assertEqual(config.visual_critic_thinking_level, "high")
         self.assertEqual(config.visual_critic_timeout_seconds, 60)
         self.assertEqual(config.reference_analyzer_model, "gemini-3.6-flash")
