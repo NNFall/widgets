@@ -922,15 +922,22 @@ async def _guarded_context_route(
             await block("malformed document URL blocked")
             return
         try:
-            request_page = request.frame.page
+            request_frame = request.frame
+            request_page = request_frame.page
+            is_main_frame = request_frame == request_page.main_frame
         except Exception:
             request_page = None
+            is_main_frame = True
         expected_page = primary_page.get("page")
         if expected_page is not None and request_page is not expected_page:
             await block("popup document blocked")
             return
         if request_origin != allowed_document_origin:
-            await block("cross-origin document blocked")
+            await block(
+                "cross-origin document blocked"
+                if is_main_frame
+                else "cross-origin subframe document blocked"
+            )
             return
         if robots is not None:
             try:
@@ -1561,10 +1568,10 @@ async def _capture_loaded_page(
     modes: set[str] = set()
     fallback_used = False
     stable_steps = 0
+    native_end_stable_steps = 0
     progressed = False
     virtual = bool(state.get("potentialVirtual"))
-    if virtual:
-        modes.add("virtual")
+    native_progressed = False
     exhausted = True
     coverage_complete = False
     for step_index in range(settings.max_scroll_steps):
@@ -1602,16 +1609,19 @@ async def _capture_loaded_page(
             stable_steps = 0
         else:
             stable_steps += 1
-        if state.get("potentialVirtual"):
+        if top_changed:
+            native_progressed = True
+            virtual = False
+            modes.discard("virtual")
+            if state.get("kind") == "element":
+                modes.add("nested")
+            else:
+                modes.add("document")
+        elif not native_progressed and (transform_changed or visible_changed):
             virtual = True
             modes.add("virtual")
-        if not top_changed and (transform_changed or visible_changed):
-            virtual = True
+        elif virtual:
             modes.add("virtual")
-        elif top_changed and state.get("kind") == "element":
-            modes.add("nested")
-        elif top_changed:
-            modes.add("document")
         observed_texts.extend(state.get("visible", ()))
         samples.append(
             await page.evaluate(
@@ -1648,7 +1658,19 @@ async def _capture_loaded_page(
                 break
         else:
             at_end = max_native_scroll == 0 or int(state["top"]) >= max_native_scroll - 2
-            if ((progressed and at_end) or not progressed) and stable_steps >= 2:
+            if (
+                at_end
+                and int(state["top"]) == int(previous["top"])
+                and int(state["height"]) == int(previous["height"])
+            ):
+                native_end_stable_steps += 1
+            else:
+                native_end_stable_steps = 0
+            if (
+                progressed
+                and at_end
+                and native_end_stable_steps >= 2
+            ) or (not progressed and stable_steps >= 2):
                 exhausted = False
                 coverage_complete = True
                 break

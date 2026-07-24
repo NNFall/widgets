@@ -340,6 +340,14 @@ class LazyFixtureHandler(BaseHTTPRequestHandler):
                 + ", '_blank')</script>"
             ).encode()
             content_type = "text/html; charset=utf-8"
+        elif path == "/cross-origin-frame":
+            body = (
+                "<!doctype html><h1>Safe host with external support frame</h1>"
+                "<iframe src="
+                + json.dumps(self.external_target)
+                + "></iframe>"
+            ).encode()
+            content_type = "text/html; charset=utf-8"
         elif path == "/redirect-assets":
             body = b"""<!doctype html><meta charset='utf-8'>
             <style>img{width:100px;height:100px;display:block}</style>
@@ -387,6 +395,32 @@ class LazyFixtureHandler(BaseHTTPRequestHandler):
                 }
               },{passive:true});
             </script>"""
+            content_type = "text/html; charset=utf-8"
+        elif path == "/native-overflow-transform":
+            body = b"""<!doctype html><meta charset='utf-8'>
+            <style>
+              html{margin:0;overflow-y:auto}
+              body{margin:0;overflow-y:hidden;background:white}
+              #animated{transform:translateZ(0)}
+              .spacer{height:1500px}
+              .tail{height:900px;background:#ddd}
+            </style>
+            <main><h1>Native document scroll</h1><div id='animated'>Animated brand</div>
+              <div class='spacer'></div><section class='tail'><h2>Native bottom</h2></section>
+            </main>"""
+            content_type = "text/html; charset=utf-8"
+        elif path == "/native-animated-bottom":
+            body = b"""<!doctype html><meta charset='utf-8'>
+            <style>
+              html,body{margin:0;background:white}
+              .spacer{height:1500px}
+              .tail{height:900px;background:#ddd}
+              #ticker{display:inline-block;animation:shift .2s infinite alternate}
+              @keyframes shift{from{transform:translateX(0)}to{transform:translateX(20px)}}
+            </style>
+            <main><h1>Native animated document</h1><div class='spacer'></div>
+              <section class='tail'><h2>Animated native bottom</h2><span id='ticker'>Live</span></section>
+            </main>"""
             content_type = "text/html; charset=utf-8"
         elif path.startswith("/virtual"):
             body = b"""<!doctype html><meta charset='utf-8'>
@@ -1003,6 +1037,55 @@ class BrowserLifecycleTests(unittest.TestCase):
             external_thread.join(timeout=2)
         self.assertEqual(HitOnlyHandler.hits, 0)
 
+    def test_blocked_cross_origin_subframe_does_not_fail_primary_document(self):
+        reason = browser_unavailable_reason()
+        if reason:
+            self.skipTest(f"Playwright Chromium unavailable: {reason}")
+        HitOnlyHandler.hits = 0
+        external = ThreadingHTTPServer(("127.0.0.1", 0), HitOnlyHandler)
+        primary = ThreadingHTTPServer(("127.0.0.1", 0), LazyFixtureHandler)
+        external_thread = threading.Thread(target=external.serve_forever, daemon=True)
+        primary_thread = threading.Thread(target=primary.serve_forever, daemon=True)
+        external_thread.start()
+        primary_thread.start()
+        LazyFixtureHandler.external_target = (
+            f"http://127.0.0.1:{external.server_port}/blocked-frame?token=secret"
+        )
+        try:
+            evidence = asyncio.run(
+                capture_reference_page(
+                    f"http://127.0.0.1:{primary.server_port}/cross-origin-frame",
+                    page_id="cross-origin-frame",
+                    category="home",
+                    viewport="desktop",
+                    settings=CaptureSettings(
+                        width=1440,
+                        height=900,
+                        warmup_ms=1000,
+                        scroll_delay_ms=600,
+                        final_settle_ms=500,
+                        max_scroll_steps=2,
+                    ),
+                    guard=PermissiveLocalGuard(),
+                )
+            )
+        finally:
+            primary.shutdown()
+            external.shutdown()
+            primary.server_close()
+            external.server_close()
+            primary_thread.join(timeout=2)
+            external_thread.join(timeout=2)
+
+        self.assertEqual(evidence.coverage_status, "complete")
+        self.assertTrue(
+            any(
+                item.startswith("cross-origin subframe document blocked:")
+                for item in evidence.policy_blocks
+            )
+        )
+        self.assertEqual(HitOnlyHandler.hits, 0)
+
     def test_two_hop_document_redirect_is_rejected_before_external_target(self):
         reason = browser_unavailable_reason()
         if reason:
@@ -1277,6 +1360,76 @@ class BrowserLifecycleTests(unittest.TestCase):
         self.assertLess(abs(transforms["middle"]), abs(transforms["bottom"]))
         self.assertEqual(abs(transforms["bottom"]), 1200)
         self.assertEqual(evidence.scroll_strategy, "virtual")
+
+    def test_native_document_scroll_is_not_misclassified_by_overflow_and_transform(self):
+        reason = browser_unavailable_reason()
+        if reason:
+            self.skipTest(f"Playwright Chromium unavailable: {reason}")
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), LazyFixtureHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            evidence = asyncio.run(
+                capture_reference_page(
+                    f"http://127.0.0.1:{server.server_port}/native-overflow-transform",
+                    page_id="native-overflow-transform",
+                    category="home",
+                    viewport="desktop",
+                    settings=CaptureSettings(
+                        width=1440,
+                        height=900,
+                        warmup_ms=1000,
+                        scroll_delay_ms=600,
+                        final_settle_ms=500,
+                        max_scroll_steps=6,
+                    ),
+                    guard=None,
+                )
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(evidence.coverage_status, "complete")
+        self.assertEqual(evidence.scroll_strategy, "document")
+        self.assertIn("bottom", {shot.position for shot in evidence.screenshots})
+
+    def test_native_document_end_uses_stable_geometry_despite_infinite_animation(self):
+        reason = browser_unavailable_reason()
+        if reason:
+            self.skipTest(f"Playwright Chromium unavailable: {reason}")
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), LazyFixtureHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            evidence = asyncio.run(
+                capture_reference_page(
+                    f"http://127.0.0.1:{server.server_port}/native-animated-bottom",
+                    page_id="native-animated-bottom",
+                    category="home",
+                    viewport="desktop",
+                    settings=CaptureSettings(
+                        width=1440,
+                        height=900,
+                        warmup_ms=1000,
+                        scroll_delay_ms=600,
+                        final_settle_ms=500,
+                        max_scroll_steps=6,
+                    ),
+                    guard=None,
+                )
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+        self.assertEqual(evidence.coverage_status, "complete")
+        self.assertEqual(evidence.scroll_strategy, "document")
+        self.assertIn("bottom", {shot.position for shot in evidence.screenshots})
 
     def test_virtual_scroller_without_proven_end_never_synthesizes_bottom(self):
         reason = browser_unavailable_reason()

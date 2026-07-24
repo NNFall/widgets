@@ -64,7 +64,7 @@ def _thaw_json(value: Any) -> Any:
 def _bounded_json_mapping(
     value: Mapping[str, Any], field_name: str, max_bytes: int
 ) -> Mapping[str, Any]:
-    result = dict(value)
+    result = _thaw_json(value)
     if len(result) > 32:
         raise ValueError(f"{field_name} contains too many fields")
     try:

@@ -1,5 +1,6 @@
 import hashlib
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from builder_lab.reference_models import (
@@ -184,6 +185,33 @@ class ReferenceModelsTests(unittest.TestCase):
         self.assertEqual(tuple(page.semantic_sample["headings"]), ("Original",))
         self.assertEqual(public["requested_url"], "https://example.com/")
         self.assertEqual(public["final_url"], "https://example.com/final")
+
+    def test_deeply_frozen_samples_survive_dataclass_replace(self):
+        page = ReferencePageEvidence(
+            page_id="home",
+            category="home",
+            requested_url="https://example.com/",
+            final_url="https://example.com/",
+            depth=0,
+            semantic_sample={"headings": ["Example"]},
+            style_sample={
+                "components": [
+                    {
+                        "name": "hero",
+                        "colors": ["#ffffff", "#111111"],
+                    }
+                ]
+            },
+            coverage_status="not_captured",
+        )
+
+        revised = replace(page, skipped_reasons=("robots_denied: /contacts",))
+
+        self.assertEqual(revised.skipped_reasons, ("robots_denied: /contacts",))
+        self.assertEqual(
+            revised.to_dict()["style_sample"]["components"][0]["name"],
+            "hero",
+        )
 
     def test_page_coverage_requires_coherent_position_contract(self):
         kwargs = {
