@@ -498,6 +498,27 @@ def _prompt(source_url: str, labels: Iterable[str]) -> str:
     )
 
 
+def _transient_provider_error(exc: Exception) -> bool:
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return True
+    diagnostic = f"{type(exc).__name__}: {exc}".casefold()
+    return any(
+        token in diagnostic
+        for token in (
+            "500",
+            "502",
+            "503",
+            "504",
+            "unavailable",
+            "high demand",
+            "temporarily",
+            "connection reset",
+            "service unavailable",
+            "gateway timeout",
+        )
+    )
+
+
 async def analyze_reference_site(
     *,
     source_url: str,
@@ -571,6 +592,28 @@ async def analyze_reference_site(
     request_id: str | None = None
     usage = {key: 0 for key in ("prompt_tokens", "output_tokens", "thinking_tokens", "total_tokens")}
     attempt_count = 0
+
+    async def generate(attempt_contents: Sequence[types.Part]) -> Any:
+        retry_delays = (0.5, 1.5, 3.0, 5.0)
+        for provider_attempt in range(len(retry_delays) + 1):
+            try:
+                async with asyncio.timeout(timeout_seconds):
+                    return await gemini_client.aio.models.generate_content(
+                        model=model.strip(),
+                        contents=attempt_contents,
+                        config=config,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if (
+                    not _transient_provider_error(exc)
+                    or provider_attempt == len(retry_delays)
+                ):
+                    raise
+                await asyncio.sleep(retry_delays[provider_attempt])
+        raise AssertionError("unreachable reference provider retry loop")
+
     try:
         for attempt_count in range(1, 3):
             attempt_contents = contents
@@ -581,12 +624,7 @@ async def analyze_reference_site(
                     "complete object within every numeric budget above; do not repeat the invalid output."
                 )
                 attempt_contents = [types.Part.from_text(text=retry_prompt), *contents[1:]]
-            async with asyncio.timeout(timeout_seconds):
-                response = await gemini_client.aio.models.generate_content(
-                    model=model.strip(),
-                    contents=attempt_contents,
-                    config=config,
-                )
+            response = await generate(attempt_contents)
             current_request_id, current_usage = _response_provenance(response)
             request_id = current_request_id or request_id
             usage = {key: usage[key] + current_usage[key] for key in usage}

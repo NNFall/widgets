@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 import io
 import json
@@ -7,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from PIL import Image
 
@@ -123,13 +122,15 @@ def evidence_with_manifest(root: Path, *, payloads: dict[str, bytes] | None = No
 
 
 class FakeModels:
-    def __init__(self, payload: dict | list[dict]):
+    def __init__(self, payload):
         self.payloads = payload if isinstance(payload, list) else [payload]
         self.calls: list[dict] = []
 
     async def generate_content(self, **kwargs):
         self.calls.append(kwargs)
         payload = self.payloads[min(len(self.calls) - 1, len(self.payloads) - 1)]
+        if isinstance(payload, BaseException):
+            raise payload
         return SimpleNamespace(
             parsed=payload,
             text=json.dumps(payload, ensure_ascii=False),
@@ -233,6 +234,38 @@ class ReferenceInputValidationTests(unittest.TestCase):
 
 
 class ReferenceGeminiAnalysisTests(unittest.IsolatedAsyncioTestCase):
+    async def test_retries_transient_provider_unavailable_with_backoff(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs, manifest_path = evidence_with_manifest(root)
+            fake = FakeClient(
+                [
+                    RuntimeError("503 UNAVAILABLE high demand"),
+                    valid_analysis(REQUIRED_LABELS),
+                ]
+            )
+
+            with patch(
+                "scripts.analyze_reference_site.asyncio.sleep",
+                new=AsyncMock(),
+            ) as sleep:
+                reference = await analyze_reference_site(
+                    source_url="https://rawbureau.ru/",
+                    allowed_hosts={"rawbureau.ru"},
+                    screenshot_inputs=inputs,
+                    evidence_root=root,
+                    captured_at="2026-07-19T12:10:23.127441+00:00",
+                    coverage_status="complete",
+                    capture_manifest=manifest_path,
+                    api_key=None,
+                    client=fake,
+                    model="gemini-3.6-flash",
+                )
+
+        self.assertEqual(reference["analysis"]["public_facts"][0]["evidence"], ["desktop.top"])
+        self.assertEqual(len(fake.aio.models.calls), 2)
+        sleep.assert_awaited_once_with(0.5)
+
     async def test_retries_once_with_explicit_local_budgets_after_semantic_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

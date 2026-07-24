@@ -73,7 +73,7 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertEqual(config.visual_critic_model, "gemini-3.5-flash")
         self.assertEqual(config.visual_critic_thinking_level, "high")
         self.assertEqual(config.visual_critic_timeout_seconds, 60)
-        self.assertEqual(config.reference_analyzer_model, "gemini-3.5-flash")
+        self.assertEqual(config.reference_analyzer_model, "gemini-3.6-flash")
         self.assertEqual(config.reference_analyzer_thinking_level, "high")
         self.assertEqual(config.antigravity_max_total_tokens, 500_000)
         self.assertEqual(config.browser_audit_timeout_ms, 10_000)

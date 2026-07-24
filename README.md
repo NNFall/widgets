@@ -288,7 +288,8 @@ nginx и откату:
 ### Воспроизводимое сравнение генераторов
 
 Текущая матрица эксперимента: Direct `gemini-3.6-flash` с `high` thinking,
-визуальный критик и анализатор `gemini-3.5-flash/high`, чат посетителя
+визуальный критик `gemini-3.5-flash/high`, визуальный анализатор
+`gemini-3.6-flash/high`, чат посетителя
 `gemini-3.5-flash-lite/medium`, агентская версия
 `antigravity-preview-05-2026`.
 

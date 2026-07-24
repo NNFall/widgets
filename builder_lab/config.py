@@ -204,7 +204,7 @@ class BuilderLabConfig:
                 "GEMINI_VISUAL_CRITIC_TIMEOUT_SECONDS", 60, 10, 180
             ),
             reference_analyzer_model=os.getenv(
-                "GEMINI_REFERENCE_ANALYZER_MODEL", "gemini-3.5-flash"
+                "GEMINI_REFERENCE_ANALYZER_MODEL", "gemini-3.6-flash"
             ).strip(),
             reference_analyzer_thinking_level=normalize_thinking_level(
                 os.getenv("GEMINI_REFERENCE_ANALYZER_THINKING_LEVEL", "high")
