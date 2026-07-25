@@ -13,6 +13,7 @@ from builder_lab.visual_critic import (
     VisualCriticResult,
     VisualCriticRole,
 )
+from builder_lab.visual_review import VisualJudgeResult
 from builder_lab.visual_models import (
     NormalizedRegion,
     VisualCategory,
@@ -91,6 +92,20 @@ class FakeCritic:
         self.closed = True
 
 
+class FakeJudge:
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+        self.closed = False
+
+    async def judge(self, *, role_results):
+        self.calls.append(role_results)
+        return self.response
+
+    async def aclose(self):
+        self.closed = True
+
+
 class Barrier:
     def __init__(self, parties):
         self.parties = parties
@@ -104,12 +119,22 @@ class Barrier:
         await asyncio.wait_for(self.ready.wait(), timeout=0.2)
 
 
-def committee(critics):
+def judged_result(*findings, tokens=7, supporting_roles=None):
+    return VisualJudgeResult(
+        critique=critique(*findings),
+        supporting_roles=supporting_roles or {},
+        usage=TokenUsage(prompt_tokens=tokens),
+    )
+
+
+def committee(critics, judge=None):
+    resolved_judge = judge or FakeJudge(judged_result())
     return VisualCriticCommittee(
         {
             role: (lambda critic=critic: critic)
             for role, critic in critics.items()
-        }
+        },
+        judge_factory=lambda: resolved_judge,
     )
 
 
@@ -128,7 +153,8 @@ async def test_two_valid_roles_form_quorum_and_all_roles_run_in_parallel():
             barrier=barrier,
         ),
     }
-    visual_committee = committee(critics)
+    judge = FakeJudge(judged_result(tokens=17))
+    visual_committee = committee(critics, judge)
 
     combined = await visual_committee.critique(
         audit=types.SimpleNamespace(),
@@ -138,7 +164,7 @@ async def test_two_valid_roles_form_quorum_and_all_roles_run_in_parallel():
     await visual_committee.aclose()
 
     assert combined.critique.verdict is VisualVerdict.PASS
-    assert combined.usage.prompt_tokens == 36
+    assert combined.usage.prompt_tokens == 53
     assert set(combined.role_results) == {
         VisualCriticRole.CONVERSATION_UX,
         VisualCriticRole.BRAND_MOTION,
@@ -148,21 +174,35 @@ async def test_two_valid_roles_form_quorum_and_all_roles_run_in_parallel():
     }
     assert barrier.arrived == 3
     assert all(critic.closed for critic in critics.values())
+    assert judge.closed
+    assert len(judge.calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_matching_major_from_two_roles_triggers_one_repair_finding():
+async def test_ai_judge_semantically_merges_differently_worded_findings():
+    accepted = finding("judge-1")
+    judge = FakeJudge(
+        judged_result(
+            accepted,
+            supporting_roles={
+                "judge-1": (
+                    VisualCriticRole.CONVERSATION_UX,
+                    VisualCriticRole.BRAND_MOTION,
+                )
+            },
+        )
+    )
     critics = {
         VisualCriticRole.CONVERSATION_UX: FakeCritic(
             result(finding("conversation-major"))
         ),
         VisualCriticRole.BRAND_MOTION: FakeCritic(
-            result(finding("brand-major"))
+            result(finding("brand-major", role_region="panel"))
         ),
         VisualCriticRole.ADVERSARIAL_CUSTOMER: FakeCritic(result()),
     }
 
-    combined = await committee(critics).critique(
+    combined = await committee(critics, judge).critique(
         audit=types.SimpleNamespace(),
         brief="Brief",
         art_direction="Direction",
@@ -170,37 +210,31 @@ async def test_matching_major_from_two_roles_triggers_one_repair_finding():
 
     assert combined.critique.verdict is VisualVerdict.REPAIR
     assert len(combined.critique.findings) == 1
-    assert combined.critique.findings[0].finding_id == "committee-1"
+    assert combined.critique.findings[0].finding_id == "judge-1"
+    assert combined.supporting_roles["judge-1"] == (
+        VisualCriticRole.CONVERSATION_UX,
+        VisualCriticRole.BRAND_MOTION,
+    )
 
 
 @pytest.mark.asyncio
-async def test_single_major_does_not_block_but_single_blocker_does():
-    one_major = {
+async def test_single_blocker_does_not_bypass_two_critic_consensus():
+    critics = {
         VisualCriticRole.CONVERSATION_UX: FakeCritic(result(finding("major"))),
-        VisualCriticRole.BRAND_MOTION: FakeCritic(result()),
-        VisualCriticRole.ADVERSARIAL_CUSTOMER: FakeCritic(result()),
-    }
-    major_result = await committee(one_major).critique(
-        audit=types.SimpleNamespace(),
-        brief="Brief",
-        art_direction="Direction",
-    )
-    assert major_result.critique.verdict is VisualVerdict.PASS
-
-    one_blocker = {
-        VisualCriticRole.CONVERSATION_UX: FakeCritic(result()),
         VisualCriticRole.BRAND_MOTION: FakeCritic(result()),
         VisualCriticRole.ADVERSARIAL_CUSTOMER: FakeCritic(
             result(finding("blocker", severity=VisualSeverity.BLOCKER))
         ),
     }
-    blocker_result = await committee(one_blocker).critique(
+    judge = FakeJudge(judged_result())
+
+    combined = await committee(critics, judge).critique(
         audit=types.SimpleNamespace(),
         brief="Brief",
         art_direction="Direction",
     )
-    assert blocker_result.critique.verdict is VisualVerdict.REPAIR
-    assert len(blocker_result.critique.findings) == 1
+    assert combined.critique.verdict is VisualVerdict.PASS
+    assert combined.critique.findings == ()
 
 
 @pytest.mark.asyncio

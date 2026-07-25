@@ -1,6 +1,7 @@
 import asyncio
 import types
 import unittest
+from dataclasses import replace
 
 from builder_lab.engines.base import BuilderEngineError, EngineResult
 from builder_lab.models import (
@@ -17,6 +18,10 @@ from builder_lab.store import RunStore, RunTerminal
 from builder_lab.browser_audit import BrowserAuditError
 from builder_lab.visual_gate import VisualRepairGate
 from builder_lab.visual_critic import VisualCriticRole
+from builder_lab.visual_review import (
+    RepairCheck,
+    RepairVerificationResult,
+)
 from builder_lab.visual_models import (
     NormalizedRegion,
     VisualCategory,
@@ -125,6 +130,34 @@ class FakeEngine:
         )
 
 
+class FakeVerifier:
+    def __init__(self, *, unresolved=False):
+        self.unresolved = unresolved
+        self.calls = []
+        self.closed = False
+
+    async def verify(self, **kwargs):
+        self.calls.append(kwargs)
+        finding_id = kwargs["findings"][0].finding_id
+        check = RepairCheck(
+            finding_id=finding_id,
+            status="unresolved" if self.unresolved else "fixed",
+            evidence=(
+                "The requested correction is still missing."
+                if self.unresolved
+                else "The requested correction is present in the changed CSS."
+            ),
+        )
+        return RepairVerificationResult(
+            summary="Independent code repair check completed.",
+            checks={finding_id: check},
+            usage=TokenUsage(prompt_tokens=5, output_tokens=2),
+        )
+
+    async def aclose(self):
+        self.closed = True
+
+
 class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.store = RunStore()
@@ -148,11 +181,16 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
             interaction_model="Opens on demand without covering the page.",
         )
 
-    async def evaluate(self, auditor, critic, engine=None):
+    async def evaluate(self, auditor, critic, engine=None, verifier=None):
         gate = VisualRepairGate(
             store=self.store,
             audit_factory=lambda: auditor,
             critic_factory=lambda: critic,
+            verifier_factory=(
+                (lambda: verifier)
+                if verifier is not None
+                else None
+            ),
         )
         return await gate.evaluate(
             run_id=self.run_id,
@@ -183,7 +221,11 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
             [event.event_type for event in visual],
             ["visual_audit.started"]
             + ["screenshot.captured"] * 6
-            + ["visual_audit.completed", "visual_audit.passed"],
+            + [
+                "visual_judge.completed",
+                "visual_audit.completed",
+                "visual_audit.passed",
+            ],
         )
         self.assertEqual(sum(event.usage.total_tokens for event in visual), 10)
         completed = next(
@@ -195,7 +237,15 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         class CommitteeCritic(FakeCritic):
             async def critique(self, **kwargs):
                 self.calls.append(kwargs)
-                role_result = types.SimpleNamespace(usage=TokenUsage(prompt_tokens=3))
+                role_finding = finding(
+                    finding_id="role-detail",
+                    severity=VisualSeverity.MINOR,
+                    confidence=0.99,
+                )
+                role_result = types.SimpleNamespace(
+                    usage=TokenUsage(prompt_tokens=3),
+                    critique=critique(role_finding),
+                )
                 return types.SimpleNamespace(
                     critique=critique(),
                     usage=TokenUsage(prompt_tokens=9, output_tokens=3),
@@ -207,6 +257,7 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
                         VisualCriticRole.ADVERSARIAL_CUSTOMER:
                             "visual_critic_unavailable",
                     },
+                    supporting_roles={},
                 )
 
         result = await self.evaluate(FakeAuditor(), CommitteeCritic([]))
@@ -223,6 +274,20 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
             {event.status for event in roles},
             {"completed", "failed"},
         )
+        completed_role = next(
+            event for event in roles if event.status == "completed"
+        )
+        self.assertEqual(completed_role.issues[0].code, "visual_responsive_integrity")
+        self.assertIn(
+            "Keep the composer inside the panel edge",
+            completed_role.issues[0].message,
+        )
+        judge = next(
+            event
+            for event in events
+            if event.event_type == "visual_judge.completed"
+        )
+        self.assertEqual(judge.status, "completed")
         self.assertEqual(sum(event.usage.total_tokens for event in roles), 0)
         self.assertEqual(
             sum(
@@ -277,6 +342,40 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["repair_issues"], ())
         self.assertEqual(call["visual_findings"], (finding(),))
         self.assertEqual((await self.store.visual_candidate(self.run_id)), repaired)
+
+    async def test_independent_code_verifier_reports_before_new_browser_audit(self):
+        repaired = artifact(
+            revision=5,
+            stage=Stage.MOTION_POLISH,
+            css=self.candidate.css + "\n.kaigo-widget { overflow: clip; }",
+            change_summary=(
+                "Поле ввода теперь полностью помещается внутри мобильной панели."
+            ),
+        )
+        verifier = FakeVerifier()
+
+        result = await self.evaluate(
+            FakeAuditor(),
+            FakeCritic([critique(finding()), critique()]),
+            FakeEngine([repaired]),
+            verifier,
+        )
+
+        self.assertEqual(result, repaired)
+        self.assertTrue(verifier.closed)
+        self.assertEqual(verifier.calls[0]["before"], self.candidate)
+        self.assertEqual(verifier.calls[0]["after"], repaired)
+        events = await self.store.events_after(self.run_id, 0)
+        event_types = [event.event_type for event in events]
+        verifier_index = event_types.index("visual_repair.verifier_completed")
+        next_audit_index = event_types.index(
+            "visual_audit.started",
+            verifier_index + 1,
+        )
+        self.assertLess(verifier_index, next_audit_index)
+        completed = events[verifier_index]
+        self.assertEqual(completed.status, "completed")
+        self.assertEqual(completed.usage.total_tokens, 7)
 
     async def test_structured_browser_gate_failure_repairs_then_reaudits_before_critic(self):
         repaired = artifact(
@@ -516,10 +615,15 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_repeated_normalized_fingerprint_stops_without_second_repair(self):
         first = finding(artifact_fields=("css", "body_html"), confidence=0.90)
-        same_semantics_new_id = finding(
-            finding_id="visual-2",
-            artifact_fields=("body_html", "css"),
-            confidence=0.91,
+        same_semantics_new_id = replace(
+            finding(
+                finding_id="visual-2",
+                artifact_fields=("body_html", "css"),
+                confidence=0.91,
+            ),
+            evidence="On mobile the composer still extends beyond the panel.",
+            repair_instruction="Keep every composer control within its mobile container.",
+            region=NormalizedRegion(x=0.72, y=0.79, width=0.19, height=0.11),
         )
         engine = FakeEngine([self.candidate])
         critic = FakeCritic([critique(first), critique(same_semantics_new_id)])
@@ -531,9 +635,31 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(engine.calls), 1)
         self.assertEqual(len(critic.calls), 2)
 
-    async def test_hard_limits_are_six_audits_and_five_repairs_independent_of_request_limit(self):
+    async def test_request_visual_limit_stops_only_visual_repairs(self):
+        self.request = BuilderRequest(
+            engine=EngineName.DIRECT,
+            brief="RAW editorial AI consultant",
+            creativity=1.2,
+            max_repairs=0,
+            visual_repair_limit=5,
+        )
+        categories = tuple(VisualCategory)
+        regions = ("launcher", "panel", "header", "messages", "suggestions", "composer")
         findings = [
-            finding(finding_id=f"visual-{index}", instruction=f"Repair instruction {index}.")
+            replace(
+                finding(
+                    finding_id=f"visual-{index}",
+                    instruction=f"Repair instruction {index}.",
+                ),
+                category=categories[index - 1],
+                region=NormalizedRegion(
+                    x=0.1,
+                    y=0.1,
+                    width=0.2,
+                    height=0.2,
+                    semantic_region=regions[index - 1],
+                ),
+            )
             for index in range(1, 7)
         ]
         repairs = [

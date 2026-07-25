@@ -15,13 +15,22 @@ def test_production_visual_factory_builds_three_independent_role_critics():
         visual_critic_timeout_seconds=180,
     )
     created = []
+    judges = []
 
     def fake_critic(**kwargs):
         critic = SimpleNamespace(**kwargs)
         created.append(critic)
         return critic
 
-    with patch("scripts.run_builder_lab.GeminiVisualCritic", side_effect=fake_critic):
+    def fake_judge(**kwargs):
+        judge = SimpleNamespace(**kwargs)
+        judges.append(judge)
+        return judge
+
+    with (
+        patch("scripts.run_builder_lab.GeminiVisualCritic", side_effect=fake_critic),
+        patch("scripts.run_builder_lab.GeminiVisualJudge", side_effect=fake_judge),
+    ):
         committee = make_visual_critic_factory(config)()
 
     assert isinstance(committee, VisualCriticCommittee)
@@ -31,3 +40,6 @@ def test_production_visual_factory_builds_three_independent_role_critics():
     assert all(critic.thinking_level == "high" for critic in created)
     assert all(critic.timeout_seconds == 180 for critic in created)
     assert len({id(critic) for critic in created}) == 3
+    assert len(judges) == 1
+    assert judges[0].model == "gemini-3.6-flash"
+    assert judges[0].thinking_level == "high"

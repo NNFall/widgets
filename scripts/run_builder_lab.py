@@ -21,6 +21,7 @@ from builder_lab.reference_pipeline import GeminiReferencePipeline
 from builder_lab.store import RunStore
 from builder_lab.visual_committee import VisualCriticCommittee
 from builder_lab.visual_critic import GeminiVisualCritic, VisualCriticRole
+from builder_lab.visual_review import GeminiRepairVerifier, GeminiVisualJudge
 from builder_lab.web import (
     CHAT_SECURE_COOKIE_KEY as CHAT_SECURE_COOKIE_KEY,
     CHAT_SERVICE_KEY as CHAT_SERVICE_KEY,
@@ -66,7 +67,14 @@ def make_visual_critic_factory(config: BuilderLabConfig):
                     )
                 )
                 for role in VisualCriticRole
-            }
+            },
+            judge_factory=lambda: GeminiVisualJudge(
+                api_key=config.gemini_api_key,
+                model=config.visual_critic_model,
+                thinking_level=config.visual_critic_thinking_level,
+                base_url=config.gemini_base_url,
+                timeout_seconds=config.visual_critic_timeout_seconds,
+            ),
         )
 
     return make_committee
@@ -95,6 +103,13 @@ def build_app(config: BuilderLabConfig) -> web.Application:
             total_timeout_seconds=config.browser_audit_total_timeout_seconds,
         ),
         visual_critic_factory=make_visual_critic_factory(config),
+        visual_repair_verifier_factory=lambda: GeminiRepairVerifier(
+            api_key=config.gemini_api_key,
+            model=config.visual_critic_model,
+            thinking_level=config.visual_critic_thinking_level,
+            base_url=config.gemini_base_url,
+            timeout_seconds=config.visual_critic_timeout_seconds,
+        ),
         reference_analyzer=reference_pipeline.analyze,
     )
     chat_service = GeminiDemoChatService(

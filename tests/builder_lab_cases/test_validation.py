@@ -1,7 +1,11 @@
 import unittest
 
 from builder_lab.models import Stage, WidgetArtifact
-from builder_lab.validation import issue_fingerprint, validate_artifact
+from builder_lab.validation import (
+    issue_fingerprint,
+    strip_reserved_runtime_attributes,
+    validate_artifact,
+)
 
 
 GOOD_HTML = """
@@ -281,6 +285,29 @@ class ArtifactValidationTests(unittest.TestCase):
     def test_reduced_motion_fallback_is_recommended_not_required(self):
         css = GOOD_CSS.split("@media (prefers-reduced-motion", 1)[0]
         self.assertNotIn("missing_reduced_motion", self.codes(artifact(css=css)))
+
+    def test_strips_runtime_owned_message_attributes_without_model_repair(self):
+        candidate = artifact(
+            body_html=GOOD_HTML.replace(
+                'data-region="messages"',
+                (
+                    'data-region="messages" '
+                    'data-kaigo-runtime-message="assistant" '
+                    "data-kaigo-runtime-label='AI' "
+                    "data-kaigo-runtime-content"
+                ),
+            )
+        )
+
+        normalized = strip_reserved_runtime_attributes(candidate)
+
+        self.assertNotIn("data-kaigo-runtime-message", normalized.body_html)
+        self.assertNotIn("data-kaigo-runtime-label", normalized.body_html)
+        self.assertNotIn("data-kaigo-runtime-content", normalized.body_html)
+        self.assertNotIn(
+            "forbidden_attribute",
+            self.codes(normalized),
+        )
 
     def test_fingerprint_is_stable_for_same_issue_set(self):
         first = validate_artifact(artifact(css="body {color:red}"), previous_revision=2)

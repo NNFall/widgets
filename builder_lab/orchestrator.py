@@ -28,7 +28,11 @@ from .models import (
     artifact_commit_message,
 )
 from .store import RunStore, RunTerminal, TERMINAL_STATUSES
-from .validation import issue_fingerprint, validate_artifact
+from .validation import (
+    issue_fingerprint,
+    strip_reserved_runtime_attributes,
+    validate_artifact,
+)
 from .visual_gate import VisualRepairGate
 from .reference_pipeline import ReferenceAnalysisResult, ReferencePipelineError
 
@@ -59,6 +63,7 @@ class BuilderOrchestrator:
         engine_factories: dict[EngineName, Callable[[], BuilderEngine]],
         visual_audit_factory: Callable[[], Any] | None = None,
         visual_critic_factory: Callable[[], Any] | None = None,
+        visual_repair_verifier_factory: Callable[[], Any] | None = None,
         reference_analyzer: (
             Callable[[str], Any] | None
         ) = None,
@@ -77,6 +82,7 @@ class BuilderOrchestrator:
                 store=store,
                 audit_factory=visual_audit_factory,
                 critic_factory=visual_critic_factory,
+                verifier_factory=visual_repair_verifier_factory,
             )
             if visual_audit_factory is not None and visual_critic_factory is not None
             else None
@@ -644,6 +650,7 @@ class BuilderOrchestrator:
         selected_direction: DirectionProposal,
     ) -> WidgetArtifact:
         previous_revision = previous.revision if previous else 0
+        candidate = strip_reserved_runtime_attributes(candidate)
         issues = validate_artifact(candidate, previous_revision=previous_revision)
         await self._record_validation(run_id, candidate, issues)
         if not issues:
@@ -668,7 +675,7 @@ class BuilderOrchestrator:
                 repair_issues=issues,
                 selected_direction=selected_direction,
             )
-            candidate = result.artifact
+            candidate = strip_reserved_runtime_attributes(result.artifact)
             await self.store.append_event(
                 run_id,
                 event_type="repair.completed",

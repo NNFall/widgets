@@ -19,7 +19,7 @@ from .models import (
     WidgetArtifact,
 )
 from .store import RunStore
-from .validation import validate_artifact
+from .validation import strip_reserved_runtime_attributes, validate_artifact
 from .browser_audit import BrowserAuditError
 from .visual_models import VisualFinding, VisualSeverity
 
@@ -28,7 +28,10 @@ MAX_BROWSER_CAPTURE_ATTEMPTS = 6
 MAX_AI_REVIEW_ATTEMPTS = 3
 # Backwards-compatible export for callers that display the former limit.
 MAX_VISUAL_AUDITS = MAX_BROWSER_CAPTURE_ATTEMPTS
-MAX_VISUAL_REPAIRS = 5
+MAX_BROWSER_REPAIRS = 4
+MAX_VALIDATION_REPAIRS = 4
+MAX_VISUAL_REPAIRS = 10
+MAX_REPEATED_VISUAL_ISSUE_ROUNDS = 3
 MIN_REPAIR_CONFIDENCE = 0.75
 LOGGER = logging.getLogger(__name__)
 
@@ -45,6 +48,18 @@ class VisualCritic(Protocol):
     async def aclose(self) -> None: ...
 
 
+class RepairVerifier(Protocol):
+    async def verify(
+        self,
+        *,
+        findings: tuple[VisualFinding, ...],
+        before: WidgetArtifact,
+        after: WidgetArtifact,
+    ) -> Any: ...
+
+    async def aclose(self) -> None: ...
+
+
 def qualified_findings(findings: tuple[VisualFinding, ...]) -> tuple[VisualFinding, ...]:
     return tuple(
         finding
@@ -54,27 +69,41 @@ def qualified_findings(findings: tuple[VisualFinding, ...]) -> tuple[VisualFindi
     )
 
 
-def visual_fingerprint(findings: tuple[VisualFinding, ...]) -> str:
-    def normalized_text(value: str) -> str:
-        return re.sub(r"\s+", " ", value).strip().casefold()
+def visual_finding_issues(
+    findings: tuple[VisualFinding, ...],
+    *,
+    supporting_roles: dict[str, tuple[Any, ...]] | None = None,
+) -> tuple[ValidationIssue, ...]:
+    issues = []
+    for finding in findings:
+        roles = tuple(
+            getattr(role, "value", str(role))
+            for role in (supporting_roles or {}).get(finding.finding_id, ())
+        )
+        support = f" Подтвердили: {', '.join(roles)}." if roles else ""
+        issues.append(
+            ValidationIssue(
+                code=f"visual_{finding.category.value}",
+                field="/".join(finding.artifact_fields),
+                message=(
+                    f"{finding.evidence} Исправить: "
+                    f"{finding.repair_instruction}.{support}"
+                )[:1_500],
+            )
+        )
+    return tuple(issues)
 
+
+def visual_fingerprint(findings: tuple[VisualFinding, ...]) -> str:
+    """Fingerprint the semantic problem, not model-specific prose or coordinates."""
     normalized = []
     for finding in findings:
-        region = finding.region
         normalized.append(
             {
                 "category": finding.category.value,
                 "screenshot_id": finding.screenshot_id,
-                "evidence": normalized_text(finding.evidence),
-                "region": {
-                    "x": round(region.x, 3),
-                    "y": round(region.y, 3),
-                    "width": round(region.width, 3),
-                    "height": round(region.height, 3),
-                    "semantic_region": region.semantic_region,
-                },
+                "semantic_region": finding.region.semantic_region,
                 "artifact_fields": sorted(finding.artifact_fields),
-                "repair_instruction": normalized_text(finding.repair_instruction),
             }
         )
     payload = json.dumps(
@@ -113,6 +142,7 @@ def forbidden_repair_fields(
         for field_name in finding.artifact_fields
         if field_name != "art_direction"
     }
+    allowed.add("change_summary")
     return tuple(sorted(changed - allowed))
 
 
@@ -192,6 +222,7 @@ def forbidden_browser_repair_fields(
                 "javascript",
                 "suggested_actions",
                 "layout_contract",
+                "change_summary",
             }
         )
     )
@@ -209,6 +240,7 @@ def apply_browser_repair(
         javascript=proposed.javascript,
         suggested_actions=proposed.suggested_actions,
         layout_contract=proposed.layout_contract,
+        change_summary=proposed.change_summary,
     )
 
 
@@ -223,6 +255,7 @@ class VisualRepairGate:
         store: RunStore,
         audit_factory: Callable[[], BrowserAuditor],
         critic_factory: Callable[[], VisualCritic],
+        verifier_factory: Callable[[], RepairVerifier] | None = None,
         critic_close_timeout_seconds: float = 5.0,
     ) -> None:
         if not 0 < critic_close_timeout_seconds <= 30:
@@ -230,6 +263,7 @@ class VisualRepairGate:
         self._store = store
         self._audit_factory = audit_factory
         self._critic_factory = critic_factory
+        self._verifier_factory = verifier_factory
         self._critic_close_timeout_seconds = critic_close_timeout_seconds
 
     async def _close_critic(self, critic: VisualCritic) -> None:
@@ -267,6 +301,78 @@ class VisualRepairGate:
     async def _checkpoint(self, run_id: str) -> None:
         if (await self._store.snapshot(run_id)).cancel_requested:
             raise asyncio.CancelledError
+
+    async def _verify_visual_repair(
+        self,
+        *,
+        run_id: str,
+        findings: tuple[VisualFinding, ...],
+        before: WidgetArtifact,
+        after: WidgetArtifact,
+    ) -> None:
+        if self._verifier_factory is None:
+            return
+        await self._store.append_event(
+            run_id,
+            event_type="visual_repair.verifier_started",
+            stage=Stage.MOTION_POLISH,
+            status="running",
+            message="Независимо проверяем, что код отвечает замечаниям судьи.",
+            revision=after.revision,
+            issues=visual_finding_issues(findings),
+        )
+        verifier: RepairVerifier | None = None
+        try:
+            verifier = self._verifier_factory()
+            result = await verifier.verify(
+                findings=findings,
+                before=before,
+                after=after,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self._store.append_event(
+                run_id,
+                event_type="visual_repair.verifier_completed",
+                stage=Stage.MOTION_POLISH,
+                status="failed",
+                message=(
+                    "Независимая проверка кода не завершилась; "
+                    "продолжаем новой браузерной проверкой."
+                ),
+                revision=after.revision,
+                usage=getattr(exc, "usage", TokenUsage()),
+            )
+            return
+        finally:
+            if verifier is not None:
+                try:
+                    async with asyncio.timeout(
+                        self._critic_close_timeout_seconds
+                    ):
+                        await verifier.aclose()
+                except (Exception, TimeoutError):
+                    pass
+        unresolved = tuple(getattr(result, "unresolved", ()))
+        issues = tuple(
+            ValidationIssue(
+                code="visual_repair_unresolved",
+                field=check.finding_id,
+                message=check.evidence,
+            )
+            for check in unresolved
+        )
+        await self._store.append_event(
+            run_id,
+            event_type="visual_repair.verifier_completed",
+            stage=Stage.MOTION_POLISH,
+            status="failed" if issues else "completed",
+            message=result.summary,
+            revision=after.revision,
+            usage=result.usage,
+            issues=issues,
+        )
 
     async def _record_validation(
         self,
@@ -325,9 +431,13 @@ class VisualRepairGate:
             raise ValueError("visual gate requires consecutive revisions")
 
         await self._store.stage_visual_candidate(run_id, candidate)
+        await self._store.stage_visual_draft(run_id, candidate)
         critic: VisualCritic | None = None
         seen: set[str] = set()
-        repair_count = 0
+        browser_repair_count = 0
+        validation_repair_count = 0
+        visual_repair_count = 0
+        visual_issue_rounds: dict[str, int] = {}
         cached_audit: Any | None = None
         screenshots_recorded = False
         browser_attempt = 0
@@ -421,7 +531,7 @@ class VisualRepairGate:
                             "repeated_browser_gate_fingerprint"
                         ) from exc
                     seen.add(fingerprint)
-                    if repair_count >= MAX_VISUAL_REPAIRS:
+                    if browser_repair_count >= MAX_BROWSER_REPAIRS:
                         LOGGER.warning(
                             "visual browser candidate exhausted run_id=%s candidate=%s",
                             run_id,
@@ -436,14 +546,17 @@ class VisualRepairGate:
                             "browser_gate_repair_exhausted"
                         ) from exc
 
-                    repair_count += 1
+                    browser_repair_count += 1
                     await self._checkpoint(run_id)
                     await self._store.append_event(
                         run_id,
                         event_type="visual_repair.started",
                         stage=Stage.MOTION_POLISH,
                         status="running",
-                        message=f"Browser gate repair: попытка {repair_count}",
+                        message=(
+                            "Browser gate repair: попытка "
+                            f"{browser_repair_count}/{MAX_BROWSER_REPAIRS}"
+                        ),
                         revision=candidate.revision,
                         issues=repair_issues,
                     )
@@ -464,7 +577,7 @@ class VisualRepairGate:
                         LOGGER.warning(
                             "browser gate repair failed run_id=%s attempt=%s error_code=%s diagnostic=%s",
                             run_id,
-                            repair_count,
+                            browser_repair_count,
                             getattr(repair_exc, "error_code", type(repair_exc).__name__),
                             str(
                                 getattr(repair_exc, "diagnostic", None)
@@ -476,7 +589,10 @@ class VisualRepairGate:
                             event_type="visual_repair.completed",
                             stage=Stage.MOTION_POLISH,
                             status="failed",
-                            message=f"Browser gate repair {repair_count} завершился ошибкой",
+                            message=(
+                                "Browser gate repair "
+                                f"{browser_repair_count} завершился ошибкой"
+                            ),
                             revision=candidate.revision,
                             usage=usage,
                         )
@@ -488,8 +604,8 @@ class VisualRepairGate:
                     ignored_fields = forbidden_browser_repair_fields(
                         candidate, proposed_candidate
                     )
-                    repaired_candidate = apply_browser_repair(
-                        candidate, proposed_candidate
+                    repaired_candidate = strip_reserved_runtime_attributes(
+                        apply_browser_repair(candidate, proposed_candidate)
                     )
                     repair_diagnostic = repair.diagnostic
                     if ignored_fields:
@@ -507,7 +623,10 @@ class VisualRepairGate:
                         event_type="visual_repair.completed",
                         stage=Stage.MOTION_POLISH,
                         status="completed",
-                        message=f"Модель завершила browser gate repair {repair_count}",
+                        message=(
+                            repaired_candidate.change_summary.strip()
+                            or "Модель исправила проблему браузерной проверки."
+                        ),
                         revision=repaired_candidate.revision,
                         usage=repair.usage,
                         diagnostic=repair_diagnostic,
@@ -530,13 +649,13 @@ class VisualRepairGate:
                                 "repeated_validation_repair_fingerprint"
                             )
                         seen.add(fingerprint)
-                        if repair_count >= MAX_VISUAL_REPAIRS:
+                        if validation_repair_count >= MAX_VALIDATION_REPAIRS:
                             raise self._quality_error(
                                 "deterministic_regression: "
                                 + "; ".join(issue.code for issue in issues)
                             )
 
-                        repair_count += 1
+                        validation_repair_count += 1
                         await self._checkpoint(run_id)
                         await self._store.append_event(
                             run_id,
@@ -545,7 +664,8 @@ class VisualRepairGate:
                             status="running",
                             message=(
                                 "Deterministic repair after browser gate: "
-                                f"попытка {repair_count}"
+                                "попытка "
+                                f"{validation_repair_count}/{MAX_VALIDATION_REPAIRS}"
                             ),
                             revision=candidate.revision,
                             issues=issues,
@@ -571,7 +691,7 @@ class VisualRepairGate:
                                 status="failed",
                                 message=(
                                     "Deterministic repair after browser gate "
-                                    f"{repair_count} завершился ошибкой"
+                                    f"{validation_repair_count} завершился ошибкой"
                                 ),
                                 revision=candidate.revision,
                                 usage=usage,
@@ -585,8 +705,8 @@ class VisualRepairGate:
                         ignored_fields = forbidden_browser_repair_fields(
                             candidate, proposed_candidate
                         )
-                        candidate = apply_browser_repair(
-                            candidate, proposed_candidate
+                        candidate = strip_reserved_runtime_attributes(
+                            apply_browser_repair(candidate, proposed_candidate)
                         )
                         repair_diagnostic = repair.diagnostic
                         if ignored_fields:
@@ -606,7 +726,11 @@ class VisualRepairGate:
                             status="completed",
                             message=(
                                 "Модель завершила deterministic repair after "
-                                f"browser gate {repair_count}"
+                                "browser gate: "
+                                + (
+                                    candidate.change_summary.strip()
+                                    or "исправлена техническая ошибка виджета"
+                                )
                             ),
                             revision=candidate.revision,
                             usage=repair.usage,
@@ -618,6 +742,7 @@ class VisualRepairGate:
                             candidate, previous_revision=previous.revision
                         )
                         await self._record_validation(run_id, candidate, issues)
+                    await self._store.stage_visual_draft(run_id, candidate)
                     cached_audit = None
                     screenshots_recorded = False
                     browser_attempt = 0
@@ -714,15 +839,23 @@ class VisualRepairGate:
                 role_results = getattr(result, "role_results", {})
                 role_failures = getattr(result, "role_failures", {})
                 if isinstance(role_results, dict):
-                    for role in role_results:
+                    for role, role_result in role_results.items():
                         role_name = getattr(role, "value", str(role))
+                        role_critique = getattr(role_result, "critique", None)
+                        role_findings = tuple(
+                            getattr(role_critique, "findings", ())
+                        )
                         await self._store.append_event(
                             run_id,
                             event_type="visual_critic.completed",
                             stage=Stage.MOTION_POLISH,
                             status="completed",
-                            message=f"Визуальный критик {role_name} завершил проверку",
+                            message=(
+                                f"Критик {role_name}: "
+                                f"{getattr(role_critique, 'summary', 'проверка завершена')}"
+                            ),
                             revision=candidate.revision,
+                            issues=visual_finding_issues(role_findings),
                         )
                 if isinstance(role_failures, dict):
                     for role, error_code in role_failures.items():
@@ -739,12 +872,31 @@ class VisualRepairGate:
                             revision=candidate.revision,
                             diagnostic=str(error_code)[:160],
                         )
+                supporting_roles = getattr(result, "supporting_roles", {})
+                normalized_support = (
+                    dict(supporting_roles)
+                    if isinstance(supporting_roles, dict)
+                    else {}
+                )
+                findings = qualified_findings(tuple(result.critique.findings))
+                await self._store.append_event(
+                    run_id,
+                    event_type="visual_judge.completed",
+                    stage=Stage.MOTION_POLISH,
+                    status="failed" if findings else "completed",
+                    message=f"Судья: {result.critique.summary}",
+                    revision=candidate.revision,
+                    issues=visual_finding_issues(
+                        findings,
+                        supporting_roles=normalized_support,
+                    ),
+                )
                 await self._store.append_event(
                     run_id,
                     event_type="visual_audit.completed",
                     stage=Stage.MOTION_POLISH,
                     status="completed",
-                    message="Browser evidence проверен Gemini visual critic",
+                    message=result.critique.summary,
                     revision=candidate.revision,
                     usage=usage,
                     diagnostic=json.dumps(
@@ -754,7 +906,6 @@ class VisualRepairGate:
                     ),
                 )
                 await self._checkpoint(run_id)
-                findings = qualified_findings(tuple(result.critique.findings))
                 if not findings:
                     await self._store.append_event(
                         run_id,
@@ -772,8 +923,12 @@ class VisualRepairGate:
                     event_type="visual_audit.blocked",
                     stage=Stage.MOTION_POLISH,
                     status="failed",
-                    message=f"Visual critic нашёл значимых проблем: {len(findings)}",
+                    message=f"Судья подтвердил проблем: {len(findings)}",
                     revision=candidate.revision,
+                    issues=visual_finding_issues(
+                        findings,
+                        supporting_roles=normalized_support,
+                    ),
                 )
                 if any(
                     "art_direction" in finding.artifact_fields
@@ -782,27 +937,50 @@ class VisualRepairGate:
                     raise self._quality_error(
                         "immutable_visual_finding_target: art_direction"
                     )
+                semantic_fingerprint = visual_fingerprint(findings)
+                visual_issue_rounds[semantic_fingerprint] = (
+                    visual_issue_rounds.get(semantic_fingerprint, 0) + 1
+                )
+                if (
+                    visual_issue_rounds[semantic_fingerprint]
+                    > MAX_REPEATED_VISUAL_ISSUE_ROUNDS
+                ):
+                    raise self._quality_error(
+                        "repeated_visual_issue_rounds_exhausted"
+                    )
                 fingerprint = (
-                    visual_fingerprint(findings)
+                    semantic_fingerprint
                     + ":"
                     + artifact_fingerprint(candidate)
                 )
                 if fingerprint in seen:
                     raise self._quality_error("repeated_visual_fingerprint")
                 seen.add(fingerprint)
-                if repair_count >= MAX_VISUAL_REPAIRS:
+                visual_limit = min(
+                    request.visual_repair_limit,
+                    MAX_VISUAL_REPAIRS,
+                )
+                if visual_repair_count >= visual_limit:
                     raise self._quality_error("visual_repair_exhausted")
 
-                repair_count += 1
+                visual_repair_count += 1
                 await self._checkpoint(run_id)
                 await self._store.append_event(
                     run_id,
                     event_type="visual_repair.started",
                     stage=Stage.MOTION_POLISH,
                     status="running",
-                    message=f"Visual repair: попытка {repair_count}",
+                    message=(
+                        "Visual repair: попытка "
+                        f"{visual_repair_count}/{visual_limit}"
+                    ),
                     revision=candidate.revision,
+                    issues=visual_finding_issues(
+                        findings,
+                        supporting_roles=normalized_support,
+                    ),
                 )
+                repair_input_candidate = candidate
                 try:
                     repair = await engine.generate(
                         request=request,
@@ -822,7 +1000,10 @@ class VisualRepairGate:
                         event_type="visual_repair.completed",
                         stage=Stage.MOTION_POLISH,
                         status="failed",
-                        message=f"Visual repair {repair_count} завершился ошибкой",
+                        message=(
+                            f"Visual repair {visual_repair_count} "
+                            "завершился ошибкой"
+                        ),
                         revision=candidate.revision,
                         usage=usage,
                     )
@@ -830,13 +1011,18 @@ class VisualRepairGate:
                         f"visual_repair_error: "
                         f"{getattr(exc, 'error_code', type(exc).__name__)}"
                     ) from exc
-                repaired_candidate = repair.artifact
+                repaired_candidate = strip_reserved_runtime_attributes(
+                    repair.artifact
+                )
                 await self._store.append_event(
                     run_id,
                     event_type="visual_repair.completed",
                     stage=Stage.MOTION_POLISH,
                     status="completed",
-                    message=f"Модель завершила visual repair {repair_count}",
+                    message=(
+                        repaired_candidate.change_summary.strip()
+                        or "Модель исправила подтверждённые визуальные проблемы."
+                    ),
                     revision=repaired_candidate.revision,
                     usage=repair.usage,
                     diagnostic=repair.diagnostic,
@@ -864,13 +1050,13 @@ class VisualRepairGate:
                             "repeated_validation_repair_fingerprint"
                         )
                     seen.add(fingerprint)
-                    if repair_count >= MAX_VISUAL_REPAIRS:
+                    if validation_repair_count >= MAX_VALIDATION_REPAIRS:
                         raise self._quality_error(
                             "deterministic_regression: "
                             + "; ".join(issue.code for issue in issues)
                         )
 
-                    repair_count += 1
+                    validation_repair_count += 1
                     await self._checkpoint(run_id)
                     await self._store.append_event(
                         run_id,
@@ -879,7 +1065,8 @@ class VisualRepairGate:
                         status="running",
                         message=(
                             "Deterministic repair after visual repair: "
-                            f"РїРѕРїС‹С‚РєР° {repair_count}"
+                            "попытка "
+                            f"{validation_repair_count}/{MAX_VALIDATION_REPAIRS}"
                         ),
                         revision=candidate.revision,
                         issues=issues,
@@ -905,7 +1092,7 @@ class VisualRepairGate:
                             status="failed",
                             message=(
                                 "Deterministic repair after visual repair "
-                                f"{repair_count} Р·Р°РІРµСЂС€РёР»СЃСЏ РѕС€РёР±РєРѕР№"
+                                f"{validation_repair_count} завершился ошибкой"
                             ),
                             revision=candidate.revision,
                             usage=usage,
@@ -919,8 +1106,8 @@ class VisualRepairGate:
                     ignored_fields = forbidden_browser_repair_fields(
                         candidate, proposed_candidate
                     )
-                    candidate = apply_browser_repair(
-                        candidate, proposed_candidate
+                    candidate = strip_reserved_runtime_attributes(
+                        apply_browser_repair(candidate, proposed_candidate)
                     )
                     repair_diagnostic = repair.diagnostic
                     if ignored_fields:
@@ -939,8 +1126,8 @@ class VisualRepairGate:
                         stage=Stage.MOTION_POLISH,
                         status="completed",
                         message=(
-                            "РњРѕРґРµР»СЊ Р·Р°РІРµСЂС€РёР»Р° deterministic repair after "
-                            f"visual repair {repair_count}"
+                            candidate.change_summary.strip()
+                            or "Модель исправила техническую ошибку после визуальной доработки."
                         ),
                         revision=candidate.revision,
                         usage=repair.usage,
@@ -953,6 +1140,13 @@ class VisualRepairGate:
                     )
                     await self._record_validation(run_id, candidate, issues)
 
+                await self._verify_visual_repair(
+                    run_id=run_id,
+                    findings=findings,
+                    before=repair_input_candidate,
+                    after=candidate,
+                )
+                await self._store.stage_visual_draft(run_id, candidate)
                 cached_audit = None
                 screenshots_recorded = False
                 browser_attempt = 0
@@ -965,11 +1159,14 @@ class VisualRepairGate:
 __all__ = [
     "MAX_AI_REVIEW_ATTEMPTS",
     "MAX_BROWSER_CAPTURE_ATTEMPTS",
+    "MAX_BROWSER_REPAIRS",
+    "MAX_VALIDATION_REPAIRS",
     "MAX_VISUAL_AUDITS",
     "MAX_VISUAL_REPAIRS",
     "MIN_REPAIR_CONFIDENCE",
     "VisualRepairGate",
     "forbidden_repair_fields",
     "qualified_findings",
+    "visual_finding_issues",
     "visual_fingerprint",
 ]

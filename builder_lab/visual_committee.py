@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from .models import TokenUsage
@@ -11,18 +10,24 @@ from .visual_critic import (
     VisualCriticResult,
     VisualCriticRole,
 )
-from .visual_models import (
-    VisualCritique,
-    VisualFinding,
-    VisualSeverity,
-    VisualVerdict,
-)
+from .visual_models import VisualCritique
+from .visual_review import VisualJudgeError, VisualJudgeResult
 
 
 class VisualCritic(Protocol):
     async def critique(
         self, *, audit: Any, brief: str, art_direction: str
     ) -> VisualCriticResult: ...
+
+    async def aclose(self) -> None: ...
+
+
+class VisualJudge(Protocol):
+    async def judge(
+        self,
+        *,
+        role_results: Mapping[VisualCriticRole, VisualCriticResult],
+    ) -> VisualJudgeResult: ...
 
     async def aclose(self) -> None: ...
 
@@ -51,61 +56,7 @@ class VisualCommitteeResult:
     usage: TokenUsage
     role_results: Mapping[VisualCriticRole, VisualCriticResult]
     role_failures: Mapping[VisualCriticRole, str]
-
-
-def _finding_group_key(finding: VisualFinding) -> tuple[Any, ...]:
-    return (
-        finding.screenshot_id,
-        finding.category.value,
-        finding.region.semantic_region or "root",
-        tuple(sorted(finding.artifact_fields)),
-    )
-
-
-def _accepted_findings(
-    role_results: Mapping[VisualCriticRole, VisualCriticResult],
-) -> tuple[VisualFinding, ...]:
-    groups: dict[
-        tuple[Any, ...],
-        list[tuple[VisualCriticRole, VisualFinding]],
-    ] = defaultdict(list)
-    for role, result in role_results.items():
-        for finding in result.critique.findings:
-            if (
-                finding.severity
-                not in {VisualSeverity.BLOCKER, VisualSeverity.MAJOR}
-                or finding.confidence < 0.75
-            ):
-                continue
-            groups[_finding_group_key(finding)].append((role, finding))
-
-    accepted: list[tuple[int, int, float, VisualFinding]] = []
-    for supported in groups.values():
-        roles = {role for role, _finding in supported}
-        blockers = [
-            finding
-            for _role, finding in supported
-            if finding.severity is VisualSeverity.BLOCKER
-        ]
-        if blockers:
-            representative = max(blockers, key=lambda item: item.confidence)
-            accepted.append((2, len(roles), representative.confidence, representative))
-            continue
-        if len(roles) >= 2:
-            representative = max(
-                (finding for _role, finding in supported),
-                key=lambda item: item.confidence,
-            )
-            accepted.append((1, len(roles), representative.confidence, representative))
-
-    accepted.sort(
-        key=lambda item: (item[0], item[1], item[2]),
-        reverse=True,
-    )
-    return tuple(
-        replace(item[3], finding_id=f"committee-{index}")
-        for index, item in enumerate(accepted[:3], start=1)
-    )
+    supporting_roles: Mapping[str, tuple[VisualCriticRole, ...]]
 
 
 class VisualCriticCommittee:
@@ -115,6 +66,8 @@ class VisualCriticCommittee:
             VisualCriticRole,
             Callable[[], VisualCritic],
         ],
+        *,
+        judge_factory: Callable[[], VisualJudge],
     ) -> None:
         normalized = {
             VisualCriticRole(role): factory
@@ -125,10 +78,13 @@ class VisualCriticCommittee:
             raise ValueError("visual committee requires exactly three critic roles")
         if any(not callable(factory) for factory in normalized.values()):
             raise TypeError("visual critic factories must be callable")
+        if not callable(judge_factory):
+            raise TypeError("visual judge factory must be callable")
         self._critics = {
             role: factory()
             for role, factory in normalized.items()
         }
+        self._judge = judge_factory()
         self._closed = False
 
     async def critique(
@@ -182,27 +138,28 @@ class VisualCriticCommittee:
                 usage=usage,
             )
 
-        findings = _accepted_findings(role_results)
-        critique = VisualCritique(
-            verdict=(
-                VisualVerdict.REPAIR
-                if findings
-                else VisualVerdict.PASS
-            ),
-            summary=(
-                f"Visual committee quorum {len(role_results)}/3; "
-                f"blocking finding groups: {len(findings)}."
-            ),
-            findings=findings,
-        )
+        try:
+            judgement = await self._judge.judge(role_results=role_results)
+        except asyncio.CancelledError:
+            raise
+        except VisualJudgeError as exc:
+            usage = usage + exc.usage
+            raise VisualCommitteeError(
+                "visual_review_inconclusive",
+                "Независимый визуальный судья не смог завершить проверку",
+                diagnostic=exc.diagnostic or exc.error_code,
+                usage=usage,
+            ) from exc
+        usage = usage + judgement.usage
         first = next(iter(role_results.values()))
         return VisualCommitteeResult(
-            critique=critique,
+            critique=judgement.critique,
             observations=tuple(first.observations),
             pixel_proof=None,
             usage=usage,
             role_results=dict(role_results),
             role_failures=dict(role_failures),
+            supporting_roles=dict(judgement.supporting_roles),
         )
 
     async def aclose(self) -> None:
@@ -211,6 +168,7 @@ class VisualCriticCommittee:
         self._closed = True
         await asyncio.gather(
             *(critic.aclose() for critic in self._critics.values()),
+            self._judge.aclose(),
             return_exceptions=True,
         )
 

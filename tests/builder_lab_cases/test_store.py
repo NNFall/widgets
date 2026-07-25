@@ -191,6 +191,33 @@ class RunStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.artifact, committed)
         self.assertEqual(snapshot.error_code, "invalid_artifact")
 
+    async def test_valid_visual_draft_survives_failure_and_is_previewable(self):
+        run = await self.store.create(self.request)
+        verified = artifact(revision=4, stage=Stage.CONVERSATION)
+        draft = artifact(revision=5, stage=Stage.MOTION_POLISH)
+        await self.store.commit_artifact(run.run_id, verified)
+
+        await self.store.stage_visual_draft(run.run_id, draft)
+        await self.store.finish(
+            run.run_id,
+            RunStatus.FAILED,
+            event_type="run.failed",
+            stage=Stage.MOTION_POLISH,
+            message="Visual review needs another repair.",
+            error_code="visual_quality_failed",
+        )
+
+        snapshot = await self.store.snapshot(run.run_id)
+        self.assertEqual(snapshot.artifact, verified)
+        self.assertEqual(snapshot.draft_artifact, draft)
+        self.assertEqual(snapshot.quality_status, "needs_repair")
+        self.assertEqual(
+            await self.store.preview_artifact(run.run_id, revision=5),
+            draft,
+        )
+        with self.assertRaises(ArtifactNotFound):
+            await self.store.artifact(run.run_id, revision=5)
+
     async def test_ttl_and_capacity_pruning_only_remove_terminal_runs(self):
         small = RunStore(ttl_seconds=1, max_runs=2)
         first = await small.create(self.request)

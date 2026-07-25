@@ -373,6 +373,7 @@ def build_stage_prompt(
                     for finding in visual_findings
                     for field_name in finding.artifact_fields
                 }
+                | {"change_summary"}
             )
         )
         locked_fields = tuple(
@@ -386,18 +387,20 @@ VISUAL_REPAIR_LOCKED_FIELDS_JSON: {json.dumps(locked_fields, separators=(',', ':
 В режиме visual_repair изменяй только поля из ALLOWED. Для каждого поля из LOCKED
 скопируй точное предыдущее JSON-значение byte-identical, без перефразирования,
 нормализации, перестановки элементов или обновления метаданных. В частности,
-не обновляй change_summary, если change_summary явно не входит в ALLOWED; сам факт
-визуальной ревизии не разрешает менять это поле.
+change_summary всегда входит в ALLOWED только как пользовательский отчёт об
+исправлении; оно не является частью визуального решения.
 """.strip()
         change_summary_contract = (
-            "- в visual_repair change_summary подчиняется спискам ALLOWED/LOCKED ниже; "
-            "не создавай новый отчёт об изменениях, если поле заблокировано;"
+            "- в visual_repair обязательно обнови change_summary: одним-двумя "
+            "простыми предложениями объясни обычному пользователю, что именно "
+            "исправлено; пиши без CSS-селекторов, HTML-тегов, имён полей и кодов цветов;"
         )
     else:
         visual_repair_field_contract = ""
         change_summary_contract = (
             "- change_summary в одном-двух предложениях объясняет пользователю, "
-            "что изменилось на этом этапе;"
+            "что изменилось на этом этапе; пиши без CSS-селекторов, HTML-тегов, "
+            "имён полей и кодов цветов;"
         )
     return f"""Ты — ведущий digital art director и frontend-дизайнер Kaigo.
 

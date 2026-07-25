@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from dataclasses import replace
 from html.parser import HTMLParser
 from typing import Iterable
 from urllib.parse import urlsplit
@@ -123,10 +124,34 @@ COMMON_ATTRIBUTES = frozenset(
     }
 )
 URL_ATTRIBUTES = frozenset({"href", "src", "action", "formaction", "poster", "xlink:href"})
+_HTML_TAG = re.compile(r"<[^>]+>")
+_RESERVED_RUNTIME_ATTRIBUTE = re.compile(
+    r"""(?ix)
+    \s+
+    (?:data-kaigo-runtime-message
+      |data-kaigo-runtime-label
+      |data-kaigo-runtime-content)
+    (?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?
+    """
+)
 
 
 def _issue(code: str, field: str, message: str) -> ValidationIssue:
     return ValidationIssue(code=code, field=field, message=message)
+
+
+def strip_reserved_runtime_attributes(
+    artifact: WidgetArtifact,
+) -> WidgetArtifact:
+    """Remove static attributes that belong exclusively to the trusted runtime."""
+
+    def clean_tag(match: re.Match[str]) -> str:
+        return _RESERVED_RUNTIME_ATTRIBUTE.sub("", match.group(0))
+
+    body_html = _HTML_TAG.sub(clean_tag, artifact.body_html)
+    if body_html == artifact.body_html:
+        return artifact
+    return replace(artifact, body_html=body_html)
 
 
 class _ArtifactHTMLParser(HTMLParser):

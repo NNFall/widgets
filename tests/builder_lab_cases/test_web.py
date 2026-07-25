@@ -111,12 +111,18 @@ class BuilderLabWebTests(unittest.IsolatedAsyncioTestCase):
         body = await response.text()
         self.assertEqual(response.status, 200)
         self.assertIn("Kaigo Builder Lab", body)
-        self.assertIn('data-builder-release="2026.07.24.2"', body)
-        self.assertIn("build 2026.07.24.2", body)
+        self.assertIn('data-builder-release="2026.07.25.1"', body)
+        self.assertIn("build 2026.07.25.1", body)
         self.assertIn('sandbox="allow-scripts"', body)
         self.assertNotIn("allow-same-origin", body)
         self.assertIn("new EventSource", body)
         self.assertIn("event.changes", body)
+        self.assertIn("event.issues", body)
+        self.assertIn("activeRunStorageKey", body)
+        self.assertIn("localStorage.setItem", body)
+        self.assertIn("resumeStoredRun()", body)
+        self.assertIn("snapshot.draft_artifact", body)
+        self.assertNotIn("text-overflow:ellipsis", body)
         self.assertIn("Изменено:", body)
         self.assertNotIn("'/api/", body)
         self.assertNotIn("`/api/", body)
@@ -289,6 +295,35 @@ class BuilderLabWebTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(preview.status, 200)
         self.assertIn("const revision = 1", await preview.text())
+
+    async def test_preview_renders_last_valid_draft_without_enabling_chat(self):
+        created = await self.create_run()
+        run_id = created["run_id"]
+        await self.store.commit_artifact(
+            run_id,
+            artifact(revision=4, stage=Stage.CONVERSATION),
+        )
+        await self.store.stage_visual_draft(
+            run_id,
+            artifact(revision=5, stage=Stage.MOTION_POLISH),
+        )
+
+        preview = await self.client.get(
+            f"/api/runs/{run_id}/preview?revision=5&channel=channel-1234567890abcdef"
+        )
+        self.assertEqual(preview.status, 200)
+        self.assertIn("const revision = 5", await preview.text())
+        chat = await self.client.post(
+            f"/api/runs/{run_id}/chat",
+            json={
+                "request_id": "request-draft-001",
+                "message": "Проверка черновика",
+                "revision": 5,
+            },
+            headers=self.chat_headers(),
+        )
+        self.assertEqual(chat.status, 409)
+        self.assertEqual((await chat.json())["error"]["code"], "chat_not_ready")
 
     async def test_preview_rejects_missing_or_invalid_protocol_channel(self):
         created = await self.create_run()

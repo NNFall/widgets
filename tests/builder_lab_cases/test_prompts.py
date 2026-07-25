@@ -67,28 +67,27 @@ def test_visual_repair_prompt_lists_union_of_allowed_and_locked_fields():
     )
 
     assert (
-        'VISUAL_REPAIR_ALLOWED_FIELDS_JSON: ["css","layout_contract","theme_tokens"]'
+        'VISUAL_REPAIR_ALLOWED_FIELDS_JSON: ["change_summary","css","layout_contract","theme_tokens"]'
         in prompt
     )
     assert "VISUAL_REPAIR_LOCKED_FIELDS_JSON:" in prompt
-    assert '"change_summary"' in prompt
     assert '"body_html"' in prompt
     assert "byte-identical" in prompt
-    assert "не обновляй change_summary" in prompt
+    assert "без CSS-селекторов, HTML-тегов, имён полей и кодов цветов" in prompt
 
 
-def test_visual_repair_prompt_allows_change_summary_only_when_finding_explicitly_does():
+def test_visual_repair_always_allows_plain_language_change_summary():
     prompt = build_stage_prompt(
         request=_request(),
         stage=Stage.MOTION_POLISH,
         revision=5,
         previous_artifact=_artifact(),
         visual_findings=(
-            _finding("summary-copy", "change_summary"),
+            _finding("summary-copy", "css"),
         ),
     )
 
-    assert 'VISUAL_REPAIR_ALLOWED_FIELDS_JSON: ["change_summary"]' in prompt
+    assert 'VISUAL_REPAIR_ALLOWED_FIELDS_JSON: ["change_summary","css"]' in prompt
     locked_line = next(
         line
         for line in prompt.splitlines()

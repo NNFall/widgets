@@ -269,7 +269,7 @@ async def preview(request: web.Request) -> web.Response:
         return _error("invalid_channel", "Канал preview некорректен", status=400)
     try:
         revision = int(requested_revision) if requested_revision else None
-        artifact = await request.app[STORE_KEY].artifact(
+        artifact = await request.app[STORE_KEY].preview_artifact(
             request.match_info["run_id"], revision
         )
     except RunNotFound:

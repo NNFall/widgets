@@ -63,6 +63,7 @@ PUBLIC_ERROR_CODES = frozenset(
         "generation_timeout",
         "invalid_artifact",
         "visual_quality_failed",
+        "visual_review_inconclusive",
         "snapshot_download_failed",
         "snapshot_rejected",
         "reference_url_unsafe",
@@ -126,7 +127,7 @@ class BuilderRequest:
     max_repairs: int = 3
     contract_id: str = "chat-v1"
     creative_profile: CreativeProfile = CreativeProfile.BALANCED
-    visual_repair_limit: int = 5
+    visual_repair_limit: int = 8
 
     def __post_init__(self) -> None:
         brief = self.brief.strip()
@@ -151,9 +152,9 @@ class BuilderRequest:
         if (
             isinstance(self.visual_repair_limit, bool)
             or not isinstance(self.visual_repair_limit, int)
-            or not 0 <= self.visual_repair_limit <= 5
+            or not 0 <= self.visual_repair_limit <= 10
         ):
-            raise ValueError("visual_repair_limit must be an integer between 0 and 5")
+            raise ValueError("visual_repair_limit must be an integer between 0 and 10")
         if not self.viewport_targets or any(
             viewport not in {"desktop", "mobile"}
             for viewport in self.viewport_targets
@@ -175,7 +176,7 @@ class BuilderRequest:
         contract_id = payload.get("contract_id", "chat-v1")
         if not isinstance(contract_id, str):
             raise ValueError("contract_id must be text")
-        visual_repair_limit = payload.get("visual_repair_limit", 5)
+        visual_repair_limit = payload.get("visual_repair_limit", 8)
         if isinstance(visual_repair_limit, bool) or not isinstance(
             visual_repair_limit,
             int,
@@ -640,6 +641,8 @@ class BuilderRunSnapshot:
     updated_at: datetime
     latest_sequence: int
     artifact: WidgetArtifact | None = None
+    draft_artifact: WidgetArtifact | None = None
+    quality_status: str = "pending"
     usage: TokenUsage = field(default_factory=TokenUsage)
     elapsed_seconds: float = 0.0
     error_code: str | None = None
@@ -654,6 +657,10 @@ class BuilderRunSnapshot:
             "updated_at": self.updated_at.isoformat(),
             "latest_sequence": self.latest_sequence,
             "artifact": self.artifact.to_dict() if self.artifact else None,
+            "draft_artifact": (
+                self.draft_artifact.to_dict() if self.draft_artifact else None
+            ),
+            "quality_status": self.quality_status,
             "usage": self.usage.to_dict(),
             "elapsed_seconds": self.elapsed_seconds,
             "error_code": self.error_code,

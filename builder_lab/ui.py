@@ -7,7 +7,7 @@ from .preview import preview_iframe_attributes
 
 
 DEFAULT_BRIEF = ""
-BUILDER_UI_RELEASE = "2026.07.24.2"
+BUILDER_UI_RELEASE = "2026.07.25.1"
 
 
 def render_builder_page(
@@ -91,19 +91,21 @@ def render_builder_page(
     .event-meta {{ display:flex; justify-content:space-between; gap:12px; color:#8c877e; font:500 9px/1.3 "Cascadia Mono",monospace; letter-spacing:.06em; text-transform:uppercase; }}
     .event-message {{ margin-top:4px; color:#d6d1c7; font-size:12px; line-height:1.4; }}
     .event-changes {{ margin-top:5px; color:#9c978e; font:500 9px/1.45 "Cascadia Mono",monospace; letter-spacing:.035em; }}
+    .event-issues {{ margin:8px 0 0; padding:8px 0 0 17px; border-top:1px solid rgba(255,255,255,.08); color:#c9c3b9; font-size:11px; line-height:1.5; }}
+    .event-issues li+li {{ margin-top:6px; }}
     .refinement-box {{ display:grid; grid-template-columns:1fr auto; gap:8px; margin-top:10px; }}
     .refinement-box textarea {{ min-height:48px; max-height:120px; resize:vertical; }}
     @keyframes arrive {{ from {{ opacity:0; transform:translateY(7px); }} to {{ opacity:1; transform:translateY(0); }} }}
     .stage-head {{ display:grid; grid-template-columns:1fr auto; gap:18px; align-items:center; padding:3px 4px 1px; }}
     .stage-title {{ display:flex; align-items:center; gap:12px; min-width:0; }}
     .stage-title h2 {{ margin:0; font-size:14px; white-space:nowrap; }}
-    .status {{ max-width:34ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted); font:500 10px/1.2 "Cascadia Mono",monospace; }}
+    .status {{ min-width:0; overflow-wrap:anywhere; white-space:normal; color:var(--muted); font:500 10px/1.35 "Cascadia Mono",monospace; }}
     .view-toggle {{ display:flex; padding:3px; border:1px solid var(--line); border-radius:12px; background:#191814; }}
     .view-toggle button {{ min-height:32px; border:0; border-radius:8px; padding:0 12px; color:#8d887f; background:transparent; cursor:pointer; font-size:11px; }}
     .view-toggle button.active {{ color:var(--text); background:#302e28; }}
     .artifact-meta {{ min-width:0; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:18px; padding:11px 13px; border:1px solid var(--line); border-radius:14px; background:#191814; }}
     .artifact-label {{ display:block; color:#77736c; font:600 9px/1.2 "Cascadia Mono",monospace; letter-spacing:.11em; text-transform:uppercase; }}
-    .art-direction {{ margin:4px 0 0; overflow:hidden; color:#cfc9bf; font-size:11px; line-height:1.35; text-overflow:ellipsis; white-space:nowrap; }}
+    .art-direction {{ margin:4px 0 0; overflow-wrap:anywhere; color:#cfc9bf; font-size:11px; line-height:1.45; white-space:normal; }}
     .validation-badge {{ padding:7px 9px; border:1px solid #514d45; border-radius:9px; color:#8f8a81; font:600 9px/1 "Cascadia Mono",monospace; letter-spacing:.07em; text-transform:uppercase; }}
     .validation-badge.valid {{ border-color:rgba(216,131,96,.65); color:#edb199; background:rgba(216,131,96,.08); }}
     .validation-badge.invalid {{ border-color:rgba(211,110,103,.65); color:#e5a39e; background:rgba(211,110,103,.08); }}
@@ -203,6 +205,7 @@ def render_builder_page(
     'use strict';
     const elements = Object.fromEntries(['source-url','engine','creativity','creativity-field','brief','generate','cancel','retry','error','revision','tokens','elapsed','builder-messages','timeline','pulse','status','preview','preview-empty','viewport','art-direction','validation-badge','refinement','refine'].map(id => [id, document.getElementById(id)]));
     const defaultMaxRepairs = {int(default_max_repairs)};
+    const activeRunStorageKey = 'kaigo.builder.activeRun.v1';
     let currentRun = null;
     let stream = null;
     let terminal = false;
@@ -217,6 +220,18 @@ def render_builder_page(
     const setRunning = (running) => {{ elements.generate.disabled = running; elements.cancel.disabled = !running; elements.refinement.disabled = running || !terminal; elements.refine.disabled = running || !terminal; elements.pulse.classList.toggle('running', running); }};
     const formatNumber = value => new Intl.NumberFormat('ru-RU').format(value || 0);
     const requestPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{{7,95}}$/;
+
+    function saveActiveRun(runId) {{
+      try {{ localStorage.setItem(activeRunStorageKey, runId); }} catch (_) {{}}
+    }}
+
+    function readActiveRun() {{
+      try {{ return localStorage.getItem(activeRunStorageKey); }} catch (_) {{ return null; }}
+    }}
+
+    function clearActiveRun() {{
+      try {{ localStorage.removeItem(activeRunStorageKey); }} catch (_) {{}}
+    }}
 
     function createChannel() {{
       return Array.from(crypto.getRandomValues(new Uint8Array(18)), value => value.toString(16).padStart(2, '0')).join('');
@@ -272,7 +287,10 @@ def render_builder_page(
     async function requestJSON(url, options = {{}}) {{
       const response = await fetch(url, {{ ...options, headers: {{ 'Content-Type':'application/json', ...(options.headers || {{}}) }} }});
       const payload = await response.json().catch(() => ({{}}));
-      if (!response.ok) throw new Error(payload.error?.message || `HTTP ${{response.status}}`);
+      if (!response.ok) throw Object.assign(
+        new Error(payload.error?.message || `HTTP ${{response.status}}`),
+        {{ status:response.status, code:payload.error?.code || null }}
+      );
       return payload;
     }}
 
@@ -332,6 +350,16 @@ def render_builder_page(
         changes.textContent = `Изменено: ${{event.changes.map(item => labels[item] || item).join(' · ')}}`;
         row.append(changes);
       }}
+      if (Array.isArray(event.issues) && event.issues.length) {{
+        const issues = document.createElement('ul');
+        issues.className = 'event-issues';
+        for (const issue of event.issues) {{
+          const item = document.createElement('li');
+          item.textContent = issue?.message || String(issue);
+          issues.append(item);
+        }}
+        row.append(issues);
+      }}
       elements.timeline.append(row);
       elements.timeline.scrollTop = elements.timeline.scrollHeight;
       elements.status.textContent = `${{event.stage || 'run'}} · ${{event.status || ''}}`;
@@ -352,26 +380,49 @@ def render_builder_page(
       snapshotTimer = setTimeout(refreshSnapshot, 80);
     }}
 
-    async function refreshSnapshot() {{
-      if (!currentRun) return;
+    function applySnapshot(snapshot) {{
+      const usage = snapshot.usage || {{}};
+      const displayArtifact = snapshot.draft_artifact || snapshot.artifact;
+      elements.revision.textContent = displayArtifact?.revision ?? '—';
+      elements['art-direction'].textContent = displayArtifact?.art_direction || 'Пока нет валидной арт-дирекции';
+      elements.tokens.textContent = formatNumber(usage.total_tokens);
+      elements.elapsed.textContent = snapshot.elapsed_seconds ? `${{snapshot.elapsed_seconds.toFixed(1)}} с` : 'в процессе';
+      terminal = ['completed','failed','cancelled'].includes(snapshot.status);
+      if (displayArtifact?.revision && (previewRun !== currentRun || previewRevision !== displayArtifact.revision)) loadPreview(displayArtifact.revision);
+      const draftNeedsRepair = Boolean(snapshot.draft_artifact) && snapshot.quality_status !== 'verified';
+      elements['validation-badge'].textContent = draftNeedsRepair ? 'Черновик · требует repair' : (snapshot.quality_status === 'verified' ? 'Проверено' : 'Проверяется');
+      elements['validation-badge'].className = `validation-badge ${{draftNeedsRepair ? 'invalid' : (snapshot.quality_status === 'verified' ? 'valid' : '')}}`;
+      if (terminal) {{
+        setRunning(false);
+        elements.retry.disabled = snapshot.status === 'completed';
+        const refinable = snapshot.status === 'completed' && snapshot.request?.engine === 'direct';
+        elements.refinement.disabled = !refinable;
+        elements.refine.disabled = !refinable;
+        elements.status.textContent = snapshot.status === 'completed'
+          ? 'Готово · артефакт проверен'
+          : (draftNeedsRepair
+            ? `Черновик сохранён · ${{snapshot.error_code || snapshot.status}}`
+            : `Остановлено · ${{snapshot.error_code || snapshot.status}}`);
+      }} else {{
+        setRunning(true);
+        elements.status.textContent = `run · ${{snapshot.status}}`;
+      }}
+      return snapshot;
+    }}
+
+    async function refreshSnapshot(snapshotOverride = null) {{
+      if (!currentRun) return null;
       try {{
-        const snapshot = await requestJSON(labUrl(`api/runs/${{currentRun}}`));
-        const usage = snapshot.usage || {{}};
-        elements.revision.textContent = snapshot.artifact?.revision ?? '—';
-        elements['art-direction'].textContent = snapshot.artifact?.art_direction || 'Пока нет валидной арт-дирекции';
-        elements.tokens.textContent = formatNumber(usage.total_tokens);
-        elements.elapsed.textContent = snapshot.elapsed_seconds ? `${{snapshot.elapsed_seconds.toFixed(1)}} с` : 'в процессе';
-        terminal = ['completed','failed','cancelled'].includes(snapshot.status);
-        if (snapshot.artifact?.revision && (previewRun !== currentRun || previewRevision !== snapshot.artifact.revision)) loadPreview(snapshot.artifact.revision);
-        if (terminal) {{
-          setRunning(false);
-          elements.retry.disabled = snapshot.status === 'completed';
-          const refinable = snapshot.status === 'completed' && snapshot.request?.engine === 'direct';
-          elements.refinement.disabled = !refinable;
-          elements.refine.disabled = !refinable;
-          elements.status.textContent = snapshot.status === 'completed' ? 'Готово · артефакт проверен' : `Остановлено · ${{snapshot.error_code || snapshot.status}}`;
+        const snapshot = snapshotOverride || await requestJSON(labUrl(`api/runs/${{currentRun}}`));
+        return applySnapshot(snapshot);
+      }} catch (error) {{
+        if (error.status === 404) {{
+          clearActiveRun();
+          currentRun = null;
         }}
-      }} catch (error) {{ showError(error.message); }}
+        showError(error.message);
+        return null;
+      }}
     }}
 
     function connectEvents(runId) {{
@@ -381,6 +432,35 @@ def render_builder_page(
         try {{ appendEvent(JSON.parse(message.data)); }} catch (_) {{ showError('Получено повреждённое событие'); }}
       }};
       stream.onerror = () => {{ if (terminal && stream) stream.close(); }};
+    }}
+
+    async function resumeStoredRun() {{
+      const runId = readActiveRun();
+      if (!runId) return;
+      currentRun = runId;
+      resetTimeline();
+      try {{
+        const snapshot = await requestJSON(labUrl(`api/runs/${{currentRun}}`));
+        const request = snapshot.request || {{}};
+        elements['source-url'].value = request.source_url || '';
+        elements.brief.value = request.brief || '';
+        if (Array.from(elements.engine.options).some(option => option.value === request.engine)) {{
+          elements.engine.value = request.engine;
+        }}
+        if (Number.isFinite(Number(request.creativity))) {{
+          elements.creativity.value = String(request.creativity);
+        }}
+        applySnapshot(snapshot);
+        connectEvents(currentRun);
+      }} catch (error) {{
+        if (error.status === 404) {{
+          clearActiveRun();
+          currentRun = null;
+          resetTimeline();
+          return;
+        }}
+        showError(error.message);
+      }}
     }}
 
     async function generate() {{
@@ -399,6 +479,7 @@ def render_builder_page(
       try {{
         const run = await requestJSON(labUrl('api/runs'), {{ method:'POST', body:JSON.stringify({{ engine:elements.engine.value, brief, source_url:elements['source-url'].value.trim(), creativity:Number(elements.creativity.value), max_repairs:defaultMaxRepairs, locale:'ru' }}) }});
         currentRun = run.run_id;
+        saveActiveRun(currentRun);
         terminal = false;
         connectEvents(currentRun);
         await refreshSnapshot();
@@ -417,6 +498,7 @@ def render_builder_page(
       try {{
         const run = await requestJSON(labUrl(`api/runs/${{currentRun}}/refine`), {{ method:'POST', body:JSON.stringify({{message}}) }});
         currentRun = run.run_id;
+        saveActiveRun(currentRun);
         terminal = false;
         if (run.artifact?.revision) loadPreview(run.artifact.revision);
         connectEvents(currentRun);
@@ -428,7 +510,7 @@ def render_builder_page(
     elements.refine.addEventListener('click', refineWidget);
     elements.refinement.addEventListener('keydown', event => {{ if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) refineWidget(); }});
     elements.cancel.addEventListener('click', async () => {{ if (!currentRun) return; try {{ await requestJSON(labUrl(`api/runs/${{currentRun}}/cancel`), {{ method:'POST', body:'{{}}' }}); }} catch (error) {{ showError(error.message); }} }});
-    elements.retry.addEventListener('click', async () => {{ if (!currentRun) return; showError(''); setRunning(true); resetTimeline(); try {{ const run = await requestJSON(labUrl(`api/runs/${{currentRun}}/retry`), {{ method:'POST', body:'{{}}' }}); currentRun=run.run_id; terminal=false; connectEvents(currentRun); }} catch (error) {{ setRunning(false); showError(error.message); }} }});
+    elements.retry.addEventListener('click', async () => {{ if (!currentRun) return; showError(''); setRunning(true); resetTimeline(); try {{ const run = await requestJSON(labUrl(`api/runs/${{currentRun}}/retry`), {{ method:'POST', body:'{{}}' }}); currentRun=run.run_id; saveActiveRun(currentRun); terminal=false; connectEvents(currentRun); await refreshSnapshot(); }} catch (error) {{ setRunning(false); showError(error.message); }} }});
     elements.engine.addEventListener('change', () => {{ elements['creativity-field'].style.opacity = elements.engine.value === 'direct' ? '1' : '.42'; elements.creativity.disabled = elements.engine.value !== 'direct'; }});
     document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {{ document.querySelectorAll('[data-view]').forEach(item => item.classList.toggle('active', item === button)); elements.viewport.classList.toggle('mobile', button.dataset.view === 'mobile'); }}));
     window.addEventListener('message', event => {{
@@ -438,6 +520,7 @@ def render_builder_page(
       if (data.type !== 'chat.request' || !requestPattern.test(data.request_id) || typeof data.text !== 'string' || data.text.length < 1 || data.text.length > 1000) return;
       bridgeChatRequest(data);
     }});
+    resumeStoredRun();
   }})();
   </script>
 </body>

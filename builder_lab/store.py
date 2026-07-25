@@ -50,6 +50,8 @@ class _RunRecord:
     events: list[BuilderEvent] = field(default_factory=list)
     artifact: WidgetArtifact | None = None
     visual_candidate: WidgetArtifact | None = None
+    draft_artifact: WidgetArtifact | None = None
+    quality_status: str = "pending"
     artifacts: dict[int, WidgetArtifact] = field(default_factory=dict)
     usage: TokenUsage = field(default_factory=TokenUsage)
     elapsed_seconds: float = 0.0
@@ -86,6 +88,8 @@ class RunStore:
             updated_at=record.updated_at,
             latest_sequence=record.events[-1].sequence if record.events else 0,
             artifact=_copy_artifact(record.artifact),
+            draft_artifact=_copy_artifact(record.draft_artifact),
+            quality_status=record.quality_status,
             usage=record.usage,
             elapsed_seconds=record.elapsed_seconds,
             error_code=record.error_code,
@@ -294,6 +298,7 @@ class RunStore:
                 raise ValueError("artifact revision must increase monotonically")
             record.artifact = _copy_artifact(artifact)
             record.artifacts[artifact.revision] = _copy_artifact(artifact)
+            record.quality_status = "verified"
             record.updated_at = datetime.now(timezone.utc)
             self._changed.notify_all()
 
@@ -317,6 +322,22 @@ class RunStore:
                 raise ArtifactNotFound((run_id, "visual_candidate"))
             return _copy_artifact(candidate)
 
+    async def stage_visual_draft(
+        self,
+        run_id: str,
+        artifact: WidgetArtifact,
+    ) -> None:
+        async with self._changed:
+            record = self._record(run_id)
+            if record.status in TERMINAL_STATUSES or record.cancel_requested:
+                raise RunTerminal(run_id)
+            if record.artifact and artifact.revision <= record.artifact.revision:
+                raise ValueError("visual draft revision must exceed public revision")
+            record.draft_artifact = _copy_artifact(artifact)
+            record.quality_status = "needs_repair"
+            record.updated_at = datetime.now(timezone.utc)
+            self._changed.notify_all()
+
     async def commit_visual_candidate(self, run_id: str) -> WidgetArtifact:
         async with self._changed:
             record = self._record(run_id)
@@ -332,6 +353,8 @@ class RunStore:
             record.artifact = committed
             record.artifacts[candidate.revision] = _copy_artifact(candidate)
             record.visual_candidate = None
+            record.draft_artifact = None
+            record.quality_status = "verified"
             self._append_locked(
                 record,
                 event_type="artifact.committed",
@@ -352,6 +375,25 @@ class RunStore:
                 candidate = record.artifact
             else:
                 candidate = record.artifacts.get(revision)
+            if candidate is None:
+                raise ArtifactNotFound((run_id, revision))
+            return _copy_artifact(candidate)
+
+    async def preview_artifact(
+        self,
+        run_id: str,
+        revision: int | None = None,
+    ) -> WidgetArtifact:
+        async with self._lock:
+            record = self._record(run_id)
+            candidate = (
+                record.artifacts.get(revision)
+                if revision is not None
+                else record.artifact
+            )
+            if candidate is None and record.draft_artifact is not None:
+                if revision is None or record.draft_artifact.revision == revision:
+                    candidate = record.draft_artifact
             if candidate is None:
                 raise ArtifactNotFound((run_id, revision))
             return _copy_artifact(candidate)
