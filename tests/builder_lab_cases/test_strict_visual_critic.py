@@ -279,6 +279,7 @@ async def test_critic_retries_one_semantically_invalid_response_and_sums_usage()
 
     assert result.usage == first_usage + second_usage
     assert len(client.models.calls) == 2
+    assert client.models.calls[0]["config"].max_output_tokens is None
     correction = client.models.calls[1]["contents"][-1].text
     assert (
         "ValueError: score 1..3 must link a finding from the same dimension"

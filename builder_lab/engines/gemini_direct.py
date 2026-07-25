@@ -241,7 +241,6 @@ class GeminiDirectEngine:
         prompt: str,
         schema: dict[str, Any],
         temperature: float,
-        max_output_tokens: int,
     ) -> Any:
         policy = generation_policy(
             self.model,
@@ -250,7 +249,6 @@ class GeminiDirectEngine:
         )
         config = types.GenerateContentConfig(
             **policy.sampling_kwargs,
-            max_output_tokens=max_output_tokens,
             response_mime_type="application/json",
             response_json_schema=build_provider_json_schema(schema, self.model),
             tools=[],
@@ -298,10 +296,6 @@ class GeminiDirectEngine:
                 prompt=attempt_prompt,
                 schema=DIRECTION_PROPOSAL_JSON_SCHEMA,
                 temperature=request.creativity,
-                # Gemini 3.x counts hidden thinking against this ceiling. A small
-                # response schema still needs enough room for high reasoning plus
-                # the visible proposal, otherwise valid JSON is truncated.
-                max_output_tokens=8_192,
             )
             total_usage = total_usage + _usage(response)
             try:
@@ -365,7 +359,6 @@ class GeminiDirectEngine:
                 prompt=attempt_prompt,
                 schema=CONCEPT_ROLE_BRIEF_JSON_SCHEMA,
                 temperature=request.creativity,
-                max_output_tokens=8_192,
             )
             total_usage = total_usage + _usage(response)
             try:
@@ -407,7 +400,6 @@ class GeminiDirectEngine:
             prompt=prompt,
             schema=DIRECTION_JUDGE_JSON_SCHEMA,
             temperature=0.2,
-            max_output_tokens=4_096,
         )
         try:
             payload = _response_payload(response)
@@ -473,7 +465,6 @@ class GeminiDirectEngine:
                 prompt=attempt_prompt,
                 schema=ARTIFACT_JSON_SCHEMA,
                 temperature=temperature,
-                max_output_tokens=32_768,
             )
             total_usage = total_usage + _usage(response)
             try:

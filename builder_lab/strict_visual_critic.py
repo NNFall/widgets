@@ -547,7 +547,6 @@ class GeminiStrictVisualCritic:
                 locale=locale,
                 phase=phase,
             ),
-            max_output_tokens=16_384,
             response_mime_type="application/json",
             response_json_schema=build_provider_json_schema(
                 STRICT_VISUAL_CRITIC_SCHEMA,

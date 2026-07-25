@@ -404,9 +404,6 @@ class GeminiDemoChatService:
             config = types.GenerateContentConfig(
                 **policy.sampling_kwargs,
                 system_instruction=system_prompt,
-                # Medium thinking tokens share the provider's output ceiling.
-                # Keep enough headroom for reasoning and a concise visible reply.
-                max_output_tokens=2_048,
                 thinking_config=policy.thinking_config,
             )
             try:

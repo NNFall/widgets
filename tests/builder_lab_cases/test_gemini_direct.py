@@ -154,7 +154,7 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         config = client.models.calls[0]["config"]
         self.assertIsNone(config.thinking_config.thinking_level)
         self.assertEqual(config.thinking_config.thinking_budget, 0)
-        self.assertEqual(config.max_output_tokens, 32_768)
+        self.assertIsNone(config.max_output_tokens)
         self.assertEqual(config.tools, [])
         self.assertIn('"schema_version"', provider_schema)
         for unsupported in (
@@ -382,7 +382,7 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.proposal.proposal_id, "candidate-1")
         self.assertEqual(result.proposal.role, DirectionRole.BRAND_ARCHAEOLOGIST)
         call = client.models.calls[0]
-        self.assertEqual(call["config"].max_output_tokens, 8_192)
+        self.assertIsNone(call["config"].max_output_tokens)
         self.assertIsNone(call["config"].thinking_config.thinking_level)
         self.assertEqual(call["config"].thinking_config.thinking_budget, 0)
         self.assertEqual(call["config"].tools, [])
@@ -434,7 +434,7 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.usage.prompt_tokens, 21)
         self.assertEqual(result.provider_request_id, "concept-1")
         call = client.models.calls[0]
-        self.assertEqual(call["config"].max_output_tokens, 8_192)
+        self.assertIsNone(call["config"].max_output_tokens)
         self.assertEqual(
             set(call["config"].response_json_schema["properties"]),
             {"summary", "decisions", "safeguards"},
@@ -560,7 +560,7 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.judgement.selected_proposal_id, "candidate-2")
         call = client.models.calls[0]
-        self.assertEqual(call["config"].max_output_tokens, 4_096)
+        self.assertIsNone(call["config"].max_output_tokens)
         self.assertNotIn("brand_archaeologist", call["contents"])
         self.assertNotIn("interaction_inventor", call["contents"])
         self.assertNotIn("hostile_conversion_accessibility_critic", call["contents"])

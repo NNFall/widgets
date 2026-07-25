@@ -116,7 +116,7 @@ class GeminiDemoChatServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call["model"], "gemini-3.5-flash-lite")
         self.assertIsNone(config.temperature)
         self.assertIsNone(config.top_p)
-        self.assertEqual(config.max_output_tokens, 2_048)
+        self.assertIsNone(config.max_output_tokens)
         self.assertIn("MEDIUM", str(config.thinking_config.thinking_level).upper())
         self.assertFalse(config.tools)
         second_contents = service._client.models.calls[1]["contents"]

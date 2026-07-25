@@ -491,7 +491,6 @@ class GeminiVisualJudge:
                     "alone never passes quorum. Do not invent source IDs. Consolidate each "
                     "accepted issue into one concrete repair instruction and strict JSON."
                 ),
-                max_output_tokens=8_192,
                 response_mime_type="application/json",
                 response_json_schema=build_provider_json_schema(
                     VISUAL_JUDGE_SCHEMA,
@@ -645,7 +644,6 @@ class GeminiRepairVerifier:
                     "capture and visual committee will remain the final authority. "
                     "Return strict JSON only."
                 ),
-                max_output_tokens=4_096,
                 response_mime_type="application/json",
                 response_json_schema=build_provider_json_schema(
                     REPAIR_VERIFICATION_SCHEMA,

@@ -423,6 +423,7 @@ class ReferenceGeminiAnalysisTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(call["config"].temperature, 0.1)
             self.assertEqual(call["config"].top_p, 1.0)
             self.assertEqual(call["config"].tools, [])
+            self.assertIsNone(call["config"].max_output_tokens)
             self.assertIn("HIGH", str(call["config"].thinking_config.thinking_level).upper())
             self.assertEqual(call["config"].response_mime_type, "application/json")
 

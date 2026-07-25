@@ -589,7 +589,6 @@ async def analyze_reference_site(
     )
     config = types.GenerateContentConfig(
         **policy.sampling_kwargs,
-        max_output_tokens=3000,
         response_mime_type="application/json",
         response_json_schema=build_provider_json_schema(
             REFERENCE_ANALYSIS_SCHEMA,

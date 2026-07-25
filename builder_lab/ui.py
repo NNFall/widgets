@@ -7,7 +7,7 @@ from .preview import preview_iframe_attributes
 
 
 DEFAULT_BRIEF = ""
-BUILDER_UI_RELEASE = "2026.07.25.1"
+BUILDER_UI_RELEASE = "2026.07.25.2"
 
 
 def render_builder_page(
