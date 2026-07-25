@@ -146,7 +146,7 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(limits.max_pages, 5)
         self.assertEqual(limits.concurrency_per_host, 1)
         self.assertEqual(limits.max_scroll_steps, 40)
-        self.assertEqual(limits.total_timeout_seconds, 300)
+        self.assertEqual(limits.total_timeout_seconds, 600)
         self.assertEqual(limits.max_page_bytes, 25 * 1024 * 1024)
         self.assertEqual(limits.max_total_bytes, 100 * 1024 * 1024)
         with self.assertRaises(ValueError):
@@ -155,6 +155,13 @@ class SelectionTests(unittest.TestCase):
             ReferenceCrawlLimits(scroll_delay_ms=599)
         with self.assertRaises(ValueError):
             ReferenceCrawlLimits(scroll_delay_ms=1201)
+
+    def test_two_pass_request_handler_uses_whole_crawl_timeout(self):
+        limits = ReferenceCrawlLimits(page_timeout_seconds=45)
+
+        timeout = reference_crawler_module._request_handler_timeout(limits)
+
+        self.assertEqual(timeout.total_seconds(), 600)
 
     def test_attempts_mobile_and_screenshots_share_one_monotonic_budget(self):
         budget = CrawlByteBudget(100)

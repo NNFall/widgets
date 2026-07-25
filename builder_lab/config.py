@@ -241,7 +241,7 @@ class BuilderLabConfig:
             reference_max_pages=_int("KAIGO_REFERENCE_MAX_PAGES", 5, 1, 5),
             reference_max_depth=_int("KAIGO_REFERENCE_MAX_DEPTH", 1, 0, 2),
             reference_timeout_seconds=_int(
-                "KAIGO_REFERENCE_TIMEOUT_SECONDS", 300, 15, 600
+                "KAIGO_REFERENCE_TIMEOUT_SECONDS", 600, 15, 600
             ),
             reference_page_timeout_seconds=_int(
                 "KAIGO_REFERENCE_PAGE_TIMEOUT_SECONDS", 45, 5, 120

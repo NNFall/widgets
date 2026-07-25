@@ -92,6 +92,12 @@ class BuilderLabPackagingTests(unittest.TestCase):
         self.assertIn("GEMINI_VISUAL_CRITIC_MODEL=gemini-3.6-flash", env_example)
         self.assertIn("KAIGO_BROWSER_AUDIT_TIMEOUT_MS=10000", env_example)
         self.assertIn("KAIGO_BROWSER_AUDIT_TOTAL_TIMEOUT_SECONDS=120", env_example)
+        self.assertIn("KAIGO_REFERENCE_TIMEOUT_SECONDS=600", env_example)
+        self.assertIn(
+            "KAIGO_REFERENCE_TIMEOUT_SECONDS: "
+            "${KAIGO_REFERENCE_TIMEOUT_SECONDS:-600}",
+            compose,
+        )
         self.assertIn("CRAWLEE_MEMORY_MBYTES=4096", env_example)
         self.assertIn("CRAWLEE_DISABLE_BROWSER_SANDBOX=true", env_example)
         self.assertNotIn("playwright install", production_dockerfile)

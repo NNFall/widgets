@@ -479,7 +479,7 @@ def select_reference_pages(
 class ReferenceCrawlLimits:
     max_pages: int = 5
     max_depth: int = 1
-    total_timeout_seconds: int = 300
+    total_timeout_seconds: int = 600
     page_timeout_seconds: int = 45
     max_total_bytes: int = 100 * 1024 * 1024
     max_page_bytes: int = 25 * 1024 * 1024
@@ -516,6 +516,10 @@ class ReferenceCrawlLimits:
             raise ValueError("max_page_bytes cannot exceed max_total_bytes")
         if self.concurrency_per_host != 1:
             raise ValueError("concurrency_per_host must remain 1")
+
+
+def _request_handler_timeout(limits: ReferenceCrawlLimits) -> timedelta:
+    return timedelta(seconds=limits.total_timeout_seconds)
 
 
 @dataclass(frozen=True)
@@ -2342,7 +2346,7 @@ class VisualReferenceCrawler:
             },
             goto_options={"wait_until": "domcontentloaded"},
             navigation_timeout=timedelta(seconds=self.limits.page_timeout_seconds),
-            request_handler_timeout=timedelta(seconds=self.limits.page_timeout_seconds * 3),
+            request_handler_timeout=_request_handler_timeout(self.limits),
             max_request_retries=self.limits.max_retries,
             max_requests_per_crawl=self.limits.max_pages,
             max_crawl_depth=self.limits.max_depth,

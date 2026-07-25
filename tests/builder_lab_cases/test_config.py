@@ -83,6 +83,7 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertIsNone(config.chat_session_secret)
         self.assertIsNone(config.gemini_api_key)
         self.assertEqual(config.reference_max_pages, 5)
+        self.assertEqual(config.reference_timeout_seconds, 600)
         self.assertEqual(config.reference_scroll_delay_ms, 750)
         self.assertEqual(config.reference_warmup_ms, 5000)
         self.assertTrue(config.reference_respect_robots)
