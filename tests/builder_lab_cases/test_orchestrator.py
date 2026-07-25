@@ -170,6 +170,22 @@ class BuilderOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(judged.usage.output_tokens, 4)
         self.assertEqual(snapshot.usage.prompt_tokens, 59)
 
+    async def test_stage_progress_messages_use_russian_display_names(self):
+        engine = ScriptedEngine()
+        _, snapshot = await self.run_direct(engine)
+
+        events = await self.store.events_after(snapshot.run_id, 0)
+        progress = [
+            event
+            for event in events
+            if event.event_type in {"stage.started", "stage.completed"}
+        ]
+
+        self.assertEqual(len(progress), len(DIRECT_STAGES) * 2)
+        for event in progress:
+            self.assertNotIn(event.stage.value, event.message)
+        self.assertIn("арт-направление", progress[0].message)
+
     async def test_reference_analysis_runs_before_direction_board_and_updates_request(self):
         engine = ScriptedEngine()
         analyzed_urls = []

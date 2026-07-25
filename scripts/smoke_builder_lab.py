@@ -37,7 +37,7 @@ MAX_CHAT_PROMPT_CHARS = 16_000
 MAX_REFERENCE_ARTIFACT_BYTES = 2_000_000
 MAX_REFERENCE_CONTEXT_CHARS = 8_000
 _SCREENSHOT_EVENT_MESSAGE = re.compile(
-    r"^Снимок visual audit: (?P<screenshot_id>[a-z0-9][a-z0-9._-]{0,79}) "
+    r"^Снимок визуальной проверки: (?P<screenshot_id>[a-z0-9][a-z0-9._-]{0,79}) "
     r"\((?P<byte_count>[1-9][0-9]*) bytes\)$"
 )
 

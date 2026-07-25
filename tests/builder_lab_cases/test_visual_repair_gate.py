@@ -16,7 +16,7 @@ from builder_lab.models import (
 from builder_lab.orchestrator import BuilderOrchestrator
 from builder_lab.store import RunStore, RunTerminal
 from builder_lab.browser_audit import BrowserAuditError
-from builder_lab.visual_gate import VisualRepairGate
+from builder_lab.visual_gate import VisualRepairGate, artifact_fingerprint
 from builder_lab.visual_critic import VisualCriticRole
 from builder_lab.visual_review import (
     RepairCheck,
@@ -159,6 +159,15 @@ class FakeVerifier:
 
 
 class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
+    def test_change_summary_alone_does_not_count_as_a_visual_repair(self):
+        before = artifact(revision=5, change_summary="До исправления")
+        after = replace(before, change_summary="Якобы исправлено")
+
+        self.assertEqual(
+            artifact_fingerprint(before),
+            artifact_fingerprint(after),
+        )
+
     async def asyncSetUp(self):
         self.store = RunStore()
         self.request = BuilderRequest(

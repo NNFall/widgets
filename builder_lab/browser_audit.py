@@ -31,6 +31,24 @@ _REQUEST_ID_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+
+@dataclass(frozen=True)
+class AuditConversationFixture:
+    user_messages: tuple[str, str]
+    assistant_messages: tuple[str, str]
+
+
+def audit_conversation_fixture() -> AuditConversationFixture:
+    """Return a brand-neutral dialogue used only to exercise chat presentation."""
+
+    return AuditConversationFixture(
+        user_messages=("Чем вы можете мне помочь?", "Как начать?"),
+        assistant_messages=(
+            "Расскажите, что вас интересует, — я подскажу по услугам и помогу выбрать следующий шаг.",
+            "Кратко опишите задачу. Я уточню детали и предложу подходящий вариант.",
+        ),
+    )
+
 _BLOCK_NETWORK_APIS = """(() => {
   const denyConstructor = name => {
     if (!(name in globalThis)) return;
@@ -890,8 +908,9 @@ class BrowserAudit:
         if re.search(r"<template\b[^>]*\bshadowroot(?:mode)?\s*=", document, re.IGNORECASE):
             raise ValueError("declarative shadow roots are disabled during browser audit")
         await page.set_content(_parent_fixture(), wait_until="load")
+        conversation = audit_conversation_fixture()
         await page.evaluate(
-            """({previewDocument, retryMode}) => {
+            """({previewDocument, retryMode, assistantMessages}) => {
               const frame = document.getElementById('preview');
               const attempts = new Map();
               window.__auditEvents = [];
@@ -917,14 +936,16 @@ class BrowserAudit:
                   return;
                 }
                 const turn = window.__auditEvents.filter(item => item.type === 'chat.request').length;
-                const answer = turn === 1
-                  ? 'RAW BUREAU проектирует квартиры и загородные дома, создавая минималистичные интерьеры.'
-                  : 'Опишите объект и задачу — бюро предложит следующий шаг и формат консультации.';
+                const answer = assistantMessages[Math.min(turn - 1, assistantMessages.length - 1)];
                 window.__auditReplies.push(() => event.source.postMessage({...base,type:'chat.response',text:answer}, '*'));
               });
               frame.srcdoc = previewDocument;
             }""",
-            {"previewDocument": document, "retryMode": retry_mode},
+            {
+                "previewDocument": document,
+                "retryMode": retry_mode,
+                "assistantMessages": list(conversation.assistant_messages),
+            },
         )
         await page.wait_for_function(
             "window.__auditEvents && window.__auditEvents.some(item => item.type === 'rendered')"
@@ -1198,6 +1219,7 @@ class BrowserAudit:
         action_results: dict[tuple[str, str], str] | None = None,
         probe_session: _ActionProbeSession | None = None,
     ) -> tuple[list[CapturedScreenshot], list[LayoutEvidence]]:
+        conversation = audit_conversation_fixture()
         owns_probe_session = probe_session is None
         if probe_session is None:
             probe_session = _ActionProbeSession()
@@ -1301,13 +1323,13 @@ class BrowserAudit:
             )
             await self._assert_visible_suggestions_actionable(frame)
 
-            await input_box.fill("Какие задачи решает RAW BUREAU?")
+            await input_box.fill(conversation.user_messages[0])
             await input_box.press("Enter")
             await self._assert_pending_turn(frame, ("user",))
             first_request_id = await self._assert_chat_request(
                 page,
                 expected_count=1,
-                expected_text="Какие задачи решает RAW BUREAU?",
+                expected_text=conversation.user_messages[0],
                 expected_revision=artifact.revision,
             )
             await self._release_audit_response(page)
@@ -1325,7 +1347,7 @@ class BrowserAudit:
                 )
             )
 
-            await input_box.fill("Как начать проект?")
+            await input_box.fill(conversation.user_messages[1])
             await frame.locator(
                 '[data-action="send"], [data-region="composer"] button'
             ).click()
@@ -1335,7 +1357,7 @@ class BrowserAudit:
             await self._assert_chat_request(
                 page,
                 expected_count=2,
-                expected_text="Как начать проект?",
+                expected_text=conversation.user_messages[1],
                 expected_revision=artifact.revision,
                 forbidden_request_ids=frozenset({first_request_id}),
             )
@@ -1345,15 +1367,15 @@ class BrowserAudit:
                 frame, ("user", "assistant", "user", "assistant")
             )
             expected_history = [
-                {"role": "user", "text": "Какие задачи решает RAW BUREAU?"},
+                {"role": "user", "text": conversation.user_messages[0]},
                 {
                     "role": "assistant",
-                    "text": "RAW BUREAU проектирует квартиры и загородные дома, создавая минималистичные интерьеры.",
+                    "text": conversation.assistant_messages[0],
                 },
-                {"role": "user", "text": "Как начать проект?"},
+                {"role": "user", "text": conversation.user_messages[1]},
                 {
                     "role": "assistant",
-                    "text": "Опишите объект и задачу — бюро предложит следующий шаг и формат консультации.",
+                    "text": conversation.assistant_messages[1],
                 },
             ]
             if await self._transcript(frame) != expected_history:
@@ -2023,6 +2045,7 @@ class BrowserAudit:
         artifact: WidgetArtifact,
         deadline: float | None = None,
     ) -> None:
+        conversation = audit_conversation_fixture()
         context, page, failures = await self._new_context(
             browser, 390, 844, deadline=deadline
         )
@@ -2209,7 +2232,7 @@ class BrowserAudit:
                 {"role": "user", "text": replacement_text},
                 {
                     "role": "assistant",
-                    "text": "Опишите объект и задачу — бюро предложит следующий шаг и формат консультации.",
+                    "text": conversation.assistant_messages[1],
                 },
             ]
             if await self._transcript(frame) != retry_history:

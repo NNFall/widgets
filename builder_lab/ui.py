@@ -7,7 +7,7 @@ from .preview import preview_iframe_attributes
 
 
 DEFAULT_BRIEF = ""
-BUILDER_UI_RELEASE = "2026.07.25.2"
+BUILDER_UI_RELEASE = "2026.07.25.3"
 
 
 def render_builder_page(
@@ -181,14 +181,14 @@ def render_builder_page(
 
     <section class="stage" aria-label="Предпросмотр виджета">
       <header class="stage-head">
-        <div class="stage-title"><h2>Live preview</h2><span class="status" id="status">Ожидает запуска</span></div>
+        <div class="stage-title"><h2>Предпросмотр</h2><span class="status" id="status">Ожидает запуска</span></div>
         <div class="view-toggle" aria-label="Размер предпросмотра">
           <button type="button" class="active" data-view="desktop">Desktop</button>
           <button type="button" data-view="mobile">Mobile</button>
         </div>
       </header>
       <div class="artifact-meta" aria-live="polite">
-        <div><span class="artifact-label">Art direction</span><p class="art-direction" id="art-direction">Появится после первой валидной ревизии</p></div>
+        <div><span class="artifact-label">Визуальная концепция</span><p class="art-direction" id="art-direction">Появится после первой валидной ревизии</p></div>
         <span class="validation-badge" id="validation-badge">Не проверено</span>
       </div>
       <div class="canvas">
@@ -327,10 +327,57 @@ def render_builder_page(
       row.dataset.status = event.status || '';
       const meta = document.createElement('div');
       meta.className = 'event-meta';
+      const eventLabels = {{
+        'run.created':'Запуск создан',
+        'run.completed':'Запуск завершён',
+        'run.failed':'Запуск остановлен с ошибкой',
+        'run.cancelled':'Запуск отменён',
+        'reference.started':'Анализ сайта начат',
+        'reference.completed':'Анализ сайта завершён',
+        'reference.failed':'Анализ сайта не выполнен',
+        'direction.failed':'Выбор направления не выполнен',
+        'direction.judged':'Направление выбрано',
+        'refinement.started':'Доработка начата',
+        'stage.started':'Этап начат',
+        'stage.completed':'Этап завершён',
+        'stage.failed':'Этап остановлен',
+        'repair.started':'Исправление начато',
+        'repair.completed':'Исправление завершено',
+        'artifact.validated':'Техническая проверка',
+        'artifact.committed':'Версия готова',
+        'artifact.seeded':'Исходная версия загружена',
+        'visual_audit.started':'Визуальная проверка начата',
+        'visual_audit.completed':'Визуальная проверка завершена',
+        'visual_audit.passed':'Визуальная проверка пройдена',
+        'visual_audit.blocked':'Нужна визуальная доработка',
+        'visual_critic.completed':'Отчёт визуального критика',
+        'visual_judge.completed':'Решение визуального судьи',
+        'visual_repair.started':'Визуальная доработка начата',
+        'visual_repair.completed':'Визуальная доработка завершена',
+        'visual_repair.verifier_started':'Проверка исправлений начата',
+        'visual_repair.verifier_completed':'Проверка исправлений завершена',
+        'screenshot.captured':'Снимок сделан'
+      }};
+      const stageLabels = {{
+        art_direction:'арт-направление',
+        foundation:'основа виджета',
+        identity:'фирменный стиль',
+        conversation:'диалог',
+        motion_polish:'анимации и отделка',
+        validation:'техническая проверка',
+        agent_build:'агентская сборка'
+      }};
+      const statusLabels = {{
+        created:'создано',
+        running:'выполняется',
+        completed:'завершено',
+        failed:'ошибка',
+        cancelled:'отменено'
+      }};
       const type = document.createElement('span');
-      type.textContent = event.type || 'event';
+      type.textContent = eventLabels[event.type] || 'Событие';
       const stage = document.createElement('span');
-      stage.textContent = event.stage || `#${{event.sequence}}`;
+      stage.textContent = stageLabels[event.stage] || `#${{event.sequence}}`;
       meta.append(type, stage);
       const message = document.createElement('div');
       message.className = 'event-message';
@@ -362,7 +409,7 @@ def render_builder_page(
       }}
       elements.timeline.append(row);
       elements.timeline.scrollTop = elements.timeline.scrollHeight;
-      elements.status.textContent = `${{event.stage || 'run'}} · ${{event.status || ''}}`;
+      elements.status.textContent = `${{stageLabels[event.stage] || 'запуск'}} · ${{statusLabels[event.status] || ''}}`;
       if ((event.type === 'artifact.committed' || event.type === 'artifact.seeded') && event.revision) {{
         loadPreview(event.revision);
       }}
@@ -390,7 +437,7 @@ def render_builder_page(
       terminal = ['completed','failed','cancelled'].includes(snapshot.status);
       if (displayArtifact?.revision && (previewRun !== currentRun || previewRevision !== displayArtifact.revision)) loadPreview(displayArtifact.revision);
       const draftNeedsRepair = Boolean(snapshot.draft_artifact) && snapshot.quality_status !== 'verified';
-      elements['validation-badge'].textContent = draftNeedsRepair ? 'Черновик · требует repair' : (snapshot.quality_status === 'verified' ? 'Проверено' : 'Проверяется');
+      elements['validation-badge'].textContent = draftNeedsRepair ? 'Черновик · нужна доработка' : (snapshot.quality_status === 'verified' ? 'Проверено' : 'Проверяется');
       elements['validation-badge'].className = `validation-badge ${{draftNeedsRepair ? 'invalid' : (snapshot.quality_status === 'verified' ? 'valid' : '')}}`;
       if (terminal) {{
         setRunning(false);
@@ -401,11 +448,11 @@ def render_builder_page(
         elements.status.textContent = snapshot.status === 'completed'
           ? 'Готово · артефакт проверен'
           : (draftNeedsRepair
-            ? `Черновик сохранён · ${{snapshot.error_code || snapshot.status}}`
-            : `Остановлено · ${{snapshot.error_code || snapshot.status}}`);
+            ? 'Черновик сохранён · нужна доработка'
+            : 'Генерация остановлена');
       }} else {{
         setRunning(true);
-        elements.status.textContent = `run · ${{snapshot.status}}`;
+        elements.status.textContent = 'Запуск · выполняется';
       }}
       return snapshot;
     }}

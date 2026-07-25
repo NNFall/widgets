@@ -41,7 +41,7 @@ def visual_event(
 ):
     message = event_type
     if screenshot_id is not None:
-        message = f"Снимок visual audit: {screenshot_id} (1200 bytes)"
+        message = f"Снимок визуальной проверки: {screenshot_id} (1200 bytes)"
     return {
         "type": event_type,
         "revision": revision,

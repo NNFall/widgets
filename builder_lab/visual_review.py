@@ -490,6 +490,7 @@ class GeminiVisualJudge:
                     "and finding_id of each supporting critic. A blocker from one critic "
                     "alone never passes quorum. Do not invent source IDs. Consolidate each "
                     "accepted issue into one concrete repair instruction and strict JSON."
+                    " Write summary, evidence, and repair instructions in Russian."
                 ),
                 response_mime_type="application/json",
                 response_json_schema=build_provider_json_schema(
@@ -642,7 +643,7 @@ class GeminiRepairVerifier:
                     "layout contract plausibly implement the requested correction. "
                     "Do not invent IDs and do not claim visual success: a new browser "
                     "capture and visual committee will remain the final authority. "
-                    "Return strict JSON only."
+                    "Write the summary and check evidence in Russian. Return strict JSON only."
                 ),
                 response_mime_type="application/json",
                 response_json_schema=build_provider_json_schema(

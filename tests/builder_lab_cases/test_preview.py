@@ -79,7 +79,13 @@ class PreviewDocumentTests(unittest.TestCase):
         self.assertNotIn("setOpen(true)", document)
         self.assertIn("content.textContent = text", document)
         self.assertNotIn("message.textContent = text", document)
-        self.assertIn("label.textContent = role === 'user' ? 'ВЫ' : 'RAW AI'", document)
+        self.assertIn("const assistantLabel =", document)
+        self.assertIn(
+            "label.textContent = role === 'user' ? 'ВЫ' : assistantLabel",
+            document,
+        )
+        self.assertIn("root.getAttribute('aria-label')", document)
+        self.assertNotIn("RAW AI", document)
         self.assertIn("data-kaigo-runtime-message", document)
         self.assertIn("message.className = `kaigo-widget__message kaigo-widget__message--${role}`", document)
         self.assertIn("label.className = 'kaigo-widget__message-label'", document)

@@ -45,6 +45,21 @@ class Stage(str, Enum):
     AGENT_BUILD = "agent_build"
 
 
+STAGE_DISPLAY_NAMES = {
+    Stage.ART_DIRECTION: "арт-направление",
+    Stage.FOUNDATION: "основа виджета",
+    Stage.IDENTITY: "фирменный стиль",
+    Stage.CONVERSATION: "диалог",
+    Stage.MOTION_POLISH: "анимации и финальная отделка",
+    Stage.VALIDATION: "техническая проверка",
+    Stage.AGENT_BUILD: "агентская сборка",
+}
+
+
+def stage_display_name(stage: Stage) -> str:
+    return STAGE_DISPLAY_NAMES[stage]
+
+
 class RunStatus(str, Enum):
     CREATED = "created"
     RUNNING = "running"

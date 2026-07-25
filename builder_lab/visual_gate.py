@@ -35,6 +35,17 @@ MAX_REPEATED_VISUAL_ISSUE_ROUNDS = 3
 MIN_REPAIR_CONFIDENCE = 0.75
 LOGGER = logging.getLogger(__name__)
 
+_CRITIC_ROLE_LABELS = {
+    "conversation_ux": "диалог и удобство",
+    "brand_motion": "бренд и анимация",
+    "adversarial_customer": "строгий взгляд клиента",
+}
+
+
+def _critic_role_label(role: Any) -> str:
+    value = getattr(role, "value", str(role))
+    return _CRITIC_ROLE_LABELS.get(value, value)
+
 
 class BrowserAuditor(Protocol):
     async def audit(self, artifact: WidgetArtifact) -> Any: ...
@@ -77,7 +88,7 @@ def visual_finding_issues(
     issues = []
     for finding in findings:
         roles = tuple(
-            getattr(role, "value", str(role))
+            _critic_role_label(role)
             for role in (supporting_roles or {}).get(finding.finding_id, ())
         )
         support = f" Подтвердили: {', '.join(roles)}." if roles else ""
@@ -115,8 +126,12 @@ def visual_fingerprint(findings: tuple[VisualFinding, ...]) -> str:
 
 
 def artifact_fingerprint(candidate: WidgetArtifact) -> str:
+    fingerprint_payload = candidate.to_dict()
+    # A prose-only progress note is not an implementation change. Ignoring it
+    # makes a no-op visual repair fail fast instead of consuming more AI rounds.
+    fingerprint_payload.pop("change_summary", None)
     payload = json.dumps(
-        candidate.to_dict(),
+        fingerprint_payload,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -171,7 +186,7 @@ def browser_repair_issues(
             repairable_runtime_failure = True
         if not diagnostic or not repairable_runtime_failure:
             return ()
-        failures = (f"Browser audit runtime failure: {diagnostic}",)
+        failures = (f"Сбой браузерной проверки: {diagnostic}",)
     return tuple(
         ValidationIssue(
             code="browser_gate_failed",
@@ -386,9 +401,9 @@ class VisualRepairGate:
             stage=candidate.stage,
             status="failed" if issues else "completed",
             message=(
-                f"Детерминированная проверка после visual repair нашла ошибок: {len(issues)}"
+                f"Техническая проверка после визуальной доработки нашла ошибок: {len(issues)}"
                 if issues
-                else "Visual repair прошёл детерминированную проверку"
+                else "Визуальная доработка прошла техническую проверку"
             ),
             revision=candidate.revision,
             issues=issues,
@@ -465,9 +480,9 @@ class VisualRepairGate:
                     stage=Stage.MOTION_POLISH,
                     status="running",
                     message=(
-                        "Browser visual audit"
+                        "Браузерная визуальная проверка"
                         if is_browser_phase
-                        else "AI visual review"
+                        else "Проверка визуальными AI-критиками"
                     )
                     + f": попытка {phase_attempt}",
                     revision=candidate.revision,
@@ -554,7 +569,7 @@ class VisualRepairGate:
                         stage=Stage.MOTION_POLISH,
                         status="running",
                         message=(
-                            "Browser gate repair: попытка "
+                            "Исправление после браузерной проверки: попытка "
                             f"{browser_repair_count}/{MAX_BROWSER_REPAIRS}"
                         ),
                         revision=candidate.revision,
@@ -590,8 +605,8 @@ class VisualRepairGate:
                             stage=Stage.MOTION_POLISH,
                             status="failed",
                             message=(
-                                "Browser gate repair "
-                                f"{browser_repair_count} завершился ошибкой"
+                                "Исправление после браузерной проверки "
+                                f"{browser_repair_count} завершилось ошибкой"
                             ),
                             revision=candidate.revision,
                             usage=usage,
@@ -663,8 +678,8 @@ class VisualRepairGate:
                             stage=Stage.MOTION_POLISH,
                             status="running",
                             message=(
-                                "Deterministic repair after browser gate: "
-                                "попытка "
+                                "Техническое исправление после браузерной "
+                                "проверки: попытка "
                                 f"{validation_repair_count}/{MAX_VALIDATION_REPAIRS}"
                             ),
                             revision=candidate.revision,
@@ -690,8 +705,8 @@ class VisualRepairGate:
                                 stage=Stage.MOTION_POLISH,
                                 status="failed",
                                 message=(
-                                    "Deterministic repair after browser gate "
-                                    f"{validation_repair_count} завершился ошибкой"
+                                    "Техническое исправление после браузерной "
+                                    f"проверки {validation_repair_count} завершилось ошибкой"
                                 ),
                                 revision=candidate.revision,
                                 usage=usage,
@@ -725,8 +740,8 @@ class VisualRepairGate:
                             stage=Stage.MOTION_POLISH,
                             status="completed",
                             message=(
-                                "Модель завершила deterministic repair after "
-                                "browser gate: "
+                                "Модель завершила техническое исправление "
+                                "после браузерной проверки: "
                                 + (
                                     candidate.change_summary.strip()
                                     or "исправлена техническая ошибка виджета"
@@ -755,7 +770,7 @@ class VisualRepairGate:
                         event_type="visual_audit.completed",
                         stage=Stage.MOTION_POLISH,
                         status="failed",
-                        message="Visual audit завершился ошибкой",
+                        message="Визуальная проверка завершилась ошибкой",
                         revision=candidate.revision,
                         usage=usage,
                     )
@@ -774,7 +789,7 @@ class VisualRepairGate:
                                 stage=Stage.MOTION_POLISH,
                                 status="completed",
                                 message=(
-                                    "Снимок visual audit: "
+                                    "Снимок визуальной проверки: "
                                     f"{screenshot.evidence.screenshot_id} "
                                     f"({screenshot.evidence.byte_count} bytes)"
                                 ),
@@ -803,7 +818,7 @@ class VisualRepairGate:
                         event_type="visual_audit.completed",
                         stage=Stage.MOTION_POLISH,
                         status="failed",
-                        message="Visual audit завершился ошибкой",
+                        message="Визуальная проверка завершилась ошибкой",
                         revision=candidate.revision,
                         usage=usage,
                     )
@@ -840,7 +855,7 @@ class VisualRepairGate:
                 role_failures = getattr(result, "role_failures", {})
                 if isinstance(role_results, dict):
                     for role, role_result in role_results.items():
-                        role_name = getattr(role, "value", str(role))
+                        role_name = _critic_role_label(role)
                         role_critique = getattr(role_result, "critique", None)
                         role_findings = tuple(
                             getattr(role_critique, "findings", ())
@@ -859,7 +874,7 @@ class VisualRepairGate:
                         )
                 if isinstance(role_failures, dict):
                     for role, error_code in role_failures.items():
-                        role_name = getattr(role, "value", str(role))
+                        role_name = _critic_role_label(role)
                         await self._store.append_event(
                             run_id,
                             event_type="visual_critic.completed",
@@ -912,7 +927,7 @@ class VisualRepairGate:
                         event_type="visual_audit.passed",
                         stage=Stage.MOTION_POLISH,
                         status="completed",
-                        message="Финальный visual audit пройден",
+                        message="Финальная визуальная проверка пройдена",
                         revision=candidate.revision,
                     )
                     await self._checkpoint(run_id)
@@ -971,7 +986,7 @@ class VisualRepairGate:
                     stage=Stage.MOTION_POLISH,
                     status="running",
                     message=(
-                        "Visual repair: попытка "
+                        "Визуальная доработка: попытка "
                         f"{visual_repair_count}/{visual_limit}"
                     ),
                     revision=candidate.revision,
@@ -1001,8 +1016,8 @@ class VisualRepairGate:
                         stage=Stage.MOTION_POLISH,
                         status="failed",
                         message=(
-                            f"Visual repair {visual_repair_count} "
-                            "завершился ошибкой"
+                            f"Визуальная доработка {visual_repair_count} "
+                            "завершилась ошибкой"
                         ),
                         revision=candidate.revision,
                         usage=usage,
@@ -1064,8 +1079,8 @@ class VisualRepairGate:
                         stage=Stage.MOTION_POLISH,
                         status="running",
                         message=(
-                            "Deterministic repair after visual repair: "
-                            "попытка "
+                            "Техническое исправление после визуальной "
+                            "доработки: попытка "
                             f"{validation_repair_count}/{MAX_VALIDATION_REPAIRS}"
                         ),
                         revision=candidate.revision,
@@ -1091,8 +1106,8 @@ class VisualRepairGate:
                             stage=Stage.MOTION_POLISH,
                             status="failed",
                             message=(
-                                "Deterministic repair after visual repair "
-                                f"{validation_repair_count} завершился ошибкой"
+                                "Техническое исправление после визуальной "
+                                f"доработки {validation_repair_count} завершилось ошибкой"
                             ),
                             revision=candidate.revision,
                             usage=usage,

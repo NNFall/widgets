@@ -26,6 +26,7 @@ from .models import (
     WidgetArtifact,
     artifact_changed_fields,
     artifact_commit_message,
+    stage_display_name,
 )
 from .store import RunStore, RunTerminal, TERMINAL_STATUSES
 from .validation import (
@@ -578,7 +579,7 @@ class BuilderOrchestrator:
                 event_type="stage.started",
                 stage=stage,
                 status="running",
-                message=f"Начат этап {stage.value}",
+                message=f"Начат этап: {stage_display_name(stage)}",
                 revision=revision,
             )
             result = await direct_engine.generate(
@@ -593,7 +594,7 @@ class BuilderOrchestrator:
                 event_type="stage.completed",
                 stage=stage,
                 status="completed",
-                message=f"Модель завершила этап {stage.value}",
+                message=f"Модель завершила этап: {stage_display_name(stage)}",
                 revision=revision,
                 usage=result.usage,
                 diagnostic=result.diagnostic,

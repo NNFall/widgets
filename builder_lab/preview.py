@@ -91,6 +91,10 @@ try {{
   const channelId = {encoded_channel};
   const revision = {revision};
   const root = document.querySelector('[data-region="root"]');
+  const assistantLabel = String(
+    (root && (root.dataset.assistantLabel || root.getAttribute('aria-label')))
+    || 'AI-КОНСУЛЬТАНТ'
+  ).trim().slice(0, 80) || 'AI-КОНСУЛЬТАНТ';
   const launcher = document.querySelector('[data-region="launcher"]');
   const panel = document.querySelector('[data-region="panel"]');
   const composer = document.querySelector('[data-region="composer"]');
@@ -199,7 +203,7 @@ try {{
     const label = document.createElement('span');
     label.className = 'kaigo-widget__message-label';
     label.setAttribute('data-kaigo-runtime-label', role);
-    label.textContent = role === 'user' ? 'ВЫ' : 'RAW AI';
+    label.textContent = role === 'user' ? 'ВЫ' : assistantLabel;
     const content = document.createElement('p');
     content.className = 'kaigo-widget__message-content';
     content.setAttribute('data-kaigo-runtime-content', role);

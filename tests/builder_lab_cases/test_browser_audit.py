@@ -123,6 +123,22 @@ def jpeg(width=1440, height=900, color=(245, 245, 245)):
 
 
 class ScreenshotBundleContractTests(unittest.TestCase):
+    def test_browser_chat_fixture_is_brand_neutral_and_russian(self):
+        from builder_lab.browser_audit import audit_conversation_fixture
+
+        fixture = audit_conversation_fixture()
+
+        self.assertEqual(
+            fixture.user_messages,
+            ("Чем вы можете мне помочь?", "Как начать?"),
+        )
+        self.assertEqual(len(fixture.assistant_messages), 2)
+        combined = " ".join(
+            (*fixture.user_messages, *fixture.assistant_messages)
+        )
+        self.assertNotIn("RAW", combined.upper())
+        self.assertNotIn("BUREAU", combined.upper())
+
     def test_captured_screenshot_validates_real_jpeg_hash_and_dimensions(self):
         data = jpeg()
         evidence = ScreenshotEvidence(
@@ -714,7 +730,7 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
             return build_preview_document(candidate, channel_id=channel_id).replace(
                 "appendMessage('user', normalized);\n    postPendingRequest();",
                 "appendMessage('user', normalized);\n    postPendingRequest();\n"
-                "    if (normalized === 'Как начать проект?') postPendingRequest();",
+                "    if (normalized === 'Как начать?') postPendingRequest();",
             )
 
         def duplicate_retry_request(candidate, *, channel_id):
@@ -727,7 +743,7 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
             return build_preview_document(candidate, channel_id=channel_id).replace(
                 "appendMessage('user', normalized);\n    postPendingRequest();",
                 "appendMessage('user', normalized);\n    postPendingRequest();\n"
-                "    if (normalized === 'Как начать проект?') {\n"
+                "    if (normalized === 'Как начать?') {\n"
                 "      const duplicateRequestId = pendingRequest.requestId;\n"
                 "      setTimeout(() => window.parent.postMessage({source:'kaigo-builder-preview',"
                 "version:2,channel_id:channelId,type:'chat.request',request_id:duplicateRequestId,"

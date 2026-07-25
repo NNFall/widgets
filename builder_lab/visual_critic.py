@@ -921,7 +921,8 @@ class GeminiVisualCritic:
                 "frames; use them to inspect small launcher, panel, message, and composer details, "
                 "but keep the structured observation IDs tied to the six originals. "
                 "Summary is informational. A pass may contain only minor or "
-                "low-confidence major findings."
+                "low-confidence major findings. Write every user-facing summary, "
+                "observation, evidence, and repair instruction in Russian."
             ),
             response_mime_type="application/json",
             response_json_schema=build_provider_json_schema(
