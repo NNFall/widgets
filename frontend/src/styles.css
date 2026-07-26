@@ -1,0 +1,36 @@
+:root {
+  font-family: 'Manrope', sans-serif;
+  color: #17201d;
+  background: #f7f2e8;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  margin: 0;
+}
+
+main {
+  width: min(100% - 2rem, 72rem);
+  margin-inline: auto;
+}
+
+section {
+  min-height: 18rem;
+  padding-block: 5rem;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+a {
+  color: inherit;
+}
