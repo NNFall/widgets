@@ -38,6 +38,7 @@ prompt-полем. Его отличие должно быть видно в с�
 - `docs/research/assets/2026-07-26-kaigo-landing-references-business-refined/`
 - `docs/research/assets/2026-07-26-kaigo-landing-animation-pairs-light/`
 - `docs/research/assets/2026-07-26-kaigo-landing-animation-cards-refined/`
+- `docs/research/assets/2026-07-27-kaigo-landing-full-sequence/`
 - официальные ссылки и изображения внутри отчёта
 
 ## Честные ограничения
