@@ -1,3 +1,7 @@
+import { useEffect, useState } from 'react';
+
+import { HeroSection } from './landing/HeroSection';
+
 const landingSections = [
   { id: 'how-it-works', title: 'Как это работает', copy: 'Три ясных шага от идеи до результата.' },
   { id: 'analysis', title: 'Анализ', copy: 'Находим задачу, где AI принесёт пользу бизнесу.' },
@@ -10,20 +14,16 @@ const landingSections = [
 function LandingPage() {
   return (
     <main>
-      <section id="hero" data-landing-section>
-        <p>Kaigo</p>
-        <h1>Через 10 минут вы сможете сказать: наш бизнес использует AI</h1>
-        <a href="/studio">Перейти в студию</a>
-      </section>
+      <HeroSection />
 
       {landingSections.map(({ id, title, copy }) => (
-        <section id={id} data-landing-section key={id}>
+        <section className="landing-placeholder" id={id} data-landing-section key={id}>
           <h2>{title}</h2>
           <p>{copy}</p>
         </section>
       ))}
 
-      <section id="final-cta" data-landing-section>
+      <section className="landing-placeholder" id="final-cta" data-landing-section>
         <h2>Начните с одной задачи</h2>
         <a href="/studio">Открыть студию</a>
       </section>
@@ -33,7 +33,7 @@ function LandingPage() {
 
 function StudioPage() {
   return (
-    <main>
+    <main className="studio-placeholder">
       <h1>Студия Kaigo</h1>
       <p>Здесь начинается работа над вашим AI-инструментом.</p>
       <a href="/">Вернуться на главную</a>
@@ -41,8 +41,18 @@ function StudioPage() {
   );
 }
 
+function currentPathname() {
+  return window.location.pathname.replace(/\/+$/, '') || '/';
+}
+
 export function App() {
-  const pathname = window.location.pathname.replace(/\/+$/, '') || '/';
+  const [pathname, setPathname] = useState(currentPathname);
+
+  useEffect(() => {
+    const syncPathname = () => setPathname(currentPathname());
+    window.addEventListener('popstate', syncPathname);
+    return () => window.removeEventListener('popstate', syncPathname);
+  }, []);
 
   return pathname === '/studio' ? <StudioPage /> : <LandingPage />;
 }
