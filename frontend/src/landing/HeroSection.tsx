@@ -42,6 +42,7 @@ export function HeroSection() {
           id="mobile-navigation"
           aria-label="Мобильная навигация"
           data-open={menuOpen ? 'true' : 'false'}
+          hidden={!menuOpen}
         >
           {navItems.map(([label, href]) => (
             <a href={href} key={href} onClick={() => setMenuOpen(false)}>{label}</a>

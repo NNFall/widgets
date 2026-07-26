@@ -14,6 +14,14 @@ describe('App', () => {
     render(<App />);
 
     expect(screen.getByRole('heading', { name: /Через 10 минут.*использует AI/i })).toBeInTheDocument();
+    expect(
+      Array.from(document.querySelectorAll('.hero-title-line'), (line) => line.textContent),
+    ).toEqual([
+      'Через 10 минут',
+      'вы сможете сказать:',
+      'наш бизнес',
+      'использует AI',
+    ]);
     const navigation = within(screen.getByRole('navigation', { name: 'Основная навигация' }));
     expect(navigation.getByRole('link', { name: 'Продукт' })).toHaveAttribute('href', '#product');
     expect(navigation.getByRole('link', { name: 'Как это работает' })).toHaveAttribute(
@@ -52,16 +60,23 @@ describe('App', () => {
     expect(window.location.pathname).toBe('/');
   });
 
-  it('exposes an accessible mobile navigation toggle', async () => {
+  it('keeps the mobile navigation untabbable while closed and exposes it when opened', async () => {
     const user = userEvent.setup();
     render(<App />);
 
     const toggle = screen.getByRole('button', { name: 'Открыть меню' });
+    const mobileNavigation = document.getElementById('mobile-navigation') as HTMLElement;
+    const mobileProductLink = mobileNavigation.querySelector('a[href="#product"]') as HTMLElement;
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(mobileNavigation).toHaveAttribute('hidden');
+    expect(mobileProductLink).not.toBeVisible();
 
     await user.click(toggle);
 
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(mobileNavigation).not.toHaveAttribute('hidden');
+    expect(screen.getByRole('navigation', { name: 'Мобильная навигация' })).toBeVisible();
+    expect(mobileProductLink).toBeVisible();
   });
 
   it.each(['/studio', '/studio/'])('renders the studio placeholder at %s', (pathname) => {

@@ -2,6 +2,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../App';
+import stylesSource from '../styles.css?raw';
 
 const setReducedMotion = (matches: boolean) => {
   Object.defineProperty(window, 'matchMedia', {
@@ -61,5 +62,16 @@ describe('HeroOrbitScene', () => {
 
     expect(screen.getByTestId('hero-scene')).toHaveAttribute('data-motion-phase', 'complete');
     expect(screen.getByTestId('widget-preview')).toHaveAttribute('data-visible', 'true');
+  });
+
+  it('locks the desktop headline width and pulses through transform and opacity only', () => {
+    expect(stylesSource).toMatch(/\.hero-copy h1\s*\{[^}]*max-width:\s*10\.8ch;/s);
+    expect(stylesSource).toContain('.widget-preview::before');
+
+    const pulseKeyframes = stylesSource.match(/@keyframes widget-pulse\s*\{([\s\S]*?)\n\}/)?.[1];
+    expect(pulseKeyframes).toContain('transform:');
+    expect(pulseKeyframes).toContain('opacity:');
+    expect(pulseKeyframes).not.toContain('box-shadow:');
+    expect(stylesSource).not.toContain('@keyframes widget-ring');
   });
 });
