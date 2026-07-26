@@ -31,6 +31,7 @@ prompt-полем. Его отличие должно быть видно в с�
 - `docs/research/2026-07-26-ai-builder-ux-benchmark.md`
 - `docs/design-prompts/2026-07-26-kaigo-landing-reference-prompt.md`
 - `docs/research/assets/2026-07-26-kaigo-landing-references/`
+- `docs/research/assets/2026-07-26-kaigo-landing-references-rich/`
 - официальные ссылки и изображения внутри отчёта
 
 ## Честные ограничения
