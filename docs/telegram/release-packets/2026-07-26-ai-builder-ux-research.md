@@ -30,6 +30,7 @@ prompt-полем. Его отличие должно быть видно в с�
 
 - `docs/research/2026-07-26-ai-builder-ux-benchmark.md`
 - `docs/design-prompts/2026-07-26-kaigo-landing-reference-prompt.md`
+- `docs/research/assets/2026-07-26-kaigo-landing-references/`
 - официальные ссылки и изображения внутри отчёта
 
 ## Честные ограничения
@@ -50,5 +51,4 @@ prompt-полем. Его отличие должно быть видно в с�
 1. Коллаж первых экранов Lovable, Base44, Bolt, AI Studio и Embeddable с
    указанием источников.
 2. Простая схема `URL → анализ → AI-сотрудник на сайте`.
-3. Будущий нейтральный reference первого экрана Kaigo после отдельной
-   генерации концептов.
+3. Пять готовых `16:9` референсов первого экрана Kaigo.
