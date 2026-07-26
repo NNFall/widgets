@@ -54,6 +54,27 @@ def test_api_error_does_not_include_bot_token() -> None:
     assert "Bad Request" in str(caught.value)
 
 
+def test_copy_message_preserves_telegram_source_contract() -> None:
+    captured: dict[str, object] = {}
+
+    def opener(request: object, timeout: float) -> FakeResponse:
+        captured["url"] = request.full_url
+        captured["body"] = json.loads(request.data)
+        captured["timeout"] = timeout
+        return FakeResponse({"ok": True, "result": {"message_id": 50}})
+
+    client = TelegramClient("token-value", opener=opener)
+    client.copy_message(20, "@kaigoww", 4)
+
+    assert captured["url"].endswith("/bottoken-value/copyMessage")
+    assert captured["body"] == {
+        "chat_id": 20,
+        "from_chat_id": "@kaigoww",
+        "message_id": 4,
+    }
+    assert captured["timeout"] == 35
+
+
 def test_split_message_preserves_every_character() -> None:
     text = (("a" * 3980) + "\n") * 3 + "tail"
     chunks = split_message(text, limit=4000)

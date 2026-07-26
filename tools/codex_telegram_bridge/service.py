@@ -15,6 +15,8 @@ class TelegramTransport(Protocol):
 
     def send_message(self, chat_id: int, text: str) -> None: ...
 
+    def copy_message(self, chat_id: int, from_chat_id: str, message_id: int) -> None: ...
+
     def send_chat_action(self, chat_id: int, action: str = "typing") -> None: ...
 
 
@@ -22,6 +24,10 @@ class CodexTransport(Protocol):
     def run(self, thread_id: str, prompt: str, *, request_id: str) -> str: ...
 
     def forget(self, request_id: str) -> None: ...
+
+
+class PostHistory(Protocol):
+    def latest_message_ids(self) -> tuple[int, ...] | None: ...
 
 
 class BridgeService:
@@ -32,12 +38,16 @@ class BridgeService:
         runner: CodexTransport,
         store: BridgeStore,
         *,
+        post_history: PostHistory | None = None,
+        publication_channel: str | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self.config = config
         self.telegram = telegram
         self.runner = runner
         self.store = store
+        self.post_history = post_history
+        self.publication_channel = publication_channel
         self.logger = logger or logging.getLogger(__name__)
         self._next_maintenance_at = 0.0
         for chat_id, thread_id in config.chat_bindings.items():
@@ -101,7 +111,7 @@ class BridgeService:
             self._reply(
                 chat_id,
                 f"Мост Telegram ↔ Codex активен. Ваш Telegram ID: {user_id}. "
-                "Команды: /status, /thread, /use <thread-id>.",
+                "Команды: /status, /thread, /use <thread-id>, /previous.",
             )
         elif command == "/status":
             binding = self.store.get_binding(chat_id)
@@ -121,8 +131,32 @@ class BridgeService:
             else:
                 self.store.set_binding(chat_id, thread_id)
                 self._reply(chat_id, f"Чат привязан к задаче Codex {thread_id}.")
+        elif command in {"/previous", "/lastpost"}:
+            if self.post_history is None or self.publication_channel is None:
+                self._reply(chat_id, "История публикаций для этого бота не настроена.")
+            else:
+                message_ids = self.post_history.latest_message_ids()
+                if not message_ids:
+                    self._reply(chat_id, "В истории пока нет опубликованных постов.")
+                else:
+                    try:
+                        for message_id in message_ids:
+                            self.telegram.copy_message(
+                                chat_id,
+                                self.publication_channel,
+                                message_id,
+                            )
+                    except TelegramApiError:
+                        self._reply(
+                            chat_id,
+                            "Предыдущий опубликованный пост сейчас недоступен в Telegram.",
+                        )
         else:
-            self._reply(chat_id, "Неизвестная команда. Доступны: /start, /status, /thread, /use <thread-id>.")
+            self._reply(
+                chat_id,
+                "Неизвестная команда. Доступны: /start, /status, /thread, "
+                "/use <thread-id>, /previous.",
+            )
         self.store.mark_update_processed(update_id)
 
     def poll_once(self) -> int:

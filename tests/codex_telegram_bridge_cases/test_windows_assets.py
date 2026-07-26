@@ -11,6 +11,8 @@ def test_example_config_contains_no_bot_token() -> None:
 
     assert "telegram_token" not in payload
     assert payload["codex_command"] == "codex.cmd"
+    assert payload["publication_channel"] == "@kaigoww"
+    assert payload["published_registry_path"].endswith("docs\\telegram\\published.jsonl")
 
 
 def test_setup_stores_token_outside_json_and_runs_safe_check() -> None:
@@ -20,6 +22,8 @@ def test_setup_stores_token_outside_json_and_runs_safe_check() -> None:
     assert '"User"' in script
     assert "--check-config" in script
     assert 'telegram_token"' not in script
+    assert "publication_channel" in script
+    assert "published_registry_path" in script
 
 
 def test_runner_restores_user_codex_home_and_starts_module() -> None:

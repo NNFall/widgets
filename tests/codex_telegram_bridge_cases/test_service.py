@@ -13,12 +13,24 @@ class FakeTelegram:
     def __init__(self) -> None:
         self.messages: list[tuple[int, str]] = []
         self.actions: list[tuple[int, str]] = []
+        self.copies: list[tuple[int, str, int]] = []
 
     def send_message(self, chat_id: int, text: str) -> None:
         self.messages.append((chat_id, text))
 
     def send_chat_action(self, chat_id: int, action: str = "typing") -> None:
         self.actions.append((chat_id, action))
+
+    def copy_message(self, chat_id: int, from_chat_id: str, message_id: int) -> None:
+        self.copies.append((chat_id, from_chat_id, message_id))
+
+
+class FakePostHistory:
+    def __init__(self, message_ids: tuple[int, ...] | None) -> None:
+        self.message_ids = message_ids
+
+    def latest_message_ids(self) -> tuple[int, ...] | None:
+        return self.message_ids
 
 
 class FakeRunner:
@@ -42,6 +54,8 @@ def _config(tmp_path: Path) -> BridgeConfig:
         chat_bindings={20: THREAD_ID},
         data_dir=tmp_path,
         codex_home=tmp_path / ".codex",
+        publication_channel="@kaigoww",
+        published_registry_path=tmp_path / "published.jsonl",
         codex_command="codex.cmd",
         poll_timeout_seconds=30,
         turn_timeout_seconds=3600,
@@ -121,6 +135,65 @@ def test_commands_report_status_and_media_limit(tmp_path: Path) -> None:
     assert any(THREAD_ID in text for text in texts)
     assert any("очеред" in text.lower() for text in texts)
     assert any("только текст" in text.lower() for text in texts)
+
+
+def test_previous_command_copies_latest_post_without_running_codex(tmp_path: Path) -> None:
+    telegram = FakeTelegram()
+    runner = FakeRunner()
+    store = BridgeStore(tmp_path / "db.sqlite3")
+    service = BridgeService(
+        _config(tmp_path),
+        telegram,
+        runner,
+        store,
+        post_history=FakePostHistory((4,)),
+        publication_channel="@kaigoww",
+    )
+
+    service.handle_update(_update(1, "/previous"))
+
+    assert telegram.copies == [(20, "@kaigoww", 4)]
+    assert runner.calls == []
+    assert store.pending_count() == 0
+
+
+def test_lastpost_command_copies_album_in_original_order(tmp_path: Path) -> None:
+    telegram = FakeTelegram()
+    store = BridgeStore(tmp_path / "db.sqlite3")
+    service = BridgeService(
+        _config(tmp_path),
+        telegram,
+        FakeRunner(),
+        store,
+        post_history=FakePostHistory((11, 12, 13)),
+        publication_channel="@kaigoww",
+    )
+
+    service.handle_update(_update(1, "/lastpost"))
+
+    assert telegram.copies == [
+        (20, "@kaigoww", 11),
+        (20, "@kaigoww", 12),
+        (20, "@kaigoww", 13),
+    ]
+
+
+def test_previous_command_explains_when_no_post_is_available(tmp_path: Path) -> None:
+    telegram = FakeTelegram()
+    store = BridgeStore(tmp_path / "db.sqlite3")
+    service = BridgeService(
+        _config(tmp_path),
+        telegram,
+        FakeRunner(),
+        store,
+        post_history=FakePostHistory(None),
+        publication_channel="@kaigoww",
+    )
+
+    service.handle_update(_update(1, "/previous"))
+
+    assert telegram.copies == []
+    assert "опубликован" in telegram.messages[-1][1].lower()
 
 
 def test_partial_long_reply_resumes_after_last_delivered_chunk(tmp_path: Path) -> None:

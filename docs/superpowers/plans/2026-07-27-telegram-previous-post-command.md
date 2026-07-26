@@ -16,7 +16,7 @@
 - Create: `tools/codex_telegram_bridge/post_history.py`
 - Create: `tests/codex_telegram_bridge_cases/test_post_history.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Проверить одиночный `telegram_message_id`, массив `telegram_message_ids`, пропуск повреждённой JSONL-строки и пустой файл.
 
@@ -25,13 +25,13 @@ history = PublishedPostHistory(path)
 assert history.latest_message_ids() == (4,)
 ```
 
-- [ ] **Step 2: Run tests to verify RED**
+- [x] **Step 2: Run tests to verify RED**
 
 Run: `python -m pytest tests/codex_telegram_bridge_cases/test_post_history.py -q`
 
 Expected: FAIL because `post_history` does not exist.
 
-- [ ] **Step 3: Implement the reader**
+- [x] **Step 3: Implement the reader**
 
 ```python
 class PublishedPostHistory:
@@ -61,7 +61,7 @@ class PublishedPostHistory:
         return latest
 ```
 
-- [ ] **Step 4: Run tests to verify GREEN**
+- [x] **Step 4: Run tests to verify GREEN**
 
 Run: `python -m pytest tests/codex_telegram_bridge_cases/test_post_history.py -q`
 
@@ -75,7 +75,7 @@ Expected: all tests pass.
 - Modify: `tests/codex_telegram_bridge_cases/test_telegram_api.py`
 - Modify: `tests/codex_telegram_bridge_cases/test_service.py`
 
-- [ ] **Step 1: Write failing API and service tests**
+- [x] **Step 1: Write failing API and service tests**
 
 ```python
 client.copy_message(20, "@kaigoww", 4)
@@ -88,13 +88,13 @@ assert captured["body"] == {
 
 Service tests require `/previous` and `/lastpost` to copy every returned ID in order, avoid `runner.run`, and show a Russian fallback when no post exists.
 
-- [ ] **Step 2: Run focused tests to verify RED**
+- [x] **Step 2: Run focused tests to verify RED**
 
 Run: `python -m pytest tests/codex_telegram_bridge_cases/test_telegram_api.py tests/codex_telegram_bridge_cases/test_service.py -q`
 
 Expected: FAIL because `copy_message` and the commands do not exist.
 
-- [ ] **Step 3: Add minimal protocol and command implementation**
+- [x] **Step 3: Add minimal protocol and command implementation**
 
 ```python
 def copy_message(self, chat_id: int, from_chat_id: str, message_id: int) -> None:
@@ -107,7 +107,7 @@ def copy_message(self, chat_id: int, from_chat_id: str, message_id: int) -> None
 
 `BridgeService._handle_command` reads `post_history.latest_message_ids()`, copies each message and catches `TelegramApiError` with a user-facing fallback.
 
-- [ ] **Step 4: Run focused tests to verify GREEN**
+- [x] **Step 4: Run focused tests to verify GREEN**
 
 Run: `python -m pytest tests/codex_telegram_bridge_cases/test_telegram_api.py tests/codex_telegram_bridge_cases/test_service.py -q`
 
@@ -123,24 +123,24 @@ Expected: all focused tests pass.
 - Modify: `tests/codex_telegram_bridge_cases/test_config.py`
 - Modify: `%LOCALAPPDATA%\KaigoCodexTelegramBridge\config.json`
 
-- [ ] **Step 1: Write failing config tests**
+- [x] **Step 1: Write failing config tests**
 
 ```python
 assert config.publication_channel == "@kaigoww"
 assert config.published_registry_path == tmp_path / "published.jsonl"
 ```
 
-- [ ] **Step 2: Run config tests to verify RED**
+- [x] **Step 2: Run config tests to verify RED**
 
 Run: `python -m pytest tests/codex_telegram_bridge_cases/test_config.py -q`
 
 Expected: FAIL because the fields do not exist.
 
-- [ ] **Step 3: Wire configuration and runtime**
+- [x] **Step 3: Wire configuration and runtime**
 
 Add required `publication_channel` and `published_registry_path`, construct `PublishedPostHistory` in `__main__.py`, and pass it into `BridgeService`.
 
-- [ ] **Step 4: Run the complete local verification**
+- [x] **Step 4: Run the complete local verification**
 
 Run:
 
@@ -152,11 +152,11 @@ git diff --check
 
 Expected: zero failures and zero syntax errors.
 
-- [ ] **Step 5: Deploy locally and smoke-test**
+- [x] **Step 5: Deploy locally and smoke-test**
 
 Update the non-secret config, restart `Kaigo Codex Telegram Bridge`, send `/previous` from the allowed owner chat, and verify that message `4` is copied without changing `@kaigoww`.
 
-- [ ] **Step 6: Commit and push**
+- [x] **Step 6: Commit and push**
 
 ```powershell
 git add tools/codex_telegram_bridge tests/codex_telegram_bridge_cases docs/superpowers/plans/2026-07-27-telegram-previous-post-command.md

@@ -50,8 +50,18 @@ if (-not [guid]::TryParse($threadText, [ref]$threadId)) {
     throw "Codex task ID must be a UUID, for example 019f9e1b-fb04-7482-b62d-cee4c051131b."
 }
 
+$publicationChannel = (Read-Host "Publication channel username (Enter = @kaigoww)").Trim()
+if ([string]::IsNullOrWhiteSpace($publicationChannel)) {
+    $publicationChannel = "@kaigoww"
+}
+if ($publicationChannel -notmatch '^@[A-Za-z0-9_]{5,}$') {
+    throw "Publication channel must be a Telegram @username."
+}
+
 $dataDir = Join-Path $env:LOCALAPPDATA "KaigoCodexTelegramBridge"
 $configPath = Join-Path $dataDir "config.json"
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$publishedRegistryPath = Join-Path $repoRoot "docs\telegram\published.jsonl"
 New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
 
 $bindings = [ordered]@{}
@@ -61,6 +71,8 @@ $config = [ordered]@{
     chat_bindings = $bindings
     data_dir = "%LOCALAPPDATA%\KaigoCodexTelegramBridge"
     codex_home = "%USERPROFILE%\.codex"
+    publication_channel = $publicationChannel
+    published_registry_path = $publishedRegistryPath
     codex_command = "codex.cmd"
     poll_timeout_seconds = 30
     turn_timeout_seconds = 3600
@@ -73,7 +85,6 @@ $json = $config | ConvertTo-Json -Depth 5
 
 $env:TELEGRAM_BOT_TOKEN = $token
 $env:CODEX_HOME = Join-Path $env:USERPROFILE ".codex"
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $python = (Get-Command python.exe -ErrorAction Stop).Source
 Push-Location $repoRoot
 try {

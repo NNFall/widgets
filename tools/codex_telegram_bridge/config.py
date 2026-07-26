@@ -20,6 +20,8 @@ class BridgeConfig:
     chat_bindings: dict[int, str]
     data_dir: Path
     codex_home: Path
+    publication_channel: str
+    published_registry_path: Path
     codex_command: str = "codex.cmd"
     poll_timeout_seconds: int = 30
     turn_timeout_seconds: int = 3600
@@ -118,6 +120,13 @@ def load_config(
     api_base = raw.get("telegram_api_base", "https://api.telegram.org")
     if not isinstance(api_base, str) or not api_base.startswith("https://"):
         raise ConfigError("telegram_api_base must be an HTTPS URL")
+    publication_channel = raw.get("publication_channel")
+    if (
+        not isinstance(publication_channel, str)
+        or not publication_channel.startswith("@")
+        or len(publication_channel) < 2
+    ):
+        raise ConfigError("publication_channel must be a Telegram @username")
 
     return BridgeConfig(
         telegram_token=token,
@@ -125,6 +134,12 @@ def load_config(
         chat_bindings=bindings,
         data_dir=_expand_path(raw.get("data_dir"), env, "data_dir"),
         codex_home=_expand_path(raw.get("codex_home"), env, "codex_home"),
+        publication_channel=publication_channel,
+        published_registry_path=_expand_path(
+            raw.get("published_registry_path"),
+            env,
+            "published_registry_path",
+        ),
         codex_command=codex_command,
         poll_timeout_seconds=poll_timeout,
         turn_timeout_seconds=turn_timeout,

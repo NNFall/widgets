@@ -9,6 +9,7 @@ from pathlib import Path
 from .codex_runner import CodexRunner
 from .config import ConfigError, load_config
 from .instance_lock import AlreadyRunningError, SingleInstanceLock
+from .post_history import PublishedPostHistory
 from .service import BridgeService
 from .store import BridgeStore
 from .telegram_api import TelegramClient
@@ -68,7 +69,15 @@ def main() -> int:
                 data_dir=config.data_dir / "codex-output",
                 timeout_seconds=config.turn_timeout_seconds,
             )
-            service = BridgeService(config, telegram, runner, store, logger=logger)
+            service = BridgeService(
+                config,
+                telegram,
+                runner,
+                store,
+                post_history=PublishedPostHistory(config.published_registry_path),
+                publication_channel=config.publication_channel,
+                logger=logger,
+            )
             try:
                 service.run_forever()
             except KeyboardInterrupt:

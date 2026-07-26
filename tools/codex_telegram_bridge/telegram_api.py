@@ -82,5 +82,15 @@ class TelegramClient:
             raise ValueError("Telegram message must contain 1 to 4096 characters")
         self._call("sendMessage", {"chat_id": chat_id, "text": text})
 
+    def copy_message(self, chat_id: int, from_chat_id: str, message_id: int) -> None:
+        self._call(
+            "copyMessage",
+            {
+                "chat_id": chat_id,
+                "from_chat_id": from_chat_id,
+                "message_id": message_id,
+            },
+        )
+
     def send_chat_action(self, chat_id: int, action: str = "typing") -> None:
         self._call("sendChatAction", {"chat_id": chat_id, "action": action})

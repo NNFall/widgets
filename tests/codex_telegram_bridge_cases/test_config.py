@@ -15,6 +15,8 @@ def _write_config(path: Path, **overrides: object) -> None:
         "chat_bindings": {"202": THREAD_ID},
         "data_dir": "%LOCALAPPDATA%\\KaigoCodexTelegramBridge",
         "codex_home": "%USERPROFILE%\\.codex",
+        "publication_channel": "@kaigoww",
+        "published_registry_path": "%REPO_ROOT%\\docs\\telegram\\published.jsonl",
     }
     payload.update(overrides)
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -29,6 +31,7 @@ def test_load_config_expands_paths_and_reads_token(tmp_path: Path) -> None:
         environ={
             "LOCALAPPDATA": str(tmp_path / "local"),
             "USERPROFILE": str(tmp_path / "user"),
+            "REPO_ROOT": str(tmp_path / "repo"),
             "TELEGRAM_BOT_TOKEN": "secret-token",
         },
     )
@@ -38,6 +41,8 @@ def test_load_config_expands_paths_and_reads_token(tmp_path: Path) -> None:
     assert config.chat_bindings == {202: THREAD_ID}
     assert config.data_dir == tmp_path / "local" / "KaigoCodexTelegramBridge"
     assert config.codex_home == tmp_path / "user" / ".codex"
+    assert config.publication_channel == "@kaigoww"
+    assert config.published_registry_path == tmp_path / "repo" / "docs" / "telegram" / "published.jsonl"
     assert config.codex_command == "codex.cmd"
     assert config.retention_days == 30
 
@@ -47,7 +52,14 @@ def test_load_config_requires_token_environment_variable(tmp_path: Path) -> None
     _write_config(path)
 
     with pytest.raises(ConfigError, match="TELEGRAM_BOT_TOKEN"):
-        load_config(path, environ={"LOCALAPPDATA": str(tmp_path), "USERPROFILE": str(tmp_path)})
+        load_config(
+            path,
+            environ={
+                "LOCALAPPDATA": str(tmp_path),
+                "USERPROFILE": str(tmp_path),
+                "REPO_ROOT": str(tmp_path),
+            },
+        )
 
 
 def test_load_config_rejects_custom_token_environment_name(tmp_path: Path) -> None:
@@ -60,6 +72,7 @@ def test_load_config_rejects_custom_token_environment_name(tmp_path: Path) -> No
             environ={
                 "LOCALAPPDATA": str(tmp_path),
                 "USERPROFILE": str(tmp_path),
+                "REPO_ROOT": str(tmp_path),
                 "TELEGRAM_BOT_TOKEN": "secret-token",
                 "CUSTOM_SECRET": "other-secret",
             },
@@ -89,6 +102,7 @@ def test_load_config_rejects_invalid_values(
             environ={
                 "LOCALAPPDATA": str(tmp_path),
                 "USERPROFILE": str(tmp_path),
+                "REPO_ROOT": str(tmp_path),
                 "TELEGRAM_BOT_TOKEN": "secret-token",
             },
         )
