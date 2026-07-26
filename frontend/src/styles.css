@@ -20,7 +20,7 @@ main {
   margin-inline: auto;
 }
 
-section {
+[data-landing-section] {
   min-height: 18rem;
   padding-block: 5rem;
 }
