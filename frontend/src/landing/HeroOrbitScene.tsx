@@ -50,14 +50,36 @@ function reducedMotionRequested() {
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
+function useReducedMotionPreference() {
+  const [reducedMotion, setReducedMotion] = useState(reducedMotionRequested);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const handleChange = (event: MediaQueryListEvent) => setReducedMotion(event.matches);
+
+    setReducedMotion(mediaQuery.matches);
+    mediaQuery.addEventListener('change', handleChange);
+    return () => mediaQuery.removeEventListener('change', handleChange);
+  }, []);
+
+  return reducedMotion;
+}
+
 export function HeroOrbitScene() {
-  const [reducedMotion] = useState(reducedMotionRequested);
+  const reducedMotion = useReducedMotionPreference();
   const [phase, setPhase] = useState<MotionPhase>(() =>
     reducedMotionRequested() ? 'complete' : 'source',
   );
 
   useEffect(() => {
-    if (reducedMotion) return;
+    if (reducedMotion) {
+      setPhase('complete');
+      return;
+    }
+
+    if (phase === 'complete') return;
 
     const timers = phaseTimeline.map(([nextPhase, delay]) =>
       window.setTimeout(() => setPhase(nextPhase), delay),
@@ -75,8 +97,11 @@ export function HeroOrbitScene() {
       className="hero-scene"
       data-testid="hero-scene"
       data-motion-phase={phase}
-      aria-label="Сайт превращается в персональный AI-виджет"
+      aria-describedby="hero-scene-description"
     >
+      <p className="sr-only" id="hero-scene-description">
+        Анимация показывает, как Kaigo анализирует исходный сайт и добавляет готовый AI-виджет.
+      </p>
       <svg className="hero-scene__orbit" viewBox="0 0 360 610" aria-hidden="true">
         <motion.path
           d="M205 16 C70 74, 83 164, 225 188 C325 206, 302 288, 146 314 C38 335, 75 430, 218 449 C318 464, 289 551, 133 590"

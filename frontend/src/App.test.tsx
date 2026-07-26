@@ -79,6 +79,23 @@ describe('App', () => {
     expect(mobileProductLink).toBeVisible();
   });
 
+  it('closes the mobile navigation and restores focus after a link is activated', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const toggle = screen.getByRole('button', { name: 'Открыть меню' });
+    await user.click(toggle);
+
+    const mobileNavigation = screen.getByRole('navigation', { name: 'Мобильная навигация' });
+    const productLink = within(mobileNavigation).getByRole('link', { name: 'Продукт' });
+    productLink.focus();
+    await user.click(productLink);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(document.getElementById('mobile-navigation')).toHaveAttribute('hidden');
+    expect(toggle).toHaveFocus();
+  });
+
   it.each(['/studio', '/studio/'])('renders the studio placeholder at %s', (pathname) => {
     window.history.replaceState({}, '', pathname);
 

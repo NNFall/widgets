@@ -195,6 +195,7 @@ a {
   display: flex;
   align-items: center;
   position: relative;
+  overflow: clip;
   isolation: isolate;
 }
 

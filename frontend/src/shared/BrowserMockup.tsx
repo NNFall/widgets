@@ -20,7 +20,7 @@ export function BrowserMockup({
   reducedMotion,
 }: BrowserMockupProps) {
   return (
-    <div className="browser-stack">
+    <div className="browser-stack" data-testid="browser-mockup" aria-hidden="true">
       <div className="browser-stack__backing" aria-hidden="true" />
       <div className="browser-mockup">
         <div className="browser-mockup__chrome" aria-hidden="true">

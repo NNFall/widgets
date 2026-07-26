@@ -1,5 +1,5 @@
 import { List, X } from '@phosphor-icons/react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import { KaigoLogo } from '../shared/KaigoLogo';
 import { UrlComposer } from '../shared/UrlComposer';
@@ -14,6 +14,12 @@ const navItems = [
 
 export function HeroSection() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuToggleRef = useRef<HTMLButtonElement>(null);
+
+  const closeMobileMenu = () => {
+    setMenuOpen(false);
+    menuToggleRef.current?.focus({ preventScroll: true });
+  };
 
   return (
     <>
@@ -27,6 +33,7 @@ export function HeroSection() {
           </nav>
           <a className="site-header__cta" href="/studio">Перейти в студию</a>
           <button
+            ref={menuToggleRef}
             className="site-header__menu-toggle"
             type="button"
             aria-label={menuOpen ? 'Закрыть меню' : 'Открыть меню'}
@@ -45,9 +52,9 @@ export function HeroSection() {
           hidden={!menuOpen}
         >
           {navItems.map(([label, href]) => (
-            <a href={href} key={href} onClick={() => setMenuOpen(false)}>{label}</a>
+            <a href={href} key={href} onClick={closeMobileMenu}>{label}</a>
           ))}
-          <a href="/studio">Перейти в студию</a>
+          <a href="/studio" onClick={closeMobileMenu}>Перейти в студию</a>
         </nav>
       </header>
 
