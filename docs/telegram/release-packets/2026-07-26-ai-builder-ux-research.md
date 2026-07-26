@@ -35,6 +35,7 @@ prompt-полем. Его отличие должно быть видно в с�
 - `docs/research/assets/2026-07-26-kaigo-landing-references-balanced/`
 - `docs/research/assets/2026-07-26-kaigo-landing-references-guided-flow/`
 - `docs/research/assets/2026-07-26-kaigo-landing-references-narrative/`
+- `docs/research/assets/2026-07-26-kaigo-landing-references-business-refined/`
 - официальные ссылки и изображения внутри отчёта
 
 ## Честные ограничения
