@@ -339,6 +339,7 @@ a {
 
 .hero-scene {
   position: relative;
+  left: -4.5%;
   width: 100%;
   min-width: 0;
   aspect-ratio: 1.36;
@@ -437,7 +438,7 @@ a {
 .hero-browser-stage {
   position: absolute;
   z-index: 4;
-  top: 12%;
+  top: 6%;
   right: 11%;
   width: 67%;
   transform-origin: center center;
@@ -447,20 +448,20 @@ a {
 
 .hero-scene[data-motion-phase='source'] .hero-browser-stage,
 .hero-scene[data-motion-phase='scanning'] .hero-browser-stage {
-  transform: translate3d(0, 38px, 0) scale(1.12) rotate(-2.5deg);
+  transform: translate3d(0, 10px, 0) scale(1.12) rotate(-2.5deg);
 }
 
 .hero-scene[data-motion-phase='transforming'] .hero-browser-stage,
 .hero-scene[data-motion-phase='cards'] .hero-browser-stage,
 .hero-scene[data-motion-phase='widget'] .hero-browser-stage,
 .hero-scene[data-motion-phase='complete'] .hero-browser-stage {
-  transform: translate3d(110px, 56px, 0) scale(0.88) rotate(2.2deg);
+  transform: translate3d(110px, 0, 0) scale(0.88) rotate(2.2deg);
 }
 
 .browser-stack {
   position: relative;
   width: 100%;
-  aspect-ratio: 1.27;
+  aspect-ratio: 0.98;
 }
 
 .browser-stack__backing {
@@ -892,9 +893,14 @@ a {
   }
 
   .hero-scene {
+    left: 0;
     width: min(100%, 820px);
     margin-inline: auto;
     transform: none;
+  }
+
+  .browser-stack {
+    aspect-ratio: 1.27;
   }
 }
 

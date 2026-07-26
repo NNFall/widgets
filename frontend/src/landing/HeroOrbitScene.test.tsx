@@ -112,6 +112,18 @@ describe('HeroOrbitScene', () => {
     expect(stylesSource).not.toContain('@keyframes widget-ring');
   });
 
+  it('matches the approved desktop geometry while resetting offsets on mobile', () => {
+    const heroGridRules = [...stylesSource.matchAll(/\.hero-section__inner\s*\{([^}]*)\}/gs)].map((match) => match[1]);
+
+    expect(heroGridRules.every((rule) => !rule.includes('transform:'))).toBe(true);
+    expect(stylesSource).toMatch(/\.hero-scene\s*\{[^}]*left:\s*-4\.5%;/s);
+    expect(stylesSource).toMatch(/\.hero-browser-stage\s*\{[^}]*top:\s*6%;/s);
+    expect(stylesSource).toMatch(/\.browser-stack\s*\{[^}]*aspect-ratio:\s*0\.98;/s);
+    expect(stylesSource).toContain('transform: translate3d(110px, 0, 0) scale(0.88) rotate(2.2deg);');
+    expect(stylesSource).toMatch(/@media \(max-width:\s*980px\)[\s\S]*?\.hero-scene\s*\{[^}]*left:\s*0;/s);
+    expect(stylesSource).toMatch(/@media \(max-width:\s*980px\)[\s\S]*?\.browser-stack\s*\{[^}]*aspect-ratio:\s*1\.27;/s);
+  });
+
   it('hides the decorative browser mockup from assistive technology and describes the scene', () => {
     render(<App />);
 
