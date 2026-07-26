@@ -15,6 +15,7 @@
 | TG-009 | 9 | idea | Будущий AI-слой поверх сайта | Помощник понимает страницу и блок, до которого дошёл посетитель | [Концепция](../superpowers/specs/2026-07-18-kaigo-ai-employee-product-concept-design.md) |
 | TG-010 | 10 | idea | Неудачные генерации как часть продукта | Как повторяющиеся визуальные ошибки привели к отдельным бюджетам ремонта и прозрачной ленте | [Спецификация проверки](../superpowers/specs/2026-07-25-transparent-visual-review-and-resumable-builder-design.md) |
 | TG-011 | 11 | idea | Почему Kaigo начинается с URL | Конструкторы предлагают пустой prompt, а Kaigo сразу показывает AI-сотрудника на реальном сайте бизнеса | [UX-ресерч](../research/2026-07-26-ai-builder-ux-benchmark.md) |
+| TG-012 | 12 | hold | Управление той же задачей Codex из Telegram | Не новый бот с потерянным контекстом, а настоящий новый ход в общей истории Codex Desktop | [Release packet](release-packets/2026-07-26-telegram-codex-bridge.md) |
 
 ## Как добавлять тему
 

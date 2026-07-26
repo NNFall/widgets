@@ -18,10 +18,10 @@
 - Create: `tools/codex_telegram_bridge/config.example.json`
 - Test: `tests/codex_telegram_bridge_cases/test_config.py`
 
-- [ ] Написать тесты на валидный config, отсутствующий token, неверный UUID и Telegram ID.
-- [ ] Запустить `python -m pytest tests/codex_telegram_bridge_cases/test_config.py -q` и увидеть ожидаемое падение импорта.
-- [ ] Реализовать immutable `BridgeConfig`, раскрытие `%VAR%`, defaults и проверку.
-- [ ] Повторить тест до зелёного статуса.
+- [x] Написать тесты на валидный config, отсутствующий token, неверный UUID и Telegram ID.
+- [x] Запустить `python -m pytest tests/codex_telegram_bridge_cases/test_config.py -q` и увидеть ожидаемое падение импорта.
+- [x] Реализовать immutable `BridgeConfig`, раскрытие `%VAR%`, defaults и проверку.
+- [x] Повторить тест до зелёного статуса.
 
 ### Task 2: Надёжная SQLite-очередь
 
@@ -29,21 +29,24 @@
 - Create: `tools/codex_telegram_bridge/store.py`
 - Test: `tests/codex_telegram_bridge_cases/test_store.py`
 
-- [ ] Написать тесты на deduplication, FIFO, привязку чата и recovery `running → pending`.
-- [ ] Запустить `python -m pytest tests/codex_telegram_bridge_cases/test_store.py -q` и увидеть ожидаемое падение.
-- [ ] Реализовать schema, атомарные транзакции и методы job lifecycle.
-- [ ] Повторить тест до зелёного статуса.
+- [x] Написать тесты на deduplication, FIFO, привязку чата, delivery cursor,
+  очистку приватного содержимого и recovery `running → pending`.
+- [x] Запустить `python -m pytest tests/codex_telegram_bridge_cases/test_store.py -q` и увидеть ожидаемое падение.
+- [x] Реализовать schema, атомарные транзакции и методы job lifecycle.
+- [x] Повторить тест до зелёного статуса.
 
-### Task 3: Безопасный запус Codex CLI
+### Task 3: Безопасный запуск Codex CLI
 
 **Files:**
 - Create: `tools/codex_telegram_bridge/codex_runner.py`
 - Test: `tests/codex_telegram_bridge_cases/test_codex_runner.py`
 
-- [ ] Написать тесты на массив аргументов, stdin, `CODEX_HOME`, output file, timeout и non-zero exit.
-- [ ] Запустить `python -m pytest tests/codex_telegram_bridge_cases/test_codex_runner.py -q` и увидеть ожидаемое падение.
-- [ ] Реализовать `CodexRunner` без `shell=True`, с временным output file в data directory.
-- [ ] Повторить тест до зелёного статуса.
+- [x] Написать тесты на массив аргументов, stdin, `CODEX_HOME`, durable output,
+  повторное использование ответа, завершение дерева процессов, timeout и non-zero exit.
+- [x] Запустить `python -m pytest tests/codex_telegram_bridge_cases/test_codex_runner.py -q` и увидеть ожидаемое падение.
+- [x] Реализовать `CodexRunner` без `shell=True`, с устойчивым outbox-файлом до
+  подтверждённой записи ответа в SQLite.
+- [x] Повторить тест до зелёного статуса.
 
 ### Task 4: Telegram API и разбиение ответов
 
@@ -51,22 +54,24 @@
 - Create: `tools/codex_telegram_bridge/telegram_api.py`
 - Test: `tests/codex_telegram_bridge_cases/test_telegram_api.py`
 
-- [ ] Написать тесты JSON HTTP contract и `split_message`, сохраняющего весь текст.
-- [ ] Запустить `python -m pytest tests/codex_telegram_bridge_cases/test_telegram_api.py -q` и увидеть ожидаемое падение.
-- [ ] Реализовать HTTPS-клиент с timeout и понятными ошибками, не включающими token.
-- [ ] Повторить тест до зелёного статуса.
+- [x] Написать тесты JSON HTTP contract и `split_message`, сохраняющего весь текст.
+- [x] Запустить `python -m pytest tests/codex_telegram_bridge_cases/test_telegram_api.py -q` и увидеть ожидаемое падение.
+- [x] Реализовать HTTPS-клиент с timeout и понятными ошибками, не включающими token.
+- [x] Повторить тест до зелёного статуса.
 
 ### Task 5: Сервис, команды и worker
 
 **Files:**
 - Create: `tools/codex_telegram_bridge/service.py`
 - Create: `tools/codex_telegram_bridge/__main__.py`
+- Create: `tools/codex_telegram_bridge/instance_lock.py`
 - Test: `tests/codex_telegram_bridge_cases/test_service.py`
 
-- [ ] Написать тесты на whitelist, `/start`, `/status`, `/thread`, `/use`, plain text, unsupported media и job completion.
-- [ ] Запустить `python -m pytest tests/codex_telegram_bridge_cases/test_service.py -q` и увидеть ожидаемое падение.
-- [ ] Реализовать чистую обработку Update и отдельный polling/worker loop.
-- [ ] Повторить тест до зелёного статуса.
+- [x] Написать тесты на whitelist, `/start`, `/status`, `/thread`, `/use`, plain text,
+  unsupported media, single-instance lock, частичную доставку и job completion.
+- [x] Запустить `python -m pytest tests/codex_telegram_bridge_cases/test_service.py -q` и увидеть ожидаемое падение.
+- [x] Реализовать чистую обработку Update и отдельный polling/worker loop.
+- [x] Повторить тест до зелёного статуса.
 
 ### Task 6: Windows-установка и документация
 
@@ -78,10 +83,10 @@
 - Create: `tools/codex_telegram_bridge/uninstall-startup-task.ps1`
 - Modify: `.gitignore`
 
-- [ ] Написать русскую инструкцию: BotFather, token, Telegram ID, thread UUID, ручной запуск, автозапуск и диагностика.
-- [ ] Создать setup script, который не печатает token и не пишет его в Git.
-- [ ] Создать idempotent install/uninstall Scheduled Task scripts без прав администратора.
-- [ ] Проверить PowerShell parser для всех `.ps1` без их запуска.
+- [x] Написать русскую инструкцию: BotFather, token, Telegram ID, thread UUID, ручной запуск, автозапуск и диагностика.
+- [x] Создать setup script, который не печатает token и не пишет его в Git.
+- [x] Создать idempotent install/uninstall Scheduled Task scripts без прав администратора.
+- [x] Проверить PowerShell parser для всех `.ps1` без их запуска.
 
 ### Task 7: Общая проверка и редакторский контур
 
@@ -90,9 +95,9 @@
 - Create: `docs/telegram/release-packets/2026-07-26-telegram-codex-bridge.md`
 - Modify: `docs/telegram/content-backlog.md`
 
-- [ ] Запустить `python -m pytest tests/codex_telegram_bridge_cases -q`.
-- [ ] Запустить `python -m compileall -q tools/codex_telegram_bridge`.
-- [ ] Проверить `codex.cmd exec resume --help` и совпадение аргументов с `CodexRunner`.
-- [ ] Запустить `git diff --check` и поиск секретов в новых файлах.
-- [ ] Обновить журнал, release packet и backlog, отделив факт готовности кода от непройденной живой Telegram-проверки.
-- [ ] Создать локальный Git-коммит без push и без публикации в Telegram.
+- [x] Запустить `python -m pytest tests/codex_telegram_bridge_cases -q`.
+- [x] Запустить `python -m compileall -q tools/codex_telegram_bridge`.
+- [x] Проверить `codex.cmd exec resume --help` и совпадение аргументов с `CodexRunner`.
+- [x] Запустить `git diff --check` и поиск секретов в новых файлах.
+- [x] Обновить журнал, release packet и backlog, отделив факт готовности кода от непройденной живой Telegram-проверки.
+- [x] Создать локальный Git-коммит без push и без публикации в Telegram.
