@@ -42,5 +42,7 @@ function StudioPage() {
 }
 
 export function App() {
-  return window.location.pathname.startsWith('/studio') ? <StudioPage /> : <LandingPage />;
+  const pathname = window.location.pathname.replace(/\/+$/, '') || '/';
+
+  return pathname === '/studio' ? <StudioPage /> : <LandingPage />;
 }

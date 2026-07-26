@@ -26,12 +26,25 @@ describe('App', () => {
     expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(8);
   });
 
-  it('renders the studio placeholder at /studio', () => {
-    window.history.replaceState({}, '', '/studio');
+  it.each(['/studio', '/studio/'])('renders the studio placeholder at %s', (pathname) => {
+    window.history.replaceState({}, '', pathname);
 
     render(<App />);
 
     expect(screen.getByRole('heading', { name: 'Студия Kaigo' })).toBeInTheDocument();
     expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(0);
+  });
+
+  it('renders the landing page for paths that only start with /studio', () => {
+    window.history.replaceState({}, '', '/studio-preview');
+
+    render(<App />);
+
+    expect(
+      screen.getByRole('heading', {
+        name: 'Через 10 минут вы сможете сказать: наш бизнес использует AI',
+      }),
+    ).toBeInTheDocument();
+    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(8);
   });
 });
