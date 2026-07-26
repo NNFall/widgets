@@ -1,12 +1,13 @@
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from './App';
 
 afterEach(() => {
   cleanup();
   window.history.replaceState({}, '', '/');
+  vi.restoreAllMocks();
 });
 
 describe('App', () => {
@@ -79,9 +80,15 @@ describe('App', () => {
     expect(mobileProductLink).toBeVisible();
   });
 
-  it('closes the mobile navigation and restores focus after a link is activated', async () => {
+  it('closes mobile navigation and restores focus after deferred hash navigation', async () => {
+    let frameCallback: FrameRequestCallback | undefined;
+    const requestFrame = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      frameCallback = callback;
+      return 41;
+    });
+    const cancelFrame = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => undefined);
     const user = userEvent.setup();
-    render(<App />);
+    const { unmount } = render(<App />);
 
     const toggle = screen.getByRole('button', { name: 'Открыть меню' });
     await user.click(toggle);
@@ -93,7 +100,17 @@ describe('App', () => {
 
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(document.getElementById('mobile-navigation')).toHaveAttribute('hidden');
+    expect(requestFrame).toHaveBeenCalledOnce();
+    expect(toggle).not.toHaveFocus();
+
+    act(() => frameCallback?.(performance.now()));
     expect(toggle).toHaveFocus();
+
+    await user.click(toggle);
+    await user.click(within(screen.getByRole('navigation', { name: 'Мобильная навигация' })).getByRole('link', { name: 'Продукт' }));
+    unmount();
+
+    expect(cancelFrame).toHaveBeenCalledWith(41);
   });
 
   it.each(['/studio', '/studio/'])('renders the studio placeholder at %s', (pathname) => {

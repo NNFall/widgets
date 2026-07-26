@@ -1,5 +1,5 @@
 import { List, X } from '@phosphor-icons/react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { KaigoLogo } from '../shared/KaigoLogo';
 import { UrlComposer } from '../shared/UrlComposer';
@@ -15,10 +15,23 @@ const navItems = [
 export function HeroSection() {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuToggleRef = useRef<HTMLButtonElement>(null);
+  const focusFrameRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (focusFrameRef.current !== null) {
+      window.cancelAnimationFrame(focusFrameRef.current);
+    }
+  }, []);
 
   const closeMobileMenu = () => {
     setMenuOpen(false);
-    menuToggleRef.current?.focus({ preventScroll: true });
+    if (focusFrameRef.current !== null) {
+      window.cancelAnimationFrame(focusFrameRef.current);
+    }
+    focusFrameRef.current = window.requestAnimationFrame(() => {
+      focusFrameRef.current = null;
+      menuToggleRef.current?.focus({ preventScroll: true });
+    });
   };
 
   return (
