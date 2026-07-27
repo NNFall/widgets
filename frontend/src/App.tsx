@@ -1,16 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { LandingPage } from './landing/LandingPage';
-
-function StudioPage() {
-  return (
-    <main className="studio-placeholder">
-      <h1>Студия Kaigo</h1>
-      <p>Здесь начинается работа над вашим AI-инструментом.</p>
-      <a href="/">Вернуться на главную</a>
-    </main>
-  );
-}
+import { StudioPage } from './studio/StudioPage';
 
 function currentPathname() {
   return window.location.pathname.replace(/\/+$/, '') || '/';

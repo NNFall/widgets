@@ -113,7 +113,7 @@ describe('App', () => {
     expect(cancelFrame).toHaveBeenCalledWith(41);
   });
 
-  it.each(['/studio', '/studio/'])('renders the studio placeholder at %s', (pathname) => {
+  it.each(['/studio', '/studio/'])('renders the functional Studio at %s', (pathname) => {
     window.history.replaceState({}, '', pathname);
 
     render(<App />);
