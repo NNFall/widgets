@@ -36,6 +36,10 @@ class RunCapacityExceeded(RuntimeError):
     pass
 
 
+class VisualCandidateCapacityExceeded(RuntimeError):
+    pass
+
+
 class ArtifactNotFound(KeyError):
     pass
 

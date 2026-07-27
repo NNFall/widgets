@@ -1,5 +1,6 @@
 import asyncio
 import gc
+from time import monotonic
 from uuid import UUID
 
 import pytest
@@ -12,7 +13,7 @@ from app.saas.models import GenerationArtifact, GenerationEvent, Project
 from builder_lab.models import BuilderRequest, EngineName, RunStatus, Stage, TokenUsage
 from builder_lab import postgres_store as postgres_store_module
 from builder_lab.postgres_store import PostgresRunStore
-from builder_lab.store import ArtifactNotFound
+from builder_lab.store import ArtifactNotFound, VisualCandidateCapacityExceeded
 from builder_lab.store_protocol import RunStoreProtocol
 from tests.builder_lab_cases.test_validation import artifact
 
@@ -466,6 +467,63 @@ async def test_wait_for_events_does_not_poll_full_snapshot(
 
 
 @pytest.mark.asyncio
+async def test_wait_for_events_uses_bounded_query_load(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    store = PostgresRunStore(factory, project_id=project_id)
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+        statements: list[str] = []
+
+        def record_statement(_conn, _cursor, statement, _params, _context, _many):
+            statements.append(statement)
+
+        event.listen(engine.sync_engine, "before_cursor_execute", record_statement)
+        started = monotonic()
+        try:
+            assert await store.wait_for_events(
+                run.run_id, run.latest_sequence, timeout=0.75
+            ) == ()
+        finally:
+            elapsed = monotonic() - started
+            event.remove(
+                engine.sync_engine, "before_cursor_execute", record_statement
+            )
+
+        assert elapsed < 1.0
+        assert len(statements) <= 7
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_events_wakes_promptly_for_terminal_event(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    store = PostgresRunStore(factory, project_id=project_id)
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+        started = monotonic()
+        waiter = asyncio.create_task(
+            store.wait_for_events(
+                run.run_id, run.latest_sequence, timeout=2.0
+            )
+        )
+        await asyncio.sleep(0.06)
+        await store.mark_terminal(run.run_id, RunStatus.FAILED)
+
+        events = await waiter
+        assert monotonic() - started < 0.4
+        assert [item.event_type for item in events] == ["run.terminal_marked"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_run_locks_are_evicted_after_operations(tmp_path) -> None:
     engine, factory, project_id = await _database(tmp_path)
     store = PostgresRunStore(factory, project_id=project_id)
@@ -519,28 +577,36 @@ async def test_terminal_and_cancel_paths_clear_visual_candidates(tmp_path) -> No
 
 
 @pytest.mark.asyncio
-async def test_visual_candidate_cache_is_bounded(
+async def test_visual_candidate_capacity_rejects_without_evicting_staged_work(
     tmp_path, monkeypatch
 ) -> None:
     engine, factory, project_id = await _database(tmp_path)
     store = PostgresRunStore(factory, project_id=project_id)
-    monkeypatch.setattr(postgres_store_module, "_MAX_VISUAL_CANDIDATES", 2)
+    monkeypatch.setattr(postgres_store_module, "_MAX_VISUAL_CANDIDATES", 1)
 
     try:
         runs = [
             await store.create(
                 BuilderRequest(engine=EngineName.DIRECT, brief=f"Run {index}")
             )
-            for index in range(3)
+            for index in range(2)
         ]
-        for run in runs:
-            await store.stage_visual_candidate(
-                run.run_id, artifact(revision=1, stage=Stage.ART_DIRECTION)
-            )
+        candidate = artifact(revision=1, stage=Stage.ART_DIRECTION)
+        await store.stage_visual_candidate(runs[0].run_id, candidate)
+        restaged = artifact(
+            revision=1,
+            stage=Stage.ART_DIRECTION,
+            css=candidate.css + "\n.restaged {}",
+        )
+        await store.stage_visual_candidate(runs[0].run_id, restaged)
 
-        with pytest.raises(ArtifactNotFound):
-            await store.visual_candidate(runs[0].run_id)
-        assert await store.visual_candidate(runs[-1].run_id)
+        with pytest.raises(
+            VisualCandidateCapacityExceeded,
+            match="visual candidate capacity",
+        ):
+            await store.stage_visual_candidate(runs[1].run_id, candidate)
+
+        assert await store.commit_visual_candidate(runs[0].run_id) == restaged
     finally:
         await engine.dispose()
 

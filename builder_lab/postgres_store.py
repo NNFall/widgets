@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import secrets
-from collections import OrderedDict
 from dataclasses import replace
 from datetime import datetime, timezone
 from time import monotonic
@@ -27,7 +26,13 @@ from .models import (
     artifact_changed_fields,
     artifact_commit_message,
 )
-from .store import ArtifactNotFound, RunNotFound, RunTerminal, TERMINAL_STATUSES
+from .store import (
+    ArtifactNotFound,
+    RunNotFound,
+    RunTerminal,
+    TERMINAL_STATUSES,
+    VisualCandidateCapacityExceeded,
+)
 
 
 _RUN_LOCKS: WeakValueDictionary[tuple[int, UUID], asyncio.Lock] = (
@@ -36,6 +41,8 @@ _RUN_LOCKS: WeakValueDictionary[tuple[int, UUID], asyncio.Lock] = (
 _DRAFT_STAGED_EVENT = "artifact.draft_staged"
 _EVENT_PAGE_SIZE = 100
 _MAX_VISUAL_CANDIDATES = 100
+_POLL_INITIAL_SECONDS = 0.05
+_POLL_MAX_SECONDS = 0.25
 
 
 def _utc(value: datetime) -> datetime:
@@ -63,7 +70,7 @@ class PostgresRunStore:
         self._sessions = session_factory
         self._project_id = project_id
         self._namespace = id(session_factory.kw.get("bind"))
-        self._visual_candidates: OrderedDict[UUID, WidgetArtifact] = OrderedDict()
+        self._visual_candidates: dict[UUID, WidgetArtifact] = {}
 
     def _run_uuid(self, run_id: str) -> UUID:
         try:
@@ -565,12 +572,17 @@ class PostgresRunStore:
                     raise ValueError(
                         "visual candidate revision must exceed public revision"
                     )
+            if (
+                run_uuid not in self._visual_candidates
+                and len(self._visual_candidates) >= _MAX_VISUAL_CANDIDATES
+            ):
+                raise VisualCandidateCapacityExceeded(
+                    "visual candidate capacity reached; commit or finish "
+                    "existing staged work before staging another run"
+                )
             self._visual_candidates[run_uuid] = WidgetArtifact.from_dict(
                 artifact.to_dict()
             )
-            self._visual_candidates.move_to_end(run_uuid)
-            while len(self._visual_candidates) > _MAX_VISUAL_CANDIDATES:
-                self._visual_candidates.popitem(last=False)
 
     async def visual_candidate(self, run_id: str) -> WidgetArtifact:
         run_uuid = self._run_uuid(run_id)
@@ -727,19 +739,40 @@ class PostgresRunStore:
     async def events_after(
         self, run_id: str, sequence: int
     ) -> tuple[BuilderEvent, ...]:
+        events, _status = await self._events_and_status_after(run_id, sequence)
+        return events
+
+    async def _events_and_status_after(
+        self, run_id: str, sequence: int
+    ) -> tuple[tuple[BuilderEvent, ...], RunStatus]:
         run_uuid = self._run_uuid(run_id)
         async with self._sessions() as database:
-            await self._run(database, run_uuid)
-            result = await database.execute(
-                select(GenerationEvent)
-                .where(
-                    GenerationEvent.run_id == run_uuid,
-                    GenerationEvent.sequence > sequence,
+            rows = (
+                await database.execute(
+                    select(GenerationRun.state, GenerationEvent)
+                    .outerjoin(
+                        GenerationEvent,
+                        (GenerationEvent.run_id == GenerationRun.id)
+                        & (GenerationEvent.sequence > sequence),
+                    )
+                    .where(
+                        GenerationRun.id == run_uuid,
+                        GenerationRun.project_id == self._project_id,
+                    )
+                    .order_by(GenerationEvent.sequence)
+                    .limit(_EVENT_PAGE_SIZE)
                 )
-                .order_by(GenerationEvent.sequence)
-                .limit(_EVENT_PAGE_SIZE)
+            ).all()
+            if not rows:
+                raise RunNotFound(run_id)
+            return (
+                tuple(
+                    self._event_from_record(record)
+                    for _state, record in rows
+                    if record is not None
+                ),
+                RunStatus(rows[0][0]),
             )
-            return tuple(self._event_from_record(record) for record in result.scalars())
 
     async def wait_for_events(
         self,
@@ -749,30 +782,20 @@ class PostgresRunStore:
         timeout: float = 15.0,
     ) -> tuple[BuilderEvent, ...]:
         deadline = monotonic() + max(0.0, timeout)
+        delay = _POLL_INITIAL_SECONDS
         while True:
-            available = await self.events_after(run_id, sequence)
+            available, status = await self._events_and_status_after(
+                run_id, sequence
+            )
             if available:
                 return available
-            if await self._run_status(run_id) in TERMINAL_STATUSES:
+            if status in TERMINAL_STATUSES:
                 return ()
             remaining = deadline - monotonic()
             if remaining <= 0:
                 return ()
-            await asyncio.sleep(min(0.05, remaining))
-
-    async def _run_status(self, run_id: str) -> RunStatus:
-        run_uuid = self._run_uuid(run_id)
-        async with self._sessions() as database:
-            result = await database.execute(
-                select(GenerationRun.state).where(
-                    GenerationRun.id == run_uuid,
-                    GenerationRun.project_id == self._project_id,
-                )
-            )
-            state = result.scalar_one_or_none()
-            if state is None:
-                raise RunNotFound(run_id)
-            return RunStatus(state)
+            await asyncio.sleep(min(delay, remaining))
+            delay = min(delay * 2, _POLL_MAX_SECONDS)
 
     async def request_cancel(self, run_id: str) -> bool:
         run_uuid = self._run_uuid(run_id)

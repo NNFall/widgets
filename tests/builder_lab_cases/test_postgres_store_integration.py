@@ -130,6 +130,18 @@ async def test_postgres_15_concurrency_and_snapshot_consistency() -> None:
         assert snapshot.status is RunStatus.RUNNING
         assert snapshot.latest_sequence == 2
         assert snapshot.usage.output_tokens == 7
+
+        waiter = asyncio.create_task(
+            first.wait_for_events(
+                active_run.run_id, snapshot.latest_sequence, timeout=2.0
+            )
+        )
+        await asyncio.sleep(0.06)
+        await second.mark_terminal(active_run.run_id, RunStatus.FAILED)
+        terminal_events = await asyncio.wait_for(waiter, timeout=0.5)
+        assert [item.event_type for item in terminal_events] == [
+            "run.terminal_marked"
+        ]
     finally:
         async with first_engine.begin() as connection:
             await connection.run_sync(Base.metadata.drop_all)
