@@ -1,0 +1,211 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from dataclasses import dataclass
+from typing import Any, Mapping
+
+from google import genai
+from google.genai import types
+
+from app.models.contracts import (
+    InvalidModelResponse,
+    ModelRequest,
+    ModelResponse,
+    ModelUnavailable,
+    ModelUsage,
+    ProviderQuotaExceeded,
+    ProviderUnavailable,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class GeminiUsageCounts:
+    input_tokens: int = 0
+    candidate_tokens: int = 0
+    thinking_tokens: int = 0
+
+
+def build_http_options(base_url: str) -> types.HttpOptions:
+    """Build google-genai HTTP options while preserving proxy path prefixes."""
+
+    base = base_url.strip().rstrip("/")
+    if not base:
+        raise ValueError("Gemini base URL must not be empty")
+    api_version = "v1beta"
+    for version in ("v1beta", "v1"):
+        suffix = "/" + version
+        if base.lower().endswith(suffix):
+            base = base[: -len(suffix)]
+            api_version = version
+            break
+    return types.HttpOptions(
+        base_url=base,
+        api_version=api_version,
+        timeout=180_000,
+    )
+
+
+def gemini_usage_counts(response: Any) -> GeminiUsageCounts:
+    metadata = getattr(response, "usage_metadata", None)
+    if metadata is None:
+        return GeminiUsageCounts()
+    return GeminiUsageCounts(
+        input_tokens=_nonnegative_integer(getattr(metadata, "prompt_token_count", 0)),
+        candidate_tokens=_nonnegative_integer(
+            getattr(metadata, "candidates_token_count", 0)
+        ),
+        thinking_tokens=_nonnegative_integer(
+            getattr(metadata, "thoughts_token_count", 0)
+        ),
+    )
+
+
+def classify_gemini_error(error: Exception) -> str:
+    diagnostic = f"{type(error).__name__}: {error}".lower()
+    status = str(getattr(error, "status", "")).lower()
+    code = str(getattr(error, "code", "")).lower()
+    combined = " ".join((diagnostic, status, code))
+    if isinstance(error, (TimeoutError, asyncio.TimeoutError)) or "timeout" in combined:
+        return "generation_timeout"
+    if any(token in combined for token in ("429", "resource_exhausted", "quota")):
+        return "quota_exceeded"
+    explicit_model_error = any(
+        token in combined for token in ("model not found", "model_unavailable")
+    )
+    not_found_model_error = (
+        "404" in combined
+        and "model" in combined
+        and any(token in combined for token in ("not found", "not_found"))
+    )
+    if explicit_model_error or not_found_model_error:
+        return "model_unavailable"
+    return "provider_unavailable"
+
+
+class GeminiModelProvider:
+    """Provider-neutral adapter for the official asynchronous google-genai client."""
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        base_url: str = "https://generativelanguage.googleapis.com",
+        client: Any | None = None,
+    ) -> None:
+        if not api_key or not api_key.strip():
+            raise ValueError("Gemini API key is required")
+        self._client = client or genai.Client(
+            api_key=api_key.strip(),
+            http_options=build_http_options(base_url),
+        )
+
+    async def generate(self, request: ModelRequest, *, model: str) -> ModelResponse:
+        config_values: dict[str, Any] = {}
+        if request.temperature is not None:
+            config_values["temperature"] = request.temperature
+        if request.response_schema is not None:
+            config_values.update(
+                response_mime_type="application/json",
+                response_json_schema=dict(request.response_schema),
+                tools=[],
+            )
+        config = types.GenerateContentConfig(**config_values)
+        contents: str | list[types.Part]
+        if request.images:
+            contents = [types.Part.from_text(text=request.prompt)]
+            contents.extend(
+                types.Part.from_bytes(data=image, mime_type=_image_mime_type(image))
+                for image in request.images
+            )
+        else:
+            contents = request.prompt
+
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=model,
+                contents=contents,
+                config=config,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            raise _provider_error(error) from error
+
+        try:
+            return _normalize_response(response, structured=request.response_schema is not None)
+        except InvalidModelResponse:
+            raise
+        except (json.JSONDecodeError, TypeError, ValueError) as error:
+            raise InvalidModelResponse("Gemini returned an invalid response") from error
+
+
+def _normalize_response(response: Any, *, structured: bool) -> ModelResponse:
+    text = getattr(response, "text", None)
+    if not isinstance(text, str) or not text.strip():
+        raise InvalidModelResponse("Gemini returned an empty response")
+
+    parsed: Mapping[str, Any] | list[Any] | None = None
+    if structured:
+        sdk_parsed = getattr(response, "parsed", None)
+        if isinstance(sdk_parsed, (Mapping, list)):
+            parsed = sdk_parsed
+        else:
+            decoded = json.loads(text)
+            if not isinstance(decoded, (dict, list)):
+                raise InvalidModelResponse("Gemini structured response is not JSON data")
+            parsed = decoded
+
+    counts = gemini_usage_counts(response)
+    return ModelResponse(
+        text=text,
+        parsed=parsed,
+        usage=ModelUsage(
+            input_tokens=counts.input_tokens,
+            output_tokens=counts.candidate_tokens + counts.thinking_tokens,
+            thinking_tokens=counts.thinking_tokens,
+        ),
+        request_id=_optional_string(getattr(response, "response_id", None)),
+        raw=_raw_response(response),
+    )
+
+
+def _provider_error(error: Exception) -> Exception:
+    category = classify_gemini_error(error)
+    if category == "quota_exceeded":
+        return ProviderQuotaExceeded("Gemini quota is temporarily unavailable")
+    if category == "model_unavailable":
+        return ModelUnavailable("The selected Gemini model is unavailable")
+    if category == "generation_timeout":
+        return ProviderUnavailable("Gemini generation timed out")
+    return ProviderUnavailable("Gemini is temporarily unavailable")
+
+
+def _raw_response(response: Any) -> Mapping[str, Any] | None:
+    model_dump = getattr(response, "model_dump", None)
+    if callable(model_dump):
+        payload = model_dump(mode="json", exclude_none=True)
+        if isinstance(payload, Mapping):
+            return payload
+    model_version = _optional_string(getattr(response, "model_version", None))
+    return {"model_version": model_version} if model_version else None
+
+
+def _image_mime_type(image: bytes) -> str:
+    if image.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if image.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if image.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(image) >= 12 and image[:4] == b"RIFF" and image[8:12] == b"WEBP":
+        return "image/webp"
+    return "application/octet-stream"
+
+
+def _nonnegative_integer(value: object) -> int:
+    return value if isinstance(value, int) and value >= 0 else 0
+
+
+def _optional_string(value: object) -> str | None:
+    return str(value) if value else None

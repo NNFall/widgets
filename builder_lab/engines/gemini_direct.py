@@ -7,6 +7,12 @@ from typing import Any
 from google import genai
 from google.genai import types
 
+from app.models.providers.gemini import (
+    build_http_options,
+    classify_gemini_error,
+    gemini_usage_counts,
+)
+
 from ..model_config import generation_policy, normalize_thinking_level
 from ..models import (
     BuilderRequest,
@@ -38,24 +44,6 @@ from .base import (
     DirectionProposalResult,
     EngineResult,
 )
-
-
-def build_http_options(base_url: str) -> types.HttpOptions:
-    base = base_url.strip().rstrip("/")
-    if not base:
-        raise ValueError("Gemini base URL must not be empty")
-    api_version = "v1beta"
-    for version in ("v1beta", "v1"):
-        suffix = "/" + version
-        if base.lower().endswith(suffix):
-            base = base[: -len(suffix)]
-            api_version = version
-            break
-    return types.HttpOptions(
-        base_url=base,
-        api_version=api_version,
-        timeout=180_000,
-    )
 
 
 def build_low_thinking_config(
@@ -158,20 +146,20 @@ def build_provider_json_schema(schema: dict[str, Any], model: str) -> dict[str, 
 
 def _provider_error(exc: Exception) -> BuilderEngineError:
     diagnostic = f"{type(exc).__name__}: {exc}"
-    lower = diagnostic.lower()
-    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)) or "timeout" in lower:
+    category = classify_gemini_error(exc)
+    if category == "generation_timeout":
         return BuilderEngineError(
             "generation_timeout",
             "Gemini не завершил этап вовремя",
             diagnostic=diagnostic,
         )
-    if any(token in lower for token in ("429", "resource_exhausted", "quota")):
+    if category == "quota_exceeded":
         return BuilderEngineError(
             "quota_exceeded",
             "Квота Gemini временно исчерпана",
             diagnostic=diagnostic,
         )
-    if any(token in lower for token in ("model not found", "404 model", "model_unavailable")):
+    if category == "model_unavailable":
         return BuilderEngineError(
             "model_unavailable",
             "Выбранная модель Gemini недоступна проекту",
@@ -185,13 +173,13 @@ def _provider_error(exc: Exception) -> BuilderEngineError:
 
 
 def _usage(response: Any) -> TokenUsage:
-    metadata = getattr(response, "usage_metadata", None)
-    if metadata is None:
-        return TokenUsage()
+    counts = gemini_usage_counts(response)
+    # Builder Lab's historical TokenUsage adds thinking_tokens in total_tokens,
+    # unlike ModelUsage where thinking is already a subset of output_tokens.
     return TokenUsage(
-        prompt_tokens=int(getattr(metadata, "prompt_token_count", 0) or 0),
-        output_tokens=int(getattr(metadata, "candidates_token_count", 0) or 0),
-        thinking_tokens=int(getattr(metadata, "thoughts_token_count", 0) or 0),
+        prompt_tokens=counts.input_tokens,
+        output_tokens=counts.candidate_tokens,
+        thinking_tokens=counts.thinking_tokens,
     )
 
 
