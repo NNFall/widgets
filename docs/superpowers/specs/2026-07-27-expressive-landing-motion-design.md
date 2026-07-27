@@ -29,7 +29,7 @@ The hero has two motion programs.
 
 After the complete hold, the scene resets without a hard cut. The browser returns to the larger neutral source state, cards and widget leave, and the same story repeats in a faster 5.4 s cycle. Completed state then rests for 11 s before the next repeat. The first cinematic run must never replay at full duration during the same mount.
 
-The root scene exposes `data-motion-program`, `data-motion-phase`, `data-motion-cycle`, and `data-visible-cards` for deterministic testing and diagnostics.
+The root scene exposes `data-motion-program`, `data-motion-phase`, `data-motion-cycle`, and `data-visible-cards` for deterministic testing and diagnostics. The sequence is advanced by exactly one pending timeout; every transition cancels or replaces that timeout, so repeated cycles cannot multiply callbacks.
 
 ## Hero visual language
 
@@ -46,7 +46,7 @@ The root scene exposes `data-motion-program`, `data-motion-phase`, `data-motion-
 - The route draws as the section enters.
 - Cards enter with alternating horizontal direction and stronger spring overshoot.
 - Each artifact has an isolated loop: URL confirmation pulse, scan checklist progress, and chat typing/send response.
-- Loops only run while the section is near the viewport.
+- Loops only run while the section is near the viewport and the document is visible.
 
 ### Visual analysis
 
@@ -71,7 +71,8 @@ The root scene exposes `data-motion-program`, `data-motion-phase`, `data-motion-
 
 - Prefer `transform`, `opacity`, SVG path progress and pseudo-element gradients.
 - No perpetual `box-shadow` animation, layout-property animation, scroll-event render loops or page-wide re-render timer.
-- Infinite decorative loops pause when their section is outside the viewport where Motion primitives allow it.
+- Infinite decorative loops are guarded by one local motion-activity rule: `inViewport && documentVisible && !reducedMotion`.
+- Activity boundaries use `IntersectionObserver`/Motion visibility and `visibilitychange`; they never install raw scroll listeners.
 - Mobile uses the same narrative with smaller travel distance and no horizontal overflow.
 - Reduced-motion renders all information and controls in their final state.
 - Existing keyboard, contrast, focus, route and Studio tests remain green.

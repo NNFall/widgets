@@ -30,7 +30,7 @@ Expected: failures for missing hook, data attributes, scan label and repeat cycl
 
 - [ ] **Step 3: Implement the state machine**
 
-Use one effect with a tracked timeout set. The schedule shape is:
+Use one effect with exactly one pending timeout. Each event schedules only the next event. The schedule shape is:
 
 ```ts
 type HeroMotionProgram = 'cinematic' | 'loop';
@@ -113,7 +113,7 @@ Run: `npm test -- --run src/landing/MotionContracts.test.ts src/landing/Accessib
 
 - [ ] **Step 3: Implement a viewport-aware decorative primitive**
 
-`AmbientMotion` uses Motion `whileInView`/`useInView` and `useReducedMotion` to expose `data-motion-active`. It must not register raw scroll listeners or update page-level state.
+`AmbientMotion` uses Motion `useInView`, `useReducedMotion` and one `visibilitychange` listener to expose `data-motion-active`; active means `inViewport && documentVisible && !reducedMotion`. It must not register raw scroll listeners or update page-level state.
 
 - [ ] **Step 4: Animate How it works and Analysis**
 
