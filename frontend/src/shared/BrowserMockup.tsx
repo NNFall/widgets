@@ -5,6 +5,7 @@ type BrowserMockupProps = {
   widgetVisible: boolean;
   motionComplete: boolean;
   reducedMotion: boolean;
+  testIds?: boolean;
 };
 
 const miniatureFeatures = [
@@ -18,9 +19,10 @@ export function BrowserMockup({
   widgetVisible,
   motionComplete,
   reducedMotion,
+  testIds = true,
 }: BrowserMockupProps) {
   return (
-    <div className="browser-stack" data-testid="browser-mockup" aria-hidden="true">
+    <div className="browser-stack" data-testid={testIds ? 'browser-mockup' : undefined} aria-hidden="true">
       <div className="browser-stack__backing" aria-hidden="true" />
       <div className="browser-mockup">
         <div className="browser-mockup__chrome" aria-hidden="true">
@@ -67,7 +69,7 @@ export function BrowserMockup({
 
       <motion.div
         className="widget-preview"
-        data-testid="widget-preview"
+        data-testid={testIds ? 'widget-preview' : undefined}
         data-visible={widgetVisible ? 'true' : 'false'}
         initial={false}
         animate={{

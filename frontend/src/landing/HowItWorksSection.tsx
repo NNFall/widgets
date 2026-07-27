@@ -1,0 +1,82 @@
+import { ArrowRight, CheckCircle, ChatsCircle, LinkSimple, MagnifyingGlass } from '@phosphor-icons/react';
+
+import { Reveal } from '../shared/Reveal';
+
+const steps = [
+  {
+    number: '1',
+    title: 'Добавьте сайт',
+    copy: 'Укажите одну публичную ссылку. Анкета и технические настройки пока не нужны.',
+    Icon: LinkSimple,
+    artifact: (
+      <div className="process-artifact process-artifact--url">
+        <span>Ссылка на сайт</span>
+        <div><span>https://modernhouse.ru</span><CheckCircle size={25} weight="fill" /></div>
+        <small>Подойдёт любая публичная страница</small>
+      </div>
+    ),
+  },
+  {
+    number: '2',
+    title: 'Дождитесь анализа',
+    copy: 'Kaigo откроет страницы, изучит услуги, визуальный стиль и вопросы клиентов.',
+    Icon: MagnifyingGlass,
+    artifact: (
+      <div className="process-artifact process-artifact--scan">
+        <strong>Анализ сайта</strong>
+        {['Открываем страницы', 'Изучаем контент и услуги', 'Анализируем стиль и тон', 'Выделяем частые вопросы'].map((item, index) => (
+          <span className={index < 2 ? 'is-active' : ''} key={item}>
+            <i>{index < 2 ? <CheckCircle size={17} weight={index === 0 ? 'fill' : 'regular'} /> : null}</i>{item}
+          </span>
+        ))}
+        <img src="/assets/house-cutout.png" alt="" />
+      </div>
+    ),
+  },
+  {
+    number: '3',
+    title: 'Проверьте AI-виджет',
+    copy: 'Посмотрите диалог, уточните поведение и публикуйте только после проверки.',
+    Icon: ChatsCircle,
+    artifact: (
+      <div className="process-artifact process-artifact--chat">
+        <div><strong>AI-консультант</strong><span><i /> Готов помочь</span></div>
+        <p className="is-user">Сколько стоит строительство дома под ключ?</p>
+        <p>Стоимость зависит от площади и материалов. Подскажите желаемую площадь?</p>
+        <div className="mini-input"><span>Задайте вопрос...</span><ArrowRight size={16} weight="bold" /></div>
+      </div>
+    ),
+  },
+] as const;
+
+export function HowItWorksSection() {
+  return (
+    <section className="landing-section how-section" id="how-it-works" data-landing-section>
+      <div className="landing-shell">
+        <Reveal className="section-heading section-heading--wide">
+          <p className="section-kicker">От ссылки до результата</p>
+          <h2>Как это работает</h2>
+          <p>Три понятных шага — без анкеты, кода и технических настроек.</p>
+        </Reveal>
+
+        <div className="how-grid">
+          <svg className="how-route" viewBox="0 0 1200 130" aria-hidden="true">
+            <path d="M205 63 C315 4 350 118 460 66 S667 12 760 68 S966 115 1062 58" />
+          </svg>
+          {steps.map(({ number, title, copy, Icon, artifact }, index) => (
+            <Reveal className={`how-card how-card--${index + 1}`} delay={index * 0.1} key={number}>
+              <div className="how-card__header">
+                <span className="step-number">{number}</span>
+                <Icon size={43} weight="regular" aria-hidden="true" />
+                <h3>{title}</h3>
+              </div>
+              <p>{copy}</p>
+              {artifact}
+            </Reveal>
+          ))}
+        </div>
+        <Reveal className="section-action"><a className="primary-button" href="/studio">Создать первый вариант</a></Reveal>
+      </div>
+    </section>
+  );
+}

@@ -12,7 +12,15 @@ function isValidWebsiteUrl(value: string) {
   }
 }
 
-export function UrlComposer() {
+type UrlComposerProps = {
+  ariaLabel?: string;
+  submitAriaLabel?: string;
+};
+
+export function UrlComposer({
+  ariaLabel = 'Ссылка на действующий сайт',
+  submitAriaLabel,
+}: UrlComposerProps) {
   const inputId = useId();
   const errorId = useId();
   const [value, setValue] = useState('');
@@ -36,7 +44,7 @@ export function UrlComposer() {
   return (
     <form className="url-composer" onSubmit={handleSubmit} noValidate>
       <label className="sr-only" htmlFor={inputId}>
-        Ссылка на действующий сайт
+        {ariaLabel}
       </label>
       <div className={`url-composer__control${error ? ' url-composer__control--error' : ''}`}>
         <LinkSimple size={25} weight="regular" aria-hidden="true" />
@@ -55,7 +63,7 @@ export function UrlComposer() {
             if (error) setError('');
           }}
         />
-        <button type="submit">Создать AI-виджет</button>
+        <button type="submit" aria-label={submitAriaLabel}>Создать AI-виджет</button>
       </div>
       <p className="url-composer__error" id={errorId} role={error ? 'alert' : undefined}>
         {error}
