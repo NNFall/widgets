@@ -57,6 +57,81 @@ curl -k https://kaigo.space/api/health
 curl -k https://kaigo.space/api/health/ai
 ```
 
+## Лендинг и Studio
+
+Статические файлы в production хранятся как неизменяемые релизы:
+
+```text
+/var/www/kaigo-marketing/releases/<release-id>/
+/var/www/kaigo-marketing/current -> /var/www/kaigo-marketing/releases/<release-id>
+```
+
+Контракт маршрутов находится в
+`deploy/nginx/kaigo-marketing-site.conf`. Это фрагмент существующего блока
+`server`, а не полный виртуальный хост. При первой интеграции:
+
+1. Сохранить все существующие exact/prefix location, включая `/real-time/`,
+   `/builder-demo/`, `/builder-comparison/` и маршруты ACME/сертификатов.
+2. Заменить только существующий fallback `location /` и существующий блок
+   `/builder/` соответствующими блоками из фрагмента.
+3. Добавить exact-блоки `/`, `/studio`, `/studio/` и `/assets/`.
+4. Подтвердить, что `/etc/nginx/.htpasswd-kaigo-builder` — тот же файл паролей,
+   который уже используется для `/builder/`. Studio не должна стать публичной.
+5. Выполнить `nginx -t` до reload nginx.
+
+Deploy-скрипт собирает frontend, копирует его в новый каталог релиза, проверяет
+nginx, атомарно переключает `current`, повторно проверяет nginx и только затем
+выполняет reload:
+
+```bash
+cd /root/ai_project
+bash scripts/deploy_marketing_site.sh "$(git rev-parse HEAD)"
+```
+
+`release-id` неизменяем: повторный deploy существующего ID завершается ошибкой
+и не перезаписывает файлы. Если проверка или reload падает после переключения,
+скрипт восстанавливает предыдущий symlink `current` и пытается перезагрузить
+nginx с прежним релизом. Неудачный релиз остаётся без активной ссылки для
+диагностики.
+
+Проверка маршрутов после deploy:
+
+```bash
+curl -fsS https://kaigo.space/ >/dev/null
+curl -fsSI https://kaigo.space/assets/ACTUAL_HASHED_ASSET.js
+test "$(curl -sS -o /dev/null -w '%{http_code}' https://kaigo.space/studio)" = 401
+test "$(curl -sS -o /dev/null -w '%{http_code}' https://kaigo.space/builder/)" = 401
+curl -fsS -u "$KAIGO_BUILDER_USER:$KAIGO_BUILDER_PASSWORD" \
+  https://kaigo.space/studio >/dev/null
+curl -fsS -u "$KAIGO_BUILDER_USER:$KAIGO_BUILDER_PASSWORD" \
+  https://kaigo.space/builder/ >/dev/null
+curl -fsS https://kaigo.space/api/health
+curl -fsS https://kaigo.space/w/demka >/dev/null
+```
+
+Ожидаемая граница авторизации:
+
+- `/` и `/assets/*` публичны;
+- файлы с Vite-hash в имени получают `immutable`, а stable-name assets —
+  `no-cache`, чтобы новый релиз не оставался со старым изображением;
+- `/studio`, `/studio/` и `/builder/` используют одинаковые учётные данные
+  Basic Auth;
+- существующие `/w/*`, `/client/*`, `/admin/*`, `/api/*` и другие более
+  специфичные location сохраняют прежние обработчики.
+
+Для ручного rollback атомарно направить `current` на заведомо рабочий релиз
+через временный symlink, затем проверить конфигурацию и выполнить reload:
+
+```bash
+deploy_root=/var/www/kaigo-marketing
+release_id=<known-good-release-id>
+rollback_link="$deploy_root/.current.rollback.$$"
+ln -s "$deploy_root/releases/$release_id" "$rollback_link"
+mv -Tf "$rollback_link" "$deploy_root/current"
+nginx -t
+systemctl reload nginx
+```
+
 `/real-time/` is intentionally handled as an exact nginx location that proxies to `/index.html`; otherwise the realtime aiohttp static handler returns a directory listing.
 
 Text widget smoke test:
