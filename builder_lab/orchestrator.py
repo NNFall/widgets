@@ -28,7 +28,8 @@ from .models import (
     artifact_commit_message,
     stage_display_name,
 )
-from .store import RunStore, RunTerminal, TERMINAL_STATUSES
+from .store import RunTerminal, TERMINAL_STATUSES
+from .store_protocol import RunStoreProtocol
 from .validation import (
     issue_fingerprint,
     strip_reserved_runtime_attributes,
@@ -60,7 +61,7 @@ class BuilderOrchestrator:
     def __init__(
         self,
         *,
-        store: RunStore,
+        store: RunStoreProtocol,
         engine_factories: dict[EngineName, Callable[[], BuilderEngine]],
         visual_audit_factory: Callable[[], Any] | None = None,
         visual_critic_factory: Callable[[], Any] | None = None,
