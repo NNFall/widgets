@@ -35,11 +35,11 @@ async function revealLanding(page: Page) {
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
 }
 
-async function expectMinimumTarget(locator: Locator, minimum = 44) {
+async function expectMinimumTarget(locator: Locator, minimum = 44, label = 'interactive target') {
   const box = await locator.boundingBox();
-  expect(box, 'interactive target must have a rendered box').not.toBeNull();
-  expect(box?.width ?? 0).toBeGreaterThanOrEqual(minimum);
-  expect(box?.height ?? 0).toBeGreaterThanOrEqual(minimum);
+  expect(box, `${label} must have a rendered box`).not.toBeNull();
+  expect.soft(box?.width ?? 0, `${label} width`).toBeGreaterThanOrEqual(minimum);
+  expect.soft(box?.height ?? 0, `${label} height`).toBeGreaterThanOrEqual(minimum);
 }
 
 async function expectCompactFirstScreen(page: Page) {
@@ -97,6 +97,19 @@ async function expectCompactFirstScreen(page: Page) {
   expect(headerBox, `site header must have a rendered box at ${viewportLabel}`).not.toBeNull();
   expect.soft(headerBox?.height ?? Number.POSITIVE_INFINITY, `header height at ${viewportLabel}`)
     .toBeLessThanOrEqual(96);
+  await expectMinimumTarget(page.locator('.site-header__logo'), 44, `header logo at ${viewportLabel}`);
+
+  const otherHeaderTargets = page.locator(
+    '.site-header a:not(.site-header__logo):visible, .site-header button:visible',
+  );
+  const otherHeaderTargetCount = await otherHeaderTargets.count();
+  for (let index = 0; index < otherHeaderTargetCount; index += 1) {
+    await expectMinimumTarget(
+      otherHeaderTargets.nth(index),
+      44,
+      `visible header target ${index + 1} at ${viewportLabel}`,
+    );
+  }
 
   const heroHeadingFontSize = await page.locator('.hero-copy h1').evaluate((element) =>
     Number.parseFloat(getComputedStyle(element).fontSize),
