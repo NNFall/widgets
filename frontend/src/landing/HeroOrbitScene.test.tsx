@@ -53,26 +53,47 @@ describe('HeroOrbitScene', () => {
     vi.useRealTimers();
   });
 
-  it('runs the source, scanning and complete phases on the agreed timeline', () => {
+  it('exposes the motion state and reveals cards sequentially on the cinematic timeline', () => {
     render(<App />);
 
     const scene = screen.getByTestId('hero-scene');
+    const cards = screen.getAllByTestId('process-card');
+    expect(scene).toHaveAttribute('data-motion-program', 'cinematic');
     expect(scene).toHaveAttribute('data-motion-phase', 'source');
+    expect(scene).toHaveAttribute('data-motion-cycle', '0');
+    expect(scene).toHaveAttribute('data-visible-cards', '0');
+    expect(cards.map((card) => card.getAttribute('data-visible'))).toEqual(['false', 'false', 'false']);
 
-    act(() => vi.advanceTimersByTime(1_800));
+    act(() => vi.advanceTimersByTime(1_200));
     expect(scene).toHaveAttribute('data-motion-phase', 'scanning');
 
-    act(() => vi.advanceTimersByTime(5_600));
+    act(() => vi.advanceTimersByTime(1_200));
+    expect(scene).toHaveAttribute('data-visible-cards', '1');
+    expect(cards.map((card) => card.getAttribute('data-visible'))).toEqual(['true', 'false', 'false']);
+
+    act(() => vi.advanceTimersByTime(1_600));
+    expect(scene).toHaveAttribute('data-visible-cards', '2');
+
+    act(() => vi.advanceTimersByTime(1_600));
+    expect(scene).toHaveAttribute('data-visible-cards', '3');
+
+    act(() => vi.advanceTimersByTime(1_900));
+    expect(scene).toHaveAttribute('data-motion-phase', 'widget');
+    expect(screen.getByTestId('widget-preview')).toHaveAttribute('data-visible', 'true');
+
+    act(() => vi.advanceTimersByTime(900));
     expect(scene).toHaveAttribute('data-motion-phase', 'complete');
   });
 
-  it('reveals three process cards and the completed widget', () => {
+  it('renders a visible scanner label while preserving the scene description', () => {
     render(<App />);
 
-    act(() => vi.advanceTimersByTime(7_400));
-
-    expect(screen.getAllByTestId('process-card')).toHaveLength(3);
-    expect(screen.getByTestId('widget-preview')).toHaveAttribute('data-visible', 'true');
+    act(() => vi.advanceTimersByTime(1_200));
+    expect(screen.getByText('Сканирование…')).toBeVisible();
+    expect(screen.getByTestId('hero-scene')).toHaveAttribute(
+      'aria-describedby',
+      'hero-scene-description',
+    );
   });
 
   it('skips the timeline when reduced motion is requested', () => {
@@ -80,8 +101,13 @@ describe('HeroOrbitScene', () => {
 
     render(<App />);
 
-    expect(screen.getByTestId('hero-scene')).toHaveAttribute('data-motion-phase', 'complete');
+    const scene = screen.getByTestId('hero-scene');
+    expect(scene).toHaveAttribute('data-motion-program', 'cinematic');
+    expect(scene).toHaveAttribute('data-motion-phase', 'complete');
+    expect(scene).toHaveAttribute('data-visible-cards', '3');
+    expect(screen.getAllByTestId('process-card').every((card) => card.getAttribute('data-visible') === 'true')).toBe(true);
     expect(screen.getByTestId('widget-preview')).toHaveAttribute('data-visible', 'true');
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('moves to complete when reduced motion changes and removes its listener on cleanup', () => {
@@ -92,12 +118,15 @@ describe('HeroOrbitScene', () => {
 
     act(() => reducedMotionController.setMatches(true));
     expect(screen.getByTestId('hero-scene')).toHaveAttribute('data-motion-phase', 'complete');
+    expect(screen.getByTestId('hero-scene')).toHaveAttribute('data-visible-cards', '3');
+    expect(vi.getTimerCount()).toBe(0);
 
     act(() => vi.advanceTimersByTime(8_000));
     expect(screen.getByTestId('hero-scene')).toHaveAttribute('data-motion-phase', 'complete');
 
     unmount();
     expect(reducedMotionController.listenerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('locks the desktop headline width and pulses through transform and opacity only', () => {

@@ -1,27 +1,8 @@
 import { ChatsCircle, LinkSimple, Scan } from '@phosphor-icons/react';
 import { motion } from 'motion/react';
-import { useEffect, useState } from 'react';
 
 import { BrowserMockup } from '../shared/BrowserMockup';
-
-type MotionPhase = 'source' | 'scanning' | 'transforming' | 'cards' | 'widget' | 'complete';
-
-const phaseTimeline: Array<[MotionPhase, number]> = [
-  ['scanning', 1_800],
-  ['transforming', 4_400],
-  ['cards', 4_900],
-  ['widget', 6_000],
-  ['complete', 7_400],
-];
-
-const phaseOrder: Record<MotionPhase, number> = {
-  source: 0,
-  scanning: 1,
-  transforming: 2,
-  cards: 3,
-  widget: 4,
-  complete: 5,
-};
+import { useHeroMotionCycle } from './useHeroMotionCycle';
 
 const processCards = [
   {
@@ -44,59 +25,20 @@ const processCards = [
   },
 ] as const;
 
-function reducedMotionRequested() {
-  return typeof window !== 'undefined'
-    && typeof window.matchMedia === 'function'
-    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-}
-
-function useReducedMotionPreference() {
-  const [reducedMotion, setReducedMotion] = useState(reducedMotionRequested);
-
-  useEffect(() => {
-    if (typeof window.matchMedia !== 'function') return;
-
-    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const handleChange = (event: MediaQueryListEvent) => setReducedMotion(event.matches);
-
-    setReducedMotion(mediaQuery.matches);
-    mediaQuery.addEventListener('change', handleChange);
-    return () => mediaQuery.removeEventListener('change', handleChange);
-  }, []);
-
-  return reducedMotion;
-}
-
 export function HeroOrbitScene() {
-  const reducedMotion = useReducedMotionPreference();
-  const [phase, setPhase] = useState<MotionPhase>(() =>
-    reducedMotionRequested() ? 'complete' : 'source',
-  );
-
-  useEffect(() => {
-    if (reducedMotion) {
-      setPhase('complete');
-      return;
-    }
-
-    if (phase === 'complete') return;
-
-    const timers = phaseTimeline.map(([nextPhase, delay]) =>
-      window.setTimeout(() => setPhase(nextPhase), delay),
-    );
-
-    return () => timers.forEach(window.clearTimeout);
-  }, [reducedMotion]);
-
-  const cardsVisible = phaseOrder[phase] >= phaseOrder.cards;
-  const widgetVisible = phaseOrder[phase] >= phaseOrder.widget;
+  const { program, phase, cycle, visibleCards, reducedMotion } = useHeroMotionCycle();
+  const cardsVisible = visibleCards > 0;
+  const widgetVisible = phase === 'widget' || phase === 'complete';
   const motionComplete = phase === 'complete';
 
   return (
     <div
       className="hero-scene"
       data-testid="hero-scene"
+      data-motion-program={program}
       data-motion-phase={phase}
+      data-motion-cycle={cycle}
+      data-visible-cards={visibleCards}
       aria-describedby="hero-scene-description"
     >
       <p className="sr-only" id="hero-scene-description">
@@ -121,18 +63,18 @@ export function HeroOrbitScene() {
           <motion.article
             className={`process-card process-card--${index + 1}`}
             data-testid="process-card"
-            data-visible={cardsVisible ? 'true' : 'false'}
+            data-visible={index < visibleCards ? 'true' : 'false'}
             key={number}
             initial={false}
             animate={{
-              opacity: cardsVisible ? 1 : 0,
-              y: motionComplete && !reducedMotion ? [0, -4, 0] : cardsVisible ? 0 : 18,
-              scale: cardsVisible ? 1 : 0.94,
+              opacity: index < visibleCards ? 1 : 0,
+              y: motionComplete && !reducedMotion ? [0, -4, 0] : index < visibleCards ? 0 : 18,
+              scale: index < visibleCards ? 1 : 0.94,
             }}
             transition={
               motionComplete && !reducedMotion
                 ? { duration: 5.2 + index * 0.35, repeat: Infinity, ease: 'easeInOut' }
-                : { type: 'spring', stiffness: 100, damping: 18, delay: cardsVisible ? index * 0.3 : 0 }
+                : { type: 'spring', stiffness: 100, damping: 18, delay: index < visibleCards ? index * 0.3 : 0 }
             }
           >
             <span className="process-card__number">{number}</span>
@@ -152,17 +94,21 @@ export function HeroOrbitScene() {
           motionComplete={motionComplete}
           reducedMotion={reducedMotion}
         />
-        <motion.div
-          className="hero-browser-stage__scanner"
-          initial={false}
-          animate={
-            phase === 'scanning'
-              ? { opacity: [0, 1, 1, 0], y: ['0%', '520%'] }
-              : { opacity: 0, y: '0%' }
-          }
-          transition={{ duration: phase === 'scanning' ? 2.6 : 0.15, ease: 'easeInOut' }}
-          aria-hidden="true"
-        />
+        <div className="hero-browser-stage__scanner-markup" aria-hidden="true">
+          <span className="hero-browser-stage__scanner-label" hidden={phase !== 'scanning'}>
+            Сканирование…
+          </span>
+          <motion.div
+            className="hero-browser-stage__scanner"
+            initial={false}
+            animate={
+              phase === 'scanning'
+                ? { opacity: [0, 1, 1, 0], y: ['0%', '520%'] }
+                : { opacity: 0, y: '0%' }
+            }
+            transition={{ duration: phase === 'scanning' ? 2.6 : 0.15, ease: 'easeInOut' }}
+          />
+        </div>
         <motion.div
           className="hero-browser-stage__widget-label"
           initial={false}
