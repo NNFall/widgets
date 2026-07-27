@@ -9,8 +9,11 @@ import {
 } from './CapabilitiesSection';
 import heroOrbitSceneSource from './HeroOrbitScene.tsx?raw';
 import analysisSectionSource from './AnalysisSection.tsx?raw';
+import faqSectionSource from './FaqSection.tsx?raw';
+import finalCtaSectionSource from './FinalCtaSection.tsx?raw';
 import howItWorksSectionSource from './HowItWorksSection.tsx?raw';
 import { HOW_CARD_STAGGER_SECONDS } from './HowItWorksSection';
+import studioSectionSource from './StudioSection.tsx?raw';
 
 describe('landing motion contracts', () => {
   it('staggers process cards at 180ms while preserving the capability cadence', () => {
@@ -177,5 +180,78 @@ describe('landing motion contracts', () => {
     expect(heroOrbitSceneSource).toMatch(
       /motionComplete\s*&&\s*!reducedMotion[\s\S]*?index\s*===\s*cycle\s*%\s*processCards\.length[\s\S]*?\?\s*'rest'\s*:\s*'settled'/,
     );
+  });
+
+  it('keeps the landing Studio story decorative, activity-gated, and state-safe', () => {
+    expect(studioSectionSource).toContain('useMotionActivity<HTMLElement>()');
+    expect(studioSectionSource).toContain("data-motion-active={active ? 'true' : 'false'}");
+    expect(studioSectionSource).toContain('className="studio-demo__ambient-cursor"');
+    expect(studioSectionSource).toContain('className="studio-demo__preview-wipe"');
+    expect(studioSectionSource).toContain('className="studio-demo__version-confirmation"');
+    expect(studioSectionSource).not.toContain('setTimeout');
+    expect(studioSectionSource).not.toContain('setInterval');
+    expect(studioSectionSource).not.toContain('useEffect');
+
+    [
+      'studio-cursor-cycle',
+      'studio-cursor-click',
+      'studio-apply-press',
+      'studio-version-confirmation',
+      'studio-preview-refresh',
+    ].forEach((name) => {
+      expect(stylesSource).toMatch(
+        new RegExp(`\\[data-motion-active='true'\\][^{}]*\\{[^}]*animation:[^;]*${name}[^;]*infinite`, 's'),
+      );
+    });
+  });
+
+  it('gives FAQ panels a real hidden spring start and alternates item entrances', () => {
+    expect(faqSectionSource).toContain("initial={reducedMotion ? false : { height: 0, opacity: 0 }}");
+    expect(faqSectionSource).toContain("animate={{ height: 'auto', opacity: 1 }}");
+    expect(faqSectionSource).toContain("exit={reducedMotion ? undefined : { height: 0, opacity: 0 }}");
+    expect(faqSectionSource).toContain("index % 2 === 0 ? 'fromLeft' : 'fromRight'");
+    expect(faqSectionSource).toContain('delay={0.06 + index * 0.09}');
+    expect(faqSectionSource).toContain('aria-expanded={open}');
+    expect(faqSectionSource).toContain('aria-controls={panelId}');
+    expect(faqSectionSource).not.toContain('setTimeout');
+    expect(faqSectionSource).not.toContain('setInterval');
+  });
+
+  it('stages the final CTA once from one parent and leaves the footer outside it', () => {
+    expect(finalCtaSectionSource).toContain('className="landing-shell final-cta-content final-cta-motion"');
+    expect(finalCtaSectionSource).toContain("initial={reducedMotion ? false : 'hidden'}");
+    expect(finalCtaSectionSource).toContain('whileInView="visible"');
+    expect(finalCtaSectionSource).toContain('viewport={{ once: true, amount: 0.18 }}');
+    expect(finalCtaSectionSource).toContain('className="final-site-card__motion final-site-card__motion--before"');
+    expect(finalCtaSectionSource).toContain('className="final-site-card__motion final-site-card__motion--after"');
+    expect(finalCtaSectionSource).toContain('className="mini-site__widget-halo"');
+
+    const footerStart = finalCtaSectionSource.indexOf('<footer className="site-footer">');
+    const motionEnd = finalCtaSectionSource.lastIndexOf('</motion.div>', footerStart);
+    expect(motionEnd).toBeGreaterThan(-1);
+    expect(footerStart).toBeGreaterThan(motionEnd);
+  });
+
+  it('uses transform/opacity-only Studio keyframes and a clean reduced-motion final state', () => {
+    [
+      'studio-cursor-cycle',
+      'studio-cursor-click',
+      'studio-apply-press',
+      'studio-version-confirmation',
+      'studio-preview-refresh',
+    ].forEach((name) => {
+      const body = stylesSource.match(new RegExp(`@keyframes ${name}\\s*\\{([\\s\\S]*?)\\n\\}`))?.[1];
+      expect(body, `missing @keyframes ${name}`).toBeDefined();
+      expect(body).toMatch(/(?:transform|opacity):/);
+      expect(body).not.toMatch(/(?:top|right|bottom|left|width|height|filter|box-shadow):/);
+    });
+
+    const reducedMotionStart = stylesSource.indexOf('@media (prefers-reduced-motion: reduce)');
+    const nextMediaQuery = stylesSource.indexOf('@media (max-width: 1280px)', reducedMotionStart);
+    const reducedMotionRules = stylesSource.slice(reducedMotionStart, nextMediaQuery);
+    expect(reducedMotionRules).toContain('.studio-demo__ambient-cursor');
+    expect(reducedMotionRules).toContain('.studio-demo__preview-wipe');
+    expect(reducedMotionRules).toContain('.mini-site__widget-halo');
+    expect(reducedMotionRules).toContain('animation: none !important;');
   });
 });

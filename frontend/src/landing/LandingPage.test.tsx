@@ -37,9 +37,12 @@ describe('LandingPage sections', () => {
 
     const timeQuestion = screen.getByRole('button', { name: /Сколько времени/ });
     expect(timeQuestion).toHaveAttribute('aria-expanded', 'false');
+    expect(timeQuestion).toHaveAttribute('aria-controls', 'faq-answer-1');
+    expect(document.getElementById('faq-answer-1')).not.toBeInTheDocument();
 
     await user.click(timeQuestion);
     expect(timeQuestion).toHaveAttribute('aria-expanded', 'true');
+    expect(document.getElementById('faq-answer-1')).toBeInTheDocument();
     expect(screen.getByText(/первую версию/i)).toBeVisible();
 
     await user.click(timeQuestion);

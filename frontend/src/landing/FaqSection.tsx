@@ -45,38 +45,45 @@ export function FaqSection() {
           </div>
         </Reveal>
 
-        <Reveal className="faq-list" delay={0.08}>
+        <div className="faq-list">
           {questions.map(({ question, answer }, index) => {
             const open = openIndex === index;
             const panelId = `faq-answer-${index}`;
             return (
-              <article className="faq-item" data-open={open ? 'true' : 'false'} key={question}>
-                <button
-                  type="button"
-                  aria-expanded={open}
-                  aria-controls={panelId}
-                  onClick={() => setOpenIndex(open ? -1 : index)}
-                >
-                  <span>{index + 1}</span><strong>{question}</strong><CaretDown size={25} weight="bold" aria-hidden="true" />
-                </button>
-                <AnimatePresence initial={false}>
-                  {open ? (
-                    <motion.div
-                      className="faq-item__answer"
-                      id={panelId}
-                      initial={false}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      exit={reducedMotion ? undefined : { height: 0, opacity: 0 }}
-                      transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 120, damping: 22 }}
-                    >
-                      <p>{answer}</p>{index === 0 ? <LinkSimple size={45} weight="regular" aria-hidden="true" /> : <ArrowRight size={34} aria-hidden="true" />}
-                    </motion.div>
-                  ) : null}
-                </AnimatePresence>
-              </article>
+              <Reveal
+                className="faq-item__entrance"
+                delay={0.06 + index * 0.09}
+                key={question}
+                preset={index % 2 === 0 ? 'fromLeft' : 'fromRight'}
+              >
+                <article className="faq-item" data-open={open ? 'true' : 'false'}>
+                  <button
+                    type="button"
+                    aria-expanded={open}
+                    aria-controls={panelId}
+                    onClick={() => setOpenIndex(open ? -1 : index)}
+                  >
+                    <span>{index + 1}</span><strong>{question}</strong><CaretDown size={25} weight="bold" aria-hidden="true" />
+                  </button>
+                  <AnimatePresence initial={false}>
+                    {open ? (
+                      <motion.div
+                        className="faq-item__answer"
+                        id={panelId}
+                        initial={reducedMotion ? false : { height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={reducedMotion ? undefined : { height: 0, opacity: 0 }}
+                        transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 132, damping: 20, mass: 0.82 }}
+                      >
+                        <p>{answer}</p>{index === 0 ? <LinkSimple size={45} weight="regular" aria-hidden="true" /> : <ArrowRight size={34} aria-hidden="true" />}
+                      </motion.div>
+                    ) : null}
+                  </AnimatePresence>
+                </article>
+              </Reveal>
             );
           })}
-        </Reveal>
+        </div>
       </div>
     </section>
   );

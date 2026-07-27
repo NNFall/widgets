@@ -1,7 +1,8 @@
 import { Code, Eye, ShieldCheck } from '@phosphor-icons/react';
+import { motion, useReducedMotion } from 'motion/react';
+import type { Variants } from 'motion/react';
 
 import { KaigoLogo } from '../shared/KaigoLogo';
-import { Reveal } from '../shared/Reveal';
 import { UrlComposer } from '../shared/UrlComposer';
 
 const guarantees = [
@@ -10,29 +11,95 @@ const guarantees = [
   { label: 'Публикация после проверки', Icon: ShieldCheck },
 ] as const;
 
+const finalCtaSequence = {
+  hidden: {},
+  visible: { transition: { delayChildren: 0.08, staggerChildren: 0.15 } },
+} satisfies Variants;
+
+const finalCopyVariants = {
+  hidden: { opacity: 0, y: 24 },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.64, ease: [0.16, 1, 0.3, 1] } },
+} satisfies Variants;
+
+const beforeCardVariants = {
+  hidden: { opacity: 0.36, x: 'var(--final-card-travel)', y: 16, scale: 0.96 },
+  visible: { opacity: 0.72, x: 0, y: 0, scale: 1, transition: { type: 'spring', stiffness: 92, damping: 16 } },
+} satisfies Variants;
+
+const afterCardVariants = {
+  hidden: { opacity: 0.38, x: 'calc(0px - var(--final-card-travel))', y: 18, scale: 0.95 },
+  visible: { opacity: 1, x: 0, y: 0, scale: 1, transition: { type: 'spring', stiffness: 104, damping: 15, delay: 0.08 } },
+} satisfies Variants;
+
+const composerVariants = {
+  hidden: { opacity: 0, y: 32, scale: 0.975 },
+  visible: { opacity: 1, y: 0, scale: 1, transition: { type: 'spring', stiffness: 112, damping: 17 } },
+} satisfies Variants;
+
+const guaranteeRowVariants = {
+  hidden: {},
+  visible: { transition: { staggerChildren: 0.09 } },
+} satisfies Variants;
+
+const guaranteeVariants = {
+  hidden: { opacity: 0, y: 14 },
+  visible: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 120, damping: 18 } },
+} satisfies Variants;
+
+const finalWidgetVariants = {
+  hidden: { opacity: 0, y: 24, scale: 0.62 },
+  visible: { opacity: 1, y: 0, scale: 1, transition: { type: 'spring', stiffness: 190, damping: 13, delay: 0.48 } },
+} satisfies Variants;
+
+const finalWidgetHaloVariants = {
+  hidden: { opacity: 0, scale: 0.72 },
+  visible: { opacity: [0, 0.92, 0], scale: [0.72, 1.08, 1.22], transition: { duration: 1.05, delay: 0.46 } },
+} satisfies Variants;
+
 export function FinalCtaSection() {
+  const reducedMotion = Boolean(useReducedMotion());
+
   return (
     <section className="landing-section final-cta-section" id="final-cta" data-landing-section>
-      <div className="landing-shell final-cta-content">
-        <Reveal className="final-cta-copy">
+      <motion.div
+        className="landing-shell final-cta-content final-cta-motion"
+        initial={reducedMotion ? false : 'hidden'}
+        animate={reducedMotion ? 'visible' : undefined}
+        whileInView="visible"
+        viewport={{ once: true, amount: 0.18 }}
+        variants={finalCtaSequence}
+      >
+        <motion.div className="final-cta-copy" variants={finalCopyVariants}>
           <p className="section-kicker">Можно начать прямо сейчас</p>
           <h2>Через 10 минут ваш бизнес<br />сможет использовать AI</h2>
           <p>Вставьте сайт, получите первый вариант и решите, что изменить перед публикацией.</p>
-        </Reveal>
-        <Reveal className="final-cta-visual" delay={0.08}>
-          <div className="final-site-card final-site-card--before"><MiniSite after={false} /></div>
-          <div className="final-site-card final-site-card--after"><MiniSite after /></div>
-        </Reveal>
-        <Reveal className="final-composer" delay={0.12}>
+        </motion.div>
+        <motion.div className="final-cta-visual" variants={finalCopyVariants}>
+          <motion.div
+            className="final-site-card__motion final-site-card__motion--before"
+            variants={beforeCardVariants}
+          >
+            <div className="final-site-card final-site-card--before"><MiniSite after={false} /></div>
+          </motion.div>
+          <motion.div
+            className="final-site-card__motion final-site-card__motion--after"
+            variants={afterCardVariants}
+          >
+            <div className="final-site-card final-site-card--after"><MiniSite after /></div>
+          </motion.div>
+        </motion.div>
+        <motion.div className="final-composer" variants={composerVariants}>
           <UrlComposer
             ariaLabel="Ссылка на сайт — финальная форма"
             submitAriaLabel="Создать AI-виджет по нижней форме"
           />
-        </Reveal>
-        <Reveal className="guarantee-row">
-          {guarantees.map(({ label, Icon }) => <span key={label}><Icon size={30} weight="regular" />{label}</span>)}
-        </Reveal>
-      </div>
+        </motion.div>
+        <motion.div className="guarantee-row" variants={guaranteeRowVariants}>
+          {guarantees.map(({ label, Icon }) => (
+            <motion.span key={label} variants={guaranteeVariants}><Icon size={30} weight="regular" />{label}</motion.span>
+          ))}
+        </motion.div>
+      </motion.div>
       <footer className="site-footer">
         <div className="landing-shell site-footer__inner">
           <div><KaigoLogo /><p>Персональные AI-виджеты<br />для бизнеса.</p></div>
@@ -48,11 +115,16 @@ export function FinalCtaSection() {
 
 function MiniSite({ after }: { after: boolean }) {
   return (
-    <div className="mini-site" aria-hidden="true">
+    <div className={`mini-site mini-site--${after ? 'after' : 'before'}`} aria-hidden="true">
       <div className="mini-site__chrome"><i /><i /><i /></div>
       <div className="mini-site__nav"><strong>Modern House</strong><span>Проекты</span><span>Услуги</span><span>Контакты</span></div>
       <div className="mini-site__main"><p>Строим дома,<br />в которых хочется<br />жить</p><img src="/assets/house-cutout.png" alt="" /></div>
-      {after ? <div className="mini-site__widget"><i />Я изучил ваш сайт.<br />Чем помочь?<b>›</b></div> : null}
+      {after ? (
+        <motion.div className="mini-site__widget-shell" variants={finalWidgetVariants}>
+          <motion.span className="mini-site__widget-halo" variants={finalWidgetHaloVariants} />
+          <div className="mini-site__widget"><i />Я изучил ваш сайт.<br />Чем помочь?<b>›</b></div>
+        </motion.div>
+      ) : null}
     </div>
   );
 }
