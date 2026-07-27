@@ -3,11 +3,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import User
-from app.saas.models import Project
+from app.saas.models import GenerationRun, Project
 
 
 class ProjectRepository:
@@ -90,6 +90,10 @@ class ProjectRepository:
                 Project.id == project_id,
                 Project.tenant_id == tenant_id,
                 Project.owner_user_id == owner_user_id,
+                exists().where(
+                    GenerationRun.id == run_id,
+                    GenerationRun.project_id == project_id,
+                ),
             )
             .values(
                 active_run_id=run_id,

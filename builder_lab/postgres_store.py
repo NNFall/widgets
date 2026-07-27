@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 import secrets
+from collections import OrderedDict
 from dataclasses import replace
 from datetime import datetime, timezone
 from time import monotonic
 from uuid import UUID, uuid4
+from weakref import WeakValueDictionary
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.saas.models import GenerationArtifact, GenerationEvent, GenerationRun, Project
@@ -28,8 +30,12 @@ from .models import (
 from .store import ArtifactNotFound, RunNotFound, RunTerminal, TERMINAL_STATUSES
 
 
-_RUN_LOCKS: dict[tuple[int, UUID], asyncio.Lock] = {}
+_RUN_LOCKS: WeakValueDictionary[tuple[int, UUID], asyncio.Lock] = (
+    WeakValueDictionary()
+)
 _DRAFT_STAGED_EVENT = "artifact.draft_staged"
+_EVENT_PAGE_SIZE = 100
+_MAX_VISUAL_CANDIDATES = 100
 
 
 def _utc(value: datetime) -> datetime:
@@ -57,7 +63,7 @@ class PostgresRunStore:
         self._sessions = session_factory
         self._project_id = project_id
         self._namespace = id(session_factory.kw.get("bind"))
-        self._visual_candidates: dict[UUID, WidgetArtifact] = {}
+        self._visual_candidates: OrderedDict[UUID, WidgetArtifact] = OrderedDict()
 
     def _run_uuid(self, run_id: str) -> UUID:
         try:
@@ -66,7 +72,12 @@ class PostgresRunStore:
             raise RunNotFound(run_id) from exc
 
     def _lock(self, run_id: UUID) -> asyncio.Lock:
-        return _RUN_LOCKS.setdefault((self._namespace, run_id), asyncio.Lock())
+        key = (self._namespace, run_id)
+        lock = _RUN_LOCKS.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _RUN_LOCKS[key] = lock
+        return lock
 
     async def _locked_run(
         self, database: AsyncSession, run_id: UUID
@@ -91,6 +102,21 @@ class PostgresRunStore:
         if record is None or record.project_id != self._project_id:
             raise RunNotFound(str(run_id))
         return record
+
+    async def _update_active_project(
+        self,
+        database: AsyncSession,
+        run: GenerationRun,
+        **values,
+    ) -> None:
+        await database.execute(
+            update(Project)
+            .where(
+                Project.id == run.project_id,
+                Project.active_run_id == run.id,
+            )
+            .values(**values)
+        )
 
     @staticmethod
     def _event_from_record(record: GenerationEvent) -> BuilderEvent:
@@ -156,10 +182,12 @@ class PostgresRunStore:
         self, database: AsyncSession, run_id: UUID
     ) -> bool:
         result = await database.execute(
-            select(GenerationEvent.id).where(
+            select(GenerationEvent.id)
+            .where(
                 GenerationEvent.run_id == run_id,
                 GenerationEvent.event_type == "run.cancel_requested",
             )
+            .limit(1)
         )
         return result.first() is not None
 
@@ -277,38 +305,65 @@ class PostgresRunStore:
 
     async def snapshot(self, run_id: str) -> BuilderRunSnapshot:
         run_uuid = self._run_uuid(run_id)
-        async with self._sessions() as database:
-            run = await self._run(database, run_uuid)
-            event_result = await database.execute(
-                select(GenerationEvent)
-                .where(GenerationEvent.run_id == run_uuid)
-                .order_by(GenerationEvent.sequence)
-            )
-            event_records = list(event_result.scalars())
-            events = [self._event_from_record(record) for record in event_records]
-            created_payload = next(
-                (
-                    record.payload
-                    for record in event_records
-                    if record.event_type == "run.created"
-                ),
-                None,
-            )
+        async with self._sessions() as database, database.begin():
+            run = await self._locked_run(database, run_uuid)
+            created_payload = (
+                await database.execute(
+                    select(GenerationEvent.payload)
+                    .where(
+                        GenerationEvent.run_id == run_uuid,
+                        GenerationEvent.event_type == "run.created",
+                    )
+                    .order_by(GenerationEvent.sequence)
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
             if not isinstance(created_payload, dict) or not isinstance(
                 created_payload.get("request"), dict
             ):
                 raise RuntimeError(f"run {run_id} has no persisted request")
+            latest_event = (
+                await database.execute(
+                    select(GenerationEvent)
+                    .where(GenerationEvent.run_id == run_uuid)
+                    .order_by(GenerationEvent.sequence.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            usage_row = (
+                await database.execute(
+                    select(
+                        func.coalesce(
+                            func.sum(
+                                GenerationEvent.payload["usage"][
+                                    "prompt_tokens"
+                                ].as_integer()
+                            ),
+                            0,
+                        ),
+                        func.coalesce(
+                            func.sum(
+                                GenerationEvent.payload["usage"][
+                                    "output_tokens"
+                                ].as_integer()
+                            ),
+                            0,
+                        ),
+                        func.coalesce(
+                            func.sum(
+                                GenerationEvent.payload["usage"][
+                                    "thinking_tokens"
+                                ].as_integer()
+                            ),
+                            0,
+                        ),
+                    ).where(GenerationEvent.run_id == run_uuid)
+                )
+            ).one()
             artifact = await self._latest_artifact(
                 database, run_uuid, quality_status="verified"
             )
-            draft_record = next(
-                (
-                    record
-                    for record in reversed(event_records)
-                    if record.event_type == _DRAFT_STAGED_EVENT
-                ),
-                None,
-            )
+            draft_record = await self._latest_draft_event(database, run_uuid)
             draft = (
                 self._draft_from_event(draft_record)
                 if draft_record is not None
@@ -319,18 +374,17 @@ class PostgresRunStore:
             if artifact is not None and draft is not None:
                 if draft.revision <= artifact.revision:
                     draft = None
-            terminal_payload = next(
-                (
-                    record.payload
-                    for record in reversed(event_records)
-                    if "elapsed_seconds" in record.payload
-                ),
-                {},
+            latest_payload = (
+                latest_event.payload
+                if latest_event is not None
+                and isinstance(latest_event.payload, dict)
+                else {}
             )
-            usage = TokenUsage()
-            for event in events:
-                usage += event.usage
-            updated_at = events[-1].timestamp if events else _utc(run.created_at)
+            updated_at = (
+                self._event_from_record(latest_event).timestamp
+                if latest_event is not None
+                else _utc(run.created_at)
+            )
             return BuilderRunSnapshot(
                 run_id=str(run.id),
                 request=BuilderRequest.from_dict(created_payload["request"]),
@@ -343,12 +397,15 @@ class PostgresRunStore:
                 quality_status=(
                     "needs_repair" if draft is not None else "verified" if artifact else "pending"
                 ),
-                usage=usage,
-                elapsed_seconds=float(terminal_payload.get("elapsed_seconds", 0.0)),
+                usage=TokenUsage(
+                    prompt_tokens=int(usage_row[0]),
+                    output_tokens=int(usage_row[1]),
+                    thinking_tokens=int(usage_row[2]),
+                ),
+                elapsed_seconds=float(latest_payload.get("elapsed_seconds", 0.0)),
                 error_code=run.error_code,
-                cancel_requested=any(
-                    record.event_type == "run.cancel_requested"
-                    for record in event_records
+                cancel_requested=await self._cancel_requested(
+                    database, run_uuid
                 ),
             )
 
@@ -414,9 +471,9 @@ class PostgresRunStore:
                 self._ensure_mutable(run)
                 run.state = RunStatus.RUNNING.value
                 run.started_at = run.started_at or datetime.now(timezone.utc)
-                project = await database.get(Project, self._project_id)
-                if project is not None:
-                    project.status = "generating"
+                await self._update_active_project(
+                    database, run, status="generating"
+                )
 
     async def _latest_artifact(
         self,
@@ -487,9 +544,9 @@ class PostgresRunStore:
                 await self._store_artifact(
                     database, run, artifact, quality_status="verified"
                 )
-                project = await database.get(Project, self._project_id)
-                if project is not None:
-                    project.active_revision = artifact.revision
+                await self._update_active_project(
+                    database, run, active_revision=artifact.revision
+                )
 
     async def stage_visual_candidate(
         self, run_id: str, artifact: WidgetArtifact
@@ -511,6 +568,9 @@ class PostgresRunStore:
             self._visual_candidates[run_uuid] = WidgetArtifact.from_dict(
                 artifact.to_dict()
             )
+            self._visual_candidates.move_to_end(run_uuid)
+            while len(self._visual_candidates) > _MAX_VISUAL_CANDIDATES:
+                self._visual_candidates.popitem(last=False)
 
     async def visual_candidate(self, run_id: str) -> WidgetArtifact:
         run_uuid = self._run_uuid(run_id)
@@ -564,59 +624,61 @@ class PostgresRunStore:
             candidate = self._visual_candidates.get(run_uuid)
             if candidate is None:
                 raise ArtifactNotFound((run_id, "visual_candidate"))
-            async with self._sessions() as database, database.begin():
-                run = await self._locked_run(database, run_uuid)
-                previous = await self._latest_artifact(
-                    database, run_uuid, quality_status="verified"
-                )
-                current_draft = await self._latest_draft_event(
-                    database, run_uuid
-                )
-                if (
-                    current_draft is not None
-                    and self._draft_from_event(current_draft) != candidate
-                ):
-                    raise ValueError(
-                        "visual candidate differs from persisted draft"
+            try:
+                async with self._sessions() as database, database.begin():
+                    run = await self._locked_run(database, run_uuid)
+                    previous = await self._latest_artifact(
+                        database, run_uuid, quality_status="verified"
                     )
-                persisted_result = await database.execute(
-                    select(GenerationArtifact)
-                    .where(
-                        GenerationArtifact.run_id == run_uuid,
-                        GenerationArtifact.revision == candidate.revision,
+                    current_draft = await self._latest_draft_event(
+                        database, run_uuid
                     )
-                    .with_for_update()
-                )
-                persisted = persisted_result.scalar_one_or_none()
-                if persisted is None:
-                    await self._store_artifact(
-                        database, run, candidate, quality_status="verified"
+                    if (
+                        current_draft is not None
+                        and self._draft_from_event(current_draft) != candidate
+                    ):
+                        raise ValueError(
+                            "visual candidate differs from persisted draft"
+                        )
+                    persisted_result = await database.execute(
+                        select(GenerationArtifact)
+                        .where(
+                            GenerationArtifact.run_id == run_uuid,
+                            GenerationArtifact.revision == candidate.revision,
+                        )
+                        .with_for_update()
                     )
-                elif persisted.quality_status != "needs_repair":
-                    raise ValueError(
-                        "artifact revision must increase monotonically"
+                    persisted = persisted_result.scalar_one_or_none()
+                    if persisted is None:
+                        await self._store_artifact(
+                            database, run, candidate, quality_status="verified"
+                        )
+                    elif persisted.quality_status != "needs_repair":
+                        raise ValueError(
+                            "artifact revision must increase monotonically"
+                        )
+                    elif persisted.config.get("artifact") != candidate.to_dict():
+                        raise ValueError(
+                            "visual candidate differs from persisted draft"
+                        )
+                    else:
+                        persisted.quality_status = "verified"
+                    self._append_record(
+                        database,
+                        run,
+                        event_type="artifact.committed",
+                        stage=candidate.stage,
+                        status="completed",
+                        message=artifact_commit_message(candidate),
+                        revision=candidate.revision,
+                        changes=artifact_changed_fields(previous, candidate),
                     )
-                elif persisted.config.get("artifact") != candidate.to_dict():
-                    raise ValueError(
-                        "visual candidate differs from persisted draft"
+                    await self._update_active_project(
+                        database, run, active_revision=candidate.revision
                     )
-                else:
-                    persisted.quality_status = "verified"
-                self._append_record(
-                    database,
-                    run,
-                    event_type="artifact.committed",
-                    stage=candidate.stage,
-                    status="completed",
-                    message=artifact_commit_message(candidate),
-                    revision=candidate.revision,
-                    changes=artifact_changed_fields(previous, candidate),
-                )
-                project = await database.get(Project, self._project_id)
-                if project is not None:
-                    project.active_revision = candidate.revision
-            self._visual_candidates.pop(run_uuid, None)
-            return WidgetArtifact.from_dict(candidate.to_dict())
+                return WidgetArtifact.from_dict(candidate.to_dict())
+            finally:
+                self._visual_candidates.pop(run_uuid, None)
 
     async def artifact(
         self, run_id: str, revision: int | None = None
@@ -675,6 +737,7 @@ class PostgresRunStore:
                     GenerationEvent.sequence > sequence,
                 )
                 .order_by(GenerationEvent.sequence)
+                .limit(_EVENT_PAGE_SIZE)
             )
             return tuple(self._event_from_record(record) for record in result.scalars())
 
@@ -690,12 +753,26 @@ class PostgresRunStore:
             available = await self.events_after(run_id, sequence)
             if available:
                 return available
-            if (await self.snapshot(run_id)).status in TERMINAL_STATUSES:
+            if await self._run_status(run_id) in TERMINAL_STATUSES:
                 return ()
             remaining = deadline - monotonic()
             if remaining <= 0:
                 return ()
             await asyncio.sleep(min(0.05, remaining))
+
+    async def _run_status(self, run_id: str) -> RunStatus:
+        run_uuid = self._run_uuid(run_id)
+        async with self._sessions() as database:
+            result = await database.execute(
+                select(GenerationRun.state).where(
+                    GenerationRun.id == run_uuid,
+                    GenerationRun.project_id == self._project_id,
+                )
+            )
+            state = result.scalar_one_or_none()
+            if state is None:
+                raise RunNotFound(run_id)
+            return RunStatus(state)
 
     async def request_cancel(self, run_id: str) -> bool:
         run_uuid = self._run_uuid(run_id)
@@ -705,16 +782,19 @@ class PostgresRunStore:
                 if RunStatus(run.state) in TERMINAL_STATUSES or await self._cancel_requested(
                     database, run_uuid
                 ):
-                    return False
-                self._append_record(
-                    database,
-                    run,
-                    event_type="run.cancel_requested",
-                    stage=None,
-                    status=run.state,
-                    message="Cancellation requested",
-                )
-                return True
+                    requested = False
+                else:
+                    self._append_record(
+                        database,
+                        run,
+                        event_type="run.cancel_requested",
+                        stage=None,
+                        status=run.state,
+                        message="Cancellation requested",
+                    )
+                    requested = True
+            self._visual_candidates.pop(run_uuid, None)
+            return requested
 
     async def finish(
         self,
@@ -752,12 +832,14 @@ class PostgresRunStore:
                 run.error_code = error_code
                 run.finished_at = event.timestamp
                 run.progress = 100 if status is RunStatus.COMPLETED else run.progress
-                project = await database.get(Project, self._project_id)
-                if project is not None:
-                    project.status = status.value
-                    if revision is not None:
-                        project.active_revision = revision
-                return event
+                project_values = {"status": status.value}
+                if revision is not None:
+                    project_values["active_revision"] = revision
+                await self._update_active_project(
+                    database, run, **project_values
+                )
+            self._visual_candidates.pop(run_uuid, None)
+            return event
 
     async def mark_terminal(
         self,
@@ -774,13 +856,26 @@ class PostgresRunStore:
             async with self._sessions() as database, database.begin():
                 run = await self._locked_run(database, run_uuid)
                 self._ensure_mutable(run)
+                event = self._append_record(
+                    database,
+                    run,
+                    event_type="run.terminal_marked",
+                    stage=None,
+                    status=status.value,
+                    message="Run marked terminal",
+                    error_code=error_code,
+                    payload_extra={
+                        "elapsed_seconds": max(0.0, elapsed_seconds)
+                    },
+                )
                 run.state = status.value
                 run.error_code = error_code
-                run.finished_at = datetime.now(timezone.utc)
+                run.finished_at = event.timestamp
                 run.progress = 100 if status is RunStatus.COMPLETED else run.progress
-                project = await database.get(Project, self._project_id)
-                if project is not None:
-                    project.status = status.value
+                await self._update_active_project(
+                    database, run, status=status.value
+                )
+            self._visual_candidates.pop(run_uuid, None)
 
 
 __all__ = ["PostgresRunStore"]

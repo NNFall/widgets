@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.db.base import Base
 from app.db.models import Tenant, User
 from app.saas.repositories import ProjectRepository
+from app.saas.models import GenerationRun
 
 
 @pytest.mark.asyncio
@@ -42,7 +43,7 @@ async def test_project_repository_scopes_reads_and_updates_to_owner(tmp_path) ->
                 source_url="https://example.com/",
                 brief="Build a support widget",
             )
-            await repository.create(
+            other_owned = await repository.create(
                 tenant_id=1,
                 owner_user_id=11,
                 source_url="https://other.example.com/",
@@ -54,6 +55,18 @@ async def test_project_repository_scopes_reads_and_updates_to_owner(tmp_path) ->
                 source_url="https://beta.example.com/",
                 brief=None,
             )
+            owned_run = GenerationRun(
+                project_id=owned.id,
+                mode="direct",
+                idempotency_key="owned-run",
+            )
+            other_run = GenerationRun(
+                project_id=other_owned.id,
+                mode="direct",
+                idempotency_key="other-run",
+            )
+            database.add_all([owned_run, other_run])
+            await database.flush()
 
         async with factory() as database, database.begin():
             repository = ProjectRepository(database)
@@ -75,17 +88,16 @@ async def test_project_repository_scopes_reads_and_updates_to_owner(tmp_path) ->
                 )
             ] == [owned.id]
 
-            run_id = uuid4()
             updated = await repository.set_active_run(
                 owned.id,
                 tenant_id=1,
                 owner_user_id=10,
-                run_id=run_id,
+                run_id=owned_run.id,
                 revision=3,
                 status="completed",
             )
             assert updated is not None
-            assert updated.active_run_id == run_id
+            assert updated.active_run_id == owned_run.id
             assert updated.active_revision == 3
             assert updated.status == "completed"
             assert (
@@ -96,6 +108,28 @@ async def test_project_repository_scopes_reads_and_updates_to_owner(tmp_path) ->
                     run_id=uuid4(),
                     revision=None,
                     status="running",
+                )
+                is None
+            )
+            assert (
+                await repository.set_active_run(
+                    owned.id,
+                    tenant_id=1,
+                    owner_user_id=10,
+                    run_id=other_run.id,
+                    revision=4,
+                    status="completed",
+                )
+                is None
+            )
+            assert (
+                await repository.set_active_run(
+                    owned.id,
+                    tenant_id=1,
+                    owner_user_id=10,
+                    run_id=uuid4(),
+                    revision=5,
+                    status="completed",
                 )
                 is None
             )

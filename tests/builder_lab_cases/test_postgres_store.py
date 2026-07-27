@@ -1,15 +1,18 @@
 import asyncio
+import gc
 from uuid import UUID
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db.base import Base
 from app.db.models import Tenant, User
 from app.saas.models import GenerationArtifact, GenerationEvent, Project
 from builder_lab.models import BuilderRequest, EngineName, RunStatus, Stage, TokenUsage
+from builder_lab import postgres_store as postgres_store_module
 from builder_lab.postgres_store import PostgresRunStore
+from builder_lab.store import ArtifactNotFound
 from builder_lab.store_protocol import RunStoreProtocol
 from tests.builder_lab_cases.test_validation import artifact
 
@@ -169,6 +172,8 @@ async def test_draft_promotion_rejects_changed_candidate_at_same_revision(
 
         with pytest.raises(ValueError, match="differs from persisted draft"):
             await store.commit_visual_candidate(run.run_id)
+        with pytest.raises(ArtifactNotFound):
+            await store.visual_candidate(run.run_id)
 
         restored = await store.snapshot(run.run_id)
         assert restored.artifact is None
@@ -278,6 +283,264 @@ async def test_verified_artifact_cannot_be_restaged_at_same_revision(tmp_path) -
             )
 
         assert await store.artifact(run.run_id, 1) == verified
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_stale_run_cannot_overwrite_active_project_summary(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    store = PostgresRunStore(factory, project_id=project_id)
+
+    try:
+        stale = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="First run")
+        )
+        active = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Second run")
+        )
+
+        await store.set_running(stale.run_id)
+        await store.commit_artifact(
+            stale.run_id, artifact(revision=1, stage=Stage.ART_DIRECTION)
+        )
+        await store.finish(
+            stale.run_id,
+            RunStatus.COMPLETED,
+            event_type="run.completed",
+            stage=Stage.ART_DIRECTION,
+            message="stale done",
+            revision=1,
+        )
+
+        async with factory() as database:
+            project = await database.get(Project, project_id)
+            assert project.active_run_id == UUID(active.run_id)
+            assert project.active_revision is None
+            assert project.status == "generating"
+
+        await store.commit_artifact(
+            active.run_id, artifact(revision=1, stage=Stage.ART_DIRECTION)
+        )
+        await store.finish(
+            active.run_id,
+            RunStatus.COMPLETED,
+            event_type="run.completed",
+            stage=Stage.ART_DIRECTION,
+            message="active done",
+            revision=1,
+        )
+        async with factory() as database:
+            project = await database.get(Project, project_id)
+            assert project.active_run_id == UUID(active.run_id)
+            assert project.active_revision == 1
+            assert project.status == "completed"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_mark_terminal_restores_elapsed_seconds(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    store = PostgresRunStore(factory, project_id=project_id)
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+        await store.mark_terminal(
+            run.run_id,
+            RunStatus.FAILED,
+            error_code="provider_unavailable",
+            elapsed_seconds=4.25,
+        )
+
+        restored = await PostgresRunStore(
+            factory, project_id=project_id
+        ).snapshot(run.run_id)
+        assert restored.status is RunStatus.FAILED
+        assert restored.error_code == "provider_unavailable"
+        assert restored.elapsed_seconds == 4.25
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_uses_only_bounded_event_queries(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    store = PostgresRunStore(factory, project_id=project_id)
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+        for index in range(12):
+            await store.append_event(
+                run.run_id,
+                event_type="stage.progress",
+                stage=Stage.FOUNDATION,
+                status="running",
+                message=f"step {index}",
+                usage=TokenUsage(prompt_tokens=1),
+            )
+
+        statements: list[str] = []
+
+        def record_statement(_conn, _cursor, statement, _params, _context, _many):
+            statements.append(statement)
+
+        event.listen(engine.sync_engine, "before_cursor_execute", record_statement)
+        try:
+            restored = await store.snapshot(run.run_id)
+        finally:
+            event.remove(
+                engine.sync_engine, "before_cursor_execute", record_statement
+            )
+
+        assert restored.usage.prompt_tokens == 12
+        event_selects = [
+            statement.upper()
+            for statement in statements
+            if "FROM GENERATION_EVENTS" in statement.upper()
+        ]
+        assert event_selects
+        assert all(
+            " LIMIT " in statement
+            or "SUM(" in statement
+            or "EXISTS" in statement
+            for statement in event_selects
+        )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_events_after_returns_bounded_pages(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    store = PostgresRunStore(factory, project_id=project_id)
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+        for index in range(105):
+            await store.append_event(
+                run.run_id,
+                event_type="stage.progress",
+                stage=Stage.FOUNDATION,
+                status="running",
+                message=f"step {index}",
+            )
+
+        first_page = await store.events_after(run.run_id, 0)
+        second_page = await store.events_after(
+            run.run_id, first_page[-1].sequence
+        )
+        assert len(first_page) == 100
+        assert len(second_page) == 6
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_events_does_not_poll_full_snapshot(
+    tmp_path, monkeypatch
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    store = PostgresRunStore(factory, project_id=project_id)
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+
+        async def reject_snapshot(_run_id: str):
+            raise AssertionError("wait_for_events must not call snapshot")
+
+        monkeypatch.setattr(store, "snapshot", reject_snapshot)
+        assert await store.wait_for_events(
+            run.run_id, run.latest_sequence, timeout=0.01
+        ) == ()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_run_locks_are_evicted_after_operations(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    store = PostgresRunStore(factory, project_id=project_id)
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+        await store.append_event(
+            run.run_id,
+            event_type="stage.progress",
+            stage=Stage.FOUNDATION,
+            status="running",
+            message="step",
+        )
+        key = (store._namespace, UUID(run.run_id))
+        gc.collect()
+        assert key not in postgres_store_module._RUN_LOCKS
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_terminal_and_cancel_paths_clear_visual_candidates(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    store = PostgresRunStore(factory, project_id=project_id)
+
+    try:
+        terminal = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Terminal")
+        )
+        cancelled = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Cancelled")
+        )
+        await store.stage_visual_candidate(
+            terminal.run_id, artifact(revision=1, stage=Stage.ART_DIRECTION)
+        )
+        await store.stage_visual_candidate(
+            cancelled.run_id, artifact(revision=1, stage=Stage.ART_DIRECTION)
+        )
+
+        await store.mark_terminal(terminal.run_id, RunStatus.FAILED)
+        assert await store.request_cancel(cancelled.run_id)
+
+        with pytest.raises(ArtifactNotFound):
+            await store.visual_candidate(terminal.run_id)
+        with pytest.raises(ArtifactNotFound):
+            await store.visual_candidate(cancelled.run_id)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_visual_candidate_cache_is_bounded(
+    tmp_path, monkeypatch
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    store = PostgresRunStore(factory, project_id=project_id)
+    monkeypatch.setattr(postgres_store_module, "_MAX_VISUAL_CANDIDATES", 2)
+
+    try:
+        runs = [
+            await store.create(
+                BuilderRequest(engine=EngineName.DIRECT, brief=f"Run {index}")
+            )
+            for index in range(3)
+        ]
+        for run in runs:
+            await store.stage_visual_candidate(
+                run.run_id, artifact(revision=1, stage=Stage.ART_DIRECTION)
+            )
+
+        with pytest.raises(ArtifactNotFound):
+            await store.visual_candidate(runs[0].run_id)
+        assert await store.visual_candidate(runs[-1].run_id)
     finally:
         await engine.dispose()
 
