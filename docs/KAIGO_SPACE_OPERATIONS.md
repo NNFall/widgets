@@ -2,11 +2,16 @@
 
 ## Routing
 
-`kaigo.space` обслуживается nginx-конфигом:
+На текущем сервере `kaigo.space` обслуживается активным обычным файлом, а не
+symlink на `sites-available`:
 
 ```text
-/etc/nginx/sites-available/kaigo.space
+/etc/nginx/sites-enabled/kaigo.space
 ```
+
+Перед изменением всегда подтверждать фактический источник через `nginx -T` и
+`ls -la /etc/nginx/sites-enabled`. Редактирование одноимённого файла только в
+`sites-available` не меняет живую маршрутизацию.
 
 Ожидаемая схема:
 
@@ -70,14 +75,18 @@ curl -k https://kaigo.space/api/health/ai
 `deploy/nginx/kaigo-marketing-site.conf`. Это фрагмент существующего блока
 `server`, а не полный виртуальный хост. При первой интеграции:
 
-1. Сохранить все существующие exact/prefix location, включая `/real-time/`,
+1. Найти активный конфиг через `nginx -T`; не считать автоматически, что это
+   файл из `sites-available`.
+2. Сохранить все существующие exact/prefix location, включая `/real-time/`,
    `/builder-demo/`, `/builder-comparison/` и маршруты ACME/сертификатов.
-2. Заменить только существующий fallback `location /` и существующий блок
+3. Заменить только существующий fallback `location /` и существующий блок
    `/builder/` соответствующими блоками из фрагмента.
-3. Добавить exact-блоки `/`, `/studio`, `/studio/` и `/assets/`.
-4. Подтвердить, что `/etc/nginx/.htpasswd-kaigo-builder` — тот же файл паролей,
+4. Добавить exact-блоки `/`, `/studio`, `/studio/` и `/assets/`.
+5. Подтвердить, что `/etc/nginx/.htpasswd-kaigo-builder` — тот же файл паролей,
    который уже используется для `/builder/`. Studio не должна стать публичной.
-5. Выполнить `nginx -t` до reload nginx.
+6. Хранить backup вне `sites-enabled`: glob nginx читает любой файл в этой
+   директории, включая `.bak`, и такой backup создаёт конфликтующий server.
+7. Выполнить `nginx -t` до reload nginx.
 
 Deploy-скрипт собирает frontend, копирует его в новый каталог релиза, проверяет
 nginx, атомарно переключает `current`, повторно проверяет nginx и только затем
@@ -153,7 +162,7 @@ ls -l /etc/nginx/sites-available/kaigo.space.bak-*
 To roll back nginx:
 
 ```bash
-cp /etc/nginx/sites-available/kaigo.space.bak-YYYYMMDD-HHMMSS /etc/nginx/sites-available/kaigo.space
+cp /etc/nginx/sites-available/kaigo.space.bak-YYYYMMDD-HHMMSS /etc/nginx/sites-enabled/kaigo.space
 nginx -t
 systemctl reload nginx
 ```

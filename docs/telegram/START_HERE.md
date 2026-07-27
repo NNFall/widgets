@@ -30,6 +30,10 @@ AI-сотрудника: компактный брендовый чат, кот�
 - Текущий запуск восстанавливается после обновления страницы.
 - Последний рабочий черновик остаётся видимым при незавершённой проверке.
 - Последний подтверждённый прогон Flowwow завершился со статусом `verified`.
+- Новый публичный сайт Kaigo из восьми экранов развёрнут на
+  <https://kaigo.space/> и проверен на desktop/mobile.
+- Визуально согласованная Studio доступна по `/studio`, но пока закрыта
+  существующей Builder Basic Auth.
 
 Публичная демонстрация: <https://kaigo.space/builder-demo/>
 
@@ -39,7 +43,7 @@ AI-сотрудника: компактный брендовый чат, кот�
 
 1. [Голос и правила канала](editorial-guide.md)
 2. [Очередь тем](content-backlog.md)
-3. [Последний release packet](release-packets/2026-07-25-flowwow-verified-generation.md)
+3. [Последний release packet](release-packets/2026-07-27-kaigo-marketing-site.md)
 4. [Стартовый черновик](drafts/2026-07-26-flowwow-first-verified-draft.md)
 5. [Журнал продукта за июль](../product-journal/2026-07.md)
 6. [Правила работы с изображениями](assets/README.md)

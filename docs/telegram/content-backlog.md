@@ -22,6 +22,7 @@
 | TG-011 | 11 | idea | Почему Kaigo начинается с URL | Конструкторы предлагают пустой prompt, а Kaigo сразу показывает AI-сотрудника на реальном сайте бизнеса | [UX-ресерч](../research/2026-07-26-ai-builder-ux-benchmark.md) |
 | TG-012 | 12 | hold | Управление той же задачей Codex из Telegram | Не новый бот с потерянным контекстом, а настоящий новый ход в общей истории Codex Desktop | [Release packet](release-packets/2026-07-26-telegram-codex-bridge.md) |
 | TG-013 | 1 | draft | Первый виджет получился красивым. Пользоваться им было невозможно | Архитектурный AI-куратор выглядел интересно, но не умел нормально разговаривать | [Черновик](drafts/2026-07-27-first-widget-failure.html) |
+| TG-014 | 1 | ready | Kaigo вышел из референса в живой сайт | Восемь экранов, анимированное превращение сайта в AI-виджет и рабочая Studio уже открыты на production | [Release packet](release-packets/2026-07-27-kaigo-marketing-site.md) |
 
 ## Как добавлять тему
 
