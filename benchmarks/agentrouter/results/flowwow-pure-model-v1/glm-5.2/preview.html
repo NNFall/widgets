@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27;; style-src &#x27;unsafe-inline&#x27;; img-src data:; font-src &#x27;none&#x27;; connect-src &#x27;none&#x27;; form-action &#x27;none&#x27;; base-uri &#x27;none&#x27;; object-src &#x27;none&#x27;">
+  <title>Kaigo Builder Preview</title>
+  <style>
+    html, body { margin: 0; min-height: 100%; background: transparent; }
+    body { min-height: 100vh; overflow: hidden; font-family: Inter, Arial, sans-serif; }
+    .kaigo-widget{--kaigo-cream:#FBF4EA;--kaigo-cream-2:#F4E8D6;--kaigo-cream-edge:#E7D7BE;--kaigo-plum:#3D1F38;--kaigo-plum-2:#542A4D;--kaigo-plum-soft:#7A4A6E;--kaigo-rose:#C75A82;--kaigo-rose-soft:#E08CA6;--kaigo-blush:#F2D4C8;--kaigo-text:#2D1A28;--kaigo-text-soft:#6B5563;--kaigo-petal:#E8A7B8;--kaigo-petal-2:#D98AA0;--kaigo-petal-3:#C76F8C;--kaigo-core:#F4C95D;--kaigo-core-2:#E8B53F;--kaigo-leaf:#7BA05B;--kaigo-leaf-2:#5E8A45;--kaigo-ink:#2D1A28;--kaigo-bubble-a:#FFFFFF;--kaigo-bubble-u:#3D1F38;--kaigo-bubble-u-text:#FBF4EA;--kaigo-radius:18px;--kaigo-radius-lg:24px;--kaigo-radius-xl:32px;--kaigo-shadow-soft:0 10px 30px rgba(61,31,56,0.10);--kaigo-shadow-lift:0 16px 44px rgba(61,31,56,0.18);--kaigo-shadow-launcher:0 8px 24px rgba(61,31,56,0.22);--kaigo-ease:cubic-bezier(0.34,1.2,0.64,1);--kaigo-ease-soft:cubic-bezier(0.4,0,0.2,1);--kaigo-font:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}.kaigo-widget *,.kaigo-widget *::before,.kaigo-widget *::after{box-sizing:border-box;margin:0;padding:0}.kaigo-widget{position:fixed;z-index:2147483000;bottom:22px;right:22px;width:auto;height:auto;font-family:var(--kaigo-font);font-size:15px;line-height:1.45;color:var(--kaigo-text);-webkit-text-size-adjust:100%;text-size-adjust:100%;pointer-events:none}.kaigo-widget .kaigo-widget__launcher{pointer-events:auto}.kaigo-widget .kaigo-widget__panel{pointer-events:auto}.kaigo-widget button{font-family:inherit;font-size:inherit;color:inherit;background:none;border:none;cursor:pointer;-webkit-appearance:none;appearance:none}.kaigo-widget textarea{font-family:inherit;font-size:inherit;color:inherit;background:none;border:none;resize:none;outline:none;-webkit-appearance:none;appearance:none}.kaigo-widget svg{display:block;width:100%;height:100%}.kaigo-widget svg path{fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}.kaigo-widget .kaigo-widget__launcher{position:absolute;bottom:0;right:0;display:flex;flex-direction:column;align-items:center;gap:6px;width:64px;height:64px;border-radius:50%;background:transparent}.kaigo-widget .kaigo-widget__launcher-text{position:absolute;bottom:-22px;left:50%;transform:translateX(-50%);font-size:11px;font-weight:600;letter-spacing:0.01em;color:var(--kaigo-plum);white-space:nowrap;opacity:0;transition:opacity 0.4s ease 0.1s;pointer-events:none;text-shadow:0 1px 3px rgba(251,244,234,0.9)}.kaigo-widget.kaigo-preview-open .kaigo-widget__launcher-text,.kaigo-widget .kaigo-widget__launcher:hover .kaigo-widget__launcher-text,.kaigo-widget .kaigo-widget__launcher:focus-visible .kaigo-widget__launcher-text{opacity:1}.kaigo-widget .kaigo-widget__launcher-flower{position:relative;width:64px;height:64px;border-radius:50%;background:radial-gradient(circle at 50% 45%,#FFF6E8 0%,#F4E2C8 60%,#E7D2AE 100%);box-shadow:var(--kaigo-shadow-launcher),inset 0 2px 6px rgba(255,255,255,0.7);transition:transform 0.5s var(--kaigo-ease),box-shadow 0.5s var(--kaigo-ease-soft)}.kaigo-widget .kaigo-widget__launcher:hover .kaigo-widget__launcher-flower,.kaigo-widget .kaigo-widget__launcher:focus-visible .kaigo-widget__launcher-flower{transform:scale(1.08) rotate(-6deg);box-shadow:var(--kaigo-shadow-lift),inset 0 2px 6px rgba(255,255,255,0.7)}.kaigo-widget .kaigo-widget__launcher:active .kaigo-widget__launcher-flower{transform:scale(0.96) rotate(3deg)}.kaigo-widget .kaigo-widget__launcher:focus-visible{outline:none}.kaigo-widget .kaigo-widget__launcher:focus-visible .kaigo-widget__launcher-flower{outline:3px solid var(--kaigo-rose);outline-offset:3px}.kaigo-widget .kaigo-widget__launcher-pulse{position:absolute;inset:-6px;border-radius:50%;border:2px solid var(--kaigo-rose-soft);opacity:0;pointer-events:none}.kaigo-widget.kaigo-preview-attention .kaigo-widget__launcher-pulse{animation:kaigo-pulse 2.6s ease-out infinite}.kaigo-widget.kaigo-preview-open .kaigo-widget__launcher-pulse{animation:none;opacity:0}@keyframes kaigo-pulse{0%{transform:scale(0.7);opacity:0}20%{opacity:0.7}80%{opacity:0.15}100%{transform:scale(1.5);opacity:0}}.kaigo-widget .kaigo-widget__petal{position:absolute;top:50%;left:50%;width:17px;height:30px;margin:-30px 0 0 -8.5px;border-radius:50% 50% 45% 45%/70% 70% 40% 40%;background:linear-gradient(to bottom,var(--kaigo-petal) 0%,var(--kaigo-petal-2) 70%,var(--kaigo-petal-3) 100%);transform-origin:50% 100%;box-shadow:inset 0 -2px 4px rgba(125,50,80,0.25),inset 0 2px 4px rgba(255,255,255,0.4)}.kaigo-widget .kaigo-widget__petal--1{transform:rotate(0deg) translateY(0)}.kaigo-widget .kaigo-widget__petal--2{transform:rotate(60deg) translateY(0)}.kaigo-widget .kaigo-widget__petal--3{transform:rotate(120deg) translateY(0)}.kaigo-widget .kaigo-widget__petal--4{transform:rotate(180deg) translateY(0)}.kaigo-widget .kaigo-widget__petal--5{transform:rotate(240deg) translateY(0)}.kaigo-widget .kaigo-widget__petal--6{transform:rotate(300deg) translateY(0)}.kaigo-widget .kaigo-widget__petal-core{position:absolute;top:50%;left:50%;width:18px;height:18px;margin:-9px 0 0 -9px;border-radius:50%;background:radial-gradient(circle at 40% 35%,var(--kaigo-core) 0%,var(--kaigo-core-2) 70%,#C99A2E 100%);box-shadow:0 0 6px rgba(244,201,93,0.6);z-index:2}.kaigo-widget.kaigo-preview-open .kaigo-widget__launcher{transform:scale(0.2);opacity:0;pointer-events:none;transition:transform 0.45s var(--kaigo-ease-soft),opacity 0.35s ease;transform-origin:50% 100%}.kaigo-widget .kaigo-widget__panel{position:absolute;bottom:0;right:0;width:376px;max-width:calc(100vw - 44px);max-height:calc(100vh - 44px);background:linear-gradient(165deg,var(--kaigo-cream) 0%,var(--kaigo-cream-2) 100%);border:1px solid var(--kaigo-cream-edge);border-radius:var(--kaigo-radius-xl);box-shadow:var(--kaigo-shadow-lift);opacity:0;transform:translateY(28px) scale(0.92);transform-origin:100% 100%;pointer-events:none;transition:opacity 0.45s var(--kaigo-ease-soft),transform 0.55s var(--kaigo-ease);display:flex;flex-direction:column;overflow:hidden}.kaigo-widget.kaigo-preview-open [data-region="panel"]{opacity:1;transform:translateY(0) scale(1);pointer-events:auto;transition:opacity 0.45s var(--kaigo-ease) 0.05s,transform 0.55s var(--kaigo-ease) 0.05s}.kaigo-widget .kaigo-widget__header{display:flex;align-items:center;gap:12px;padding:14px 16px 12px;background:linear-gradient(140deg,var(--kaigo-plum) 0%,var(--kaigo-plum-2) 100%);color:var(--kaigo-cream);position:relative;flex-shrink:0;overflow:hidden}.kaigo-widget .kaigo-widget__header::after{content:"";position:absolute;top:0;right:0;width:120px;height:120px;background:radial-gradient(circle,rgba(232,167,184,0.12) 0%,transparent 65%);pointer-events:none}.kaigo-widget .kaigo-widget__header-avatar{position:relative;width:44px;height:44px;flex-shrink:0;display:flex;align-items:center;justify-content:center}.kaigo-widget .kaigo-widget__header-petal{position:absolute;top:50%;left:50%;width:9px;height:16px;margin:-16px 0 0 -4.5px;border-radius:50% 50% 45% 45%/70% 70% 40% 40%;background:linear-gradient(to bottom,var(--kaigo-rose-soft) 0%,var(--kaigo-rose) 100%);transform-origin:50% 100%;box-shadow:inset 0 1px 2px rgba(255,255,255,0.35)}.kaigo-widget .kaigo-widget__header-petal--1{transform:rotate(0deg)}.kaigo-widget .kaigo-widget__header-petal--2{transform:rotate(90deg)}.kaigo-widget .kaigo-widget__header-petal--3{transform:rotate(180deg)}.kaigo-widget .kaigo-widget__header-petal--4{transform:rotate(270deg)}.kaigo-widget .kaigo-widget__header-core{position:absolute;top:50%;left:50%;width:9px;height:9px;margin:-4.5px 0 0 -4.5px;border-radius:50%;background:radial-gradient(circle,var(--kaigo-core) 0%,var(--kaigo-core-2) 100%);box-shadow:0 0 4px rgba(244,201,93,0.7);z-index:2}.kaigo-widget .kaigo-widget__header-meta{flex:1;min-width:0}.kaigo-widget .kaigo-widget__header-name{font-size:15px;font-weight:700;letter-spacing:-0.01em;color:var(--kaigo-cream);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.kaigo-widget .kaigo-widget__header-status{display:flex;align-items:center;gap:6px;font-size:12.5px;color:rgba(251,244,234,0.78);margin-top:2px}.kaigo-widget .kaigo-widget__status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#7BD88F;box-shadow:0 0 6px rgba(123,216,143,0.7);flex-shrink:0}.kaigo-widget .kaigo-widget__close{width:44px;height:44px;flex-shrink:0;border-radius:12px;color:var(--kaigo-cream);background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;transition:background 0.2s ease,transform 0.2s ease;position:relative;z-index:1}.kaigo-widget .kaigo-widget__close svg{width:18px;height:18px}.kaigo-widget .kaigo-widget__close:hover{background:rgba(255,255,255,0.18)}.kaigo-widget .kaigo-widget__close:active{transform:scale(0.9)}.kaigo-widget .kaigo-widget__close:focus-visible{outline:2px solid var(--kaigo-rose-soft);outline-offset:2px}.kaigo-widget .kaigo-widget__messages{flex:1;min-height:0;overflow-y:auto;padding:14px 14px 6px;display:flex;flex-direction:column;gap:12px;scrollbar-width:thin;scrollbar-color:var(--kaigo-cream-edge) transparent;background:transparent}.kaigo-widget .kaigo-widget__messages::-webkit-scrollbar{width:6px}.kaigo-widget .kaigo-widget__messages::-webkit-scrollbar-track{background:transparent}.kaigo-widget .kaigo-widget__messages::-webkit-scrollbar-thumb{background:var(--kaigo-cream-edge);border-radius:3px}.kaigo-widget .kaigo-widget__message{display:flex;gap:8px;max-width:100%;align-items:flex-start}.kaigo-widget .kaigo-widget__message--assistant{flex-direction:row;align-self:flex-start;max-width:88%}.kaigo-widget .kaigo-widget__message--user{flex-direction:row-reverse;align-self:flex-end;max-width:82%}.kaigo-widget .kaigo-widget__message-avatar{position:relative;width:34px;height:34px;flex-shrink:0;display:flex;align-items:center;justify-content:center;margin-top:2px}.kaigo-widget .kaigo-widget__msg-petal{position:absolute;top:50%;left:50%;width:7px;height:12px;margin:-12px 0 0 -3.5px;border-radius:50% 50% 45% 45%/70% 70% 40% 40%;background:linear-gradient(to bottom,var(--kaigo-rose-soft) 0%,var(--kaigo-rose) 100%);transform-origin:50% 100%;box-shadow:inset 0 1px 2px rgba(255,255,255,0.3)}.kaigo-widget .kaigo-widget__msg-petal--1{transform:rotate(0deg)}.kaigo-widget .kaigo-widget__msg-petal--2{transform:rotate(90deg)}.kaigo-widget .kaigo-widget__msg-petal--3{transform:rotate(180deg)}.kaigo-widget .kaigo-widget__msg-petal--4{transform:rotate(270deg)}.kaigo-widget .kaigo-widget__msg-core{position:absolute;top:50%;left:50%;width:7px;height:7px;margin:-3.5px 0 0 -3.5px;border-radius:50%;background:radial-gradient(circle,var(--kaigo-core) 0%,var(--kaigo-core-2) 100%);z-index:2}.kaigo-widget .kaigo-widget__message-body{display:flex;flex-direction:column;gap:4px;min-width:0}.kaigo-widget .kaigo-widget__message--assistant .kaigo-widget__message-body{align-items:flex-start}.kaigo-widget .kaigo-widget__message--user .kaigo-widget__message-body{align-items:flex-end}.kaigo-widget .kaigo-widget__message-label{font-size:11.5px;font-weight:600;letter-spacing:0.01em;color:var(--kaigo-text-soft);padding:0 4px}.kaigo-widget .kaigo-widget__message--assistant .kaigo-widget__message-label{color:var(--kaigo-rose)}.kaigo-widget .kaigo-widget__message--user .kaigo-widget__message-label{color:var(--kaigo-plum-soft)}.kaigo-widget .kaigo-widget__message-content{padding:10px 13px;font-size:14.5px;line-height:1.42;word-wrap:break-word;overflow-wrap:break-word;-webkit-hyphens:auto;hyphens:auto}.kaigo-widget .kaigo-widget__message--assistant .kaigo-widget__message-content{background:var(--kaigo-bubble-a);color:var(--kaigo-text);border-radius:4px 16px 16px 16px;border:1px solid var(--kaigo-cream-edge);box-shadow:0 2px 8px rgba(61,31,56,0.06)}.kaigo-widget .kaigo-widget__message--user .kaigo-widget__message-content{background:var(--kaigo-bubble-u);color:var(--kaigo-bubble-u-text);border-radius:16px 4px 16px 16px}.kaigo-widget .kaigo-widget__message--assistant,.kaigo-widget [data-kaigo-runtime-message="assistant"]{animation:kaigo-msg-in 0.5s var(--kaigo-ease) both}.kaigo-widget .kaigo-widget__message--user,.kaigo-widget [data-kaigo-runtime-message="user"]{animation:kaigo-msg-in 0.4s var(--kaigo-ease-soft) both}@keyframes kaigo-msg-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}.kaigo-widget .kaigo-widget__message-status{font-size:11.5px;color:var(--kaigo-text-soft);padding:0 4px;min-height:0}.kaigo-widget .kaigo-widget__message-status--pending,.kaigo-widget [data-kaigo-runtime-status="pending"]{display:flex;align-items:center;gap:7px;color:var(--kaigo-rose);padding:2px 4px}.kaigo-widget .kaigo-widget__message-status--pending::before,.kaigo-widget [data-kaigo-runtime-status="pending"]::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--kaigo-rose);animation:kaigo-blink 1s ease-in-out infinite}@keyframes kaigo-blink{0%,100%{opacity:0.25;transform:scale(0.8)}50%{opacity:1;transform:scale(1.15)}}.kaigo-widget .kaigo-widget__message-status--error,.kaigo-widget [data-kaigo-runtime-status="error"]{display:block;color:#B03A2E;background:rgba(199,90,130,0.12);border-radius:8px;padding:8px 10px;font-size:13px}.kaigo-widget [data-kaigo-runtime-retry="true"]{display:inline-flex;align-items:center;justify-content:center;min-height:44px;min-width:44px;padding:8px 16px;margin-top:6px;border-radius:10px;background:var(--kaigo-rose);color:#FFF;font-weight:600;font-size:13px;cursor:pointer;border:none;transition:background 0.2s ease,transform 0.2s ease;box-shadow:0 2px 8px rgba(199,90,130,0.3)}.kaigo-widget [data-kaigo-runtime-retry="true"]:hover{background:var(--kaigo-petal-3)}.kaigo-widget [data-kaigo-runtime-retry="true"]:active{transform:scale(0.96)}.kaigo-widget [data-kaigo-runtime-retry="true"]:focus-visible{outline:2px solid var(--kaigo-plum);outline-offset:2px}.kaigo-widget:has([data-kaigo-runtime-status="error"]) [data-region="suggestions"]{display:none}.kaigo-widget .kaigo-widget__suggestions{display:flex;gap:8px;padding:4px 14px 10px;flex-wrap:wrap;flex-shrink:0;transition:opacity 0.3s ease,max-height 0.4s ease,padding 0.3s ease,max-height:120px;overflow:hidden}.kaigo-widget:has([data-kaigo-runtime-message="user"]) .kaigo-widget__suggestions{opacity:0;max-height:0;padding-top:0;padding-bottom:0;pointer-events:none}.kaigo-widget .kaigo-widget__suggestion{display:inline-flex;align-items:center;min-height:44px;min-width:44px;padding:10px 14px;border-radius:14px;background:var(--kaigo-cream);border:1.5px solid var(--kaigo-rose-soft);color:var(--kaigo-plum);font-size:13.5px;font-weight:500;transition:background 0.22s ease,transform 0.22s ease,box-shadow 0.22s ease,border-color 0.22s ease;text-align:left}.kaigo-widget .kaigo-widget__suggestion:hover{background:var(--kaigo-blush);border-color:var(--kaigo-rose);box-shadow:0 4px 12px rgba(199,90,130,0.16);transform:translateY(-1px)}.kaigo-widget .kaigo-widget__suggestion:active{transform:translateY(0) scale(0.98)}.kaigo-widget .kaigo-widget__suggestion:focus-visible{outline:2px solid var(--kaigo-rose);outline-offset:2px}.kaigo-widget .kaigo-widget__composer{padding:10px 14px 14px;flex-shrink:0;border-top:1px solid var(--kaigo-cream-edge);background:rgba(251,244,234,0.6)}.kaigo-widget .kaigo-widget__composer-label{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.kaigo-widget .kaigo-widget__composer-row{display:flex;align-items:flex-end;gap:8px;background:var(--kaigo-bubble-a);border:1.5px solid var(--kaigo-cream-edge);border-radius:16px;padding:6px 6px 6px 12px;transition:border-color 0.2s ease,box-shadow 0.2s ease}.kaigo-widget .kaigo-widget__composer-row:focus-within{border-color:var(--kaigo-rose-soft);box-shadow:0 0 0 3px rgba(199,90,130,0.12)}.kaigo-widget .kaigo-widget__input{flex:1;min-height:28px;max-height:100px;line-height:1.4;color:var(--kaigo-text);padding:7px 0;background:transparent;font-size:14.5px}.kaigo-widget .kaigo-widget__input::placeholder{color:var(--kaigo-text-soft);opacity:0.7}.kaigo-widget .kaigo-widget__send{width:44px;height:44px;flex-shrink:0;border-radius:12px;background:var(--kaigo-plum);color:var(--kaigo-cream);display:flex;align-items:center;justify-content:center;transition:background 0.2s ease,transform 0.2s ease,opacity 0.2s ease}.kaigo-widget .kaigo-widget__send svg{width:18px;height:18px}.kaigo-widget .kaigo-widget__send:hover{background:var(--kaigo-plum-2)}.kaigo-widget .kaigo-widget__send:active{transform:scale(0.92)}.kaigo-widget .kaigo-widget__send:focus-visible{outline:2px solid var(--kaigo-rose);outline-offset:2px}.kaigo-widget.kaigo-preview-attention .kaigo-widget__launcher-flower{animation:kaigo-breathe 3s ease-in-out infinite}.kaigo-widget.kaigo-preview-open .kaigo-widget__launcher-flower{animation:none}@keyframes kaigo-breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}.kaigo-widget .kaigo-widget__petal--1{animation:kaigo-sway-1 5s ease-in-out infinite}.kaigo-widget .kaigo-widget__petal--3{animation:kaigo-sway-2 5.5s ease-in-out infinite}.kaigo-widget .kaigo-widget__petal--5{animation:kaigo-sway-1 4.5s ease-in-out infinite}@keyframes kaigo-sway-1{0%,100%{transform:rotate(0deg) translateY(0)}50%{transform:rotate(-3deg) translateY(-1px)}}@keyframes kaigo-sway-2{0%,100%{transform:rotate(120deg) translateY(0)}50%{transform:rotate(117deg) translateY(-1px)}}.kaigo-widget .kaigo-widget__header-petal--1{animation:kaigo-h-sway-1 4.5s ease-in-out infinite}.kaigo-widget .kaigo-widget__header-petal--3{animation:kaigo-h-sway-2 5s ease-in-out infinite}@keyframes kaigo-h-sway-1{0%,100%{transform:rotate(0deg)}50%{transform:rotate(-5deg)}}@keyframes kaigo-h-sway-2{0%,100%{transform:rotate(180deg)}50%{transform:rotate(175deg)}}.kaigo-widget .kaigo-widget__msg-petal--1{animation:kaigo-m-sway 4s ease-in-out infinite}@keyframes kaigo-m-sway{0%,100%{transform:rotate(0deg)}50%{transform:rotate(-6deg)}}@media (prefers-reduced-motion: reduce){.kaigo-widget *,.kaigo-widget *::before,.kaigo-widget *::after{animation-duration:0.01ms !important;animation-iteration-count:1 !important;transition-duration:0.01ms !important;scroll-behavior:auto !important}.kaigo-widget .kaigo-widget__petal--1,.kaigo-widget .kaigo-widget__petal--3,.kaigo-widget .kaigo-widget__petal--5,.kaigo-widget .kaigo-widget__header-petal--1,.kaigo-widget .kaigo-widget__header-petal--3,.kaigo-widget .kaigo-widget__msg-petal--1{animation:none}.kaigo-widget.kaigo-preview-attention .kaigo-widget__launcher-pulse{animation:none;opacity:0}.kaigo-widget.kaigo-preview-attention .kaigo-widget__launcher-flower{animation:none}.kaigo-widget .kaigo-widget__message-status--pending::before,.kaigo-widget [data-kaigo-runtime-status="pending"]::before{animation:none;opacity:1}.kaigo-widget .kaigo-widget__launcher:hover .kaigo-widget__launcher-flower,.kaigo-widget .kaigo-widget__launcher:focus-visible .kaigo-widget__launcher-flower{transform:scale(1.08)}.kaigo-widget.kaigo-preview-open .kaigo-widget__launcher{transform:scale(0.2);opacity:0}.kaigo-widget.kaigo-preview-open [data-region="panel"]{transform:translateY(0) scale(1);opacity:1}}@media (max-width:600px){.kaigo-widget{bottom:16px;right:16px;left:16px}.kaigo-widget .kaigo-widget__launcher{width:56px;height:56px}.kaigo-widget .kaigo-widget__launcher-flower{width:56px;height:56px}.kaigo-widget .kaigo-widget__panel{width:auto;max-width:none;left:0;right:0;bottom:0;max-height:70vh;border-radius:var(--kaigo-radius-lg) var(--kaigo-radius-lg) 0 0;transform:translateY(30px) scale(0.96)}.kaigo-widget.kaigo-preview-open [data-region="panel"]{transform:translateY(0) scale(1)}.kaigo-widget .kaigo-widget__header{padding:12px 14px 10px}.kaigo-widget .kaigo-widget__header-name{font-size:14px}.kaigo-widget .kaigo-widget__messages{padding:12px 12px 4px;gap:10px}.kaigo-widget .kaigo-widget__message-content{font-size:14px;padding:9px 12px}.kaigo-widget .kaigo-widget__suggestions{padding:4px 12px 8px;gap:6px}.kaigo-widget .kaigo-widget__suggestion{font-size:13px;padding:9px 12px}.kaigo-widget .kaigo-widget__composer{padding:8px 12px 12px}}@media (max-width:390px){.kaigo-widget .kaigo-widget__panel{max-height:74vh}.kaigo-widget .kaigo-widget__message--assistant{max-width:90%}.kaigo-widget .kaigo-widget__message--user{max-width:86%}}
+    [data-region="root"] [hidden] { display: none !important; }
+    [data-region="root"] [data-kaigo-runtime-input] { resize: none; scrollbar-width: none; }
+    [data-region="root"] [data-kaigo-runtime-input]::-webkit-scrollbar,
+    [data-region="root"] [data-region="messages"]::-webkit-scrollbar { display: none; width: 0; height: 0; }
+    [data-region="root"] [data-region="messages"] { scrollbar-width: none; }
+  </style>
+</head>
+<body>
+<div data-region="root" class="kaigo-widget">
+  <div data-region="launcher" class="kaigo-widget__launcher" aria-label="Открыть чат с AI-флористом Мариной">
+    <div class="kaigo-widget__launcher-pulse"></div>
+    <div class="kaigo-widget__launcher-flower" aria-hidden="true">
+      <span class="kaigo-widget__petal kaigo-widget__petal--1"></span>
+      <span class="kaigo-widget__petal kaigo-widget__petal--2"></span>
+      <span class="kaigo-widget__petal kaigo-widget__petal--3"></span>
+      <span class="kaigo-widget__petal kaigo-widget__petal--4"></span>
+      <span class="kaigo-widget__petal kaigo-widget__petal--5"></span>
+      <span class="kaigo-widget__petal kaigo-widget__petal--6"></span>
+      <span class="kaigo-widget__petal-core"></span>
+    </div>
+    <span class="kaigo-widget__launcher-text">Марина</span>
+  </div>
+
+  <div data-region="panel" class="kaigo-widget__panel" aria-label="Чат с AI-флористом Мариной" role="dialog" aria-modal="false">
+    <div data-region="header" class="kaigo-widget__header">
+      <div class="kaigo-widget__header-avatar" aria-hidden="true">
+        <span class="kaigo-widget__header-petal kaigo-widget__header-petal--1"></span>
+        <span class="kaigo-widget__header-petal kaigo-widget__header-petal--2"></span>
+        <span class="kaigo-widget__header-petal kaigo-widget__header-petal--3"></span>
+        <span class="kaigo-widget__header-petal kaigo-widget__header-petal--4"></span>
+        <span class="kaigo-widget__header-core"></span>
+      </div>
+      <div class="kaigo-widget__header-meta">
+        <h2 class="kaigo-widget__header-name">Марина · ваш флорист</h2>
+        <p class="kaigo-widget__header-status">
+          <span class="kaigo-widget__status-dot" aria-hidden="true"></span>
+          <span>На связи — подберу букет</span>
+        </p>
+      </div>
+      <button type="button" class="kaigo-widget__close" data-action="close" aria-label="Закрыть чат">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 6 L18 18 M18 6 L6 18"/>
+        </svg>
+      </button>
+    </div>
+
+    <div data-region="messages" class="kaigo-widget__messages" aria-live="polite" aria-label="История чата">
+      <div class="kaigo-widget__message kaigo-widget__message--assistant">
+        <div class="kaigo-widget__message-avatar" aria-hidden="true">
+          <span class="kaigo-widget__msg-petal kaigo-widget__msg-petal--1"></span>
+          <span class="kaigo-widget__msg-petal kaigo-widget__msg-petal--2"></span>
+          <span class="kaigo-widget__msg-petal kaigo-widget__msg-petal--3"></span>
+          <span class="kaigo-widget__msg-petal kaigo-widget__msg-petal--4"></span>
+          <span class="kaigo-widget__msg-core"></span>
+        </div>
+        <div class="kaigo-widget__message-body">
+          <p class="kaigo-widget__message-label">Марина</p>
+          <div class="kaigo-widget__message-content">Здравствуйте! Я Марина, ваш живой AI-флорист. Подскажу букет к случаю — просто скажите повод и бюджет.</div>
+          <p class="kaigo-widget__message-status"></p>
+        </div>
+      </div>
+    </div>
+
+    <div data-region="suggestions" class="kaigo-widget__suggestions" aria-label="Быстрые вопросы">
+      <button type="button" class="kaigo-widget__suggestion" data-action="suggestion">Букет на день рождения до 2500&nbsp;₽</button>
+      <button type="button" class="kaigo-widget__suggestion" data-action="suggestion">Что подарить коллеге?</button>
+    </div>
+
+    <div data-region="composer" class="kaigo-widget__composer" aria-label="Форма сообщения флористу">
+      <label class="kaigo-widget__composer-label" for="kaigo-composer-input">Ваш вопрос флористу</label>
+      <div class="kaigo-widget__composer-row">
+        <textarea id="kaigo-composer-input" class="kaigo-widget__input" rows="1" placeholder="Спросите про букет..." aria-label="Ваш вопрос флористу"></textarea>
+        <button type="button" class="kaigo-widget__send" data-action="send" aria-label="Отправить вопрос">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 12 L19 12 M13 6 L19 12 L13 18"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+(() => {
+  'use strict';
+  const channelId = "visual-only-preview-channel";
+  const revision = 2;
+  const root = document.querySelector('[data-region="root"]');
+  const assistantLabel = String(
+    (root && (root.dataset.assistantLabel || root.getAttribute('aria-label')))
+    || 'AI-КОНСУЛЬТАНТ'
+  ).trim().slice(0, 80) || 'AI-КОНСУЛЬТАНТ';
+  const launcher = document.querySelector('[data-region="launcher"]');
+  const panel = document.querySelector('[data-region="panel"]');
+  const composer = document.querySelector('[data-region="composer"]');
+  const messages = document.querySelector('[data-region="messages"]');
+  const suggestionsRegion = document.querySelector('[data-region="suggestions"]');
+  const suggestions = Array.from(document.querySelectorAll('[data-suggestion], [data-region="suggestions"] button'));
+  let input = composer && composer.querySelector('input, textarea');
+  const toggle = root && root.querySelector('.kaigo-toggle, [data-action="toggle"], input[type="checkbox"]');
+  const requestPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{7,95}$/;
+  const ATTENTION_DELAY_MS = 15000;
+  const reducedMotionQuery = matchMedia('(prefers-reduced-motion: reduce)');
+  let pendingRequest = null;
+  let failedRequest = null;
+  let attentionTimer = null;
+  let attentionCancelled = false;
+
+  if (input && input.tagName !== 'TEXTAREA') {
+    const replacement = document.createElement('textarea');
+    replacement.className = input.className;
+    replacement.placeholder = input.placeholder || '';
+    replacement.setAttribute('aria-label', input.getAttribute('aria-label') || 'Введите сообщение');
+    replacement.autocomplete = 'off';
+    input.replaceWith(replacement);
+    input = replacement;
+  }
+  if (input) {
+    input.rows = 1;
+    input.setAttribute('data-kaigo-runtime-input', 'true');
+  }
+  if (messages) {
+    messages.setAttribute('role', 'log');
+    messages.setAttribute('aria-live', 'polite');
+    messages.setAttribute('aria-relevant', 'additions');
+  }
+
+  function cancelAttention() {
+    if (attentionCancelled) return;
+    attentionCancelled = true;
+    if (attentionTimer !== null) clearTimeout(attentionTimer);
+    attentionTimer = null;
+    if (root) root.classList.remove('kaigo-preview-attention');
+  }
+
+  function scheduleAttention() {
+    if (
+      !root
+      || attentionCancelled
+      || attentionTimer !== null
+      || document.visibilityState !== 'visible'
+      || root.dataset.state !== 'closed'
+      || root.dataset.chatStarted === 'true'
+      || reducedMotionQuery.matches
+    ) return;
+    attentionTimer = setTimeout(() => {
+      attentionTimer = null;
+      if (
+        attentionCancelled
+        || document.visibilityState !== 'visible'
+        || root.dataset.state !== 'closed'
+        || root.dataset.chatStarted === 'true'
+        || reducedMotionQuery.matches
+      ) return;
+      root.classList.add('kaigo-preview-attention');
+    }, ATTENTION_DELAY_MS);
+  }
+
+  const setOpen = (open, returnFocus = false) => {
+    if (!root) return;
+    if (open) cancelAttention();
+    root.classList.toggle('kaigo-preview-open', Boolean(open));
+    root.dataset.state = open ? 'open' : 'closed';
+    if (panel) panel.toggleAttribute('data-open', Boolean(open));
+    if (toggle) toggle.checked = Boolean(open);
+    if (launcher) {
+      launcher.hidden = Boolean(open);
+      launcher.setAttribute('aria-hidden', open ? 'true' : 'false');
+      launcher.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    if (panel) panel.setAttribute('aria-hidden', open ? 'false' : 'true');
+    if (open && input && matchMedia('(hover: hover) and (pointer: fine)').matches) {
+      setTimeout(() => input.focus(), 0);
+    }
+    if (!open && returnFocus && launcher && document.activeElement !== launcher) launcher.focus();
+  };
+
+  if (launcher) launcher.addEventListener('click', (event) => {
+    if (toggle && event.target === toggle) return;
+    event.preventDefault();
+    const opening = !root || root.dataset.state !== 'open';
+    setOpen(opening, !opening);
+  });
+
+  if (toggle) toggle.addEventListener('change', () => setOpen(toggle.checked));
+
+  const closeButton = document.querySelector('[data-action="close"]');
+  if (closeButton) closeButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    setOpen(false, true);
+  });
+
+  function appendMessage(role, text) {
+    if (!messages) return;
+    const message = document.createElement('article');
+    message.className = `kaigo-widget__message kaigo-widget__message--${role}`;
+    message.setAttribute('data-kaigo-runtime-message', role);
+    const label = document.createElement('span');
+    label.className = 'kaigo-widget__message-label';
+    label.setAttribute('data-kaigo-runtime-label', role);
+    label.textContent = role === 'user' ? 'ВЫ' : assistantLabel;
+    const content = document.createElement('p');
+    content.className = 'kaigo-widget__message-content';
+    content.setAttribute('data-kaigo-runtime-content', role);
+    content.textContent = text;
+    message.append(label, content);
+    messages.append(message);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function clearStatus() {
+    const status = messages && messages.querySelector('[data-kaigo-runtime-status]');
+    if (status) status.remove();
+  }
+
+  function showStatus(kind, text, retryable = false) {
+    if (!messages) return;
+    clearStatus();
+    const status = document.createElement('div');
+    status.className = `kaigo-widget__message-status kaigo-widget__message-status--${kind}`;
+    status.setAttribute('data-kaigo-runtime-status', kind);
+    status.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+    const copy = document.createElement('span');
+    copy.textContent = text;
+    status.append(copy);
+    if (retryable) {
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.setAttribute('data-kaigo-runtime-retry', 'true');
+      retry.textContent = 'ПОВТОРИТЬ';
+      retry.addEventListener('click', retryFailedRequest);
+      status.append(retry);
+    }
+    messages.append(status);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function setBusy(value) {
+    if (!composer) return;
+    composer.setAttribute('aria-busy', value ? 'true' : 'false');
+    const send = composer.querySelector('[data-action="send"], button');
+    if (send) send.disabled = Boolean(value);
+  }
+
+  function requestId() {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    return 'request-' + Array.from(crypto.getRandomValues(new Uint8Array(12)), value => value.toString(16).padStart(2, '0')).join('');
+  }
+
+  function postPendingRequest() {
+    if (!pendingRequest) return;
+    clearStatus();
+    setBusy(true);
+    showStatus('pending', 'Gemini готовит ответ');
+    window.parent.postMessage({
+      source: 'kaigo-builder-preview',
+      version: 2,
+      channel_id: channelId,
+      type: 'chat.request',
+      request_id: pendingRequest.requestId,
+      revision,
+      text: pendingRequest.text
+    }, '*');
+  }
+
+  function retryFailedRequest() {
+    if (!failedRequest || pendingRequest) return;
+    pendingRequest = failedRequest;
+    failedRequest = null;
+    postPendingRequest();
+  }
+
+  function sendText(text) {
+    const normalized = String(text || '').trim();
+    if (!normalized || normalized.length > 1000 || pendingRequest) return;
+    cancelAttention();
+    failedRequest = null;
+    clearStatus();
+    if (root) root.dataset.chatStarted = 'true';
+    if (suggestionsRegion) {
+      suggestionsRegion.hidden = true;
+      suggestionsRegion.setAttribute('aria-hidden', 'true');
+    }
+    suggestions.forEach(item => { item.disabled = true; });
+    pendingRequest = { requestId: requestId(), text: normalized };
+    appendMessage('user', normalized);
+    postPendingRequest();
+  }
+
+  suggestions.slice(2).forEach(item => { item.hidden = true; item.disabled = true; });
+  suggestions.slice(0, 2).forEach(suggestion => suggestion.addEventListener('click', event => {
+    event.preventDefault();
+    const text = suggestion.dataset.suggestion || suggestion.textContent.trim();
+    sendText(text);
+  }));
+
+  if (composer) composer.addEventListener('click', event => {
+    const button = event.target.closest('[data-action="send"], button');
+    if (!button || button.hasAttribute('data-kaigo-runtime-retry') || !input) return;
+    event.preventDefault();
+    sendText(input.value);
+  });
+
+  function autosize() {
+    if (!input) return;
+    input.style.height = 'auto';
+    const lineHeight = parseFloat(getComputedStyle(input).lineHeight) || 20;
+    const minHeight = Math.max(44, lineHeight + 8);
+    const maxHeight = lineHeight * 4 + 8;
+    input.style.height = `${Math.max(minHeight, Math.min(input.scrollHeight, maxHeight))}px`;
+    input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }
+  if (input) {
+    input.addEventListener('input', autosize);
+    input.addEventListener('keydown', event => {
+      if (event.isComposing) return;
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        sendText(input.value);
+      }
+    });
+    autosize();
+  }
+
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && root && root.dataset.state === 'open') {
+      event.preventDefault();
+      setOpen(false, true);
+      if (launcher) launcher.focus();
+    }
+  });
+
+  window.addEventListener('message', (event) => {
+    const data = event.data;
+    if (event.source !== window.parent || !data || data.source !== 'kaigo-builder-parent' || data.version !== 2 || data.channel_id !== channelId || data.revision !== revision) return;
+    if (data.type === 'set-open') { setOpen(Boolean(data.open)); return; }
+    if (!pendingRequest || !requestPattern.test(data.request_id) || data.request_id !== pendingRequest.requestId) return;
+    if (data.type === 'chat.response') {
+      if (typeof data.text !== 'string' || !data.text.trim() || data.text.length > 4000) return;
+      clearStatus();
+      appendMessage('assistant', data.text.trim());
+      if (input && input.value === pendingRequest.text) input.value = '';
+      pendingRequest = null;
+      setBusy(false);
+      autosize();
+      return;
+    }
+    if (data.type === 'chat.error') {
+      failedRequest = pendingRequest;
+      pendingRequest = null;
+      clearStatus();
+      setBusy(false);
+      showStatus('error', typeof data.message === 'string' ? data.message.slice(0, 320) : 'Связь прервалась. Текст сохранён.', data.retryable !== false);
+    }
+  });
+
+  document.addEventListener('pointerdown', cancelAttention, {capture: true, once: true});
+  document.addEventListener('keydown', cancelAttention, {capture: true, once: true});
+  document.addEventListener('visibilitychange', cancelAttention, {once: true});
+  reducedMotionQuery.addEventListener('change', event => {
+    if (event.matches) cancelAttention();
+  });
+  setOpen(false);
+  scheduleAttention();
+  window.parent.postMessage({
+    source: 'kaigo-builder-preview',
+    version: 2,
+    channel_id: channelId,
+    type: 'rendered',
+    revision
+  }, '*');
+})();
+</script>
+
+<script data-kaigo-generated>
+try {
+(function(){"use strict";function init(){const root=document.querySelector('.kaigo-widget');if(!root)return;const panel=root.querySelector('[data-region="panel"]');const launcher=root.querySelector('[data-region="launcher"] [data-action="open"], .kaigo-widget__launcher');const input=root.querySelector('#kaigo-composer-input');const sendBtn=root.querySelector('[data-action="send"]');const closeBtn=root.querySelector('[data-action="close"]');const suggestions=root.querySelectorAll('[data-action="suggestion"]');const messages=root.querySelector('[data-region="messages"]');let openedOnce=false;function isOpen(){return root.classList.contains('kaigo-preview-open')||root.getAttribute('data-state')==='open'||panel.hasAttribute('data-open');}function triggerLauncher(){const btn=launcher&&launcher.querySelector?launcher.querySelector('[data-action="open"]'):null;if(btn&&typeof btn.click==='function'){btn.click();}else if(launcher&&typeof launcher.click==='function'){launcher.click();}}function triggerClose(){if(closeBtn&&typeof closeBtn.click==='function')closeBtn.click();}function triggerSend(text){if(!sendBtn)return;if(input){input.value=text;input.dispatchEvent(new Event('input',{bubbles:true}));}sendBtn.click();}function attachOpenOnce(){if(openedOnce)return;openedOnce=true;setTimeout(function(){triggerLauncher();},2200);}if(window.IntersectionObserver){const io=new IntersectionObserver(function(entries){entries.forEach(function(e){if(e.isIntersecting&&e.intersectionRatio>0.25){attachOpenOnce();io.disconnect();}});},{threshold:[0.25]});io.observe(root);}else{setTimeout(function(){attachOpenOnce();},2600);}function bumpDraft(){if(!input)return;if(input.scrollHeight>input.clientHeight&&input.scrollHeight<100){input.style.height='auto';input.style.height=Math.min(input.scrollHeight,100)+'px';}}if(input){input.addEventListener('input',bumpDraft);input.addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(input.value.trim().length>0){triggerSend(input.value);}}});}if(suggestions&&suggestions.length){suggestions.forEach(function(s){s.addEventListener('click',function(){var txt=s.getAttribute('data-kaigo-suggestion')||s.textContent.trim();triggerSend(txt);});});}if(closeBtn){closeBtn.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();closeBtn.click();}});}if(sendBtn){sendBtn.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();if(input&&input.value.trim().length>0)sendBtn.click();}});}if(launcher){launcher.addEventListener('keydown',function(e){if((e.key==='Enter'||e.key===' ')&&!isOpen()){e.preventDefault();triggerLauncher();}});}}function domReady(fn){if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',fn);}else{fn();}}var attempts=0;function boot(){attempts++;var root=document.querySelector('.kaigo-widget');if(!root&&attempts<30){setTimeout(boot,100);return;}if(root){try{init();}catch(e){}}}domReady(boot);})();
+} catch (error) {
+  console.error('kaigo-generated-javascript', error);
+}
+</script>
+</body>
+</html>

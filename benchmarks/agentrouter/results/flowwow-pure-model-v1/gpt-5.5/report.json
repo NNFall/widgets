@@ -1,0 +1,80 @@
+{
+  "benchmark_id": "flowwow-pure-model-v1",
+  "generated_at": "2026-07-27T22:40:10.500277+00:00",
+  "provider": "agentrouter-qwen",
+  "model": "gpt-5.5",
+  "source_url": "https://about.flowwow.com/",
+  "brief": "Виджет в виде цветочка: живой AI-флорист подсказывает подарок по поводу и бюджету и говорит естественно, без ощущения робота.",
+  "elapsed_seconds": 542.154,
+  "usage": {
+    "input_tokens": 39537,
+    "output_tokens": 15196,
+    "thinking_tokens": 643
+  },
+  "estimated_cost_usd": 0.383131,
+  "estimated_cost_rub": 38.31,
+  "pricing": {
+    "input_usd_per_million": 7.0,
+    "output_usd_per_million": 7.0,
+    "source": "AgentRouter console pricing observed 2026-07-28"
+  },
+  "request_ids": [
+    "198cf9fc-f790-4582-840f-c654e4908917",
+    "2053046b-245d-4160-a95e-fa5a2717de1a"
+  ],
+  "attempts": [
+    {
+      "attempt": 1,
+      "kind": "generation",
+      "elapsed_seconds": 394.823,
+      "usage": {
+        "input_tokens": 16049,
+        "output_tokens": 7812,
+        "thinking_tokens": 516
+      },
+      "request_id": "198cf9fc-f790-4582-840f-c654e4908917",
+      "validation_issue_count": 4,
+      "validation_issues": [
+        {
+          "code": "forbidden_element",
+          "field": "body_html",
+          "message": "Element <article> is not allowed"
+        },
+        {
+          "code": "forbidden_attribute",
+          "field": "body_html",
+          "message": "Attribute data-kaigo-runtime-message is not allowed"
+        },
+        {
+          "code": "forbidden_attribute",
+          "field": "body_html",
+          "message": "Attribute data-kaigo-runtime-label is not allowed"
+        },
+        {
+          "code": "forbidden_attribute",
+          "field": "body_html",
+          "message": "Attribute data-kaigo-runtime-content is not allowed"
+        }
+      ],
+      "change_summary": "Создана foundation-версия компактного AI-флориста: закрытый бутон раскрывается в тёплую цветочную чат-панель с понятной перепиской, быстрыми вопросами и доступным полем ввода. Заложены адаптивные размеры, состояния runtime, оформление pending/error/retry и мягкая motion-система с reduced-motion."
+    },
+    {
+      "attempt": 2,
+      "kind": "repair",
+      "elapsed_seconds": 147.331,
+      "usage": {
+        "input_tokens": 23488,
+        "output_tokens": 7384,
+        "thinking_tokens": 127
+      },
+      "request_id": "2053046b-245d-4160-a95e-fa5a2717de1a",
+      "validation_issue_count": 0,
+      "validation_issues": [],
+      "change_summary": "Исправлена совместимость разметки без изменения цветочной арт-дирекции: приветственное сообщение осталось тем же чат-сообщением, но теперь использует только разрешённую структуру. Визуальная система, адаптивность, быстрые вопросы и runtime-стили сохранены."
+    }
+  ],
+  "validation_passed": true,
+  "validation_issues": [],
+  "artifact_path": "benchmarks\\agentrouter\\results\\flowwow-pure-model-v1\\gpt-5.5\\artifact.json",
+  "preview_path": "benchmarks\\agentrouter\\results\\flowwow-pure-model-v1\\gpt-5.5\\preview.html"
+}

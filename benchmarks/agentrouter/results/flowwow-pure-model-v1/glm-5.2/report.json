@@ -1,0 +1,57 @@
+{
+  "benchmark_id": "flowwow-pure-model-v1",
+  "generated_at": "2026-07-27T22:30:50.613336+00:00",
+  "provider": "agentrouter-qwen",
+  "model": "glm-5.2",
+  "source_url": "https://about.flowwow.com/",
+  "brief": "Виджет в виде цветочка: живой AI-флорист подсказывает подарок по поводу и бюджету и говорит естественно, без ощущения робота.",
+  "elapsed_seconds": 511.637,
+  "usage": {
+    "input_tokens": 60593,
+    "output_tokens": 126635,
+    "thinking_tokens": 107295
+  },
+  "estimated_cost_usd": 1.123368,
+  "estimated_cost_rub": 112.34,
+  "pricing": {
+    "input_usd_per_million": 6.0,
+    "output_usd_per_million": 6.0,
+    "source": "AgentRouter console pricing observed 2026-07-28"
+  },
+  "request_ids": [
+    "7c44ca7e-b7de-4fe1-9799-cfe7d96dd001",
+    "67f8c1cf-61eb-437b-b499-c4ab8232f9cc"
+  ],
+  "attempts": [
+    {
+      "attempt": 1,
+      "kind": "generation",
+      "elapsed_seconds": 300.4,
+      "usage": {
+        "input_tokens": 33763,
+        "output_tokens": 73746,
+        "thinking_tokens": 64075
+      },
+      "request_id": "7c44ca7e-b7de-4fe1-9799-cfe7d96dd001",
+      "validation_issue_count": 12
+    },
+    {
+      "attempt": 2,
+      "kind": "repair",
+      "elapsed_seconds": 211.237,
+      "usage": {
+        "input_tokens": 26830,
+        "output_tokens": 52889,
+        "thinking_tokens": 43220
+      },
+      "request_id": "67f8c1cf-61eb-437b-b499-c4ab8232f9cc",
+      "validation_issue_count": 0,
+      "validation_issues": [],
+      "change_summary": "Виджет получил корневой контейнер, недопустимые атрибуты и элементы удалены, переменные стилей перенесены внутрь виджета, а форма сообщения получила доступную подпись."
+    }
+  ],
+  "validation_passed": true,
+  "validation_issues": [],
+  "artifact_path": "benchmarks\\agentrouter\\results\\flowwow-pure-model-v1\\glm-5.2\\artifact.json",
+  "preview_path": "benchmarks\\agentrouter\\results\\flowwow-pure-model-v1\\glm-5.2\\preview.html"
+}
