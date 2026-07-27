@@ -81,7 +81,8 @@ curl -k https://kaigo.space/api/health/ai
    `/builder-demo/`, `/builder-comparison/` и маршруты ACME/сертификатов.
 3. Заменить только существующий fallback `location /` и существующий блок
    `/builder/` соответствующими блоками из фрагмента.
-4. Добавить exact-блоки `/`, `/studio`, `/studio/` и `/assets/`.
+4. Добавить exact-блоки `/`, `/favicon.svg`, `/studio`, `/studio/` и
+   `/assets/`.
 5. Подтвердить, что `/etc/nginx/.htpasswd-kaigo-builder` — тот же файл паролей,
    который уже используется для `/builder/`. Studio не должна стать публичной.
 6. Хранить backup вне `sites-enabled`: glob nginx читает любой файл в этой
@@ -107,6 +108,7 @@ nginx с прежним релизом. Неудачный релиз остаё
 
 ```bash
 curl -fsS https://kaigo.space/ >/dev/null
+curl -fsSI https://kaigo.space/favicon.svg
 curl -fsSI https://kaigo.space/assets/ACTUAL_HASHED_ASSET.js
 test "$(curl -sS -o /dev/null -w '%{http_code}' https://kaigo.space/studio)" = 401
 test "$(curl -sS -o /dev/null -w '%{http_code}' https://kaigo.space/builder/)" = 401
@@ -120,7 +122,9 @@ curl -fsS https://kaigo.space/w/demka >/dev/null
 
 Ожидаемая граница авторизации:
 
-- `/` и `/assets/*` публичны;
+- `/`, `/favicon.svg` и `/assets/*` публичны;
+- `/favicon.svg` получает `no-cache`, чтобы новый брендовый значок появлялся
+  сразу после переключения релиза;
 - файлы с Vite-hash в имени получают `immutable`, а stable-name assets —
   `no-cache`, чтобы новый релиз не оставался со старым изображением;
 - `/studio`, `/studio/` и `/builder/` используют одинаковые учётные данные

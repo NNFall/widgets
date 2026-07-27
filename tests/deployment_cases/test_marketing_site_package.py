@@ -39,11 +39,17 @@ BASH = next(
 class MarketingSitePackageTests(unittest.TestCase):
     def test_frontend_build_is_a_self_contained_hashed_static_package(self):
         index = (DIST / "index.html").read_text(encoding="utf-8")
+        favicon = DIST / "favicon.svg"
         references = re.findall(
             r"""(?:src|href)=["'](/assets/[^"']+\.(?:js|css))["']""",
             index,
         )
 
+        self.assertTrue(favicon.is_file(), "built package must include favicon.svg")
+        self.assertIn(
+            '<link rel="icon" type="image/svg+xml" href="/favicon.svg" />',
+            index,
+        )
         self.assertTrue(references, "index.html must reference built JS/CSS assets")
         self.assertTrue(any(reference.endswith(".js") for reference in references))
         self.assertTrue(any(reference.endswith(".css") for reference in references))
@@ -73,6 +79,12 @@ class MarketingSitePackageTests(unittest.TestCase):
         stable_assets = config.split("location /assets/ {", 1)[1].split("}", 1)[0]
         self.assertIn('Cache-Control "no-cache"', stable_assets)
         self.assertIn("try_files $uri =404;", config)
+
+        favicon = config.split("location = /favicon.svg {", 1)[1].split("}", 1)[0]
+        self.assertIn("root /var/www/kaigo-marketing/current;", favicon)
+        self.assertIn("try_files /favicon.svg =404;", favicon)
+        self.assertIn('Cache-Control "no-cache"', favicon)
+        self.assertIn('X-Content-Type-Options "nosniff"', favicon)
 
         fallback = config.split("location / {", 1)[1]
         self.assertIn("proxy_pass http://127.0.0.1:8080;", fallback)
@@ -242,6 +254,17 @@ class MarketingSitePackageTests(unittest.TestCase):
                 timeout=2,
             ) as stable_response:
                 self.assertEqual(stable_response.headers["Cache-Control"], "no-cache")
+
+            with urllib.request.urlopen(
+                f"{base_url}/favicon.svg",
+                timeout=2,
+            ) as favicon_response:
+                self.assertEqual(favicon_response.status, 200)
+                self.assertEqual(favicon_response.headers["Cache-Control"], "no-cache")
+                self.assertEqual(
+                    favicon_response.headers["Content-Type"],
+                    "image/svg+xml",
+                )
         finally:
             subprocess.run(
                 [DOCKER, "rm", "-f", container],
