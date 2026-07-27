@@ -1,18 +1,101 @@
 import { describe, expect, it } from 'vitest';
 
 import { WIDGET_LAUNCHER_REPEAT_DELAY_SECONDS } from '../shared/BrowserMockup';
+import revealSource from '../shared/Reveal.tsx?raw';
 import stylesSource from '../styles.css?raw';
 import {
   CAPABILITY_CARD_STAGGER_SECONDS,
   CAPABILITY_REVEAL_DELAYS_SECONDS,
 } from './CapabilitiesSection';
 import heroOrbitSceneSource from './HeroOrbitScene.tsx?raw';
+import analysisSectionSource from './AnalysisSection.tsx?raw';
+import howItWorksSectionSource from './HowItWorksSection.tsx?raw';
 import { HOW_CARD_STAGGER_SECONDS } from './HowItWorksSection';
 
 describe('landing motion contracts', () => {
-  it('staggers narrative and capability cards at a legible 260ms cadence', () => {
-    expect(HOW_CARD_STAGGER_SECONDS).toBe(0.26);
+  it('staggers process cards at 180ms while preserving the capability cadence', () => {
+    expect(HOW_CARD_STAGGER_SECONDS).toBe(0.18);
     expect(CAPABILITY_CARD_STAGGER_SECONDS).toBe(0.26);
+  });
+
+  it('uses invisible transform-only Reveal presets with a reduced-motion shortcut', () => {
+    expect(revealSource).toMatch(/heading:\s*\{[^}]*opacity:\s*0,[^}]*y:/s);
+    expect(revealSource).toMatch(/fromLeft:\s*\{[^}]*opacity:\s*0,[^}]*x:\s*'clamp\(-65px, -5vw, -36px\)'[^}]*scale:\s*0\.92/s);
+    expect(revealSource).toMatch(/fromRight:\s*\{[^}]*opacity:\s*0,[^}]*x:\s*'clamp\(36px, 5vw, 65px\)'[^}]*scale:\s*0\.92/s);
+    expect(revealSource).toMatch(/scale:\s*\{[^}]*opacity:\s*0,[^}]*scale:\s*0\.9/s);
+    expect(revealSource).toContain(
+      'initial={reducedMotion || !viewportMotionAvailable ? false : hiddenByPreset[preset]}',
+    );
+  });
+
+  it('draws the process route once and keeps alternating entrance transforms on shells', () => {
+    expect(howItWorksSectionSource).toContain('className="how-route__path"');
+    expect(stylesSource).toMatch(
+      /\[data-motion-active='true'\]\s+\.how-route__path\s*\{[^}]*animation:\s*how-route-draw 1\.1s[^;]* both;/s,
+    );
+    expect(howItWorksSectionSource).toContain("index % 2 === 0 ? 'fromLeft' : 'fromRight'");
+    expect(howItWorksSectionSource).toContain('className="how-card__entrance"');
+    expect(howItWorksSectionSource).toMatch(/className=\{`how-card how-card--\$\{index \+ 1\}`\}/);
+  });
+
+  it('gates the three process artifact stories behind the section activity boundary', () => {
+    expect(howItWorksSectionSource).toContain('useMotionActivity<HTMLElement>()');
+    expect(howItWorksSectionSource).toContain("data-motion-active={active ? 'true' : 'false'}");
+    expect(howItWorksSectionSource).toContain('how-confirmation-pulse');
+    expect(howItWorksSectionSource).toContain('how-checklist-progress');
+    expect(howItWorksSectionSource).toContain('how-chat-response');
+  });
+
+  it('keeps the analysis browser rotation inside its scale entrance and exposes focus targets', () => {
+    expect(analysisSectionSource).toContain('useMotionActivity<HTMLElement>()');
+    expect(analysisSectionSource).toContain('className="analysis-browser__entrance"');
+    expect(analysisSectionSource).toContain('preset="scale"');
+    expect(analysisSectionSource).toContain('className="analysis-browser"');
+    expect(analysisSectionSource).toContain('className="analysis-focus-ring"');
+    expect(analysisSectionSource.match(/data-analysis-target=/g)).toHaveLength(4);
+    expect(analysisSectionSource).toContain('motionComplete={active}');
+    expect(analysisSectionSource).toContain('reducedMotion={!active}');
+  });
+
+  it('gates every new infinite section animation and disables it for reduced motion', () => {
+    const activeLoops = [
+      'how-confirmation-pulse',
+      'how-checklist-progress',
+      'how-chat-response',
+      'analysis-focus-travel',
+      'analysis-lens-breathe',
+    ];
+
+    activeLoops.forEach((name) => {
+      expect(stylesSource).toMatch(
+        new RegExp(`\\[data-motion-active='true'\\][^{}]*\\{[^}]*animation:[^;]*${name}[^;]*infinite`, 's'),
+      );
+    });
+
+    const reducedMotionStart = stylesSource.indexOf('@media (prefers-reduced-motion: reduce)');
+    const nextMediaQuery = stylesSource.indexOf('@media (max-width: 1280px)', reducedMotionStart);
+    const reducedMotionRules = stylesSource.slice(reducedMotionStart, nextMediaQuery);
+    expect(reducedMotionRules).toContain('.how-section');
+    expect(reducedMotionRules).toContain('.analysis-section');
+    expect(reducedMotionRules).toContain('animation: none !important;');
+  });
+
+  it('keeps all process and analysis keyframes on transform and opacity only', () => {
+    const sectionKeyframes = [
+      'how-route-draw',
+      'how-confirmation-pulse',
+      'how-checklist-progress',
+      'how-chat-response',
+      'analysis-focus-travel',
+      'analysis-lens-breathe',
+    ];
+
+    sectionKeyframes.forEach((name) => {
+      const body = stylesSource.match(new RegExp(`@keyframes ${name}\\s*\\{([\\s\\S]*?)\\n\\}`))?.[1];
+      expect(body, `missing @keyframes ${name}`).toBeDefined();
+      expect(body).toMatch(/(?:transform|opacity):/);
+      expect(body).not.toMatch(/(?:top|right|bottom|left|width|height|filter|box-shadow):/);
+    });
   });
 
   it('reveals all six capability cards in one alternating sequence without pairs', () => {

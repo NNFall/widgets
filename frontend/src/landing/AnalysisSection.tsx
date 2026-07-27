@@ -1,6 +1,7 @@
 import { ChatCircleDots, FileText, Palette, TreeStructure } from '@phosphor-icons/react';
 
 import { BrowserMockup } from '../shared/BrowserMockup';
+import { useMotionActivity } from '../shared/MotionActivity';
 import { Reveal } from '../shared/Reveal';
 
 const observations = [
@@ -11,10 +12,18 @@ const observations = [
 ] as const;
 
 export function AnalysisSection() {
+  const { active, ref } = useMotionActivity<HTMLElement>();
+
   return (
-    <section className="landing-section analysis-section" id="analysis" data-landing-section>
+    <section
+      className="landing-section analysis-section"
+      id="analysis"
+      data-landing-section
+      data-motion-active={active ? 'true' : 'false'}
+      ref={ref}
+    >
       <div className="landing-shell analysis-layout">
-        <Reveal className="analysis-copy">
+        <Reveal className="analysis-copy" preset="heading">
           <p className="section-kicker">Визуальный анализ</p>
           <h2 aria-label="Что видит Kaigo">Kaigo изучает сайт,<br />а не просто<br />читает текст</h2>
           <p>Он проходит по страницам, видит оформление и собирает контекст, который понадобится будущему AI-консультанту.</p>
@@ -24,18 +33,39 @@ export function AnalysisSection() {
           </div>
         </Reveal>
 
-        <Reveal className="analysis-scene" delay={0.08}>
-          <div className="analysis-browser"><BrowserMockup widgetVisible={false} motionComplete={false} reducedMotion testIds={false} /></div>
+        <div className="analysis-scene">
+          <Reveal className="analysis-browser__entrance" delay={0.08} preset="scale">
+            <div className="analysis-browser">
+              <BrowserMockup
+                widgetVisible={false}
+                motionComplete={active}
+                reducedMotion={!active}
+                testIds={false}
+              />
+            </div>
+          </Reveal>
+          <div className="analysis-focus-ring" aria-hidden="true" />
+          <span className="analysis-focus-node analysis-focus-node--content" data-analysis-target="content" aria-hidden="true" />
+          <span className="analysis-focus-node analysis-focus-node--visual" data-analysis-target="visual" aria-hidden="true" />
+          <span className="analysis-focus-node analysis-focus-node--structure" data-analysis-target="structure" aria-hidden="true" />
+          <span className="analysis-focus-node analysis-focus-node--questions" data-analysis-target="questions" aria-hidden="true" />
           <div className="analysis-lens analysis-lens--one" aria-hidden="true" />
           <div className="analysis-lens analysis-lens--two" aria-hidden="true" />
           <div className="analysis-lens analysis-lens--three" aria-hidden="true" />
-          {observations.map(({ label, copy, Icon, className }) => (
-            <article className={`analysis-note ${className}`} key={label}>
-              <Icon size={37} weight="regular" aria-hidden="true" />
-              <span><strong>{label}</strong><small>{copy}</small></span>
-            </article>
+          {observations.map(({ label, copy, Icon, className }, index) => (
+            <Reveal
+              className={`analysis-note-shell ${className}`}
+              delay={0.28 + index * 0.22}
+              key={label}
+              preset={index % 2 === 0 ? 'fromLeft' : 'fromRight'}
+            >
+              <article className="analysis-note">
+                <Icon size={37} weight="regular" aria-hidden="true" />
+                <span><strong>{label}</strong><small>{copy}</small></span>
+              </article>
+            </Reveal>
           ))}
-        </Reveal>
+        </div>
       </div>
     </section>
   );
