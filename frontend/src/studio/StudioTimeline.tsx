@@ -1,5 +1,5 @@
 import { CheckCircle, CircleNotch, WarningCircle } from '@phosphor-icons/react';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 
 import { safeEventMessage } from './errors';
 import type { BuilderEvent } from './types';
@@ -60,7 +60,21 @@ function StatusIcon({ status }: { status: string }) {
   return <CircleNotch aria-hidden size={18} weight="bold" />;
 }
 
+export function studioTimelineEventMotion(reducedMotion: boolean) {
+  return {
+    initial: reducedMotion ? false as const : { opacity: 0, y: 10 },
+    animate: { opacity: 1, y: 0 },
+    exit: reducedMotion ? undefined : { opacity: 0 },
+    transition: reducedMotion
+      ? { duration: 0 }
+      : { type: 'spring' as const, stiffness: 120, damping: 20 },
+  };
+}
+
 export function StudioTimeline({ events, running }: { events: BuilderEvent[]; running: boolean }) {
+  const reducedMotion = Boolean(useReducedMotion());
+  const eventMotion = studioTimelineEventMotion(reducedMotion);
+
   return (
     <section className="studio-timeline" aria-labelledby="studio-timeline-title">
       <div className="studio-timeline__head">
@@ -68,7 +82,12 @@ export function StudioTimeline({ events, running }: { events: BuilderEvent[]; ru
           <p className="studio-kicker">Ход сборки</p>
           <h2 id="studio-timeline-title">Диалог с генератором</h2>
         </div>
-        <span className="studio-timeline__signal" data-running={running} aria-label={running ? 'Генерация выполняется' : 'Генерация не выполняется'} />
+        <span
+          className="studio-timeline__signal"
+          data-running={running}
+          role="status"
+          aria-label={running ? 'Генерация выполняется' : 'Генерация не выполняется'}
+        />
       </div>
       <div className="studio-timeline__list" aria-live="polite">
         {events.length === 0 ? (
@@ -84,10 +103,10 @@ export function StudioTimeline({ events, running }: { events: BuilderEvent[]; ru
                 className="studio-event"
                 data-status={item.status}
                 key={`${item.run_id}-${item.sequence}`}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                transition={{ type: 'spring', stiffness: 120, damping: 20 }}
+                initial={eventMotion.initial}
+                animate={eventMotion.animate}
+                exit={eventMotion.exit}
+                transition={eventMotion.transition}
               >
                 <div className="studio-event__icon"><StatusIcon status={item.status} /></div>
                 <div className="studio-event__content">

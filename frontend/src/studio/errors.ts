@@ -17,9 +17,15 @@ export const STUDIO_ERROR_MESSAGES: Readonly<Record<string, string>> = {
 };
 
 export const GENERIC_EVENT_ERROR = 'Этап завершился с ошибкой.';
+export const STUDIO_AUTH_ERROR = 'Доступ к Studio не подтверждён. Обновите страницу и войдите снова.';
 
 export function russianErrorMessage(code: string | null, fallback: string) {
   return (code && STUDIO_ERROR_MESSAGES[code]) || fallback;
+}
+
+export function russianRequestErrorMessage(status: number, code: string | null, fallback: string) {
+  if (status === 401) return STUDIO_AUTH_ERROR;
+  return russianErrorMessage(code, fallback);
 }
 
 export function safeEventMessage(event: BuilderEvent) {

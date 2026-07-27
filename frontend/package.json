@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "vitest",
+    "test": "vitest src",
     "lint": "eslint . --max-warnings 0",
     "test:e2e": "playwright test"
   },

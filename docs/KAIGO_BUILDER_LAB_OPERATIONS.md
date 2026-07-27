@@ -245,6 +245,29 @@ location ^~ /builder/ {
 }
 ```
 
+Новая React Studio использует те же изменяющие состояние endpoints, поэтому
+`/studio` и `/studio/` обязаны быть закрыты тем же realm и тем же htpasswd,
+что и `/builder/`. Защиту `/builder/` при публикации Studio не снимают:
+
+```nginx
+location = /studio {
+    auth_basic "Kaigo Builder";
+    auth_basic_user_file /etc/nginx/.htpasswd-kaigo-builder;
+    try_files /index.html =404;
+}
+
+location ^~ /studio/ {
+    auth_basic "Kaigo Builder";
+    auth_basic_user_file /etc/nginx/.htpasswd-kaigo-builder;
+    try_files $uri /index.html;
+}
+```
+
+Это deployment-контракт для будущего production reload, а не инструкция
+открывать Builder API публично. Перед применением серверный root должен уже
+указывать на проверенный frontend build; живой nginx изменяют только после
+backup и успешного `nginx -t`.
+
 Открытое демо проксируется только на read-only обработчики:
 
 ```nginx
@@ -316,13 +339,16 @@ art_direction -> foundation -> identity -> conversation -> motion_polish
 
 ```bash
 curl -fsS https://kaigo.space/builder-demo/ >/dev/null
+curl -sS -o /dev/null -w '%{http_code}\n' https://kaigo.space/studio
 curl -sS -o /dev/null -w '%{http_code}\n' https://kaigo.space/builder/
 curl -fsS https://kaigo.space/ >/dev/null
 curl -fsS https://kaigo.space/w/demka >/dev/null
 curl -fsS https://kaigo.online/ >/dev/null
 ```
 
-Без авторизации `/builder/` должен отвечать `401`. С авторизацией — `200`.
+Без авторизации и `/studio`, и `/builder/` должны отвечать `401`. С одной и той
+же Basic Auth-парой оба маршрута должны отвечать `200`; это отдельно
+подтверждает, что публикация Studio не ослабила защиту Builder API.
 Дополнительно проверяются app/db контейнеры, loopback-порт и browser console.
 
 Для production-чата отдельно проверяются запрет GET и два последовательных

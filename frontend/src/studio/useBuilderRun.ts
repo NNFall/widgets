@@ -9,7 +9,7 @@ import {
   refineBuilderRun,
   retryBuilderRun,
 } from './api';
-import { russianErrorMessage, safeEventMessage } from './errors';
+import { russianErrorMessage, russianRequestErrorMessage, safeEventMessage } from './errors';
 import type {
   BuilderEvent,
   BuilderRunInput,
@@ -82,7 +82,7 @@ function forgetRun() {
 function describeError(error: unknown, fallback = 'Не удалось выполнить запрос к студии.'): StudioError {
   if (error instanceof BuilderApiError) {
     return {
-      message: russianErrorMessage(error.code, fallback),
+      message: russianRequestErrorMessage(error.status, error.code, fallback),
       raw: error.raw,
       code: error.code,
     };
@@ -109,6 +109,7 @@ export interface BuilderRunController {
   activityMessage: string;
   connection: 'idle' | 'streaming' | 'polling';
   isHydrating: boolean;
+  mutationPending: boolean;
   createRun: (input: BuilderRunInput) => Promise<void>;
   cancelRun: () => Promise<void>;
   retryRun: () => Promise<void>;
@@ -126,11 +127,37 @@ export function useBuilderRun(): BuilderRunController {
   );
   const [connection, setConnection] = useState<'idle' | 'streaming' | 'polling'>('idle');
   const [isHydrating, setIsHydrating] = useState(Boolean(runId));
+  const [mutationPending, setMutationPending] = useState(false);
   const [streamVersion, setStreamVersion] = useState(0);
+  const activeRunRef = useRef<string | null>(runId);
+  const activeRunEpochRef = useRef(0);
+  const operationEpochRef = useRef(0);
+  const mutationPendingRef = useRef(false);
   const snapshotRef = useRef<BuilderRunSnapshot | null>(null);
   const snapshotWatermarkRef = useRef<SnapshotWatermark | null>(null);
 
+  const beginMutation = useCallback(() => {
+    if (mutationPendingRef.current) return null;
+    mutationPendingRef.current = true;
+    setMutationPending(true);
+    operationEpochRef.current += 1;
+    return operationEpochRef.current;
+  }, []);
+
+  const finishMutation = useCallback((operationEpoch: number) => {
+    if (operationEpochRef.current !== operationEpoch) return;
+    mutationPendingRef.current = false;
+    setMutationPending(false);
+    setStreamVersion((version) => version + 1);
+  }, []);
+
+  const isCurrentOperation = useCallback((operationEpoch: number, expectedRunId: string | null) => (
+    operationEpochRef.current === operationEpoch
+    && activeRunRef.current === expectedRunId
+  ), []);
+
   const applySnapshot = useCallback((next: BuilderRunSnapshot) => {
+    if (activeRunRef.current !== next.run_id) return false;
     const nextWatermark = snapshotWatermark(next);
     const currentWatermark = snapshotWatermarkRef.current;
     if (currentWatermark && isSnapshotRegression(currentWatermark, nextWatermark)) {
@@ -160,6 +187,11 @@ export function useBuilderRun(): BuilderRunController {
   }, []);
 
   const adoptRun = useCallback((next: BuilderRunSnapshot, message: string) => {
+    activeRunEpochRef.current += 1;
+    operationEpochRef.current += 1;
+    activeRunRef.current = next.run_id;
+    mutationPendingRef.current = false;
+    setMutationPending(false);
     snapshotWatermarkRef.current = null;
     snapshotRef.current = null;
     setEvents([]);
@@ -173,6 +205,7 @@ export function useBuilderRun(): BuilderRunController {
 
   useEffect(() => {
     if (!runId) {
+      activeRunRef.current = null;
       snapshotWatermarkRef.current = null;
       snapshotRef.current = null;
       setConnection('idle');
@@ -183,6 +216,9 @@ export function useBuilderRun(): BuilderRunController {
       snapshotWatermarkRef.current = null;
       snapshotRef.current = null;
     }
+    activeRunRef.current = runId;
+    const effectEpoch = activeRunEpochRef.current;
+    const effectOperationEpoch = operationEpochRef.current;
 
     let disposed = false;
     let stream: EventSource | null = null;
@@ -197,16 +233,31 @@ export function useBuilderRun(): BuilderRunController {
     const refresh = async () => {
       try {
         const next = await getBuilderRun(runId);
-        if (disposed) return;
+        if (
+          disposed
+          || activeRunRef.current !== runId
+          || activeRunEpochRef.current !== effectEpoch
+          || operationEpochRef.current !== effectOperationEpoch
+        ) return;
         if (!applySnapshot(next)) return;
         if (TERMINAL_STATUSES.has(next.status)) {
           terminalFromEvent = true;
           stopPolling();
         }
       } catch (caught) {
-        if (disposed) return;
+        if (
+          disposed
+          || activeRunRef.current !== runId
+          || activeRunEpochRef.current !== effectEpoch
+          || operationEpochRef.current !== effectOperationEpoch
+        ) return;
         if (caught instanceof BuilderApiError && caught.status === 404) {
           forgetRun();
+          activeRunEpochRef.current += 1;
+          operationEpochRef.current += 1;
+          activeRunRef.current = null;
+          mutationPendingRef.current = false;
+          setMutationPending(false);
           setRunId(null);
           snapshotWatermarkRef.current = null;
           snapshotRef.current = null;
@@ -222,7 +273,15 @@ export function useBuilderRun(): BuilderRunController {
     };
 
     const startPolling = () => {
-      if (disposed || pollTimer || terminalFromEvent || TERMINAL_STATUSES.has(snapshotRef.current?.status ?? 'created')) return;
+      if (
+        disposed
+        || activeRunRef.current !== runId
+        || activeRunEpochRef.current !== effectEpoch
+        || operationEpochRef.current !== effectOperationEpoch
+        || pollTimer
+        || terminalFromEvent
+        || TERMINAL_STATUSES.has(snapshotRef.current?.status ?? 'created')
+      ) return;
       setConnection('polling');
       pollTimer = setInterval(refresh, POLL_INTERVAL_MS);
     };
@@ -232,7 +291,12 @@ export function useBuilderRun(): BuilderRunController {
       stream = new EventSource(builderUrl(`api/runs/${encodeURIComponent(runId)}/events`));
       setConnection('streaming');
       stream.onmessage = (message) => {
-        if (disposed) return;
+        if (
+          disposed
+          || activeRunRef.current !== runId
+          || activeRunEpochRef.current !== effectEpoch
+          || operationEpochRef.current !== effectOperationEpoch
+        ) return;
         try {
           const incoming = JSON.parse(message.data) as BuilderEvent;
           if (incoming.run_id !== runId || !Number.isInteger(incoming.sequence)) return;
@@ -257,6 +321,12 @@ export function useBuilderRun(): BuilderRunController {
         }
       };
       stream.onerror = () => {
+        if (
+          disposed
+          || activeRunRef.current !== runId
+          || activeRunEpochRef.current !== effectEpoch
+          || operationEpochRef.current !== effectOperationEpoch
+        ) return;
         stream?.close();
         if (terminalFromEvent) setConnection('idle');
         else startPolling();
@@ -273,53 +343,82 @@ export function useBuilderRun(): BuilderRunController {
   }, [applySnapshot, runId, streamVersion]);
 
   const createRun = useCallback(async (input: BuilderRunInput) => {
+    const expectedRunId = activeRunRef.current;
+    const operationEpoch = beginMutation();
+    if (operationEpoch === null) return;
     setError(null);
     setActivityMessage('Создаём запуск');
     try {
       const next = await createBuilderRun(input);
+      if (!isCurrentOperation(operationEpoch, expectedRunId)) return;
       adoptRun(next, 'Запуск создан');
     } catch (caught) {
+      if (!isCurrentOperation(operationEpoch, expectedRunId)) return;
       setActivityMessage('Запуск не создан');
       setError(describeError(caught, 'Не удалось создать запуск.'));
+    } finally {
+      finishMutation(operationEpoch);
     }
-  }, [adoptRun]);
+  }, [adoptRun, beginMutation, finishMutation, isCurrentOperation]);
 
   const cancelRun = useCallback(async () => {
-    if (!runId) return;
+    const targetRunId = activeRunRef.current;
+    if (!targetRunId) return;
+    const operationEpoch = beginMutation();
+    if (operationEpoch === null) return;
     setError(null);
     try {
-      await cancelBuilderRun(runId);
+      await cancelBuilderRun(targetRunId);
+      if (!isCurrentOperation(operationEpoch, targetRunId)) return;
       setActivityMessage('Отмена запрошена');
-      const next = await getBuilderRun(runId);
+      const next = await getBuilderRun(targetRunId);
+      if (!isCurrentOperation(operationEpoch, targetRunId)) return;
       applySnapshot(next);
     } catch (caught) {
+      if (!isCurrentOperation(operationEpoch, targetRunId)) return;
       setError(describeError(caught, 'Не удалось отменить генерацию.'));
+    } finally {
+      finishMutation(operationEpoch);
     }
-  }, [applySnapshot, runId]);
+  }, [applySnapshot, beginMutation, finishMutation, isCurrentOperation]);
 
   const retryRun = useCallback(async () => {
-    if (!runId) return;
+    const targetRunId = activeRunRef.current;
+    if (!targetRunId) return;
+    const operationEpoch = beginMutation();
+    if (operationEpoch === null) return;
     setError(null);
     setActivityMessage('Повторяем запуск');
     try {
-      const next = await retryBuilderRun(runId);
+      const next = await retryBuilderRun(targetRunId);
+      if (!isCurrentOperation(operationEpoch, targetRunId)) return;
       adoptRun(next, 'Повторный запуск создан');
     } catch (caught) {
+      if (!isCurrentOperation(operationEpoch, targetRunId)) return;
       setError(describeError(caught, 'Не удалось повторить запуск.'));
+    } finally {
+      finishMutation(operationEpoch);
     }
-  }, [adoptRun, runId]);
+  }, [adoptRun, beginMutation, finishMutation, isCurrentOperation]);
 
   const refineRun = useCallback(async (message: string) => {
-    if (!runId) return;
+    const targetRunId = activeRunRef.current;
+    if (!targetRunId) return;
+    const operationEpoch = beginMutation();
+    if (operationEpoch === null) return;
     setError(null);
     setActivityMessage('Готовим доработку');
     try {
-      const next = await refineBuilderRun(runId, message);
+      const next = await refineBuilderRun(targetRunId, message);
+      if (!isCurrentOperation(operationEpoch, targetRunId)) return;
       adoptRun(next, 'Доработка начата');
     } catch (caught) {
+      if (!isCurrentOperation(operationEpoch, targetRunId)) return;
       setError(describeError(caught, 'Не удалось запустить доработку.'));
+    } finally {
+      finishMutation(operationEpoch);
     }
-  }, [adoptRun, runId]);
+  }, [adoptRun, beginMutation, finishMutation, isCurrentOperation]);
 
   return {
     runId,
@@ -329,6 +428,7 @@ export function useBuilderRun(): BuilderRunController {
     activityMessage,
     connection,
     isHydrating,
+    mutationPending,
     createRun,
     cancelRun,
     retryRun,

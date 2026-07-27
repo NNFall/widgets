@@ -87,6 +87,7 @@ export function StudioPage() {
   const artifact = selectedArtifact(controller.snapshot);
   const status = controller.snapshot?.status ?? null;
   const running = status === 'created' || status === 'running';
+  const controlsLocked = running || controller.mutationPending;
   const progress = progressFor(controller.snapshot, controller.events.length);
   const refinable = status === 'completed'
     && controller.snapshot?.request.engine === 'direct'
@@ -187,7 +188,7 @@ export function StudioPage() {
                 placeholder="https://example.com"
                 value={sourceUrl}
                 onChange={(event) => setSourceUrl(event.target.value)}
-                disabled={running}
+                disabled={controlsLocked}
               />
             </div>
             <p className="studio-helper">Публичная HTTPS-страница без параметров в адресе.</p>
@@ -199,14 +200,14 @@ export function StudioPage() {
               maxLength={12_000}
               value={brief}
               onChange={(event) => setBrief(event.target.value)}
-              disabled={running}
+              disabled={controlsLocked}
             />
 
             <details className="studio-advanced">
               <summary>Параметры прототипа</summary>
               <div>
                 <label htmlFor="studio-engine">Движок</label>
-                <select id="studio-engine" value={engine} onChange={(event) => setEngine(event.target.value as BuilderEngine)} disabled={running}>
+                <select id="studio-engine" value={engine} onChange={(event) => setEngine(event.target.value as BuilderEngine)} disabled={controlsLocked}>
                   <option value="direct">Gemini staged</option>
                   <option value="antigravity">Antigravity agent</option>
                 </select>
@@ -219,16 +220,16 @@ export function StudioPage() {
                   step="0.05"
                   value={creativity}
                   onChange={(event) => setCreativity(Number(event.target.value))}
-                  disabled={running || engine !== 'direct'}
+                  disabled={controlsLocked || engine !== 'direct'}
                 />
               </div>
             </details>
 
             {formError && <p className="studio-form__error" role="alert">{formError}</p>}
-            <button type="submit" className="studio-create" disabled={running || controller.isHydrating}>
-              {controller.isHydrating ? <Clock aria-hidden size={20} /> : <PaperPlaneTilt aria-hidden size={20} weight="fill" />}
+            <button type="submit" className="studio-create" disabled={running || controller.isHydrating || controller.mutationPending}>
+              {controller.isHydrating || controller.mutationPending ? <Clock aria-hidden size={20} /> : <PaperPlaneTilt aria-hidden size={20} weight="fill" />}
               {running ? 'Генерация идёт' : 'Создать AI-виджет'}
-              {!running && !controller.isHydrating && <ArrowRight aria-hidden size={18} />}
+              {!running && !controller.isHydrating && !controller.mutationPending && <ArrowRight aria-hidden size={18} />}
             </button>
           </form>
 
@@ -241,10 +242,10 @@ export function StudioPage() {
           )}
 
           <div className="studio-run-actions">
-            <button type="button" onClick={() => void controller.cancelRun()} disabled={!running}>
+            <button type="button" onClick={() => void controller.cancelRun()} disabled={!running || controller.mutationPending}>
               <StopCircle aria-hidden size={18} /> Отменить генерацию
             </button>
-            <button type="button" onClick={() => void controller.retryRun()} disabled={status !== 'failed' && status !== 'cancelled'}>
+            <button type="button" onClick={() => void controller.retryRun()} disabled={controller.mutationPending || (status !== 'failed' && status !== 'cancelled')}>
               <ArrowsClockwise aria-hidden size={18} /> Повторить запуск
             </button>
           </div>
@@ -263,14 +264,20 @@ export function StudioPage() {
                 value={refinement}
                 onChange={(event) => setRefinement(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && refinable && refinement.trim()) {
+                  if (
+                    event.key === 'Enter'
+                    && (event.ctrlKey || event.metaKey)
+                    && refinable
+                    && !controller.mutationPending
+                    && refinement.trim()
+                  ) {
                     event.preventDefault();
                     event.currentTarget.form?.requestSubmit();
                   }
                 }}
-                disabled={!refinable}
+                disabled={!refinable || controller.mutationPending}
               />
-              <button type="submit" disabled={!refinable || !refinement.trim()} aria-label="Применить изменение">
+              <button type="submit" disabled={!refinable || controller.mutationPending || !refinement.trim()} aria-label="Применить изменение">
                 <PaperPlaneTilt aria-hidden size={19} weight="fill" />
               </button>
             </div>

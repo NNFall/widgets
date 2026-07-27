@@ -7,13 +7,20 @@ export class BuilderApiError extends Error {
   readonly status: number;
   readonly code: string | null;
   readonly raw: string;
+  readonly retryable: boolean;
 
-  constructor(message: string, options: { status: number; code: string | null; raw: string }) {
+  constructor(message: string, options: {
+    status: number;
+    code: string | null;
+    raw: string;
+    retryable?: boolean;
+  }) {
     super(message);
     this.name = 'BuilderApiError';
     this.status = options.status;
     this.code = options.code;
     this.raw = options.raw;
+    this.retryable = options.retryable ?? false;
   }
 }
 
@@ -39,6 +46,7 @@ async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> 
       status: response.status,
       code: payload.error?.code ?? null,
       raw: message,
+      retryable: payload.error?.retryable ?? false,
     });
   }
   return payload;

@@ -2007,7 +2007,7 @@ a {
   gap: 10px;
   border: 1px solid var(--coral);
   border-radius: 13px;
-  color: #fff;
+  color: var(--ink);
   background: var(--coral);
   box-shadow: 0 15px 28px rgba(254, 105, 54, .16);
   cursor: pointer;
@@ -2285,7 +2285,7 @@ a {
 }
 
 .studio-event__meta span {
-  color: #89959d;
+  color: #5f6c74;
   font-size: 8px;
   font-weight: 700;
   letter-spacing: .06em;
@@ -2303,7 +2303,7 @@ a {
 .studio-event__content > small {
   display: block;
   margin-top: 6px;
-  color: #778790;
+  color: #596871;
   font-size: 9px;
   line-height: 1.4;
 }

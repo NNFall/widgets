@@ -91,7 +91,7 @@ export function StudioPreview({
           type: 'chat.error',
           code: apiError?.code ?? 'chat_network_error',
           message: apiError?.raw ?? 'Связь прервалась. Текст сохранён.',
-          retryable: true,
+          retryable: apiError?.retryable ?? false,
         });
       } finally {
         requestsRef.current.delete(requestId);
