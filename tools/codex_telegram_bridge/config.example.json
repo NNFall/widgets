@@ -1,0 +1,15 @@
+{
+  "allowed_user_ids": [123456789],
+  "chat_bindings": {
+    "123456789": "019f9e1b-fb04-7482-b62d-cee4c051131b"
+  },
+  "data_dir": "%LOCALAPPDATA%\\KaigoCodexTelegramBridge",
+  "codex_home": "%USERPROFILE%\\.codex",
+  "publication_channel": "@kaigoww",
+  "published_registry_path": "%KAIGO_REPO%\\docs\\telegram\\published.jsonl",
+  "codex_command": "codex.cmd",
+  "poll_timeout_seconds": 30,
+  "turn_timeout_seconds": 3600,
+  "retry_delay_seconds": 5,
+  "retention_days": 30
+}

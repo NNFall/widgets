@@ -1,0 +1,95 @@
+{
+  "assessments": [
+    {
+      "confidence": 0.98,
+      "dimension": "direction_fidelity",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.98,
+      "dimension": "page_subordination",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.98,
+      "dimension": "visual_hierarchy",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.98,
+      "dimension": "conversation_clarity",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.98,
+      "dimension": "typography_legibility",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.98,
+      "dimension": "spacing_alignment",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.98,
+      "dimension": "system_coherence",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.98,
+      "dimension": "responsive_composition",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.98,
+      "dimension": "craft_polish",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.98,
+      "dimension": "distinctiveness",
+      "finding_ids": [],
+      "score": 5
+    }
+  ],
+  "findings": [],
+  "observations": [
+    {
+      "observation": "Компактный лончер расположился в правом нижнем углу экрана. Черный монохромный плашка с текстом RAW BUREAU, технической плашкой AI 2.4 и зеленым индикатором статуса точно передает индустриально-архитектурный стиль бюро.",
+      "screenshot_id": "desktop.closed"
+    },
+    {
+      "observation": "Панель шириной 360px открывается в правом нижнем углу. Заголовок содержит технические атрибуты, логотип и кнопку закрытия. Сообщение AI выделено белым вертикальным акцентом слева, ниже представлены две подсказки и инпут с контрастной белой кнопкой отправки.",
+      "screenshot_id": "desktop.open_initial"
+    },
+    {
+      "observation": "В истории сообщений чётко разделены роли: выравнивание по правому краю и ярлык ВЫ для пользователя, выравнивание по левому краю с префиксом RAW AI и белой полосой акцента для ассистента. Подсказки автоматически скрылись.",
+      "screenshot_id": "desktop.after_turn_2"
+    },
+    {
+      "observation": "На мобильном экране (390px) лончер сохраняет пропорции и позиционирование внизу справа, обеспечивая удобное нажатие пальцем.",
+      "screenshot_id": "mobile.closed"
+    },
+    {
+      "observation": "Мобильная панель занимает около 66% высоты экрана, оставляя контекст страницы видимым сверху. Элементы управления, подсказки и поле ввода адаптированы под сенсорный ввод.",
+      "screenshot_id": "mobile.open_initial"
+    },
+    {
+      "observation": "После нескольких реплик на мобильном устройстве история сообщений корректно прокручивается внутри контейнера с тонкой полосой прогресса. Поле ввода и кнопка отправки остаются зафиксированными внизу.",
+      "screenshot_id": "mobile.after_turn_2"
+    }
+  ],
+  "revision_actions": [],
+  "summary": "Интерфейс AI-ассистента RAW BUREAU полностью соответствует эстетике бруталистского минимализма и техническим требованиями. Высокий контраст, строгая типографика, точные отступы и безупречная адаптивность на desktop и mobile.",
+  "verdict": "pass",
+  "weighted_score": 5.0
+}

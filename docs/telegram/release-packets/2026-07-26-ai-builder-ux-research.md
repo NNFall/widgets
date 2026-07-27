@@ -1,0 +1,62 @@
+# 2026-07-26 — UX-ресерч AI-конструкторов для Kaigo
+
+Статус: продуктовый ресерч, не выпущенная функция
+
+## Коротко
+
+Сравнены Google AI Studio Build, Lovable, Base44, Bolt, v0, Replit,
+Embeddable и классические widget-конструкторы. Зафиксирована простая модель
+публичного Kaigo: URL-first ввод, затем единый workspace с понятными этапами и
+виджетом прямо на исходном сайте.
+
+## Главный вывод
+
+Kaigo не должен выглядеть как ещё один конструктор приложения с пустым
+prompt-полем. Его отличие должно быть видно в самой механике:
+
+> Пользователь вставляет сайт и видит, как на этом же сайте появляется его
+> индивидуальный AI-сотрудник.
+
+## Что можно рассказать
+
+- Почему один главный ввод лучше анкеты из десяти шагов.
+- Почему длинная генерация должна сохраняться как фоновая задача.
+- Почему preview Kaigo — это реальный сайт, а не пустой canvas.
+- Чем Kaigo отличается от ближайшего прямого конкурента Embeddable.
+- Почему дизайн пока сознательно не зафиксирован: сначала выбирается
+  композиция и продуктовая метафора.
+
+## Проверяемые материалы
+
+- `docs/research/2026-07-26-ai-builder-ux-benchmark.md`
+- `docs/design-prompts/2026-07-26-kaigo-landing-reference-prompt.md`
+- `docs/research/assets/2026-07-26-kaigo-landing-references/`
+- `docs/research/assets/2026-07-26-kaigo-landing-references-rich/`
+- `docs/research/assets/2026-07-26-kaigo-landing-references-balanced/`
+- `docs/research/assets/2026-07-26-kaigo-landing-references-guided-flow/`
+- `docs/research/assets/2026-07-26-kaigo-landing-references-narrative/`
+- `docs/research/assets/2026-07-26-kaigo-landing-references-business-refined/`
+- `docs/research/assets/2026-07-26-kaigo-landing-animation-pairs-light/`
+- `docs/research/assets/2026-07-26-kaigo-landing-animation-cards-refined/`
+- `docs/research/assets/2026-07-27-kaigo-landing-full-sequence/`
+- официальные ссылки и изображения внутри отчёта
+
+## Честные ограничения
+
+- Интерфейс по этой модели ещё не реализован.
+- Палитра, типографика и окончательный визуальный характер не выбраны.
+- Часть закрытых editor-состояний изучалась по свежей официальной документации
+  и опубликованным product screenshots, а не через авторизованные аккаунты.
+
+## Возможная публикация
+
+«Почему Kaigo начинается с URL, а не с пустого промпта» — коротко показать
+несколько привычных AI-builder входов и объяснить, что Kaigo сразу привязывает
+генерацию к сайту реального бизнеса.
+
+## Нужные изображения
+
+1. Коллаж первых экранов Lovable, Base44, Bolt, AI Studio и Embeddable с
+   указанием источников.
+2. Простая схема `URL → анализ → AI-сотрудник на сайте`.
+3. Пять готовых `16:9` референсов первого экрана Kaigo.

@@ -1,0 +1,211 @@
+import hashlib
+import json
+import unittest
+from datetime import datetime, timezone
+
+from builder_lab.reference_models import (
+    CrawlFailure,
+    ReferenceCrawlResult,
+    ReferencePageEvidence,
+    ScreenshotEvidence,
+)
+from builder_lab.reference_pipeline import (
+    GeminiReferencePipeline,
+    ReferencePipelineError,
+    compile_reference_context,
+)
+
+
+def screenshot(
+    screenshot_id: str,
+    page_id: str,
+    viewport: str,
+    position: str,
+) -> ScreenshotEvidence:
+    data = f"{viewport}-{position}".encode()
+    return ScreenshotEvidence(
+        screenshot_id=screenshot_id,
+        page_id=page_id,
+        viewport=viewport,
+        position=position,
+        mime_type="image/jpeg",
+        width=1440 if viewport == "desktop" else 390,
+        height=900 if viewport == "desktop" else 844,
+        sha256=hashlib.sha256(data).hexdigest(),
+        size_bytes=len(data),
+        data=data,
+    )
+
+
+def crawl_result() -> ReferenceCrawlResult:
+    now = datetime.now(timezone.utc)
+    desktop = ReferencePageEvidence(
+        page_id="home",
+        category="home",
+        requested_url="https://example.com/",
+        final_url="https://example.com/",
+        depth=0,
+        screenshots=tuple(
+            screenshot(f"desktop-{position}", "home", "desktop", position)
+            for position in ("top", "middle", "bottom")
+        ),
+        coverage_status="complete",
+    )
+    mobile = ReferencePageEvidence(
+        page_id="home-mobile",
+        category="home",
+        requested_url="https://example.com/",
+        final_url="https://example.com/",
+        depth=0,
+        screenshots=tuple(
+            screenshot(f"mobile-{position}", "home-mobile", "mobile", position)
+            for position in ("top", "middle", "bottom")
+        ),
+        coverage_status="complete",
+    )
+    return ReferenceCrawlResult.succeeded(
+        source_url="https://example.com/",
+        pages=(desktop, mobile),
+        started_at=now,
+        completed_at=now,
+    )
+
+
+def analysis_payload() -> dict:
+    return {
+        "schema_version": "kaigo.reference.v1",
+        "source": {"url": "https://example.com/", "kind": "public website"},
+        "analysis": {
+            "visual_summary": "Строгая светлая сетка с крупной чёрной типографикой.",
+            "public_facts": [
+                {
+                    "statement": "Компания показывает услуги на главной странице.",
+                    "evidence": ["desktop.top"],
+                }
+            ],
+            "visual_tokens": {
+                "palette": [
+                    {
+                        "token": "background",
+                        "value": "warm white",
+                        "evidence": ["desktop.top", "mobile.top"],
+                    }
+                ],
+                "typography": [],
+                "geometry": [],
+                "motion": [],
+            },
+        },
+        "provenance": {
+            "model": "gemini-3.5-flash",
+            "usage": {
+                "prompt_tokens": 10,
+                "output_tokens": 5,
+                "thinking_tokens": 3,
+                "total_tokens": 18,
+            },
+        },
+    }
+
+
+class FakeCrawler:
+    def __init__(self, result):
+        self.result = result
+        self.urls = []
+
+    async def crawl(self, url):
+        self.urls.append(url)
+        return self.result
+
+
+class ReferencePipelineTests(unittest.IsolatedAsyncioTestCase):
+    async def test_captures_six_states_and_returns_bounded_grounded_context(self):
+        crawler = FakeCrawler(crawl_result())
+        analyzer_calls = []
+
+        async def analyzer(**kwargs):
+            analyzer_calls.append(kwargs)
+            self.assertTrue(kwargs["capture_manifest"].is_file())
+            self.assertTrue(kwargs["evidence_root"].is_dir())
+            self.assertEqual(
+                [label for label, _path in kwargs["screenshot_inputs"]],
+                [
+                    "desktop.top",
+                    "desktop.middle",
+                    "desktop.bottom",
+                    "mobile.top",
+                    "mobile.middle",
+                    "mobile.bottom",
+                ],
+            )
+            return analysis_payload()
+
+        pipeline = GeminiReferencePipeline(
+            crawler=crawler,
+            analyzer=analyzer,
+            api_key="secret",
+            model="gemini-3.5-flash",
+            thinking_level="high",
+            base_url="https://generativelanguage.googleapis.com",
+        )
+
+        result = await pipeline.analyze("https://example.com/")
+
+        self.assertEqual(crawler.urls, ["https://example.com/"])
+        self.assertEqual(len(analyzer_calls), 1)
+        self.assertIn('"visual_summary"', result.context)
+        self.assertIn("Строгая светлая сетка", result.context)
+        self.assertLessEqual(len(result.context), 8_000)
+        self.assertEqual(result.summary, analysis_payload()["analysis"]["visual_summary"])
+        self.assertEqual(result.usage.total_tokens, 18)
+
+    async def test_rejects_incomplete_or_failed_capture(self):
+        failed = ReferenceCrawlResult.failed(
+            source_url="https://example.com/",
+            failure=CrawlFailure(code="crawl_failed", message="navigation failed"),
+            started_at=datetime.now(timezone.utc),
+        )
+        pipeline = GeminiReferencePipeline(
+            crawler=FakeCrawler(failed),
+            analyzer=lambda **_kwargs: None,
+            api_key="secret",
+            model="gemini-3.5-flash",
+            thinking_level="high",
+            base_url="https://generativelanguage.googleapis.com",
+        )
+
+        with self.assertRaises(ReferencePipelineError) as caught:
+            await pipeline.analyze("https://example.com/")
+
+        self.assertEqual(caught.exception.error_code, "reference_capture_failed")
+
+    def test_compiler_prunes_oversized_model_output_but_keeps_truth(self):
+        payload = analysis_payload()
+        payload["analysis"]["visual_summary"] = "S" * 1_200
+        payload["analysis"]["public_facts"] = [
+            {"statement": f"{index}-" + "F" * 480, "evidence": ["desktop.top"]}
+            for index in range(24)
+        ]
+        payload["analysis"]["visual_tokens"] = {
+            category: [
+                {
+                    "token": f"{category}-{index}",
+                    "value": "V" * 220,
+                    "evidence": ["desktop.top", "mobile.top"],
+                }
+                for index in range(16)
+            ]
+            for category in ("palette", "typography", "geometry", "motion")
+        }
+
+        result = compile_reference_context(payload)
+        decoded = json.loads(result.context)
+
+        self.assertLessEqual(len(result.context), 8_000)
+        self.assertTrue(decoded["public_facts"])
+        self.assertTrue(decoded["visual_summary"])
+        self.assertEqual(decoded["source_url"], "https://example.com/")
+
+
+if __name__ == "__main__":
+    unittest.main()

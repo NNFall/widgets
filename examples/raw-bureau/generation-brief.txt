@@ -1,0 +1,42 @@
+Создай компактный AI-виджет для сайта RAW BUREAU в направлении «плавающая проектная заметка». Он должен выглядеть как небольшой редакционный фрагмент самого сайта, а не как отдельный мессенджер, модальное окно или технологическая панель.
+
+Визуальный язык
+- Светло-серый фон, близкий к #f5f5f5, чёрный основной текст, редкий нейтральный серый для служебных меток.
+- Крупный тяжёлый гротеск для коротких акцентов, малый регулярный гротеск для текста, плотная редакционная иерархия.
+- Одна внешняя hairline-рамка, острые углы, тонкие разделители, заметные паузы.
+- Без пузырей сообщений, аватаров, карточек внутри карточки, glass, glow, градиентов, теней, HUD, координат, фиктивной телеметрии и декоративной «AI-магии».
+- Без default scrollbar, стандартной рамки textarea, browser resize-handle и inset-эффекта. История сохраняет wheel, touch, Page Up/Down, Home/End и screen reader; native scrollbar только визуально скрыт.
+
+Геометрия и responsive
+- Начальное состояние всегда closed; backdrop и блокировка страницы запрещены.
+- Desktop при width >= 900px: launcher ровно 216×46px, right/bottom 20px; первый open ровно 372×304px; далее высота по содержимому до min(536px, 68dvh). При viewport 1440×900 панель не больше 372×536px и не больше 30% площади viewport.
+- Mobile/tablet при width < 900px: left/right/bottom по 12px с safe-area; ширина calc(100vw - 24px); при 390×844 первый open высотой 320px; предел min(70dvh, calc(100dvh - 24px)). Не fullscreen.
+- Первое открытие целиком помещается без overflow. После достижения максимума scroll разрешён только внутри истории.
+- Любая интерактивная область минимум 44×44px. Composer никогда не перекрывает transcript.
+
+Обязательная семантическая структура
+- Один корневой элемент data-region="root".
+- Launcher data-region="launcher" с текстом «AI-КОНСУЛЬТАНТ / RAW BUREAU» и понятным признаком открытия.
+- Панель data-region="panel" с role="dialog" и доступным названием.
+- Header data-region="header": «RAW BUREAU / AI» и настоящая текстовая кнопка data-action="close" «ЗАКРЫТЬ».
+- История data-region="messages" с role="log", aria-live="polite"; assistant/user/status/error используют классы .kaigo-widget__message--assistant, .kaigo-widget__message--user, .kaigo-widget__message--status, .kaigo-widget__message--error. Показывай редакционные метки «RAW AI» и «ВЫ», но не bubble-форму.
+- Suggestions data-region="suggestions": максимум две нумерованные текстовые строки. Каждая кнопка содержит data-suggestion с точным отправляемым вопросом; не копирует его только визуально.
+- Composer data-region="composer": семантический textarea с label, auto-grow 1–4 строки, собственный focus state и настоящая кнопка data-action="send" «ОТПРАВИТЬ».
+- Error отображается inline и даёт настоящую кнопку data-action="retry" «ПОВТОРИТЬ».
+
+Trusted runtime и функциональная честность
+- HTML/CSS описывают только безопасную оболочку; trusted runtime Kaigo единолично управляет открытием, закрытием, отправкой, pending/error/retry, историей и запросом к серверному Gemini endpoint.
+- Никакого сгенерированного JavaScript, внешней сети, inline-handler, навигации, формы заявки или fake actions. Не изображай действие выполненным до успешного ответа trusted runtime.
+- Первый open: приветствие до 220 символов и максимум две честные suggestions.
+- Отправка мгновенно добавляет ровно один user turn, ставит aria-busy=true, показывает один конечный status-row и после ответа добавляет ровно один assistant turn.
+- Enter отправляет; Shift+Enter добавляет строку; IME composition не отправляет. Escape закрывает и возвращает focus launcher. Desktop-open фокусирует textarea, touch-open не поднимает клавиатуру автоматически.
+- Закрытие и повторное открытие сохраняют transcript, draft и session. Ошибка не считается успехом, текст пользователя остаётся, retry не создаёт duplicate send.
+
+Motion
+- Только opacity/transform, 150–250ms, конечные переходы. Без spinner, bouncing dots и бесконечных анимаций.
+- Обязательно отключай движение через prefers-reduced-motion.
+
+Текст и действия
+- Тон спокойный, профессиональный, русский. Виджет честно называет себя AI.
+- Не выдумывай сервисы или статусы. Не добавляй кнопки «анализ участка», «подобрать проект», «оставить заявку» и другие fake actions, если trusted runtime не реализует их.
+- Одновременно видимы не более трёх действий, включая close/send/suggestion.

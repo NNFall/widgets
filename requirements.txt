@@ -1,5 +1,6 @@
 ﻿# requirements.txt
 openai
+google-genai>=2.12.1,<3.0.0
 telethon
 python-dotenv
 aiosqlite
@@ -15,3 +16,5 @@ aiohttp-session
 SQLAlchemy
 alembic
 bcrypt
+# Browser-only crawler dependencies live in requirements.builder-lab.txt so the
+# production application image remains free of Chromium/Crawlee.

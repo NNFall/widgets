@@ -1,0 +1,123 @@
+{
+  "assessments": [
+    {
+      "confidence": 0.95,
+      "dimension": "direction_fidelity",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.95,
+      "dimension": "page_subordination",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.95,
+      "dimension": "visual_hierarchy",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.95,
+      "dimension": "conversation_clarity",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.95,
+      "dimension": "typography_legibility",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.95,
+      "dimension": "spacing_alignment",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.95,
+      "dimension": "system_coherence",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.95,
+      "dimension": "responsive_composition",
+      "finding_ids": [],
+      "score": 5
+    },
+    {
+      "confidence": 0.95,
+      "dimension": "craft_polish",
+      "finding_ids": [
+        "f1"
+      ],
+      "score": 3
+    },
+    {
+      "confidence": 0.95,
+      "dimension": "distinctiveness",
+      "finding_ids": [],
+      "score": 5
+    }
+  ],
+  "findings": [
+    {
+      "confidence": 0.92,
+      "dimension": "craft_polish",
+      "evidence": "Верхняя реплика в блоке сообщений при прокрутке вниз срезается ровно по границе хедера без внутреннего верхнего отступа padding-top.",
+      "finding_id": "f1",
+      "region": {
+        "height": 0.05,
+        "semantic_region": "messages",
+        "width": 0.18,
+        "x": 0.8,
+        "y": 0.52
+      },
+      "screenshot_id": "desktop.after_turn_2"
+    }
+  ],
+  "observations": [
+    {
+      "observation": "В закрытом состоянии на десктопе отображается контрастный прямоугольный лончер RAW [+] в правом нижнем углу.",
+      "screenshot_id": "desktop.closed"
+    },
+    {
+      "observation": "При первом открытии панели на десктопе виден темный интерфейс с фоновой сеткой, приветствием RAW AI и двумя кнопками быстрых подсказок.",
+      "screenshot_id": "desktop.open_initial"
+    },
+    {
+      "observation": "После двух шагов диалога на десктопе верхняя реплика частично срезается под нижней границей шапки панели.",
+      "screenshot_id": "desktop.after_turn_2"
+    },
+    {
+      "observation": "На мобильном экране в закрытом состоянии прямоугольный лончер RAW [+] корректно зафиксирован снизу справа.",
+      "screenshot_id": "mobile.closed"
+    },
+    {
+      "observation": "На мобильном устройстве открывается компактная панель чата высотой около 70% viewport с сохраненным открытым контекстом сверху.",
+      "screenshot_id": "mobile.open_initial"
+    },
+    {
+      "observation": "При активной переписке на мобильном экране верхний текст стартового сообщения обрезается о верхний край области сообщений.",
+      "screenshot_id": "mobile.after_turn_2"
+    }
+  ],
+  "revision_actions": [
+    {
+      "action_id": "act_1",
+      "artifact_fields": [
+        "css"
+      ],
+      "finding_ids": [
+        "f1"
+      ],
+      "instruction": "Добавить внутренний верхний отступ (padding-top) для контейнера сообщений (.messages-container), чтобы верхняя строчка прокручиваемого текста не упиралась жестко в край шапки."
+    }
+  ],
+  "summary": "Интерфейс RAW AI отлично передает фирменную эстетику архитектурного бюро: строгая геометрия, монументальная монохромность и технологичная фоновая сетка. Единственная мелкая недоработка — отсутствие верхнего отступа при прокрутке сообщений под шапку.",
+  "verdict": "pass",
+  "weighted_score": 4.84
+}

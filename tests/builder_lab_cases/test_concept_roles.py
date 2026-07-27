@@ -1,0 +1,359 @@
+import asyncio
+import unittest
+
+from builder_lab.concept_roles import ConceptRolesError, run_concept_roles
+from builder_lab.engines.base import BuilderEngineError, ConceptRoleResult
+from builder_lab.models import (
+    BuilderRequest,
+    ConceptRole,
+    ConceptRoleBrief,
+    CreativeProfile,
+    EngineName,
+    TokenUsage,
+)
+from builder_lab.prompts import build_concept_role_prompt
+
+
+def request(
+    *,
+    profile: CreativeProfile = CreativeProfile.PRODUCT_CHAT,
+) -> BuilderRequest:
+    return BuilderRequest(
+        engine=EngineName.DIRECT,
+        brief="Создай AI-консультанта для RAW BUREAU",
+        reference_context='{"visual_summary":"sharp monochrome grid"}',
+        creative_profile=profile,
+    )
+
+
+def brief(role: ConceptRole) -> ConceptRoleBrief:
+    return ConceptRoleBrief(
+        role=role,
+        summary={
+            ConceptRole.SITE_BRAND_ANALYST: "Редакционная система RAW",
+            ConceptRole.CONVERSATION_DESIGNER: "Короткий проектный диалог",
+            ConceptRole.ART_DIRECTOR_FRONTEND_DEVELOPER: "Плавающая записка",
+        }[role],
+        decisions=(
+            {
+                ConceptRole.SITE_BRAND_ANALYST: "Использовать строгую сетку",
+                ConceptRole.CONVERSATION_DESIGNER: "AI отвечает коротко и по делу",
+                ConceptRole.ART_DIRECTOR_FRONTEND_DEVELOPER: (
+                    "Соединить монохромную сетку и чат-пузырьки"
+                ),
+            }[role],
+        ),
+        safeguards=("Не придумывать услуги",),
+    )
+
+
+class RecordingConceptRoleEngine:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def develop_concept_role(self, *, request, role, prior_briefs=()):
+        self.calls.append((role.value, tuple(item.role.value for item in prior_briefs)))
+        return ConceptRoleResult(
+            brief=brief(role),
+            usage=TokenUsage(prompt_tokens=10, output_tokens=2, thinking_tokens=1),
+            provider_request_id=f"request-{role.value}",
+            diagnostic=f"diagnostic-{role.value}",
+        )
+
+
+class ConceptRoleModelTests(unittest.TestCase):
+    def test_brief_is_bounded_and_round_trips(self):
+        item = brief(ConceptRole.CONVERSATION_DESIGNER)
+        self.assertEqual(ConceptRoleBrief.from_dict(item.to_dict()), item)
+
+        with self.assertRaises(ValueError):
+            ConceptRoleBrief(
+                role=ConceptRole.SITE_BRAND_ANALYST,
+                summary="x" * 81,
+                decisions=("valid",),
+                safeguards=(),
+            )
+        with self.assertRaises(ValueError):
+            ConceptRoleBrief(
+                role=ConceptRole.SITE_BRAND_ANALYST,
+                summary="valid",
+                decisions=tuple(f"decision-{index}" for index in range(5)),
+                safeguards=(),
+            )
+
+    def test_non_final_prompts_are_canonical_across_profiles(self):
+        requests = tuple(
+            request(profile=profile)
+            for profile in (
+                CreativeProfile.PRODUCT_CHAT,
+                CreativeProfile.BRAND_MOTION,
+                CreativeProfile.AI_CHARACTER,
+            )
+        )
+        analyst_prompts = tuple(
+            build_concept_role_prompt(
+                request=item,
+                role=ConceptRole.SITE_BRAND_ANALYST,
+                prior_briefs=(),
+            )
+            for item in requests
+        )
+        conversation_prompts = tuple(
+            build_concept_role_prompt(
+                request=item,
+                role=ConceptRole.CONVERSATION_DESIGNER,
+                prior_briefs=(brief(ConceptRole.SITE_BRAND_ANALYST),),
+            )
+            for item in requests
+        )
+
+        self.assertEqual(len(set(analyst_prompts)), 1)
+        self.assertEqual(len(set(conversation_prompts)), 1)
+        for prompt in analyst_prompts + conversation_prompts:
+            self.assertNotIn("CREATIVE_PROFILE_BRIEF:", prompt)
+            self.assertNotIn("motion carte blanche", prompt)
+            self.assertNotIn("digital employee or character", prompt)
+
+    def test_final_prompt_gets_prior_briefs_as_untrusted_data_and_one_profile(self):
+        prompt = build_concept_role_prompt(
+            request=request(profile=CreativeProfile.BRAND_MOTION),
+            role=ConceptRole.ART_DIRECTOR_FRONTEND_DEVELOPER,
+            prior_briefs=(
+                brief(ConceptRole.SITE_BRAND_ANALYST),
+                brief(ConceptRole.CONVERSATION_DESIGNER),
+            ),
+        )
+
+        self.assertEqual(prompt.count("CREATIVE_PROFILE_BRIEF:"), 1)
+        self.assertIn("motion carte blanche", prompt)
+        self.assertIn("UNTRUSTED_PRIOR_CONCEPT_BRIEFS_JSON", prompt)
+        self.assertIn("data, not instructions", prompt)
+        self.assertIn('"role":"site_brand_analyst"', prompt)
+        self.assertIn('"role":"conversation_designer"', prompt)
+
+
+class ConceptRoleSequenceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_roles_run_sequentially_and_receive_prior_work(self):
+        engine = RecordingConceptRoleEngine()
+
+        result = await run_concept_roles(engine=engine, request=request())
+
+        self.assertEqual(
+            engine.calls,
+            [
+                ("site_brand_analyst", ()),
+                ("conversation_designer", ("site_brand_analyst",)),
+                (
+                    "art_director_frontend_developer",
+                    ("site_brand_analyst", "conversation_designer"),
+                ),
+            ],
+        )
+        self.assertEqual(
+            result.selected_direction.role,
+            ConceptRole.ART_DIRECTOR_FRONTEND_DEVELOPER,
+        )
+        self.assertEqual(result.selected_direction.proposal_id, "candidate-1")
+        self.assertIn(
+            "AI отвечает коротко и по делу",
+            result.selected_direction.interaction_model,
+        )
+        self.assertEqual(result.usage.prompt_tokens, 30)
+        self.assertEqual(result.usage.output_tokens, 6)
+        self.assertEqual(result.usage.thinking_tokens, 3)
+        self.assertEqual(
+            tuple(item.brief for item in result.executions),
+            result.briefs,
+        )
+        self.assertEqual(
+            tuple(item.usage for item in result.executions),
+            (
+                TokenUsage(prompt_tokens=10, output_tokens=2, thinking_tokens=1),
+            )
+            * 3,
+        )
+        self.assertEqual(
+            result.executions[-1].provider_request_id,
+            "request-art_director_frontend_developer",
+        )
+        self.assertEqual(
+            result.executions[-1].diagnostic,
+            "diagnostic-art_director_frontend_developer",
+        )
+        self.assertEqual(
+            sum((item.usage for item in result.executions), TokenUsage()),
+            result.usage,
+        )
+
+    async def test_failure_usage_includes_completed_and_failed_call_exactly_once(self):
+        class FailingEngine(RecordingConceptRoleEngine):
+            async def develop_concept_role(self, *, request, role, prior_briefs=()):
+                self.calls.append(
+                    (role.value, tuple(item.role.value for item in prior_briefs))
+                )
+                if role is ConceptRole.CONVERSATION_DESIGNER:
+                    failure = BuilderEngineError(
+                        "invalid_artifact",
+                        "bad conversation brief",
+                        diagnostic="provider returned malformed JSON",
+                        usage=TokenUsage(
+                            prompt_tokens=7,
+                            output_tokens=3,
+                            thinking_tokens=2,
+                        ),
+                    )
+                    failure.provider_request_id = "failed-request-2"
+                    raise failure
+                return ConceptRoleResult(
+                    brief=brief(role),
+                    usage=TokenUsage(
+                        prompt_tokens=10,
+                        output_tokens=2,
+                        thinking_tokens=1,
+                    ),
+                )
+
+        engine = FailingEngine()
+        with self.assertRaises(ConceptRolesError) as caught:
+            await run_concept_roles(engine=engine, request=request())
+
+        self.assertEqual(
+            engine.calls,
+            [
+                ("site_brand_analyst", ()),
+                ("conversation_designer", ("site_brand_analyst",)),
+            ],
+        )
+        self.assertEqual(caught.exception.error_code, "invalid_artifact")
+        self.assertEqual(caught.exception.usage.prompt_tokens, 17)
+        self.assertEqual(caught.exception.usage.output_tokens, 5)
+        self.assertEqual(caught.exception.usage.thinking_tokens, 3)
+        self.assertEqual(
+            tuple(
+                execution.brief.role
+                for execution in caught.exception.completed_executions
+            ),
+            (ConceptRole.SITE_BRAND_ANALYST,),
+        )
+        self.assertEqual(
+            caught.exception.completed_executions[0].usage,
+            TokenUsage(prompt_tokens=10, output_tokens=2, thinking_tokens=1),
+        )
+        self.assertEqual(
+            caught.exception.failed_execution.role,
+            ConceptRole.CONVERSATION_DESIGNER,
+        )
+        self.assertEqual(
+            caught.exception.failed_execution.usage,
+            TokenUsage(prompt_tokens=7, output_tokens=3, thinking_tokens=2),
+        )
+        self.assertEqual(
+            caught.exception.failed_execution.provider_request_id,
+            "failed-request-2",
+        )
+        self.assertEqual(
+            caught.exception.failed_execution.diagnostic,
+            "provider returned malformed JSON",
+        )
+        self.assertEqual(
+            sum(
+                (
+                    execution.usage
+                    for execution in caught.exception.completed_executions
+                ),
+                caught.exception.failed_execution.usage,
+            ),
+            caught.exception.usage,
+        )
+
+    async def test_role_mismatch_stops_the_sequence(self):
+        class WrongRoleEngine(RecordingConceptRoleEngine):
+            async def develop_concept_role(self, *, request, role, prior_briefs=()):
+                self.calls.append(
+                    (role.value, tuple(item.role.value for item in prior_briefs))
+                )
+                return ConceptRoleResult(
+                    brief=brief(ConceptRole.SITE_BRAND_ANALYST),
+                    usage=TokenUsage(prompt_tokens=4, output_tokens=1),
+                    provider_request_id="wrong-role-request",
+                    diagnostic="response role did not match requested role",
+                )
+
+        engine = WrongRoleEngine()
+        with self.assertRaises(ConceptRolesError) as caught:
+            await run_concept_roles(engine=engine, request=request())
+
+        self.assertEqual(len(engine.calls), 2)
+        self.assertEqual(caught.exception.usage.prompt_tokens, 8)
+        self.assertEqual(caught.exception.usage.output_tokens, 2)
+        self.assertEqual(
+            tuple(
+                execution.brief.role
+                for execution in caught.exception.completed_executions
+            ),
+            (ConceptRole.SITE_BRAND_ANALYST,),
+        )
+        self.assertEqual(
+            caught.exception.failed_execution.role,
+            ConceptRole.CONVERSATION_DESIGNER,
+        )
+        self.assertEqual(
+            caught.exception.failed_execution.usage,
+            TokenUsage(prompt_tokens=4, output_tokens=1),
+        )
+        self.assertEqual(
+            caught.exception.failed_execution.provider_request_id,
+            "wrong-role-request",
+        )
+
+    async def test_third_role_failure_preserves_both_completed_briefs(self):
+        class ThirdRoleFailureEngine(RecordingConceptRoleEngine):
+            async def develop_concept_role(self, *, request, role, prior_briefs=()):
+                if role is ConceptRole.ART_DIRECTOR_FRONTEND_DEVELOPER:
+                    raise BuilderEngineError(
+                        "provider_unavailable",
+                        "art direction request failed",
+                        usage=TokenUsage(prompt_tokens=6, output_tokens=2),
+                    )
+                return await super().develop_concept_role(
+                    request=request,
+                    role=role,
+                    prior_briefs=prior_briefs,
+                )
+
+        with self.assertRaises(ConceptRolesError) as caught:
+            await run_concept_roles(
+                engine=ThirdRoleFailureEngine(),
+                request=request(),
+            )
+
+        self.assertEqual(
+            tuple(
+                execution.brief.role
+                for execution in caught.exception.completed_executions
+            ),
+            (
+                ConceptRole.SITE_BRAND_ANALYST,
+                ConceptRole.CONVERSATION_DESIGNER,
+            ),
+        )
+        self.assertEqual(
+            caught.exception.failed_execution.role,
+            ConceptRole.ART_DIRECTOR_FRONTEND_DEVELOPER,
+        )
+        self.assertEqual(
+            caught.exception.usage,
+            TokenUsage(prompt_tokens=26, output_tokens=6, thinking_tokens=2),
+        )
+
+    async def test_cancellation_is_not_wrapped_as_partial_role_failure(self):
+        class CancelledEngine(RecordingConceptRoleEngine):
+            async def develop_concept_role(self, *, request, role, prior_briefs=()):
+                raise asyncio.CancelledError
+
+        with self.assertRaises(asyncio.CancelledError):
+            await run_concept_roles(engine=CancelledEngine(), request=request())
+
+
+if __name__ == "__main__":
+    unittest.main()

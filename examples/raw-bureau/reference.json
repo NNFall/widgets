@@ -1,0 +1,198 @@
+{
+  "schema_version": "kaigo.reference.v1",
+  "source": {
+    "url": "https://rawbureau.ru/",
+    "kind": "public website"
+  },
+  "capture": {
+    "captured_at": "2026-07-19T12:10:23.127441+00:00",
+    "coverage_status": "complete",
+    "states": [
+      "desktop.top",
+      "desktop.middle",
+      "desktop.bottom",
+      "mobile.top",
+      "mobile.middle",
+      "mobile.bottom"
+    ],
+    "viewports": {
+      "desktop": "1440x900",
+      "mobile": "390x844"
+    }
+  },
+  "screenshots": [
+    {
+      "state": "desktop.top",
+      "mime_type": "image/jpeg",
+      "width": 1440,
+      "height": 900,
+      "size_bytes": 136155,
+      "sha256": "58eedaf80ff42f510e6f1a0370e5f2b819fd0f7b3ad5144df4e9961d97b7c4dc"
+    },
+    {
+      "state": "desktop.middle",
+      "mime_type": "image/jpeg",
+      "width": 1440,
+      "height": 900,
+      "size_bytes": 106739,
+      "sha256": "2dfdf6fa7b8f17b924abb7350db4e71547a096c35ec40ff182ccfd32191262d5"
+    },
+    {
+      "state": "desktop.bottom",
+      "mime_type": "image/jpeg",
+      "width": 1440,
+      "height": 900,
+      "size_bytes": 120645,
+      "sha256": "1e48fde66b2ae63344543d0a222010281cc684342a861e619075bf4dd19e14da"
+    },
+    {
+      "state": "mobile.top",
+      "mime_type": "image/jpeg",
+      "width": 390,
+      "height": 844,
+      "size_bytes": 57078,
+      "sha256": "559ea33d2bd865aaa609537778cbc0d2d28079a3f6ea9007c142e790bec9220d"
+    },
+    {
+      "state": "mobile.middle",
+      "mime_type": "image/jpeg",
+      "width": 390,
+      "height": 844,
+      "size_bytes": 60985,
+      "sha256": "752ac8bd66b68d853ac337880393543df4d76dead8fb32962a80f573c2749969"
+    },
+    {
+      "state": "mobile.bottom",
+      "mime_type": "image/jpeg",
+      "width": 390,
+      "height": 844,
+      "size_bytes": 57780,
+      "sha256": "918c0e69a313a1e5f692caa20511460422f955cf1c6c72a18ce5b0f4656957d8"
+    }
+  ],
+  "analysis": {
+    "visual_summary": "Плоская почти монохромная редакционная система: крупный чёрный гротеск, малые служебные подписи, тонкие линии, острые углы, большие паузы и тёплые интерьерные фотографии на светло-сером фоне.",
+    "public_facts": [
+      {
+        "statement": "Название студии на странице — RAW BUREAU.",
+        "evidence": ["desktop.top", "mobile.top"]
+      },
+      {
+        "statement": "Студия сообщает, что проектирует квартиры и загородные дома и создаёт минималистичные интерьеры для повседневной жизни.",
+        "evidence": ["desktop.top", "mobile.top"]
+      },
+      {
+        "statement": "На странице указана география: Москва и работа по всей России.",
+        "evidence": ["desktop.top", "mobile.top"]
+      },
+      {
+        "statement": "На странице заявлено более 35 разработанных дизайн-проектов за 5 лет работы.",
+        "evidence": ["mobile.top"]
+      },
+      {
+        "statement": "Среди показанных услуг есть авторский надзор и комплектация.",
+        "evidence": ["desktop.middle", "mobile.middle"]
+      },
+      {
+        "statement": "Для дизайн-проекта на странице указана цена от 6 000 ₽/м².",
+        "evidence": ["crawl.semantic.home.desktop"]
+      },
+      {
+        "statement": "Для авторского надзора показана цена 40 000 ₽ в месяц, для комплектации — 10% от сметы.",
+        "evidence": ["desktop.middle", "mobile.middle"]
+      },
+      {
+        "statement": "Страница приглашает оставить заявку на бесплатную 30-минутную встречу для оценки проекта.",
+        "evidence": ["desktop.middle", "mobile.middle"]
+      },
+      {
+        "statement": "В контактах указаны телефон +7 (908) 094-12-85 и почта rawbureau@yandex.ru, а также Telegram и WhatsApp.",
+        "evidence": ["desktop.bottom", "mobile.bottom"]
+      }
+    ],
+    "visual_tokens": {
+      "palette": [
+        {
+          "token": "page-background",
+          "value": "светло-серый, близкий к #f5f5f5",
+          "evidence": ["desktop.top", "desktop.middle", "desktop.bottom"]
+        },
+        {
+          "token": "primary-ink",
+          "value": "чёрный",
+          "evidence": ["desktop.top", "mobile.top"]
+        },
+        {
+          "token": "photography",
+          "value": "тёплые нейтральные интерьерные тона",
+          "evidence": ["desktop.top", "mobile.top"]
+        }
+      ],
+      "typography": [
+        {
+          "token": "display-heading",
+          "value": "очень крупный тяжёлый гротеск в верхнем регистре с плотным набором",
+          "evidence": ["desktop.top", "desktop.bottom", "mobile.top"]
+        },
+        {
+          "token": "service-text",
+          "value": "нейтральный гротеск, регулярный вес, короткие строки",
+          "evidence": ["desktop.middle", "mobile.middle"]
+        },
+        {
+          "token": "hierarchy",
+          "value": "резкий контраст огромного названия и малых служебных подписей",
+          "evidence": ["desktop.top", "desktop.bottom"]
+        }
+      ],
+      "geometry": [
+        {
+          "token": "corners",
+          "value": "преимущественно острые; скругление не является основным мотивом",
+          "evidence": ["desktop.top", "desktop.middle"]
+        },
+        {
+          "token": "rules",
+          "value": "тонкие чёрные и серые разделительные линии",
+          "evidence": ["desktop.middle", "desktop.bottom", "mobile.middle"]
+        },
+        {
+          "token": "spacing",
+          "value": "крупные вертикальные паузы и свободные поля",
+          "evidence": ["desktop.middle", "mobile.top"]
+        },
+        {
+          "token": "responsive-composition",
+          "value": "широкие многоколоночные ряды на desktop перестраиваются в одноколоночный поток на mobile",
+          "evidence": ["desktop.top", "mobile.top", "desktop.bottom", "mobile.bottom"]
+        }
+      ],
+      "motion": []
+    }
+  },
+  "provenance": {
+    "method": "bounded public browser capture plus human-visible screenshot and semantic-sample verification",
+    "model_analysis_status": "pending_real_call",
+    "evidence_policy": "every fact and token cites one or more supplied public evidence identifiers",
+    "evidence_sources": [
+      {
+        "evidence_id": "crawl.semantic.home.desktop",
+        "kind": "public bounded crawler semantic sample",
+        "field": "pages[home].semantic_sample.headings",
+        "coverage_status": "complete",
+        "excerpt": "от 6 000 ₽/м²",
+        "manifest_sha256": "1c7dd7ffdcbb47c1e2e9f79a0e8d33ec82a957c658781beaf61254538a49951b"
+      }
+    ],
+    "capture_manifest_status": "succeeded",
+    "capture_started_at": "2026-07-19T12:09:22.199524+00:00",
+    "capture_completed_at": "2026-07-19T12:10:23.127441+00:00"
+  },
+  "exclusions": [
+    "Локальные пути и байты снимков не входят в файл.",
+    "Закрытые, авторизованные, скрытые и предположительные сведения исключены.",
+    "Статические снимки не доказывают motion, поэтому motion-токены не заявлены.",
+    "Цены и контакты отражают публичную страницу на момент capture и могут измениться; в диалоге их нужно предлагать подтвердить у студии.",
+    "Источник указан только как provenance; Gemini не поручается самостоятельно открывать URL."
+  ]
+}

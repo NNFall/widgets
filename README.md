@@ -229,3 +229,82 @@ docker exec ai_project_db pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > backup.sq
 ```bash
 cp data/dialogs.sqlite3 dialogs.sqlite3.backup
 ```
+
+## Gemini Builder Lab
+
+В репозитории есть отдельная лаборатория для пользовательского прототипа
+генерации виджетов через `gemini-3.6-flash`. Пользователь вводит публичную
+HTTPS-ссылку и необязательное пожелание, видит реальные этапы слева и live
+preview справа. Прототип снимает главную страницу в шести состояниях,
+формирует grounded visual brief, запускает поэтапную генерацию и принимает
+результат только после BrowserAudit и Gemini visual critic. Готовую версию
+можно дорабатывать сообщениями; каждая доработка создаёт следующую ревизию и
+повторяет проверки.
+
+Лаборатория не подключена к production-базе виджетов и пока не публикует
+embed-код. Запуски и доработки хранятся в памяти процесса.
+
+Локальный запуск:
+
+```bash
+python scripts/run_builder_lab.py
+python scripts/smoke_builder_lab.py --engine direct
+```
+
+Docker-сервис включается только явно через profile:
+
+```bash
+bash scripts/deploy_builder_lab.sh
+```
+
+Guarded wrapper создаёт выделенную IPv4-only сеть, применяет стабильный egress
+firewall до старта контейнера и затем проверяет его повторно. Прямой `compose up`
+на рабочем сервере не используется.
+
+На рабочем сервере порт остаётся loopback-only. Nginx открывает два безопасных
+маршрута:
+
+- `https://kaigo.space/builder-demo/` — публичный сохранённый результат без
+  возможности вызвать модель;
+- `https://kaigo.space/builder/` — полный Builder, защищённый browser-паролем.
+
+Минимальный сценарий:
+
+```text
+URL + пожелание
+-> desktop/mobile capture
+-> Gemini visual brief
+-> 5 Direct-стадий
+-> deterministic validation
+-> BrowserAudit + Gemini critic
+-> live preview
+-> доработка сообщением как следующая проверенная ревизия
+```
+
+Русские инструкции по Gemini-only маршруту, сохранению демо, журналу стадий,
+nginx и откату:
+[docs/KAIGO_BUILDER_LAB_OPERATIONS.md](docs/KAIGO_BUILDER_LAB_OPERATIONS.md).
+
+### Воспроизводимое сравнение генераторов
+
+Текущая матрица эксперимента: Direct `gemini-3.6-flash` с `high` thinking,
+визуальный критик `gemini-3.6-flash/high`, визуальный анализатор
+`gemini-3.6-flash/high`, чат посетителя
+`gemini-3.5-flash-lite/medium`, агентская версия
+`antigravity-preview-05-2026`.
+
+Исходный бриф и доказательства RAW BUREAU фиксируются неизменяемым manifest с
+SHA-256, после чего обе версии собираются из одного input bundle:
+
+```powershell
+py -3.12 scripts/build_raw_bureau_comparison.py freeze `
+  --source-url https://rawbureau.ru/ `
+  --existing-baseline D:\path\to\baseline `
+  --output D:\path\to\comparison
+
+py -3.12 scripts/build_raw_bureau_comparison.py render `
+  --output D:\path\to\comparison
+```
+
+Результат содержит архив старой версии, Direct и Antigravity, отдельные
+`report.json`, доказательства и общий статический `index.html`.

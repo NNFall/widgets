@@ -33,3 +33,6 @@ logs/
 
 # Папка с виртуальным окружением Python
 .venv/
+.playwright-cli/
+output/playwright/
+output/comparison/

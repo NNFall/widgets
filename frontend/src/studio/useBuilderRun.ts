@@ -1,0 +1,438 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+import {
+  BuilderApiError,
+  builderUrl,
+  cancelBuilderRun,
+  createBuilderRun,
+  getBuilderRun,
+  refineBuilderRun,
+  retryBuilderRun,
+} from './api';
+import { russianErrorMessage, russianRequestErrorMessage, safeEventMessage } from './errors';
+import type {
+  BuilderEvent,
+  BuilderRunInput,
+  BuilderRunSnapshot,
+  BuilderRunStatus,
+  StudioError,
+} from './types';
+
+export const ACTIVE_RUN_STORAGE_KEY = 'kaigo.builder.activeRun.v1';
+const POLL_INTERVAL_MS = 2_000;
+
+const TERMINAL_STATUSES = new Set<BuilderRunStatus>(['completed', 'failed', 'cancelled']);
+
+interface SnapshotWatermark {
+  runId: string;
+  latestSequence: number;
+  isTerminal: boolean;
+  artifactRevision: number;
+  updatedAt: number;
+}
+
+function snapshotWatermark(snapshot: BuilderRunSnapshot): SnapshotWatermark {
+  const updatedAt = Date.parse(snapshot.updated_at);
+  return {
+    runId: snapshot.run_id,
+    latestSequence: snapshot.latest_sequence,
+    isTerminal: TERMINAL_STATUSES.has(snapshot.status),
+    artifactRevision: Math.max(
+      snapshot.artifact?.revision ?? 0,
+      snapshot.draft_artifact?.revision ?? 0,
+    ),
+    updatedAt: Number.isNaN(updatedAt) ? 0 : updatedAt,
+  };
+}
+
+function isSnapshotRegression(current: SnapshotWatermark, next: SnapshotWatermark) {
+  if (current.runId !== next.runId) return false;
+  if (next.latestSequence !== current.latestSequence) {
+    return next.latestSequence < current.latestSequence;
+  }
+  if (current.isTerminal && !next.isTerminal) return true;
+  if (next.artifactRevision < current.artifactRevision) return true;
+  return next.updatedAt < current.updatedAt;
+}
+
+function readStoredRun() {
+  try {
+    return localStorage.getItem(ACTIVE_RUN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function storeRun(runId: string) {
+  try {
+    localStorage.setItem(ACTIVE_RUN_STORAGE_KEY, runId);
+  } catch {
+    // Persistence is an enhancement; the active browser session can continue without it.
+  }
+}
+
+function forgetRun() {
+  try {
+    localStorage.removeItem(ACTIVE_RUN_STORAGE_KEY);
+  } catch {
+    // Storage may be blocked in privacy modes.
+  }
+}
+
+function describeError(error: unknown, fallback = 'Не удалось выполнить запрос к студии.'): StudioError {
+  if (error instanceof BuilderApiError) {
+    return {
+      message: russianRequestErrorMessage(error.status, error.code, fallback),
+      raw: error.raw,
+      code: error.code,
+    };
+  }
+  if (error instanceof Error) {
+    return { message: fallback, raw: error.message, code: null };
+  }
+  return { message: fallback, raw: String(error), code: null };
+}
+
+function terminalError(code: string | null, raw: string): StudioError {
+  return {
+    message: russianErrorMessage(code, 'Генерация завершилась с ошибкой.'),
+    raw: raw || code || 'Подробности не переданы',
+    code,
+  };
+}
+
+export interface BuilderRunController {
+  runId: string | null;
+  snapshot: BuilderRunSnapshot | null;
+  events: BuilderEvent[];
+  error: StudioError | null;
+  activityMessage: string;
+  connection: 'idle' | 'streaming' | 'polling';
+  isHydrating: boolean;
+  mutationPending: boolean;
+  createRun: (input: BuilderRunInput) => Promise<void>;
+  cancelRun: () => Promise<void>;
+  retryRun: () => Promise<void>;
+  refineRun: (message: string) => Promise<void>;
+  clearError: () => void;
+}
+
+export function useBuilderRun(): BuilderRunController {
+  const [runId, setRunId] = useState<string | null>(() => readStoredRun());
+  const [snapshot, setSnapshot] = useState<BuilderRunSnapshot | null>(null);
+  const [events, setEvents] = useState<BuilderEvent[]>([]);
+  const [error, setError] = useState<StudioError | null>(null);
+  const [activityMessage, setActivityMessage] = useState(
+    runId ? 'Восстанавливаем запуск' : 'Ожидает запуска',
+  );
+  const [connection, setConnection] = useState<'idle' | 'streaming' | 'polling'>('idle');
+  const [isHydrating, setIsHydrating] = useState(Boolean(runId));
+  const [mutationPending, setMutationPending] = useState(false);
+  const [streamVersion, setStreamVersion] = useState(0);
+  const activeRunRef = useRef<string | null>(runId);
+  const activeRunEpochRef = useRef(0);
+  const operationEpochRef = useRef(0);
+  const mutationPendingRef = useRef(false);
+  const snapshotRef = useRef<BuilderRunSnapshot | null>(null);
+  const snapshotWatermarkRef = useRef<SnapshotWatermark | null>(null);
+
+  const beginMutation = useCallback(() => {
+    if (mutationPendingRef.current) return null;
+    mutationPendingRef.current = true;
+    setMutationPending(true);
+    operationEpochRef.current += 1;
+    return operationEpochRef.current;
+  }, []);
+
+  const finishMutation = useCallback((operationEpoch: number) => {
+    if (operationEpochRef.current !== operationEpoch) return;
+    mutationPendingRef.current = false;
+    setMutationPending(false);
+    setStreamVersion((version) => version + 1);
+  }, []);
+
+  const isCurrentOperation = useCallback((operationEpoch: number, expectedRunId: string | null) => (
+    operationEpochRef.current === operationEpoch
+    && activeRunRef.current === expectedRunId
+  ), []);
+
+  const applySnapshot = useCallback((next: BuilderRunSnapshot) => {
+    if (activeRunRef.current !== next.run_id) return false;
+    const nextWatermark = snapshotWatermark(next);
+    const currentWatermark = snapshotWatermarkRef.current;
+    if (currentWatermark && isSnapshotRegression(currentWatermark, nextWatermark)) {
+      return false;
+    }
+    snapshotWatermarkRef.current = nextWatermark;
+    snapshotRef.current = next;
+    setSnapshot(next);
+    setIsHydrating(false);
+    if (next.status === 'completed') {
+      setActivityMessage('Готово — виджет проверен');
+      setError(null);
+    } else if (next.status === 'cancelled') {
+      setActivityMessage('Генерация отменена');
+      setError(terminalError('run_cancelled', 'Запуск отменён пользователем'));
+    } else if (next.status === 'failed') {
+      setActivityMessage('Генерация остановлена');
+      setError((current) => current ?? terminalError(next.error_code, next.error_code ?? 'Ошибка генерации'));
+    } else if (next.status === 'running') {
+      setActivityMessage((current) => (
+        current === 'Восстанавливаем запуск' || current === 'Ожидает запуска'
+          ? 'Генерация выполняется'
+          : current
+      ));
+    }
+    return true;
+  }, []);
+
+  const adoptRun = useCallback((next: BuilderRunSnapshot, message: string) => {
+    activeRunEpochRef.current += 1;
+    operationEpochRef.current += 1;
+    activeRunRef.current = next.run_id;
+    mutationPendingRef.current = false;
+    setMutationPending(false);
+    snapshotWatermarkRef.current = null;
+    snapshotRef.current = null;
+    setEvents([]);
+    setError(null);
+    setActivityMessage(message);
+    setRunId(next.run_id);
+    storeRun(next.run_id);
+    applySnapshot(next);
+    setStreamVersion((version) => version + 1);
+  }, [applySnapshot]);
+
+  useEffect(() => {
+    if (!runId) {
+      activeRunRef.current = null;
+      snapshotWatermarkRef.current = null;
+      snapshotRef.current = null;
+      setConnection('idle');
+      setIsHydrating(false);
+      return;
+    }
+    if (snapshotWatermarkRef.current?.runId !== runId) {
+      snapshotWatermarkRef.current = null;
+      snapshotRef.current = null;
+    }
+    activeRunRef.current = runId;
+    const effectEpoch = activeRunEpochRef.current;
+    const effectOperationEpoch = operationEpochRef.current;
+
+    let disposed = false;
+    let stream: EventSource | null = null;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let terminalFromEvent = false;
+
+    const stopPolling = () => {
+      if (pollTimer) clearInterval(pollTimer);
+      pollTimer = null;
+    };
+
+    const refresh = async () => {
+      try {
+        const next = await getBuilderRun(runId);
+        if (
+          disposed
+          || activeRunRef.current !== runId
+          || activeRunEpochRef.current !== effectEpoch
+          || operationEpochRef.current !== effectOperationEpoch
+        ) return;
+        if (!applySnapshot(next)) return;
+        if (TERMINAL_STATUSES.has(next.status)) {
+          terminalFromEvent = true;
+          stopPolling();
+        }
+      } catch (caught) {
+        if (
+          disposed
+          || activeRunRef.current !== runId
+          || activeRunEpochRef.current !== effectEpoch
+          || operationEpochRef.current !== effectOperationEpoch
+        ) return;
+        if (caught instanceof BuilderApiError && caught.status === 404) {
+          forgetRun();
+          activeRunEpochRef.current += 1;
+          operationEpochRef.current += 1;
+          activeRunRef.current = null;
+          mutationPendingRef.current = false;
+          setMutationPending(false);
+          setRunId(null);
+          snapshotWatermarkRef.current = null;
+          snapshotRef.current = null;
+          setSnapshot(null);
+          setEvents([]);
+          setError(null);
+          setActivityMessage('Ожидает запуска');
+          return;
+        }
+        setIsHydrating(false);
+        setError(describeError(caught, 'Не удалось получить состояние запуска.'));
+      }
+    };
+
+    const startPolling = () => {
+      if (
+        disposed
+        || activeRunRef.current !== runId
+        || activeRunEpochRef.current !== effectEpoch
+        || operationEpochRef.current !== effectOperationEpoch
+        || pollTimer
+        || terminalFromEvent
+        || TERMINAL_STATUSES.has(snapshotRef.current?.status ?? 'created')
+      ) return;
+      setConnection('polling');
+      pollTimer = setInterval(refresh, POLL_INTERVAL_MS);
+    };
+
+    void refresh();
+    try {
+      stream = new EventSource(builderUrl(`api/runs/${encodeURIComponent(runId)}/events`));
+      setConnection('streaming');
+      stream.onmessage = (message) => {
+        if (
+          disposed
+          || activeRunRef.current !== runId
+          || activeRunEpochRef.current !== effectEpoch
+          || operationEpochRef.current !== effectOperationEpoch
+        ) return;
+        try {
+          const incoming = JSON.parse(message.data) as BuilderEvent;
+          if (incoming.run_id !== runId || !Number.isInteger(incoming.sequence)) return;
+          setEvents((current) => {
+            if (current.some((item) => item.sequence === incoming.sequence)) return current;
+            return [...current, incoming].sort((left, right) => left.sequence - right.sequence);
+          });
+          setActivityMessage(safeEventMessage(incoming) || 'Генерация выполняется');
+          if (incoming.type === 'run.failed') {
+            terminalFromEvent = true;
+            setError(terminalError(incoming.error_code, incoming.message));
+          } else if (incoming.type === 'run.cancelled') {
+            terminalFromEvent = true;
+            setError(terminalError('run_cancelled', incoming.message));
+          } else if (incoming.type === 'run.completed') {
+            terminalFromEvent = true;
+            setError(null);
+          }
+          void refresh();
+        } catch (caught) {
+          setError(describeError(caught, 'Получено повреждённое событие генерации.'));
+        }
+      };
+      stream.onerror = () => {
+        if (
+          disposed
+          || activeRunRef.current !== runId
+          || activeRunEpochRef.current !== effectEpoch
+          || operationEpochRef.current !== effectOperationEpoch
+        ) return;
+        stream?.close();
+        if (terminalFromEvent) setConnection('idle');
+        else startPolling();
+      };
+    } catch {
+      startPolling();
+    }
+
+    return () => {
+      disposed = true;
+      stream?.close();
+      stopPolling();
+    };
+  }, [applySnapshot, runId, streamVersion]);
+
+  const createRun = useCallback(async (input: BuilderRunInput) => {
+    const expectedRunId = activeRunRef.current;
+    const operationEpoch = beginMutation();
+    if (operationEpoch === null) return;
+    setError(null);
+    setActivityMessage('Создаём запуск');
+    try {
+      const next = await createBuilderRun(input);
+      if (!isCurrentOperation(operationEpoch, expectedRunId)) return;
+      adoptRun(next, 'Запуск создан');
+    } catch (caught) {
+      if (!isCurrentOperation(operationEpoch, expectedRunId)) return;
+      setActivityMessage('Запуск не создан');
+      setError(describeError(caught, 'Не удалось создать запуск.'));
+    } finally {
+      finishMutation(operationEpoch);
+    }
+  }, [adoptRun, beginMutation, finishMutation, isCurrentOperation]);
+
+  const cancelRun = useCallback(async () => {
+    const targetRunId = activeRunRef.current;
+    if (!targetRunId) return;
+    const operationEpoch = beginMutation();
+    if (operationEpoch === null) return;
+    setError(null);
+    try {
+      await cancelBuilderRun(targetRunId);
+      if (!isCurrentOperation(operationEpoch, targetRunId)) return;
+      setActivityMessage('Отмена запрошена');
+      const next = await getBuilderRun(targetRunId);
+      if (!isCurrentOperation(operationEpoch, targetRunId)) return;
+      applySnapshot(next);
+    } catch (caught) {
+      if (!isCurrentOperation(operationEpoch, targetRunId)) return;
+      setError(describeError(caught, 'Не удалось отменить генерацию.'));
+    } finally {
+      finishMutation(operationEpoch);
+    }
+  }, [applySnapshot, beginMutation, finishMutation, isCurrentOperation]);
+
+  const retryRun = useCallback(async () => {
+    const targetRunId = activeRunRef.current;
+    if (!targetRunId) return;
+    const operationEpoch = beginMutation();
+    if (operationEpoch === null) return;
+    setError(null);
+    setActivityMessage('Повторяем запуск');
+    try {
+      const next = await retryBuilderRun(targetRunId);
+      if (!isCurrentOperation(operationEpoch, targetRunId)) return;
+      adoptRun(next, 'Повторный запуск создан');
+    } catch (caught) {
+      if (!isCurrentOperation(operationEpoch, targetRunId)) return;
+      setError(describeError(caught, 'Не удалось повторить запуск.'));
+    } finally {
+      finishMutation(operationEpoch);
+    }
+  }, [adoptRun, beginMutation, finishMutation, isCurrentOperation]);
+
+  const refineRun = useCallback(async (message: string) => {
+    const targetRunId = activeRunRef.current;
+    if (!targetRunId) return;
+    const operationEpoch = beginMutation();
+    if (operationEpoch === null) return;
+    setError(null);
+    setActivityMessage('Готовим доработку');
+    try {
+      const next = await refineBuilderRun(targetRunId, message);
+      if (!isCurrentOperation(operationEpoch, targetRunId)) return;
+      adoptRun(next, 'Доработка начата');
+    } catch (caught) {
+      if (!isCurrentOperation(operationEpoch, targetRunId)) return;
+      setError(describeError(caught, 'Не удалось запустить доработку.'));
+    } finally {
+      finishMutation(operationEpoch);
+    }
+  }, [adoptRun, beginMutation, finishMutation, isCurrentOperation]);
+
+  return {
+    runId,
+    snapshot,
+    events,
+    error,
+    activityMessage,
+    connection,
+    isHydrating,
+    mutationPending,
+    createRun,
+    cancelRun,
+    retryRun,
+    refineRun,
+    clearError: () => setError(null),
+  };
+}

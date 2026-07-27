@@ -1,0 +1,16 @@
+[Unit]
+Description=Delete expired Kaigo private reference evidence
+Documentation=/root/ai_project/docs/KAIGO_BUILDER_LAB_OPERATIONS.md
+ConditionPathExists=/root/ai_project/scripts/cleanup_reference_evidence.py
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/ai_project
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /root/ai_project/scripts/cleanup_reference_evidence.py /root/ai_project/data/reference-evidence
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/root/ai_project/data/reference-evidence
