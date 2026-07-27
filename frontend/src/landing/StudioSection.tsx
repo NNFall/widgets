@@ -47,9 +47,9 @@ export function StudioSection() {
           </div>
           <div className="studio-demo__workspace">
             <div className="studio-demo__toolbar">
-              <span>Версия {revision}</span>
-              <button type="button"><Eye size={18} />Предпросмотр</button>
-              <button type="button"><UploadSimple size={18} />Опубликовать</button>
+              <span className="studio-demo__version">Версия {revision}</span>
+              <span className="studio-demo__action studio-demo__preview-label"><Eye size={18} />Предпросмотр</span>
+              <span className="studio-demo__action studio-demo__publish-label"><UploadSimple size={18} />Опубликовать</span>
             </div>
             <AnimatePresence mode="wait" initial={false}>
               <motion.div

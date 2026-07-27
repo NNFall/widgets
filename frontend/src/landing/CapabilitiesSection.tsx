@@ -43,9 +43,9 @@ export function CapabilitiesSection() {
             <div className="chat-showcase__body">
               <div className="chat-showcase__message"><KaigoLogo className="kaigo-logo--compact" /><p>Расскажите, что вы ищете —<br />я помогу сориентироваться.</p></div>
               <div className="chat-showcase__suggestions">
-                <button type="button">Хочу консультацию по проекту</button>
-                <button type="button">Сколько стоит строительство?</button>
-                <button type="button">Посмотреть реализованные проекты</button>
+                <span>Хочу консультацию по проекту</span>
+                <span>Сколько стоит строительство?</span>
+                <span>Посмотреть реализованные проекты</span>
               </div>
               <div className="chat-showcase__input"><span>Введите сообщение...</span><ArrowRight size={19} weight="bold" /></div>
               <small>AI-сотрудник может ошибаться. Проверяйте важное.</small>

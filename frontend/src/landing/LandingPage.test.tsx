@@ -45,4 +45,17 @@ describe('LandingPage sections', () => {
     await user.click(timeQuestion);
     expect(timeQuestion).toHaveAttribute('aria-expanded', 'false');
   });
+
+  it('does not expose demo-only controls or unavailable legal pages as actions', () => {
+    render(<LandingPage />);
+
+    expect(screen.queryByRole('button', { name: 'Хочу консультацию по проекту' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Предпросмотр' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Опубликовать' })).not.toBeInTheDocument();
+    expect(screen.getByText('Хочу консультацию по проекту', { selector: 'span' })).toBeVisible();
+    expect(screen.getByText('Предпросмотр', { selector: 'span' })).toBeVisible();
+    expect(screen.getByText('Опубликовать', { selector: 'span' })).toBeVisible();
+    expect(screen.queryByRole('link', { name: 'Политика конфиденциальности' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Условия использования' })).not.toBeInTheDocument();
+  });
 });

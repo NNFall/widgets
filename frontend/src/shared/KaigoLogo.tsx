@@ -4,7 +4,7 @@ type KaigoLogoProps = {
 
 export function KaigoLogo({ className = '' }: KaigoLogoProps) {
   return (
-    <span className={`kaigo-logo ${className}`.trim()} aria-label="Kaigo">
+    <span className={`kaigo-logo ${className}`.trim()} role="img" aria-label="Kaigo">
       <svg className="kaigo-logo__mark" viewBox="0 0 42 42" aria-hidden="true">
         <defs>
           <linearGradient id="kaigo-mark-gradient" x1="3" y1="39" x2="37" y2="3">

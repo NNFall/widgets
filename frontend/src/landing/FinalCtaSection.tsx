@@ -39,7 +39,7 @@ export function FinalCtaSection() {
           <nav aria-label="Навигация в подвале">
             <a href="#product">Продукт</a><a href="#how-it-works">Как это работает</a><a href="#case-study">Кейсы</a><a href="#faq">Помощь</a><a href="/studio">Студия</a>
           </nav>
-          <div className="site-footer__legal"><a href="/privacy">Политика конфиденциальности</a><a href="/terms">Условия использования</a></div>
+          <div className="site-footer__legal"><span>Политика конфиденциальности</span><span>Условия использования</span></div>
         </div>
       </footer>
     </section>
