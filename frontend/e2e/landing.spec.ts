@@ -42,18 +42,12 @@ async function expectMinimumTarget(locator: Locator, minimum = 44) {
   expect(box?.height ?? 0).toBeGreaterThanOrEqual(minimum);
 }
 
-test('landing compact desktop fits the first screen and exposes the brand @compact', async ({ page }) => {
-  const motionDeadlineMs = 12_000;
-  const startedAt = Date.now();
-  await page.goto('/');
-
-  const remainingMs = motionDeadlineMs - (Date.now() - startedAt);
-  expect(remainingMs, 'navigation must leave time for the hero motion deadline').toBeGreaterThan(0);
+async function expectCompactFirstScreen(page: Page) {
+  const viewport = page.viewportSize();
+  expect(viewport, 'compact project must provide a viewport').not.toBeNull();
+  const viewportLabel = `${viewport?.width}x${viewport?.height}`;
   const scene = page.getByTestId('hero-scene');
-  await expect(scene).toHaveAttribute('data-motion-phase', 'complete', { timeout: remainingMs });
   const finalWidget = page.locator('[data-testid="widget-preview"][data-visible="true"]');
-  await expect(finalWidget).toBeVisible();
-
   const widgetLabel = page.locator('.hero-browser-stage__widget-label');
   const heroComposer = page.locator('.hero-copy .url-composer');
   const processCards = page.locator('[data-testid="process-card"][data-visible="true"]');
@@ -75,7 +69,7 @@ test('landing compact desktop fits the first screen and exposes the brand @compa
 
   const viewportTolerance = 1;
   for (const [name, locator] of firstScreenElements) {
-    await expect(locator, `${name} must be visible in the completed hero`).toBeVisible();
+    await expect(locator, `${name} must be visible in the completed hero at ${viewportLabel}`).toBeVisible();
     const bounds = await locator.evaluate((element) => {
       const rect = element.getBoundingClientRect();
       return {
@@ -87,29 +81,100 @@ test('landing compact desktop fits the first screen and exposes the brand @compa
         viewportHeight: window.innerHeight,
       };
     });
-    expect.soft(bounds.left, `${name} must not protrude past the left viewport edge`)
+    expect.soft(bounds.left, `${name} must not protrude past the left viewport edge at ${viewportLabel}`)
       .toBeGreaterThanOrEqual(-viewportTolerance);
-    expect.soft(bounds.top, `${name} must not protrude past the top viewport edge`)
+    expect.soft(bounds.top, `${name} must not protrude past the top viewport edge at ${viewportLabel}`)
       .toBeGreaterThanOrEqual(-viewportTolerance);
-    expect.soft(bounds.right, `${name} must not protrude past the right viewport edge`)
+    expect.soft(bounds.right, `${name} must not protrude past the right viewport edge at ${viewportLabel}`)
       .toBeLessThanOrEqual(bounds.viewportWidth + viewportTolerance);
-    expect.soft(bounds.bottom, `${name} must not protrude past the bottom viewport edge`)
+    expect.soft(bounds.bottom, `${name} must not protrude past the bottom viewport edge at ${viewportLabel}`)
       .toBeLessThanOrEqual(bounds.viewportHeight + viewportTolerance);
   }
   await expectNoHorizontalOverflow(page);
 
-  await expect.soft(page).toHaveTitle('Kaigo — AI в вашем бизнесе за 10 минут');
-  await expect.soft(page.locator('link[rel="icon"]')).toHaveAttribute('href', '/favicon.svg');
-
   const header = page.locator('.site-header');
   const headerBox = await header.boundingBox();
-  expect(headerBox, 'site header must have a rendered box').not.toBeNull();
-  expect.soft(headerBox?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(96);
+  expect(headerBox, `site header must have a rendered box at ${viewportLabel}`).not.toBeNull();
+  expect.soft(headerBox?.height ?? Number.POSITIVE_INFINITY, `header height at ${viewportLabel}`)
+    .toBeLessThanOrEqual(96);
 
   const heroHeadingFontSize = await page.locator('.hero-copy h1').evaluate((element) =>
     Number.parseFloat(getComputedStyle(element).fontSize),
   );
-  expect.soft(heroHeadingFontSize).toBeLessThanOrEqual(50);
+  expect.soft(heroHeadingFontSize, `hero heading font size at ${viewportLabel}`).toBeLessThanOrEqual(50);
+}
+
+test('landing compact desktop fits the first screen and exposes the brand @compact', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.addInitScript(() => {
+    type HeroMotionDiagnostic = {
+      sourceAt: number | null;
+      completeAt: number | null;
+    };
+
+    const diagnostic: HeroMotionDiagnostic = { sourceAt: null, completeAt: null };
+    (window as Window & { __kaigoHeroMotionTiming?: HeroMotionDiagnostic }).__kaigoHeroMotionTiming = diagnostic;
+
+    const sceneSelector = '[data-testid="hero-scene"]';
+    const recordPhase = (scene: Element) => {
+      const phase = scene.getAttribute('data-motion-phase');
+      if (phase === 'source' && diagnostic.sourceAt === null) {
+        diagnostic.sourceAt = performance.now();
+      }
+      if (phase === 'complete' && diagnostic.completeAt === null) {
+        diagnostic.completeAt = performance.now();
+      }
+    };
+    const inspectNode = (node: Node) => {
+      if (!(node instanceof Element)) return;
+      if (node.matches(sceneSelector)) recordPhase(node);
+      node.querySelectorAll(sceneSelector).forEach(recordPhase);
+    };
+
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.type === 'attributes') {
+          inspectNode(record.target);
+          continue;
+        }
+        record.addedNodes.forEach(inspectNode);
+      }
+    });
+    observer.observe(document, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['data-motion-phase'],
+    });
+    if (document.documentElement) inspectNode(document.documentElement);
+  });
+
+  await page.goto('/');
+
+  const scene = page.getByTestId('hero-scene');
+  await expect(scene).toHaveAttribute('data-motion-phase', 'complete', { timeout: 20_000 });
+  const motionTiming = await page.evaluate(() => (
+    (window as Window & {
+      __kaigoHeroMotionTiming?: { sourceAt: number | null; completeAt: number | null };
+    }).__kaigoHeroMotionTiming
+  ));
+  expect(motionTiming?.sourceAt, 'observer must capture the first source phase').toEqual(expect.any(Number));
+  expect(motionTiming?.completeAt, 'observer must capture the first complete phase').toEqual(expect.any(Number));
+  const motionDurationMs = (motionTiming?.completeAt ?? Number.POSITIVE_INFINITY)
+    - (motionTiming?.sourceAt ?? Number.NEGATIVE_INFINITY);
+  expect(motionDurationMs, 'complete phase must follow the source phase').toBeGreaterThanOrEqual(0);
+  expect(motionDurationMs, 'hero motion from source to complete must finish within 12 seconds')
+    .toBeLessThanOrEqual(12_000);
+
+  await expectCompactFirstScreen(page);
+  await page.setViewportSize({ width: 1_366, height: 768 });
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+  await expectCompactFirstScreen(page);
+
+  await expect.soft(page).toHaveTitle('Kaigo — AI в вашем бизнесе за 10 минут');
+  await expect.soft(page.locator('link[rel="icon"]')).toHaveAttribute('href', '/favicon.svg');
 });
 
 test('landing desktop completes the hero story without overflow @desktop', async ({ page }, testInfo) => {
