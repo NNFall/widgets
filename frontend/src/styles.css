@@ -1652,6 +1652,10 @@ a {
     height: 36px;
   }
 
+  .site-header__logo {
+    min-height: 44px;
+  }
+
   .kaigo-logo__wordmark {
     font-size: 30px;
   }
