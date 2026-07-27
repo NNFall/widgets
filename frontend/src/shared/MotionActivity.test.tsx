@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, renderHook, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const motionState = vi.hoisted(() => ({
@@ -11,7 +11,7 @@ vi.mock('motion/react', () => ({
   useReducedMotion: () => motionState.reducedMotion,
 }));
 
-import { MotionActivity } from './MotionActivity';
+import { MotionActivity, useMotionActivity } from './MotionActivity';
 
 const setVisibility = (visibilityState: DocumentVisibilityState) => {
   Object.defineProperty(document, 'visibilityState', {
@@ -61,6 +61,16 @@ describe('MotionActivity', () => {
 
     setVisibility('visible');
     expect(screen.getByText('scene').parentElement).toHaveAttribute('data-motion-active', 'true');
+  });
+
+  it('returns the reduced-motion preference separately from activity', () => {
+    motionState.reducedMotion = true;
+    const { result } = renderHook(() => useMotionActivity());
+
+    expect(result.current).toMatchObject({
+      active: false,
+      reducedMotion: true,
+    });
   });
 
   it('registers one visibility listener and removes the same listener on cleanup', () => {

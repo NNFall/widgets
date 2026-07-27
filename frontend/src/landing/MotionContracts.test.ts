@@ -54,7 +54,18 @@ describe('landing motion contracts', () => {
     expect(analysisSectionSource).toContain('className="analysis-focus-ring"');
     expect(analysisSectionSource.match(/data-analysis-target=/g)).toHaveLength(4);
     expect(analysisSectionSource).toContain('motionComplete={active}');
-    expect(analysisSectionSource).toContain('reducedMotion={!active}');
+    expect(analysisSectionSource).toContain('reducedMotion={reducedMotion}');
+    expect(analysisSectionSource).not.toContain('reducedMotion={!active}');
+  });
+
+  it('drives focus, lenses, and notes from one shared observation phase', () => {
+    expect(analysisSectionSource).toContain('useAnalysisObservationCycle(active)');
+    expect(analysisSectionSource).toContain('data-analysis-focus={observation}');
+    expect(analysisSectionSource).toContain('data-analysis-kind="lens"');
+    expect(analysisSectionSource).toContain('data-analysis-kind="note"');
+    expect(analysisSectionSource).toContain("data-analysis-active={observation === target ? 'true' : 'false'}");
+    expect(stylesSource).not.toContain('@keyframes analysis-focus-travel');
+    expect(stylesSource).not.toContain('@keyframes analysis-lens-breathe');
   });
 
   it('gates every new infinite section animation and disables it for reduced motion', () => {
@@ -62,8 +73,6 @@ describe('landing motion contracts', () => {
       'how-confirmation-pulse',
       'how-checklist-progress',
       'how-chat-response',
-      'analysis-focus-travel',
-      'analysis-lens-breathe',
     ];
 
     activeLoops.forEach((name) => {
@@ -78,6 +87,8 @@ describe('landing motion contracts', () => {
     expect(reducedMotionRules).toContain('.how-section');
     expect(reducedMotionRules).toContain('.analysis-section');
     expect(reducedMotionRules).toContain('animation: none !important;');
+    expect(reducedMotionRules).toMatch(/\.how-chat-typing\s*\{[^}]*display:\s*none;/s);
+    expect(reducedMotionRules).toMatch(/\.how-chat-response-window\s*\{[^}]*height:\s*auto;[^}]*overflow:\s*visible;/s);
   });
 
   it('keeps all process and analysis keyframes on transform and opacity only', () => {
@@ -86,8 +97,6 @@ describe('landing motion contracts', () => {
       'how-confirmation-pulse',
       'how-checklist-progress',
       'how-chat-response',
-      'analysis-focus-travel',
-      'analysis-lens-breathe',
     ];
 
     sectionKeyframes.forEach((name) => {

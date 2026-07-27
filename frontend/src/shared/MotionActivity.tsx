@@ -4,6 +4,7 @@ import type { HTMLAttributes, ReactNode, RefObject } from 'react';
 
 type MotionActivityState<T extends HTMLElement> = {
   active: boolean;
+  reducedMotion: boolean;
   ref: RefObject<T | null>;
 };
 
@@ -23,6 +24,7 @@ export function useMotionActivity<T extends HTMLElement = HTMLDivElement>(): Mot
 
   return {
     active: inViewport && documentVisible && !reducedMotion,
+    reducedMotion,
     ref,
   };
 }
