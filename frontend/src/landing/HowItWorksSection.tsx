@@ -2,6 +2,8 @@ import { ArrowRight, CheckCircle, ChatsCircle, LinkSimple, MagnifyingGlass } fro
 
 import { Reveal } from '../shared/Reveal';
 
+export const HOW_CARD_STAGGER_SECONDS = 0.26;
+
 const steps = [
   {
     number: '1',
@@ -64,7 +66,11 @@ export function HowItWorksSection() {
             <path d="M205 63 C315 4 350 118 460 66 S667 12 760 68 S966 115 1062 58" />
           </svg>
           {steps.map(({ number, title, copy, Icon, artifact }, index) => (
-            <Reveal className={`how-card how-card--${index + 1}`} delay={index * 0.1} key={number}>
+            <Reveal
+              className={`how-card how-card--${index + 1}`}
+              delay={index * HOW_CARD_STAGGER_SECONDS}
+              key={number}
+            >
               <div className="how-card__header">
                 <span className="step-number">{number}</span>
                 <Icon size={43} weight="regular" aria-hidden="true" />

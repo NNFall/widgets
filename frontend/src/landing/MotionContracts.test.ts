@@ -1,0 +1,21 @@
+import { describe, expect, it } from 'vitest';
+
+import { WIDGET_LAUNCHER_REPEAT_DELAY_SECONDS } from '../shared/BrowserMockup';
+import { CAPABILITY_CARD_STAGGER_SECONDS } from './CapabilitiesSection';
+import { HOW_CARD_STAGGER_SECONDS } from './HowItWorksSection';
+
+describe('landing motion contracts', () => {
+  it('staggers narrative and capability cards at a legible 260ms cadence', () => {
+    expect(HOW_CARD_STAGGER_SECONDS).toBe(0.26);
+    expect(CAPABILITY_CARD_STAGGER_SECONDS).toBe(0.26);
+  });
+
+  it('keeps the recurring launcher animation on a restrained 13 second cycle', () => {
+    const pulseDurationSeconds = 2.3;
+    const totalCycleSeconds = pulseDurationSeconds + WIDGET_LAUNCHER_REPEAT_DELAY_SECONDS;
+
+    expect(totalCycleSeconds).toBeGreaterThanOrEqual(12);
+    expect(totalCycleSeconds).toBeLessThanOrEqual(15);
+    expect(totalCycleSeconds).toBe(13);
+  });
+});

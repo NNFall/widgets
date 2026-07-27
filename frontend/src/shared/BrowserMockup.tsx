@@ -8,6 +8,8 @@ type BrowserMockupProps = {
   testIds?: boolean;
 };
 
+export const WIDGET_LAUNCHER_REPEAT_DELAY_SECONDS = 10.7;
+
 const miniatureFeatures = [
   ['Современный', 'и стильный дизайн'],
   ['Качество', 'и надёжность'],
@@ -93,7 +95,12 @@ export function BrowserMockup({
           }
           transition={
             motionComplete && !reducedMotion
-              ? { duration: 2.3, repeat: Infinity, repeatDelay: 8.5, ease: 'easeInOut' }
+              ? {
+                duration: 2.3,
+                repeat: Infinity,
+                repeatDelay: WIDGET_LAUNCHER_REPEAT_DELAY_SECONDS,
+                ease: 'easeInOut',
+              }
               : { duration: 0 }
           }
         >

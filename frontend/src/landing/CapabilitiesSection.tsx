@@ -3,6 +3,8 @@ import { ArrowRight, BookOpen, Clock, EnvelopeSimple, SlidersHorizontal, Target,
 import { KaigoLogo } from '../shared/KaigoLogo';
 import { Reveal } from '../shared/Reveal';
 
+export const CAPABILITY_CARD_STAGGER_SECONDS = 0.26;
+
 const capabilities = [
   { title: 'Знает ваш бизнес', copy: 'Опирается на страницы, услуги и заданные инструкции.', Icon: BookOpen },
   { title: 'Говорит в стиле бренда', copy: 'Сохраняет тон общения и визуальный характер сайта.', Icon: Textbox },
@@ -25,7 +27,7 @@ export function CapabilitiesSection() {
         <div className="capability-stage">
           <div className="capability-column capability-column--left">
             {capabilities.slice(0, 3).map(({ title, copy, Icon }, index) => (
-              <Reveal className="capability-item" delay={index * 0.08} key={title}>
+              <Reveal className="capability-item" delay={index * CAPABILITY_CARD_STAGGER_SECONDS} key={title}>
                 <Icon size={39} weight="regular" aria-hidden="true" /><span><strong>{title}</strong><small>{copy}</small></span>
               </Reveal>
             ))}
@@ -48,7 +50,7 @@ export function CapabilitiesSection() {
 
           <div className="capability-column capability-column--right">
             {capabilities.slice(3).map(({ title, copy, Icon }, index) => (
-              <Reveal className="capability-item" delay={index * 0.08} key={title}>
+              <Reveal className="capability-item" delay={index * CAPABILITY_CARD_STAGGER_SECONDS} key={title}>
                 <Icon size={39} weight="regular" aria-hidden="true" /><span><strong>{title}</strong><small>{copy}</small></span>
               </Reveal>
             ))}
