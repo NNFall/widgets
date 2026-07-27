@@ -90,6 +90,16 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
 function event(overrides: Partial<BuilderEvent> = {}): BuilderEvent {
   return {
     run_id: 'run-123',
@@ -129,8 +139,12 @@ describe('StudioPage', () => {
     const user = userEvent.setup();
 
     render(<StudioPage />);
-    await user.type(screen.getByLabelText('Ссылка на сайт'), 'https://example.com');
-    await user.type(screen.getByLabelText('Пожелание к AI-сотруднику'), 'Отвечай кратко и по делу');
+    fireEvent.change(screen.getByLabelText('Ссылка на сайт'), {
+      target: { value: 'https://example.com' },
+    });
+    fireEvent.change(screen.getByLabelText('Пожелание к AI-сотруднику'), {
+      target: { value: 'Отвечай кратко и по делу' },
+    });
     await user.click(screen.getByRole('button', { name: 'Создать AI-виджет' }));
 
     expect((await screen.findAllByText('Запуск создан')).some((item) => item.textContent === 'Запуск создан')).toBe(true);
@@ -172,8 +186,8 @@ describe('StudioPage', () => {
 
     expect(await screen.findByDisplayValue('https://example.com/')).toBeVisible();
     expect(screen.getByDisplayValue('Спокойный консультант')).toBeVisible();
-    expect(screen.getByText('1 820')).toBeInTheDocument();
-    expect(screen.getByText('47,6 с')).toBeInTheDocument();
+    expect(screen.getByText('1 820')).toBeVisible();
+    expect(screen.getByText('47,6 с')).toBeVisible();
     const preview = screen.getByTitle('Предпросмотр AI-сотрудника Kaigo');
     expect(preview).toHaveAttribute('sandbox', 'allow-scripts');
     expect(preview.getAttribute('src')).toMatch(
@@ -280,9 +294,64 @@ describe('StudioPage', () => {
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Финальная визуальная проверка не пройдена');
+    const timeline = screen.getByRole('region', { name: 'Диалог с генератором' });
+    expect(within(timeline).getByText('Финальная визуальная проверка не пройдена.')).toBeVisible();
+    expect(within(timeline).queryByText('Gemini returned an invalid grounded reference')).not.toBeInTheDocument();
     const details = within(alert).getByText('Детали');
     expect(details.closest('details')).not.toHaveAttribute('open');
     expect(within(alert).getByText('Gemini returned an invalid grounded reference')).toBeInTheDocument();
+    expect(screen.getAllByText('Gemini returned an invalid grounded reference')).toHaveLength(1);
+  });
+
+  it('ignores a stale slower snapshot after a newer terminal revision was accepted', async () => {
+    localStorage.setItem(ACTIVE_RUN_STORAGE_KEY, 'run-123');
+    const olderResponse = deferred<Response>();
+    const newerResponse = deferred<Response>();
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(() => olderResponse.promise)
+      .mockImplementationOnce(() => newerResponse.promise);
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<StudioPage />);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => {
+      FakeEventSource.instances[0].emit(event({
+        sequence: 10,
+        type: 'artifact.committed',
+        stage: 'motion_polish',
+        status: 'completed',
+        message: 'Ревизия 5 готова',
+        revision: 5,
+      }));
+    });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      newerResponse.resolve(jsonResponse(snapshot({
+        status: 'completed',
+        latest_sequence: 10,
+        updated_at: '2026-07-27T00:00:10+00:00',
+        artifact: { ...artifact, revision: 5 },
+        quality_status: 'verified',
+      })));
+      await newerResponse.promise;
+    });
+    expect(await screen.findByText('5')).toBeVisible();
+    expect(document.querySelector('.studio-header__session strong')).toHaveTextContent('Готово — виджет проверен');
+
+    await act(async () => {
+      olderResponse.resolve(jsonResponse(snapshot({
+        status: 'running',
+        latest_sequence: 2,
+        updated_at: '2026-07-27T00:00:02+00:00',
+        artifact: { ...artifact, revision: 2 },
+        quality_status: 'pending',
+      })));
+      await olderResponse.promise;
+    });
+    expect(screen.getByText('5')).toBeVisible();
+    expect(screen.queryByText('2')).not.toBeInTheDocument();
+    expect(document.querySelector('.studio-header__session strong')).toHaveTextContent('Готово — виджет проверен');
   });
 
   it('falls back from EventSource to snapshot polling and closes resources on unmount', async () => {

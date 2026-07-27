@@ -9,6 +9,7 @@ import {
   refineBuilderRun,
   retryBuilderRun,
 } from './api';
+import { russianErrorMessage, safeEventMessage } from './errors';
 import type {
   BuilderEvent,
   BuilderRunInput,
@@ -22,21 +23,37 @@ const POLL_INTERVAL_MS = 2_000;
 
 const TERMINAL_STATUSES = new Set<BuilderRunStatus>(['completed', 'failed', 'cancelled']);
 
-const ERROR_MESSAGES: Record<string, string> = {
-  missing_api_key: 'Сервис генерации пока не настроен.',
-  provider_unavailable: 'Gemini сейчас недоступен. Запуск можно повторить позже.',
-  model_unavailable: 'Выбранная модель Gemini сейчас недоступна.',
-  quota_exceeded: 'Лимит Gemini временно исчерпан. Попробуйте позже.',
-  generation_timeout: 'Генерация заняла слишком много времени и была остановлена.',
-  invalid_artifact: 'Полученную версию не удалось безопасно открыть.',
-  visual_quality_failed: 'Финальная визуальная проверка не пройдена.',
-  visual_review_inconclusive: 'Визуальную проверку не удалось завершить уверенно.',
-  reference_capture_failed: 'Не удалось снять главную страницу сайта.',
-  reference_capture_incomplete: 'Не удалось полностью снять главную страницу сайта.',
-  reference_analysis_failed: 'Не удалось закончить анализ исходного сайта.',
-  run_cancelled: 'Генерация отменена.',
-  internal_error: 'Во время генерации произошла внутренняя ошибка.',
-};
+interface SnapshotWatermark {
+  runId: string;
+  latestSequence: number;
+  isTerminal: boolean;
+  artifactRevision: number;
+  updatedAt: number;
+}
+
+function snapshotWatermark(snapshot: BuilderRunSnapshot): SnapshotWatermark {
+  const updatedAt = Date.parse(snapshot.updated_at);
+  return {
+    runId: snapshot.run_id,
+    latestSequence: snapshot.latest_sequence,
+    isTerminal: TERMINAL_STATUSES.has(snapshot.status),
+    artifactRevision: Math.max(
+      snapshot.artifact?.revision ?? 0,
+      snapshot.draft_artifact?.revision ?? 0,
+    ),
+    updatedAt: Number.isNaN(updatedAt) ? 0 : updatedAt,
+  };
+}
+
+function isSnapshotRegression(current: SnapshotWatermark, next: SnapshotWatermark) {
+  if (current.runId !== next.runId) return false;
+  if (next.latestSequence !== current.latestSequence) {
+    return next.latestSequence < current.latestSequence;
+  }
+  if (current.isTerminal && !next.isTerminal) return true;
+  if (next.artifactRevision < current.artifactRevision) return true;
+  return next.updatedAt < current.updatedAt;
+}
 
 function readStoredRun() {
   try {
@@ -65,7 +82,7 @@ function forgetRun() {
 function describeError(error: unknown, fallback = 'Не удалось выполнить запрос к студии.'): StudioError {
   if (error instanceof BuilderApiError) {
     return {
-      message: (error.code && ERROR_MESSAGES[error.code]) || fallback,
+      message: russianErrorMessage(error.code, fallback),
       raw: error.raw,
       code: error.code,
     };
@@ -78,7 +95,7 @@ function describeError(error: unknown, fallback = 'Не удалось выпо�
 
 function terminalError(code: string | null, raw: string): StudioError {
   return {
-    message: (code && ERROR_MESSAGES[code]) || 'Генерация завершилась с ошибкой.',
+    message: russianErrorMessage(code, 'Генерация завершилась с ошибкой.'),
     raw: raw || code || 'Подробности не переданы',
     code,
   };
@@ -111,8 +128,15 @@ export function useBuilderRun(): BuilderRunController {
   const [isHydrating, setIsHydrating] = useState(Boolean(runId));
   const [streamVersion, setStreamVersion] = useState(0);
   const snapshotRef = useRef<BuilderRunSnapshot | null>(null);
+  const snapshotWatermarkRef = useRef<SnapshotWatermark | null>(null);
 
   const applySnapshot = useCallback((next: BuilderRunSnapshot) => {
+    const nextWatermark = snapshotWatermark(next);
+    const currentWatermark = snapshotWatermarkRef.current;
+    if (currentWatermark && isSnapshotRegression(currentWatermark, nextWatermark)) {
+      return false;
+    }
+    snapshotWatermarkRef.current = nextWatermark;
     snapshotRef.current = next;
     setSnapshot(next);
     setIsHydrating(false);
@@ -132,9 +156,12 @@ export function useBuilderRun(): BuilderRunController {
           : current
       ));
     }
+    return true;
   }, []);
 
   const adoptRun = useCallback((next: BuilderRunSnapshot, message: string) => {
+    snapshotWatermarkRef.current = null;
+    snapshotRef.current = null;
     setEvents([]);
     setError(null);
     setActivityMessage(message);
@@ -146,9 +173,15 @@ export function useBuilderRun(): BuilderRunController {
 
   useEffect(() => {
     if (!runId) {
+      snapshotWatermarkRef.current = null;
+      snapshotRef.current = null;
       setConnection('idle');
       setIsHydrating(false);
       return;
+    }
+    if (snapshotWatermarkRef.current?.runId !== runId) {
+      snapshotWatermarkRef.current = null;
+      snapshotRef.current = null;
     }
 
     let disposed = false;
@@ -165,7 +198,7 @@ export function useBuilderRun(): BuilderRunController {
       try {
         const next = await getBuilderRun(runId);
         if (disposed) return;
-        applySnapshot(next);
+        if (!applySnapshot(next)) return;
         if (TERMINAL_STATUSES.has(next.status)) {
           terminalFromEvent = true;
           stopPolling();
@@ -175,6 +208,8 @@ export function useBuilderRun(): BuilderRunController {
         if (caught instanceof BuilderApiError && caught.status === 404) {
           forgetRun();
           setRunId(null);
+          snapshotWatermarkRef.current = null;
+          snapshotRef.current = null;
           setSnapshot(null);
           setEvents([]);
           setError(null);
@@ -205,7 +240,7 @@ export function useBuilderRun(): BuilderRunController {
             if (current.some((item) => item.sequence === incoming.sequence)) return current;
             return [...current, incoming].sort((left, right) => left.sequence - right.sequence);
           });
-          setActivityMessage(incoming.message || 'Генерация выполняется');
+          setActivityMessage(safeEventMessage(incoming) || 'Генерация выполняется');
           if (incoming.type === 'run.failed') {
             terminalFromEvent = true;
             setError(terminalError(incoming.error_code, incoming.message));

@@ -162,7 +162,7 @@ export function StudioPage() {
       <main className="studio-shell">
         <motion.aside
           className="studio-rail"
-          initial={{ opacity: 0, x: -16 }}
+          initial={false}
           animate={{ opacity: 1, x: 0 }}
           transition={{ type: 'spring', stiffness: 105, damping: 22 }}
         >
@@ -281,7 +281,7 @@ export function StudioPage() {
         <motion.section
           className="studio-workspace"
           ref={previewAnchorRef}
-          initial={{ opacity: 0, y: 14 }}
+          initial={false}
           animate={{ opacity: 1, y: 0 }}
           transition={{ type: 'spring', stiffness: 95, damping: 22, delay: 0.08 }}
         >

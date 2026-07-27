@@ -1,6 +1,7 @@
 import { CheckCircle, CircleNotch, WarningCircle } from '@phosphor-icons/react';
 import { AnimatePresence, motion } from 'motion/react';
 
+import { safeEventMessage } from './errors';
 import type { BuilderEvent } from './types';
 
 const EVENT_LABELS: Record<string, string> = {
@@ -94,7 +95,7 @@ export function StudioTimeline({ events, running }: { events: BuilderEvent[]; ru
                     <strong>{EVENT_LABELS[item.type] ?? 'Событие генерации'}</strong>
                     <span>{item.stage ? STAGE_LABELS[item.stage] : `Шаг ${item.sequence}`}</span>
                   </div>
-                  <p>{item.message}</p>
+                  <p>{safeEventMessage(item)}</p>
                   {item.changes.length > 0 && (
                     <small>Изменено: {item.changes.map((change) => CHANGE_LABELS[change] ?? change).join(' · ')}</small>
                   )}
