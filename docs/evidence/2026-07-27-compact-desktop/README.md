@@ -1,6 +1,9 @@
 # Compact desktop и бренд Kaigo — evidence
 
-Дата проверки: 2026-07-27. Проверенный HEAD: `3b3ad1c`.
+Дата проверки: 2026-07-27.
+
+- frontend-релиз и полный UI-набор проверены на `f734338`;
+- production routing favicon исправлен и проверен на `7f5432a`.
 
 ## Scope
 
@@ -13,8 +16,6 @@
   accessibility-сценариев;
 - новый геометрический знак `K`, favicon `/favicon.svg` и заголовок вкладки
   `Kaigo — AI в вашем бизнесе за 10 минут`.
-
-Production/deploy в этот пакет доказательств не входят.
 
 ## RED → GREEN
 
@@ -53,6 +54,29 @@ GREEN на текущем HEAD:
 | `npm run lint` | PASS |
 | `npm run build` | PASS; CSS 100.87 kB, JS 483.62 kB |
 | `npx playwright test` | PASS, 12/12: compact 1536 с повторной проверкой 1366, desktop 1920, mobile 390, reduced motion и a11y |
+| `python -m unittest tests.deployment_cases.test_marketing_site_package` | PASS, 10 тестов; 4 platform-dependent сценария пропущены |
+
+## Production
+
+- GitHub-ветка `codex/gemini-technical-foundation` указывает на `7f5432a`.
+- Активный статический release:
+  `/var/www/kaigo-marketing/releases/f734338`.
+- Серверный checkout и управляемый nginx-snippet обновлены до `7f5432a`;
+  перед reload выполнен успешный `nginx -t`, прежний snippet сохранён вне
+  `sites-enabled`.
+- Внешний smoke подтвердил:
+  - `/` — `200`;
+  - новый title и ссылка `/favicon.svg` присутствуют в HTML;
+  - `/favicon.svg` — `200`, `Content-Type: image/svg+xml`,
+    `Cache-Control: no-cache`;
+  - текущий hashed JS — `200`;
+  - `/studio` и `/builder/` — `401`;
+  - `/api/health` и `/w/demka` — `200`.
+
+При первом production smoke favicon дал `404`: файл присутствовал в release,
+но exact-route отсутствовал, поэтому запрос попадал в fallback старого
+приложения. Исправление добавило отдельный публичный статический маршрут и
+deployment-контракт RED → GREEN.
 
 ## Brand assets
 
