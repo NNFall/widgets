@@ -26,4 +26,13 @@ describe('landing accessibility contracts', () => {
       /\.studio-demo__publish-label\s*\{[^}]*color:\s*var\(--ink\)/s,
     );
   });
+
+  it('keeps mobile landing controls at least 44 pixels tall and wide', () => {
+    expect(stylesSource).toMatch(
+      /\.case-toggle button\s*\{[^}]*min-height:\s*44px/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.studio-demo__sidebar > button\s*\{[^}]*width:\s*44px;[^}]*height:\s*44px/s,
+    );
+  });
 });
