@@ -1637,6 +1637,58 @@ a {
 .site-footer nav { display: flex; justify-content: center; gap: clamp(22px, 3.4vw, 56px); font-size: 15px; }
 .site-footer__legal { display: grid; gap: 11px; justify-items: start; color: #66798a; font-size: 14px; }
 
+@media (min-width: 1281px) and (max-width: 1600px) {
+  .site-header {
+    height: 94px;
+  }
+
+  .site-header__inner,
+  .hero-section__inner {
+    width: min(calc(100% - 88px), var(--container));
+  }
+
+  .kaigo-logo__mark {
+    width: 36px;
+    height: 36px;
+  }
+
+  .kaigo-logo__wordmark {
+    font-size: 30px;
+  }
+
+  .site-header__nav {
+    gap: 36px;
+  }
+
+  .site-header__nav a {
+    font-size: 16px;
+  }
+
+  .site-header__cta {
+    min-height: 50px;
+    padding-inline: 24px;
+    font-size: 16px;
+  }
+
+  .hero-section {
+    min-height: calc(100dvh - 94px);
+    padding-block: 28px 40px;
+  }
+
+  .hero-copy h1 {
+    font-size: clamp(46px, 3.15vw, 50px);
+  }
+
+  .hero-copy > p {
+    font-size: 18px;
+  }
+
+  .hero-scene {
+    transform: scale(0.86);
+    transform-origin: center;
+  }
+}
+
 @media (max-width: 1280px) {
   .site-header__inner,
   .hero-section__inner {
