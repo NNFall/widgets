@@ -62,6 +62,15 @@ describe('landing motion contracts', () => {
     expect(reducedMotionRules).toContain('.hero-browser-stage__scanner-particle');
     expect(reducedMotionRules).toContain('.widget-preview__shimmer');
     expect(reducedMotionRules).toContain('animation: none !important;');
-    expect(heroOrbitSceneSource).toMatch(/motionComplete\s*&&\s*!reducedMotion\s*\?\s*'rest'/);
+    expect(heroOrbitSceneSource).toMatch(/motionComplete\s*&&\s*!reducedMotion[\s\S]*?'rest'/);
+  });
+
+  it('isolates complete-rest drift to one card and settles the others', () => {
+    expect(heroOrbitSceneSource).toMatch(
+      /settled:\s*\{[\s\S]*?opacity:\s*1,[\s\S]*?x:\s*'0px',[\s\S]*?y:\s*'0px'/,
+    );
+    expect(heroOrbitSceneSource).toMatch(
+      /motionComplete\s*&&\s*!reducedMotion[\s\S]*?index\s*===\s*cycle\s*%\s*processCards\.length[\s\S]*?\?\s*'rest'\s*:\s*'settled'/,
+    );
   });
 });

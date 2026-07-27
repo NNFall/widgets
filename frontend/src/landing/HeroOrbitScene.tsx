@@ -48,6 +48,13 @@ const processCardVariants: Variants = {
     scale: [0.82, 1.04, 1],
     rotate: ['var(--card-hidden-rotate)', 'var(--card-overshoot-rotate)', '0deg'],
   },
+  settled: {
+    opacity: 1,
+    x: '0px',
+    y: '0px',
+    scale: 1,
+    rotate: '0deg',
+  },
   rest: {
     opacity: 1,
     x: ['0px', 'var(--card-drift-x)', '0px'],
@@ -97,29 +104,38 @@ export function HeroOrbitScene() {
             data-testid="process-card"
             data-visible={index < visibleCards ? 'true' : 'false'}
             data-reveal-direction={direction}
+            data-resting={
+              motionComplete && !reducedMotion && index === cycle % processCards.length
+                ? 'true'
+                : 'false'
+            }
             key={number}
             initial={false}
             animate={
-              motionComplete && !reducedMotion ? 'rest' : index < visibleCards ? 'visible' : 'hidden'
+              motionComplete && !reducedMotion
+                ? index === cycle % processCards.length ? 'rest' : 'settled'
+                : index < visibleCards ? 'visible' : 'hidden'
             }
             variants={processCardVariants}
             transition={
               reducedMotion
                 ? { duration: 0, delay: 0 }
-                : motionComplete
+                : motionComplete && index === cycle % processCards.length
                   ? {
                     duration: 5.4 + index * 0.45,
                     repeat: Infinity,
                     repeatDelay: 0.8 + index * 0.35,
                     ease: 'easeInOut',
                   }
-                  : index < visibleCards
-                    ? {
-                      duration: 0.78,
-                      times: [0, 0.7, 1],
-                      ease: [0.16, 1, 0.3, 1],
-                    }
-                    : { duration: 0.34, ease: 'easeOut' }
+                  : motionComplete
+                    ? { duration: 0.3, ease: 'easeOut' }
+                    : index < visibleCards
+                      ? {
+                        duration: 0.78,
+                        times: [0, 0.7, 1],
+                        ease: [0.16, 1, 0.3, 1],
+                      }
+                      : { duration: 0.34, ease: 'easeOut' }
             }
           >
             <span className="process-card__number">{number}</span>
@@ -142,26 +158,27 @@ export function HeroOrbitScene() {
         />
         <div
           className="hero-browser-stage__scanner-markup"
-          data-testid="hero-scanner"
           aria-hidden="true"
         >
-          <span className="hero-browser-stage__scanner-label" hidden={phase !== 'scanning'}>
-            Сканирование…
-          </span>
           <motion.div
             className="hero-browser-stage__scanner"
+            data-testid="hero-scanner"
+            data-active={phase === 'scanning' ? 'true' : 'false'}
+            aria-hidden="true"
             initial={false}
             animate={
               phase === 'scanning'
-                ? { opacity: [0, 0.96, 1, 1, 0.96, 0], y: ['-65%', '625%'] }
-                : { opacity: 0, y: '-65%' }
+                ? { y: ['-65%', '625%'] }
+                : { y: '-65%' }
             }
             transition={{
               duration: reducedMotion ? 0 : SCANNER_DURATION_SECONDS[program],
               ease: 'linear',
-              times: [0, 0.06, 0.22, 0.78, 0.94, 1],
             }}
           >
+            <span className="hero-browser-stage__scanner-label" hidden={phase !== 'scanning'}>
+              Сканирование…
+            </span>
             <span
               className="hero-browser-stage__scanner-band"
               data-testid="hero-scanner-band"

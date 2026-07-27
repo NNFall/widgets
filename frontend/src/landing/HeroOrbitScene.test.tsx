@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../App';
@@ -91,8 +91,11 @@ describe('HeroOrbitScene', () => {
     render(<App />);
 
     act(() => vi.advanceTimersByTime(1_200));
-    expect(screen.getByText('Сканирование…')).toBeVisible();
-    expect(screen.getByTestId('hero-scanner')).toHaveAttribute('aria-hidden', 'true');
+    const scanner = screen.getByTestId('hero-scanner');
+    expect(scanner).toHaveClass('hero-browser-stage__scanner');
+    expect(scanner).toHaveAttribute('data-active', 'true');
+    expect(within(scanner).getByText('Сканирование…')).toBeVisible();
+    expect(scanner).toHaveAttribute('aria-hidden', 'true');
     expect(screen.getByTestId('hero-scanner-band')).toBeInTheDocument();
     expect(screen.getByTestId('hero-scanner-core')).toBeInTheDocument();
     expect(screen.getByTestId('hero-scanner-trail')).toBeInTheDocument();
@@ -111,6 +114,33 @@ describe('HeroOrbitScene', () => {
     ).toEqual(['upper-left', 'left', 'lower-left']);
     expect(screen.getByTestId('browser-mockup')).toHaveAttribute('data-variant', 'hero');
     expect(screen.getByTestId('widget-preview')).toHaveAttribute('data-variant', 'hero');
+  });
+
+  it('uses actual upper-left, left, and lower-left card vectors on desktop and mobile', () => {
+    const readVectors = (source: string) => [1, 2, 3].map((card) => {
+      const rule = [...source.matchAll(new RegExp(`\\.process-card--${card}\\s*\\{([^}]*)\\}`, 'g'))]
+        .map((match) => match[1])
+        .find((body) => body.includes('--card-hidden-x'));
+      const x = Number(rule?.match(/--card-hidden-x:\s*(-?\d+)px;/)?.[1]);
+      const y = Number(rule?.match(/--card-hidden-y:\s*(-?\d+)px;/)?.[1]);
+      return { x, y };
+    });
+    const desktopStyles = stylesSource.slice(0, stylesSource.indexOf('@media (max-width: 1280px)'));
+    const mobileStyles = stylesSource.slice(
+      stylesSource.indexOf('@media (max-width: 767px)'),
+      stylesSource.indexOf('@media (max-width: 640px)'),
+    );
+
+    expect(readVectors(desktopStyles)).toEqual([
+      { x: -112, y: -22 },
+      { x: -84, y: 0 },
+      { x: -120, y: 22 },
+    ]);
+    expect(readVectors(mobileStyles)).toEqual([
+      { x: -58, y: -12 },
+      { x: -44, y: 0 },
+      { x: -62, y: 14 },
+    ]);
   });
 
   it('skips the timeline when reduced motion is requested', () => {
@@ -212,6 +242,15 @@ describe('HeroOrbitScene', () => {
     );
     expect(browserMockupSource).toMatch(/variant\s*=\s*'default'/);
     expect(heroOrbitSceneSource).toMatch(/<BrowserMockup[\s\S]*?variant="hero"/);
+  });
+
+  it('limits widget will-change to the arrival phase', () => {
+    expect(stylesSource).toMatch(
+      /data-motion-phase='widget'\]\s+\.browser-stack--hero\s+\.widget-preview\s*\{[^}]*will-change:\s*transform, opacity;/s,
+    );
+    expect(stylesSource).not.toMatch(
+      /data-motion-phase='complete'\]\s+\.browser-stack--hero\s+\.widget-preview[\s\S]{0,120}will-change:/,
+    );
   });
 
   it('hides the decorative browser mockup from assistive technology and describes the scene', () => {

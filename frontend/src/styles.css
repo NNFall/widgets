@@ -407,7 +407,7 @@ a {
 
 .process-card--2 {
   --card-hidden-x: -84px;
-  --card-hidden-y: 24px;
+  --card-hidden-y: 0px;
   --card-hidden-rotate: 5deg;
   --card-overshoot-x: 6px;
   --card-overshoot-y: -5px;
@@ -507,7 +507,7 @@ a {
 .hero-scene[data-motion-phase='widget'] .hero-browser-stage,
 .hero-scene[data-motion-phase='resetting'] .hero-browser-stage,
 .hero-scene[data-motion-phase='scanning'] .process-card,
-.hero-scene[data-motion-phase='complete'] .process-card {
+.hero-scene[data-motion-phase='complete'] .process-card[data-resting='true'] {
   will-change: transform, opacity;
 }
 
@@ -718,8 +718,7 @@ a {
     0 8px 18px rgba(254, 105, 54, 0.08);
 }
 
-.hero-scene[data-motion-phase='widget'] .browser-stack--hero .widget-preview,
-.hero-scene[data-motion-phase='complete'] .browser-stack--hero .widget-preview {
+.hero-scene[data-motion-phase='widget'] .browser-stack--hero .widget-preview {
   will-change: transform, opacity;
 }
 
@@ -902,6 +901,11 @@ a {
   height: 16%;
   opacity: 0;
   pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.hero-browser-stage__scanner[data-active='true'] {
+  opacity: 1;
 }
 
 .hero-scene[data-motion-phase='scanning'] .hero-browser-stage__scanner {
@@ -1669,7 +1673,7 @@ a {
 
   .process-card--2 {
     --card-hidden-x: -44px;
-    --card-hidden-y: 15px;
+    --card-hidden-y: 0px;
     --card-hidden-rotate: 3.4deg;
     --card-overshoot-x: 4px;
     --card-overshoot-y: -3px;
