@@ -1,16 +1,24 @@
 import { CheckCircle, ShieldCheck, Sparkle } from '@phosphor-icons/react';
-import { useReducedMotion } from 'motion/react';
+import { motion } from 'motion/react';
 import { useState } from 'react';
 
 import { BrowserMockup } from '../shared/BrowserMockup';
+import { useMotionActivity } from '../shared/MotionActivity';
 import { Reveal } from '../shared/Reveal';
 
 export function CaseStudySection() {
   const [activeView, setActiveView] = useState<'before' | 'after'>('after');
-  const reducedMotion = Boolean(useReducedMotion());
+  const { active, reducedMotion, ref } = useMotionActivity<HTMLElement>();
 
   return (
-    <section className="landing-section case-section" id="case-study" data-landing-section>
+    <section
+      className="landing-section case-section"
+      id="case-study"
+      data-landing-section
+      data-case-view={activeView}
+      data-motion-active={active ? 'true' : 'false'}
+      ref={ref}
+    >
       <div className="landing-shell">
         <Reveal className="case-heading">
           <p className="section-kicker section-kicker--pill">Кейс: AI-консультант для строительной компании</p>
@@ -23,13 +31,24 @@ export function CaseStudySection() {
         </div>
 
         <div className="case-comparison">
-          <Reveal className={`case-panel case-panel--before${activeView === 'before' ? ' is-mobile-active' : ''}`}>
+          <Reveal className={`case-panel case-panel--before${activeView === 'before' ? ' is-mobile-active is-active' : ''}`}>
             <div className="case-panel__label"><span>До</span><p>Посетитель сам ищет проекты, условия и способ оставить заявку.</p></div>
             <div className="case-browser"><BrowserMockup widgetVisible={false} motionComplete={false} reducedMotion testIds={false} /></div>
           </Reveal>
-          <Reveal className={`case-panel case-panel--after${activeView === 'after' ? ' is-mobile-active' : ''}`} delay={0.08}>
+          <Reveal className={`case-panel case-panel--after${activeView === 'after' ? ' is-mobile-active is-active' : ''}`} delay={0.08}>
             <div className="case-panel__label"><span>После</span><p>AI-виджет отвечает по услугам, помогает выбрать проект и подводит к обращению.</p></div>
-            <div className="case-browser"><BrowserMockup widgetVisible motionComplete reducedMotion={reducedMotion} testIds={false} /></div>
+            <div className="case-browser" data-case-widget="enhanced">
+              <motion.div
+                className="case-browser__after-reveal"
+                key={activeView === 'after' ? 'case-after-active' : 'case-after-idle'}
+                initial={activeView === 'after' && !reducedMotion ? { opacity: 0.72, y: 42, scale: 0.88, rotate: -2.5 } : false}
+                animate={{ opacity: 1, y: 0, scale: 1, rotate: 0 }}
+                transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 148, damping: 13, mass: 0.82 }}
+              >
+                <span className="case-after-halo" aria-hidden="true" />
+                <BrowserMockup widgetVisible motionComplete={active} reducedMotion={reducedMotion} testIds={false} />
+              </motion.div>
+            </div>
           </Reveal>
         </div>
 
