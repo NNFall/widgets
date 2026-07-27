@@ -3,12 +3,13 @@ import logging
 from html import escape
 
 from aiohttp import web
-from aiohttp_session import setup as setup_session, SimpleCookieStorage, get_session
+from aiohttp_session import setup as setup_session, get_session
 from sqlalchemy import select
 
 from app.admin.routes import setup_admin_routes
 from app.api.routes import setup_api_routes
 from app.config import AppConfig, load_config
+from app.auth.session_storage import DatabaseSessionStorage
 from app.db import models
 from app.db import init_db_signals
 from app.db.session import session_scope
@@ -349,7 +350,16 @@ async def create_app(config: AppConfig | None = None) -> web.Application:
     app = web.Application()
     app['config'] = cfg
 
-    setup_session(app, SimpleCookieStorage(max_age=14 * 24 * 3600))
+    setup_session(
+        app,
+        DatabaseSessionStorage(
+            cookie_name=cfg.session_cookie_name,
+            max_age=cfg.session_ttl_seconds,
+            secure=cfg.public_auth_enabled or cfg.environment == "production",
+            httponly=True,
+            samesite="Lax",
+        ),
+    )
     app.on_startup.append(_init_history_db)
 
     init_db_signals(app)
