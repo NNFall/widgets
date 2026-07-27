@@ -42,6 +42,55 @@ async function expectMinimumTarget(locator: Locator, minimum = 44) {
   expect(box?.height ?? 0).toBeGreaterThanOrEqual(minimum);
 }
 
+test('landing compact desktop fits the first screen and exposes the brand @compact', async ({ page }) => {
+  await page.goto('/');
+
+  const scene = page.getByTestId('hero-scene');
+  await expect(scene).toHaveAttribute('data-motion-phase', 'complete', { timeout: 12_000 });
+  await expect(page.locator('[data-testid="widget-preview"][data-visible="true"]')).toBeVisible();
+
+  await expect.soft(page).toHaveTitle('Kaigo — AI в вашем бизнесе за 10 минут');
+  await expect.soft(page.locator('link[rel="icon"]')).toHaveAttribute('href', '/favicon.svg');
+
+  const header = page.locator('.site-header');
+  const headerBox = await header.boundingBox();
+  expect(headerBox, 'site header must have a rendered box').not.toBeNull();
+  expect.soft(headerBox?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(96);
+
+  const heroHeadingFontSize = await page.locator('.hero-copy h1').evaluate((element) =>
+    Number.parseFloat(getComputedStyle(element).fontSize),
+  );
+  expect.soft(heroHeadingFontSize).toBeLessThanOrEqual(50);
+
+  const firstScreen = await page.evaluate(() => {
+    const headerBounds = document.querySelector('.site-header')?.getBoundingClientRect();
+    const heroBounds = document.querySelector('.hero-section')?.getBoundingClientRect();
+    const copyBounds = document.querySelector('.hero-copy')?.getBoundingClientRect();
+    const sceneBounds = document.querySelector('.hero-scene')?.getBoundingClientRect();
+
+    return {
+      viewportHeight: window.innerHeight,
+      headerBottom: headerBounds?.bottom ?? Number.NaN,
+      heroTop: heroBounds?.top ?? Number.NaN,
+      heroBottom: heroBounds?.bottom ?? Number.POSITIVE_INFINITY,
+      contentTop: Math.min(
+        copyBounds?.top ?? Number.POSITIVE_INFINITY,
+        sceneBounds?.top ?? Number.POSITIVE_INFINITY,
+      ),
+      contentBottom: Math.max(
+        copyBounds?.bottom ?? Number.POSITIVE_INFINITY,
+        sceneBounds?.bottom ?? Number.POSITIVE_INFINITY,
+      ),
+    };
+  });
+  const viewportTolerance = Math.max(4, firstScreen.viewportHeight * 0.01);
+  expect(firstScreen.heroTop).toBeGreaterThanOrEqual(firstScreen.headerBottom - 1);
+  expect(firstScreen.contentTop).toBeGreaterThanOrEqual(firstScreen.heroTop - viewportTolerance);
+  expect(firstScreen.contentBottom).toBeLessThanOrEqual(firstScreen.viewportHeight + viewportTolerance);
+  expect(firstScreen.heroBottom).toBeLessThanOrEqual(firstScreen.viewportHeight + viewportTolerance);
+  await expectNoHorizontalOverflow(page);
+});
+
 test('landing desktop completes the hero story without overflow @desktop', async ({ page }, testInfo) => {
   test.setTimeout(90_000);
   await page.goto('/');

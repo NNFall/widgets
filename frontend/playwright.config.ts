@@ -33,6 +33,11 @@ export default defineConfig({
   },
   projects: [
     {
+      name: 'compact-1536',
+      grep: /@compact/,
+      use: { viewport: { width: 1_536, height: 830 } },
+    },
+    {
       name: 'desktop-1920',
       grep: /@desktop/,
       use: { viewport: { width: 1_920, height: 1_080 } },

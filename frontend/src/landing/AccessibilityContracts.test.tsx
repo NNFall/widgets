@@ -12,6 +12,7 @@ describe('landing accessibility contracts', () => {
 
     const logo = screen.getByRole('img', { name: 'Kaigo' });
     expect(within(logo).getByText('Kaigo')).toBeInTheDocument();
+    expect(logo.querySelector('[data-kaigo-mark="K"]')).toBeInTheDocument();
     expect(screen.getAllByLabelText('Kaigo')).toHaveLength(1);
   });
 
