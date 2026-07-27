@@ -12,7 +12,28 @@ describe('landing accessibility contracts', () => {
 
     const logo = screen.getByRole('img', { name: 'Kaigo' });
     expect(within(logo).getByText('Kaigo')).toBeInTheDocument();
-    expect(logo.querySelector('[data-kaigo-mark="K"]')).toBeInTheDocument();
+    const mark = logo.querySelector('[data-kaigo-mark="K"]');
+    expect.soft(mark).toBeInTheDocument();
+
+    const strokeGeometry = Array.from(mark?.querySelectorAll('[data-kaigo-stroke]') ?? []).map((path) => ({
+      stroke: path.getAttribute('data-kaigo-stroke'),
+      d: path.getAttribute('d'),
+    }));
+    expect.soft(strokeGeometry).toEqual([
+      { stroke: 'stem', d: 'M4 4h9v34H4z' },
+      { stroke: 'upper-diagonal', d: 'M13 21 29 4h11L22 22z' },
+      { stroke: 'lower-diagonal', d: 'M13 21h9l18 17H29z' },
+    ]);
+
+    const renderedPaths = Array.from(logo.querySelectorAll('path')).map((path) => path.getAttribute('d'));
+    const legacyRPaths = [
+      'M4 4h13v34H4z',
+      'M21 4h4c8.3 0 13 4.2 13 10.1S33.3 24 25 24h-4V4Z',
+      'M21 26h4c7 0 11 3 13 12H21V26Z',
+    ];
+    for (const legacyPath of legacyRPaths) {
+      expect.soft(renderedPaths).not.toContain(legacyPath);
+    }
     expect(screen.getAllByLabelText('Kaigo')).toHaveLength(1);
   });
 
