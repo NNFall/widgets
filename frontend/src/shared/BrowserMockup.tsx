@@ -79,7 +79,11 @@ export function BrowserMockup({
           scale: widgetVisible ? 1 : 0.82,
           y: widgetVisible ? 0 : 18,
         }}
-        transition={{ type: 'spring', stiffness: 120, damping: 18 }}
+        transition={
+          reducedMotion
+            ? { duration: 0, delay: 0 }
+            : { type: 'spring', stiffness: 120, damping: 18 }
+        }
         aria-hidden={!widgetVisible}
       >
         <div className="widget-preview__message">

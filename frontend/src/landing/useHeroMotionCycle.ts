@@ -35,84 +35,92 @@ function reducedMotionRequested() {
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
+function assertNever(value: never): never {
+  throw new Error(`Unhandled hero motion state: ${String(value)}`);
+}
+
 function cinematicTransition(state: HeroMotionCycleState): ScheduledTransition {
-  if (state.phase === 'source') {
-    return { delay: 1_200, next: { ...state, phase: 'scanning' } };
-  }
-
-  if (state.phase === 'scanning') {
-    if (state.visibleCards === 0) {
-      return { delay: 1_200, next: { ...state, visibleCards: 1 } };
+  const phase = state.phase;
+  switch (phase) {
+    case 'source':
+      return { delay: 1_200, next: { ...state, phase: 'scanning' } };
+    case 'scanning': {
+      const visibleCards = state.visibleCards;
+      switch (visibleCards) {
+        case 0:
+          return { delay: 1_200, next: { ...state, visibleCards: 1 } };
+        case 1:
+          return { delay: 1_600, next: { ...state, visibleCards: 2 } };
+        case 2:
+          return { delay: 1_600, next: { ...state, visibleCards: 3 } };
+        case 3:
+          return { delay: 1_900, next: { ...state, phase: 'widget' } };
+        default:
+          return assertNever(visibleCards);
+      }
     }
-    if (state.visibleCards === 1) {
-      return { delay: 1_600, next: { ...state, visibleCards: 2 } };
-    }
-    if (state.visibleCards === 2) {
-      return { delay: 1_600, next: { ...state, visibleCards: 3 } };
-    }
-    return { delay: 1_900, next: { ...state, phase: 'widget' } };
+    case 'widget':
+      return { delay: 900, next: { ...state, phase: 'complete' } };
+    case 'complete':
+      return {
+        delay: 12_000,
+        next: { ...state, phase: 'resetting', visibleCards: 0 },
+      };
+    case 'resetting':
+      return {
+        delay: 600,
+        next: {
+          program: 'loop',
+          phase: 'source',
+          cycle: state.cycle + 1,
+          visibleCards: 0,
+        },
+      };
+    default:
+      return assertNever(phase);
   }
-
-  if (state.phase === 'widget') {
-    return { delay: 900, next: { ...state, phase: 'complete' } };
-  }
-
-  if (state.phase === 'complete') {
-    return {
-      delay: 12_000,
-      next: { ...state, phase: 'resetting', visibleCards: 0 },
-    };
-  }
-
-  return {
-    delay: 600,
-    next: {
-      program: 'loop',
-      phase: 'source',
-      cycle: state.cycle + 1,
-      visibleCards: 0,
-    },
-  };
 }
 
 function loopTransition(state: HeroMotionCycleState): ScheduledTransition {
-  if (state.phase === 'source') {
-    return { delay: 800, next: { ...state, phase: 'scanning' } };
-  }
-
-  if (state.phase === 'scanning') {
-    if (state.visibleCards === 0) {
-      return { delay: 800, next: { ...state, visibleCards: 1 } };
+  const phase = state.phase;
+  switch (phase) {
+    case 'source':
+      return { delay: 800, next: { ...state, phase: 'scanning' } };
+    case 'scanning': {
+      const visibleCards = state.visibleCards;
+      switch (visibleCards) {
+        case 0:
+          return { delay: 800, next: { ...state, visibleCards: 1 } };
+        case 1:
+          return { delay: 1_000, next: { ...state, visibleCards: 2 } };
+        case 2:
+          return { delay: 1_000, next: { ...state, visibleCards: 3 } };
+        case 3:
+          return { delay: 1_000, next: { ...state, phase: 'widget' } };
+        default:
+          return assertNever(visibleCards);
+      }
     }
-    if (state.visibleCards === 1) {
-      return { delay: 1_000, next: { ...state, visibleCards: 2 } };
-    }
-    if (state.visibleCards === 2) {
-      return { delay: 1_000, next: { ...state, visibleCards: 3 } };
-    }
-    return { delay: 1_000, next: { ...state, phase: 'widget' } };
+    case 'widget':
+      return { delay: 800, next: { ...state, phase: 'complete' } };
+    case 'complete':
+      return {
+        delay: 11_000,
+        next: { ...state, phase: 'resetting', visibleCards: 0 },
+      };
+    case 'resetting':
+      return {
+        delay: 600,
+        next: {
+          ...state,
+          phase: 'source',
+          cycle: state.cycle + 1,
+          visibleCards: 0,
+        },
+      };
+    default:
+      return assertNever(phase);
   }
-
-  if (state.phase === 'widget') {
-    return { delay: 800, next: { ...state, phase: 'complete' } };
-  }
-
-  if (state.phase === 'complete') {
-    return {
-      delay: 11_000,
-      next: { ...state, phase: 'resetting', visibleCards: 0 },
-    };
-  }
-
-  return {
-    delay: 600,
-    next: {
-      ...state,
-      phase: 'source',
-      cycle: state.cycle + 1,
-      visibleCards: 0,
-    },
-  };
 }
 
 function getNextTransition(state: HeroMotionCycleState) {
@@ -134,8 +142,13 @@ export function useHeroMotionCycle() {
     const handleChange = (event: MediaQueryListEvent) => setReducedMotion(event.matches);
 
     setReducedMotion(mediaQuery.matches);
-    mediaQuery.addEventListener('change', handleChange);
-    return () => mediaQuery.removeEventListener('change', handleChange);
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleChange);
+      return () => mediaQuery.removeEventListener('change', handleChange);
+    }
+
+    mediaQuery.addListener(handleChange);
+    return () => mediaQuery.removeListener(handleChange);
   }, []);
 
   useEffect(() => {

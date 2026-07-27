@@ -33,6 +33,31 @@ const installReducedMotionPreference = (initialMatches: boolean) => {
   };
 };
 
+const installLegacyReducedMotionPreference = (initialMatches: boolean) => {
+  const matches = initialMatches;
+  const listeners = new Set<ReducedMotionListener>();
+  const mediaQuery = {
+    get matches() {
+      return matches;
+    },
+    media: '(prefers-reduced-motion: reduce)',
+    onchange: null,
+    addListener: vi.fn((listener: ReducedMotionListener) => listeners.add(listener)),
+    removeListener: vi.fn((listener: ReducedMotionListener) => listeners.delete(listener)),
+    dispatchEvent: vi.fn(),
+  };
+
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn().mockImplementation(() => mediaQuery),
+  });
+
+  return {
+    mediaQuery,
+    listenerCount: () => listeners.size,
+  };
+};
+
 const advance = (milliseconds: number) => {
   act(() => vi.advanceTimersByTime(milliseconds));
 };
@@ -134,6 +159,23 @@ describe('useHeroMotionCycle', () => {
     expect(result.current).toMatchObject({ program: 'cinematic', cycle: 0 });
 
     unmount();
+    expect(preference.listenerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('supports legacy matchMedia listeners and removes them on unmount', () => {
+    const preference = installLegacyReducedMotionPreference(false);
+    let unmount: (() => void) | undefined;
+
+    expect(() => {
+      ({ unmount } = renderHook(() => useHeroMotionCycle()));
+    }).not.toThrow();
+    expect(preference.mediaQuery.addListener).toHaveBeenCalledOnce();
+    expect(preference.listenerCount()).toBe(1);
+    expect(vi.getTimerCount()).toBe(1);
+
+    unmount?.();
+    expect(preference.mediaQuery.removeListener).toHaveBeenCalledOnce();
     expect(preference.listenerCount()).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
   });

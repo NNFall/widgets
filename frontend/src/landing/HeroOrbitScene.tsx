@@ -72,9 +72,11 @@ export function HeroOrbitScene() {
               scale: index < visibleCards ? 1 : 0.94,
             }}
             transition={
-              motionComplete && !reducedMotion
-                ? { duration: 5.2 + index * 0.35, repeat: Infinity, ease: 'easeInOut' }
-                : { type: 'spring', stiffness: 100, damping: 18, delay: index < visibleCards ? index * 0.3 : 0 }
+              reducedMotion
+                ? { duration: 0, delay: 0 }
+                : motionComplete
+                  ? { duration: 5.2 + index * 0.35, repeat: Infinity, ease: 'easeInOut' }
+                  : { type: 'spring', stiffness: 100, damping: 18, delay: index < visibleCards ? index * 0.3 : 0 }
             }
           >
             <span className="process-card__number">{number}</span>
@@ -106,7 +108,7 @@ export function HeroOrbitScene() {
                 ? { opacity: [0, 1, 1, 0], y: ['0%', '520%'] }
                 : { opacity: 0, y: '0%' }
             }
-            transition={{ duration: phase === 'scanning' ? 2.6 : 0.15, ease: 'easeInOut' }}
+            transition={{ duration: reducedMotion ? 0 : phase === 'scanning' ? 2.6 : 0.15, ease: 'easeInOut' }}
           />
         </div>
         <motion.div

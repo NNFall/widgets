@@ -2,7 +2,9 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../App';
+import browserMockupSource from '../shared/BrowserMockup.tsx?raw';
 import stylesSource from '../styles.css?raw';
+import heroOrbitSceneSource from './HeroOrbitScene.tsx?raw';
 
 type ReducedMotionListener = (event: { matches: boolean }) => void;
 
@@ -127,6 +129,21 @@ describe('HeroOrbitScene', () => {
     unmount();
     expect(reducedMotionController.listenerCount()).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('uses immediate visual transitions when reduced motion is enabled dynamically', () => {
+    expect(heroOrbitSceneSource).toMatch(
+      /transition=\{\s*reducedMotion\s*\?\s*\{\s*duration:\s*0,\s*delay:\s*0\s*\}\s*:\s*motionComplete/,
+    );
+    expect(heroOrbitSceneSource).toMatch(
+      /className="hero-browser-stage__scanner"[\s\S]*?transition=\{\{\s*duration:\s*reducedMotion\s*\?\s*0\s*:/,
+    );
+    expect(heroOrbitSceneSource).toMatch(
+      /className="hero-browser-stage__widget-label"[\s\S]*?duration:\s*reducedMotion\s*\?\s*0[\s\S]*?delay:\s*reducedMotion\s*\?\s*0/,
+    );
+    expect(browserMockupSource).toMatch(
+      /className="widget-preview"[\s\S]*?transition=\{\s*reducedMotion\s*\?\s*\{\s*duration:\s*0,\s*delay:\s*0\s*\}/,
+    );
   });
 
   it('locks the desktop headline width and pulses through transform and opacity only', () => {
