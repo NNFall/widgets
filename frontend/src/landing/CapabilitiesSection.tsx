@@ -4,14 +4,18 @@ import { KaigoLogo } from '../shared/KaigoLogo';
 import { Reveal } from '../shared/Reveal';
 
 export const CAPABILITY_CARD_STAGGER_SECONDS = 0.26;
+export const CAPABILITY_REVEAL_DELAYS_SECONDS = Array.from(
+  { length: 6 },
+  (_, order) => Number((order * CAPABILITY_CARD_STAGGER_SECONDS).toFixed(2)),
+);
 
 const capabilities = [
-  { title: 'Знает ваш бизнес', copy: 'Опирается на страницы, услуги и заданные инструкции.', Icon: BookOpen },
-  { title: 'Говорит в стиле бренда', copy: 'Сохраняет тон общения и визуальный характер сайта.', Icon: Textbox },
-  { title: 'Отвечает 24/7', copy: 'Не заставляет посетителя ждать рабочего дня.', Icon: Clock },
-  { title: 'Помогает выбрать', copy: 'Уточняет задачу и предлагает подходящий следующий шаг.', Icon: Target },
-  { title: 'Собирает обращения', copy: 'Передаёт контакты в Telegram или на почту.', Icon: EnvelopeSimple },
-  { title: 'Можно дорабатывать', copy: 'Поведение и текст меняются до публикации.', Icon: SlidersHorizontal },
+  { title: 'Знает ваш бизнес', copy: 'Опирается на страницы, услуги и заданные инструкции.', Icon: BookOpen, revealOrder: 0 },
+  { title: 'Говорит в стиле бренда', copy: 'Сохраняет тон общения и визуальный характер сайта.', Icon: Textbox, revealOrder: 2 },
+  { title: 'Отвечает 24/7', copy: 'Не заставляет посетителя ждать рабочего дня.', Icon: Clock, revealOrder: 4 },
+  { title: 'Помогает выбрать', copy: 'Уточняет задачу и предлагает подходящий следующий шаг.', Icon: Target, revealOrder: 1 },
+  { title: 'Собирает обращения', copy: 'Передаёт контакты в Telegram или на почту.', Icon: EnvelopeSimple, revealOrder: 3 },
+  { title: 'Можно дорабатывать', copy: 'Поведение и текст меняются до публикации.', Icon: SlidersHorizontal, revealOrder: 5 },
 ] as const;
 
 export function CapabilitiesSection() {
@@ -26,8 +30,8 @@ export function CapabilitiesSection() {
 
         <div className="capability-stage">
           <div className="capability-column capability-column--left">
-            {capabilities.slice(0, 3).map(({ title, copy, Icon }, index) => (
-              <Reveal className="capability-item" delay={index * CAPABILITY_CARD_STAGGER_SECONDS} key={title}>
+            {capabilities.slice(0, 3).map(({ title, copy, Icon, revealOrder }) => (
+              <Reveal className="capability-item" delay={CAPABILITY_REVEAL_DELAYS_SECONDS[revealOrder]} key={title}>
                 <Icon size={39} weight="regular" aria-hidden="true" /><span><strong>{title}</strong><small>{copy}</small></span>
               </Reveal>
             ))}
@@ -49,8 +53,8 @@ export function CapabilitiesSection() {
           </Reveal>
 
           <div className="capability-column capability-column--right">
-            {capabilities.slice(3).map(({ title, copy, Icon }, index) => (
-              <Reveal className="capability-item" delay={index * CAPABILITY_CARD_STAGGER_SECONDS} key={title}>
+            {capabilities.slice(3).map(({ title, copy, Icon, revealOrder }) => (
+              <Reveal className="capability-item" delay={CAPABILITY_REVEAL_DELAYS_SECONDS[revealOrder]} key={title}>
                 <Icon size={39} weight="regular" aria-hidden="true" /><span><strong>{title}</strong><small>{copy}</small></span>
               </Reveal>
             ))}
