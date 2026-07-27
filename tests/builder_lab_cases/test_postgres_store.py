@@ -1,13 +1,16 @@
 import asyncio
+from uuid import UUID
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db.base import Base
 from app.db.models import Tenant, User
-from app.saas.models import Project
+from app.saas.models import GenerationArtifact, Project
 from builder_lab.models import BuilderRequest, EngineName, RunStatus, Stage, TokenUsage
 from builder_lab.postgres_store import PostgresRunStore
+from builder_lab.store_protocol import RunStoreProtocol
 from tests.builder_lab_cases.test_validation import artifact
 
 
@@ -101,3 +104,85 @@ async def test_artifact_json_is_immutable_and_revisioned(tmp_path) -> None:
         assert await restored_store.artifact(run.run_id) == second
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_committing_staged_draft_promotes_identical_revision(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    store = PostgresRunStore(factory, project_id=project_id)
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+        await store.commit_artifact(
+            run.run_id, artifact(revision=1, stage=Stage.ART_DIRECTION)
+        )
+        candidate = artifact(revision=2, stage=Stage.FOUNDATION)
+        await store.stage_visual_candidate(run.run_id, candidate)
+        await store.stage_visual_draft(run.run_id, candidate)
+
+        committed = await store.commit_visual_candidate(run.run_id)
+
+        restored = await PostgresRunStore(
+            factory, project_id=project_id
+        ).snapshot(run.run_id)
+        assert committed == candidate
+        assert restored.artifact == candidate
+        assert restored.draft_artifact is None
+        assert restored.quality_status == "verified"
+        async with factory() as database:
+            rows = (
+                await database.execute(
+                    select(GenerationArtifact).where(
+                        GenerationArtifact.run_id == UUID(run.run_id),
+                        GenerationArtifact.revision == candidate.revision,
+                    )
+                )
+            ).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].quality_status == "verified"
+        assert rows[0].config["artifact"] == candidate.to_dict()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_draft_promotion_rejects_changed_candidate_at_same_revision(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    store = PostgresRunStore(factory, project_id=project_id)
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+        candidate = artifact(revision=1, stage=Stage.ART_DIRECTION)
+        changed_draft = artifact(
+            revision=1,
+            stage=Stage.ART_DIRECTION,
+            css=candidate.css + "\n.changed {}",
+        )
+        await store.stage_visual_candidate(run.run_id, candidate)
+        await store.stage_visual_draft(run.run_id, changed_draft)
+
+        with pytest.raises(ValueError, match="differs from persisted draft"):
+            await store.commit_visual_candidate(run.run_id)
+
+        restored = await store.snapshot(run.run_id)
+        assert restored.artifact is None
+        assert restored.draft_artifact == changed_draft
+        assert restored.quality_status == "needs_repair"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "live_read_method",
+    ("artifact", "preview_artifact", "events_after", "wait_for_events"),
+)
+def test_orchestrator_store_protocol_excludes_live_read_methods(
+    live_read_method: str,
+) -> None:
+    assert live_read_method not in RunStoreProtocol.__dict__

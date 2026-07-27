@@ -57,26 +57,6 @@ class RunStoreProtocol(Protocol):
 
     async def commit_visual_candidate(self, run_id: str) -> WidgetArtifact: ...
 
-    async def artifact(
-        self, run_id: str, revision: int | None = None
-    ) -> WidgetArtifact: ...
-
-    async def preview_artifact(
-        self, run_id: str, revision: int | None = None
-    ) -> WidgetArtifact: ...
-
-    async def events_after(
-        self, run_id: str, sequence: int
-    ) -> tuple[BuilderEvent, ...]: ...
-
-    async def wait_for_events(
-        self,
-        run_id: str,
-        sequence: int,
-        *,
-        timeout: float = 15.0,
-    ) -> tuple[BuilderEvent, ...]: ...
-
     async def request_cancel(self, run_id: str) -> bool: ...
 
     async def finish(

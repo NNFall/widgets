@@ -500,9 +500,29 @@ class PostgresRunStore:
                 previous = await self._latest_artifact(
                     database, run_uuid, quality_status="verified"
                 )
-                await self._store_artifact(
-                    database, run, candidate, quality_status="verified"
+                persisted_result = await database.execute(
+                    select(GenerationArtifact)
+                    .where(
+                        GenerationArtifact.run_id == run_uuid,
+                        GenerationArtifact.revision == candidate.revision,
+                    )
+                    .with_for_update()
                 )
+                persisted = persisted_result.scalar_one_or_none()
+                if persisted is None:
+                    await self._store_artifact(
+                        database, run, candidate, quality_status="verified"
+                    )
+                elif persisted.quality_status != "needs_repair":
+                    raise ValueError(
+                        "artifact revision must increase monotonically"
+                    )
+                elif persisted.config.get("artifact") != candidate.to_dict():
+                    raise ValueError(
+                        "visual candidate differs from persisted draft"
+                    )
+                else:
+                    persisted.quality_status = "verified"
                 self._append_record(
                     database,
                     run,
