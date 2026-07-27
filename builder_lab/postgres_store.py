@@ -29,6 +29,7 @@ from .store import ArtifactNotFound, RunNotFound, RunTerminal, TERMINAL_STATUSES
 
 
 _RUN_LOCKS: dict[tuple[int, UUID], asyncio.Lock] = {}
+_DRAFT_STAGED_EVENT = "artifact.draft_staged"
 
 
 def _utc(value: datetime) -> datetime:
@@ -117,6 +118,15 @@ class PostgresRunStore:
             css=record.css,
             javascript=record.javascript,
         )
+
+    @staticmethod
+    def _draft_from_event(record: GenerationEvent) -> WidgetArtifact:
+        payload = record.payload.get("artifact")
+        if not isinstance(payload, dict):
+            raise RuntimeError(
+                f"draft event {record.run_id}:{record.sequence} has no artifact"
+            )
+        return WidgetArtifact.from_dict(payload)
 
     @staticmethod
     def _new_artifact_record(
@@ -291,9 +301,24 @@ class PostgresRunStore:
             artifact = await self._latest_artifact(
                 database, run_uuid, quality_status="verified"
             )
-            draft = await self._latest_artifact(
-                database, run_uuid, quality_status="needs_repair"
+            draft_record = next(
+                (
+                    record
+                    for record in reversed(event_records)
+                    if record.event_type == _DRAFT_STAGED_EVENT
+                ),
+                None,
             )
+            draft = (
+                self._draft_from_event(draft_record)
+                if draft_record is not None
+                else await self._latest_artifact(
+                    database, run_uuid, quality_status="needs_repair"
+                )
+            )
+            if artifact is not None and draft is not None:
+                if draft.revision <= artifact.revision:
+                    draft = None
             terminal_payload = next(
                 (
                     record.payload
@@ -412,6 +437,22 @@ class PostgresRunStore:
         record = result.scalar_one_or_none()
         return self._artifact_from_record(record) if record is not None else None
 
+    async def _latest_draft_event(
+        self,
+        database: AsyncSession,
+        run_id: UUID,
+    ) -> GenerationEvent | None:
+        result = await database.execute(
+            select(GenerationEvent)
+            .where(
+                GenerationEvent.run_id == run_id,
+                GenerationEvent.event_type == _DRAFT_STAGED_EVENT,
+            )
+            .order_by(GenerationEvent.sequence.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def _store_artifact(
         self,
         database: AsyncSession,
@@ -485,8 +526,36 @@ class PostgresRunStore:
         async with self._lock(run_uuid):
             async with self._sessions() as database, database.begin():
                 run = await self._locked_run(database, run_uuid)
-                await self._store_artifact(
-                    database, run, artifact, quality_status="needs_repair"
+                self._ensure_mutable(
+                    run,
+                    cancelled=await self._cancel_requested(database, run_uuid),
+                )
+                latest = await self._latest_artifact(
+                    database, run_uuid, quality_status="verified"
+                )
+                if latest is not None and artifact.revision <= latest.revision:
+                    raise ValueError(
+                        "visual draft revision must exceed public revision"
+                    )
+                previous_draft = await self._latest_draft_event(
+                    database, run_uuid
+                )
+                self._append_record(
+                    database,
+                    run,
+                    event_type=_DRAFT_STAGED_EVENT,
+                    stage=artifact.stage,
+                    status="needs_repair",
+                    message="Visual repair draft staged",
+                    revision=artifact.revision,
+                    payload_extra={
+                        "artifact": artifact.to_dict(),
+                        "supersedes_sequence": (
+                            previous_draft.sequence
+                            if previous_draft is not None
+                            else None
+                        ),
+                    },
                 )
 
     async def commit_visual_candidate(self, run_id: str) -> WidgetArtifact:
@@ -500,6 +569,16 @@ class PostgresRunStore:
                 previous = await self._latest_artifact(
                     database, run_uuid, quality_status="verified"
                 )
+                current_draft = await self._latest_draft_event(
+                    database, run_uuid
+                )
+                if (
+                    current_draft is not None
+                    and self._draft_from_event(current_draft) != candidate
+                ):
+                    raise ValueError(
+                        "visual candidate differs from persisted draft"
+                    )
                 persisted_result = await database.execute(
                     select(GenerationArtifact)
                     .where(
@@ -564,21 +643,24 @@ class PostgresRunStore:
         async with self._sessions() as database:
             await self._run(database, run_uuid)
             statement = select(GenerationArtifact).where(
-                GenerationArtifact.run_id == run_uuid
+                GenerationArtifact.run_id == run_uuid,
+                GenerationArtifact.quality_status == "verified",
             )
-            if not include_draft:
-                statement = statement.where(
-                    GenerationArtifact.quality_status == "verified"
-                )
             if revision is not None:
                 statement = statement.where(GenerationArtifact.revision == revision)
             else:
                 statement = statement.order_by(GenerationArtifact.revision.desc()).limit(1)
             result = await database.execute(statement)
             record = result.scalar_one_or_none()
-            if record is None:
-                raise ArtifactNotFound((run_id, revision))
-            return self._artifact_from_record(record)
+            if record is not None:
+                return self._artifact_from_record(record)
+            if include_draft:
+                draft_record = await self._latest_draft_event(database, run_uuid)
+                if draft_record is not None:
+                    draft = self._draft_from_event(draft_record)
+                    if revision is None or draft.revision == revision:
+                        return draft
+            raise ArtifactNotFound((run_id, revision))
 
     async def events_after(
         self, run_id: str, sequence: int

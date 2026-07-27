@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db.base import Base
 from app.db.models import Tenant, User
-from app.saas.models import GenerationArtifact, Project
+from app.saas.models import GenerationArtifact, GenerationEvent, Project
 from builder_lab.models import BuilderRequest, EngineName, RunStatus, Stage, TokenUsage
 from builder_lab.postgres_store import PostgresRunStore
 from builder_lab.store_protocol import RunStoreProtocol
@@ -174,6 +174,110 @@ async def test_draft_promotion_rejects_changed_candidate_at_same_revision(
         assert restored.artifact is None
         assert restored.draft_artifact == changed_draft
         assert restored.quality_status == "needs_repair"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_repeated_visual_repair_drafts_keep_history_and_commit_latest(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    store = PostgresRunStore(factory, project_id=project_id)
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+        await store.commit_artifact(
+            run.run_id, artifact(revision=1, stage=Stage.ART_DIRECTION)
+        )
+        first_draft = artifact(revision=2, stage=Stage.FOUNDATION)
+        repaired_draft = artifact(
+            revision=2,
+            stage=Stage.FOUNDATION,
+            css=first_draft.css + "\n.repaired {}",
+        )
+
+        await store.stage_visual_candidate(run.run_id, first_draft)
+        await store.stage_visual_draft(run.run_id, first_draft)
+        assert (await store.snapshot(run.run_id)).draft_artifact == first_draft
+
+        await store.stage_visual_candidate(run.run_id, repaired_draft)
+        await store.stage_visual_draft(run.run_id, repaired_draft)
+        before_commit = await store.snapshot(run.run_id)
+        assert before_commit.artifact.revision == 1
+        assert before_commit.draft_artifact == repaired_draft
+        assert before_commit.quality_status == "needs_repair"
+
+        committed = await store.commit_visual_candidate(run.run_id)
+        restored = await PostgresRunStore(
+            factory, project_id=project_id
+        ).snapshot(run.run_id)
+
+        assert committed == repaired_draft
+        assert restored.artifact == repaired_draft
+        assert restored.draft_artifact is None
+        assert restored.quality_status == "verified"
+        async with factory() as database:
+            artifact_rows = (
+                await database.execute(
+                    select(GenerationArtifact).where(
+                        GenerationArtifact.run_id == UUID(run.run_id),
+                        GenerationArtifact.revision == repaired_draft.revision,
+                    )
+                )
+            ).scalars().all()
+            draft_events = (
+                await database.execute(
+                    select(GenerationEvent)
+                    .where(
+                        GenerationEvent.run_id == UUID(run.run_id),
+                        GenerationEvent.event_type == "artifact.draft_staged",
+                    )
+                    .order_by(GenerationEvent.sequence)
+                )
+            ).scalars().all()
+        assert len(artifact_rows) == 1
+        assert artifact_rows[0].config["artifact"] == repaired_draft.to_dict()
+        assert [event.payload["artifact"] for event in draft_events] == [
+            first_draft.to_dict(),
+            repaired_draft.to_dict(),
+        ]
+        assert draft_events[0].payload["supersedes_sequence"] is None
+        assert (
+            draft_events[1].payload["supersedes_sequence"]
+            == draft_events[0].sequence
+        )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_verified_artifact_cannot_be_restaged_at_same_revision(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    store = PostgresRunStore(factory, project_id=project_id)
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+        verified = artifact(revision=1, stage=Stage.ART_DIRECTION)
+        await store.commit_artifact(run.run_id, verified)
+
+        with pytest.raises(
+            ValueError, match="visual draft revision must exceed public revision"
+        ):
+            await store.stage_visual_draft(
+                run.run_id,
+                artifact(
+                    revision=1,
+                    stage=Stage.ART_DIRECTION,
+                    css=verified.css + "\n.changed {}",
+                ),
+            )
+
+        assert await store.artifact(run.run_id, 1) == verified
     finally:
         await engine.dispose()
 
