@@ -189,25 +189,25 @@ Expected: all commands exit 0.
 - Modify: `docs/PRODUCT_BACKLOG.md`
 - Modify the existing Telegram/editor handoff files used by this project.
 
-- [ ] **Step 1: Record the result**
+- [x] **Step 1: Record the result**
 
 Document the motion architecture, timings, browser evidence, commands, residual backlog and one concise publication angle.
 
-- [ ] **Step 2: Commit intentionally**
+- [x] **Step 2: Commit intentionally**
 
 Stage only task-owned files; leave `frontend/public/assets/house-cutout-checker-preview.png` untouched. Commit with a scoped message such as `feat: amplify Kaigo landing motion`.
 
-- [ ] **Step 3: Push, deploy and smoke-test**
+- [x] **Step 3: Push, deploy and smoke-test**
 
 Push `codex/gemini-technical-foundation`, deploy through `scripts/deploy_marketing_site.sh`, verify `https://kaigo.space/`, and confirm `/studio` remains protected.
 
-- [ ] **Step 4: Clean task-created subagents**
+- [x] **Step 4: Clean task-created subagents**
 
 Delete only completed agents created for this motion task using the approved cleanup workflow and report deleted count and reclaimed bytes.
 
 ## Completion update — 2026-07-27
 
-Tasks 1–5 are complete. Task 6 is complete through local verification and evidence capture; push, production deployment and agent-storage cleanup are the remaining delivery operations at the time of this update.
+Tasks 1–6 are complete, including documentation, commit, GitHub push, production deployment and verified cleanup of task-created agent storage.
 
 Delivered contracts:
 
@@ -218,3 +218,6 @@ Delivered contracts:
 - independent visual, accessibility and technical review;
 - 92/92 Vitest tests, 11/11 Playwright scenarios, TypeScript, ESLint and production build passing;
 - evidence catalogued under `docs/evidence/2026-07-27-expressive-motion/`.
+- commit `b7afacb` deployed atomically as `/var/www/kaigo-marketing/releases/b7afacb`;
+- production smoke passed at `https://kaigo.space/`, while `/studio` and `/builder/` retained their expected `401` protection.
+- 23 completed motion-task subagents were deleted through native `codex delete`; 573,439,092 bytes (546.87 MiB) of rollout storage were reclaimed and the parent task remained intact.
