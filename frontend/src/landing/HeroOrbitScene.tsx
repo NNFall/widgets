@@ -28,11 +28,6 @@ const processCards = [
   },
 ] as const;
 
-export const SCANNER_DURATION_SECONDS = {
-  cinematic: 6.3,
-  loop: 3.8,
-} as const;
-
 const processCardVariants: Variants = {
   hidden: {
     opacity: 0,
@@ -160,21 +155,11 @@ export function HeroOrbitScene() {
           className="hero-browser-stage__scanner-markup"
           aria-hidden="true"
         >
-          <motion.div
+          <div
             className="hero-browser-stage__scanner"
             data-testid="hero-scanner"
             data-active={phase === 'scanning' ? 'true' : 'false'}
             aria-hidden="true"
-            initial={false}
-            animate={
-              phase === 'scanning'
-                ? { y: ['-65%', '625%'] }
-                : { y: '-65%' }
-            }
-            transition={{
-              duration: reducedMotion ? 0 : SCANNER_DURATION_SECONDS[program],
-              ease: 'linear',
-            }}
           >
             <span className="hero-browser-stage__scanner-label" hidden={phase !== 'scanning'}>
               Сканирование…
@@ -198,13 +183,16 @@ export function HeroOrbitScene() {
                 key={particle}
               />
             ))}
-          </motion.div>
+          </div>
         </div>
         <motion.div
           className="hero-browser-stage__widget-label"
           initial={false}
           animate={{ opacity: widgetVisible ? 1 : 0, y: widgetVisible ? 0 : 12 }}
-          transition={{ duration: reducedMotion ? 0 : 0.55, delay: reducedMotion ? 0 : 0.25 }}
+          transition={{
+            duration: reducedMotion ? 0 : 0.55,
+            delay: reducedMotion ? 0 : widgetVisible ? 0.25 : 0,
+          }}
         >
           Готовый AI-виджет
           <svg viewBox="0 0 76 54" aria-hidden="true">

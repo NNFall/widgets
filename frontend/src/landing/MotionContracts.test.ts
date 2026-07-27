@@ -30,16 +30,28 @@ describe('landing motion contracts', () => {
   });
 
   it('matches scanner travel to the distinct cinematic and loop scanning phases', () => {
-    expect(heroOrbitSceneSource).toMatch(
-      /cinematic:\s*6\.3,\s*\n\s*loop:\s*3\.8,/,
+    expect(stylesSource).toMatch(
+      /data-motion-program='cinematic'\]\s*\{[^}]*--hero-scanner-duration:\s*6\.3s;/s,
     );
-    expect(heroOrbitSceneSource).toMatch(
-      /duration:\s*reducedMotion\s*\?\s*0\s*:\s*SCANNER_DURATION_SECONDS\[program\]/,
+    expect(stylesSource).toMatch(
+      /data-motion-program='loop'\]\s*\{[^}]*--hero-scanner-duration:\s*3\.8s;/s,
     );
+    expect(stylesSource).toMatch(
+      /\.hero-browser-stage__scanner\[data-active='true'\]\s*\{[^}]*animation:\s*hero-scanner-sweep var\(--hero-scanner-duration\) linear both;/s,
+    );
+
+    const scannerMarkup = heroOrbitSceneSource.slice(
+      heroOrbitSceneSource.indexOf('className="hero-browser-stage__scanner"'),
+      heroOrbitSceneSource.indexOf('data-testid="hero-scanner-band"'),
+    );
+    expect(scannerMarkup).not.toContain('animate=');
+    expect(scannerMarkup).not.toContain('transition=');
+    expect(heroOrbitSceneSource).not.toContain('SCANNER_DURATION_SECONDS');
   });
 
   it('keeps every new CSS motion keyframe on transform and opacity only', () => {
     const motionKeyframes = [
+      'hero-scanner-sweep',
       'hero-scanner-particle',
       'hero-widget-halo',
       'hero-widget-burst',
@@ -60,6 +72,7 @@ describe('landing motion contracts', () => {
     const reducedMotionRules = stylesSource.slice(reducedMotionStart, nextMediaQuery);
 
     expect(reducedMotionRules).toContain('.hero-browser-stage__scanner-particle');
+    expect(reducedMotionRules).toContain('.hero-browser-stage__scanner');
     expect(reducedMotionRules).toContain('.widget-preview__shimmer');
     expect(reducedMotionRules).toContain('animation: none !important;');
     expect(heroOrbitSceneSource).toMatch(/motionComplete\s*&&\s*!reducedMotion[\s\S]*?'rest'/);

@@ -74,6 +74,37 @@ test('landing desktop completes the hero story without overflow @desktop', async
   });
 });
 
+test('scanner travels continuously across card reveals @desktop', async ({ page }) => {
+  await page.goto('/');
+
+  const scene = page.getByTestId('hero-scene');
+  const scanner = page.getByTestId('hero-scanner');
+
+  await expect(scene).toHaveAttribute('data-visible-cards', '1', { timeout: 4_000 });
+  const firstScan = await scanner.evaluate((element) => {
+    const styles = getComputedStyle(element);
+    return {
+      animationName: styles.animationName,
+      animationPlayState: styles.animationPlayState,
+      y: element.getBoundingClientRect().y,
+    };
+  });
+  expect(firstScan.animationName).toContain('hero-scanner-sweep');
+  expect(firstScan.animationPlayState).toBe('running');
+
+  await expect(scene).toHaveAttribute('data-visible-cards', '2', { timeout: 3_000 });
+  const secondScan = await scanner.evaluate((element) => {
+    const styles = getComputedStyle(element);
+    return {
+      animationName: styles.animationName,
+      y: element.getBoundingClientRect().y,
+    };
+  });
+
+  expect(secondScan.animationName).toBe(firstScan.animationName);
+  expect(secondScan.y - firstScan.y).toBeGreaterThan(50);
+});
+
 test('landing navigation, composer, case toggle and FAQ are functional @desktop', async ({ page }) => {
   await page.goto('/');
 
