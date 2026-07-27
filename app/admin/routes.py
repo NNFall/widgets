@@ -197,8 +197,6 @@ def _widget_form(widget: models.Widget | None = None) -> str:
 
     temperature = widget.temperature if widget else core_settings.default_temperature
 
-    max_tokens = widget.max_tokens if widget else core_settings.default_max_tokens
-
     options = ''.join(
 
         f"<option value='{escape(key)}'{ ' selected' if key == template else ''}>{escape(TEMPLATE_LABELS.get(key, key.title()))}</option>"
@@ -222,8 +220,6 @@ def _widget_form(widget: models.Widget | None = None) -> str:
         <label>Gemini модель для речи<input type='text' name='stt_model' value='{stt_model}' placeholder='{core_settings.default_stt_model}'></label>
 
         <label>Температура<input type='number' step='0.1' min='0' max='2' name='temperature' value='{temperature}'></label>
-
-        <label>Максимум токенов<input type='number' min='1' name='max_tokens' value='{max_tokens}'></label>
 
         <label>Источник промпта или inline prompt<textarea name='prompt_source' placeholder='{prompt_placeholder}'>{prompt_source}</textarea></label>
 
@@ -305,8 +301,6 @@ async def widget_create_submit(request: web.Request) -> web.StreamResponse:
 
         temperature=_to_float(data.get('temperature'), core_settings.default_temperature),
 
-        max_tokens=_to_int(data.get('max_tokens'), core_settings.default_max_tokens),
-
     )
 
     async with session_scope(request.app) as db_session:
@@ -376,8 +370,6 @@ async def widget_overview(request: web.Request) -> web.Response:
             ('Gemini модель для речи', widget.stt_model or core_settings.default_stt_model),
 
             ('Температура', f"{widget.temperature}"),
-
-            ('Макс. токенов', str(widget.max_tokens)),
 
             ('Промпт', widget.prompt_source or 'стандартный'),
 
@@ -678,8 +670,6 @@ async def widget_update(request: web.Request) -> web.StreamResponse:
         'stt_model': data.get('stt_model', '').strip() or None,
 
         'temperature': _to_float(data.get('temperature'), core_settings.default_temperature),
-
-        'max_tokens': _to_int(data.get('max_tokens'), core_settings.default_max_tokens),
 
     }
 

@@ -6,6 +6,7 @@ from app.models.contracts import (
     ModelRequest,
     ModelResponse,
     ModelUsage,
+    ProviderCapabilities,
     ProviderUnavailable,
 )
 from app.models.router import InMemoryModelCallAudit, ModelPolicy, ModelRouter, ProviderTarget
@@ -89,6 +90,41 @@ async def test_fallback_is_a_second_visible_attempt() -> None:
     assert [call.status for call in audit.calls] == ["failed", "completed"]
     assert audit.calls[0].error_code == "provider_unavailable"
     assert audit.calls[1].provider == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_image_request_skips_incapable_primary_and_audits_failure() -> None:
+    primary = FakeProvider()
+    primary.capabilities = ProviderCapabilities(images=False, structured_output=True)
+    fallback = FakeProvider()
+    fallback.capabilities = ProviderCapabilities(images=True, structured_output=True)
+    audit = InMemoryModelCallAudit()
+    router = ModelRouter(
+        providers={"primary": primary, "fallback": fallback},
+        policies={
+            ("visual_critic", "standard"): ModelPolicy(
+                prompt_version="visual-v4",
+                targets=(
+                    ProviderTarget("primary", "glm-5.2", 6_000_000, 6_000_000),
+                    ProviderTarget("fallback", "gemini-3.5-flash", 1_000_000, 2_000_000),
+                ),
+            )
+        },
+        audit=audit,
+    )
+    request = ModelRequest(prompt="Inspect", images=(b"exact-image",))
+
+    response = await router.generate(
+        role="visual_critic",
+        mode="standard",
+        request=request,
+    )
+
+    assert response.request_id == "request-gemini-3.5-flash"
+    assert primary.requests == []
+    assert fallback.requests == [request]
+    assert [call.status for call in audit.calls] == ["failed", "completed"]
+    assert audit.calls[0].error_code == "unsupported_request"
 
 
 def test_model_request_has_no_output_token_limit() -> None:

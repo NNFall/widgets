@@ -14,6 +14,7 @@ from app.models.contracts import (
     ModelResponse,
     ModelUnavailable,
     ModelUsage,
+    ProviderCapabilities,
     ProviderQuotaExceeded,
     ProviderUnavailable,
 )
@@ -85,6 +86,8 @@ def classify_gemini_error(error: Exception) -> str:
 
 class GeminiModelProvider:
     """Provider-neutral adapter for the official asynchronous google-genai client."""
+
+    capabilities = ProviderCapabilities(images=True, structured_output=True)
 
     def __init__(
         self,

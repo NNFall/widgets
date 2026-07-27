@@ -45,7 +45,6 @@ async def main() -> None:
                     template=preset.template_key,
                     stt_model=core_settings.default_stt_model,
                     temperature=preset.temperature,
-                    max_tokens=preset.max_tokens,
                 )
                 session.add(widget)
                 await session.flush()
@@ -60,7 +59,6 @@ async def main() -> None:
                 widget.template = preset.template_key
                 widget.stt_model = core_settings.default_stt_model
                 widget.temperature = preset.temperature
-                widget.max_tokens = preset.max_tokens
                 updated += 1
 
             html = build_widget_html(preset)

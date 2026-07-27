@@ -5,6 +5,12 @@ from typing import Any, Mapping, Protocol
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderCapabilities:
+    images: bool = False
+    structured_output: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class ModelUsage:
     """Normalized billing usage; thinking_tokens is a diagnostic output subset."""
 
@@ -55,5 +61,11 @@ class InvalidModelResponse(ModelProviderError):
     error_code = "invalid_response"
 
 
+class UnsupportedModelRequest(ModelProviderError):
+    error_code = "unsupported_request"
+
+
 class ModelProvider(Protocol):
+    capabilities: ProviderCapabilities
+
     async def generate(self, request: ModelRequest, *, model: str) -> ModelResponse: ...

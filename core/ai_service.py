@@ -246,7 +246,6 @@ async def get_ai_response(
     tools: List[Dict[str, Any]] | None,
     model: str = config.settings.default_model,
     temperature: float = config.settings.default_temperature,
-    max_tokens: int = config.settings.default_max_tokens,
 ) -> ChatCompletionMessage:
     messages = []
     if system_prompt:
@@ -265,7 +264,6 @@ async def get_ai_response(
         "model": chat_model,
         "messages": messages,
         "temperature": temperature,
-        "max_tokens": max_tokens,
     }
     if tools:
         request["tools"] = tools
@@ -303,7 +301,6 @@ async def check_provider(model: str | None = None) -> dict[str, Any]:
             tools=None,
             model=chat_model,
             temperature=0,
-            max_tokens=8,
         )
     except AIServiceError as exc:
         return {

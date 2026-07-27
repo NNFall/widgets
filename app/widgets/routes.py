@@ -148,7 +148,6 @@ async def widget_api_send(request: web.Request) -> web.Response:
         model=widget.ai_model,
         prompt_source=widget.prompt_source,
         temperature=widget.temperature,
-        max_tokens=widget.max_tokens,
         widget_id=widget.id,
         widget_slug=widget.slug,
     )
@@ -244,7 +243,6 @@ async def widget_api_audio(request: web.Request) -> web.Response:
         model=widget.ai_model,
         prompt_source=widget.prompt_source,
         temperature=widget.temperature,
-        max_tokens=widget.max_tokens,
         stt_model=widget.stt_model,
         widget_id=widget.id,
         widget_slug=widget.slug,

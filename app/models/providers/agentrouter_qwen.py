@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import shutil
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -13,13 +14,17 @@ from app.models.contracts import (
     ModelResponse,
     ModelUnavailable,
     ModelUsage,
+    ProviderCapabilities,
     ProviderQuotaExceeded,
     ProviderUnavailable,
+    UnsupportedModelRequest,
 )
 
 
 class AgentRouterQwenProvider:
     """AgentRouter adapter executed through its supported Qwen Code client."""
+
+    capabilities = ProviderCapabilities(images=False, structured_output=True)
 
     def __init__(
         self,
@@ -40,7 +45,7 @@ class AgentRouterQwenProvider:
 
     async def generate(self, request: ModelRequest, *, model: str) -> ModelResponse:
         if request.images:
-            raise InvalidModelResponse(
+            raise UnsupportedModelRequest(
                 "AgentRouter Qwen adapter does not yet accept binary image inputs"
             )
         prompt = _provider_prompt(request)
@@ -53,43 +58,70 @@ class AgentRouterQwenProvider:
                 "NO_COLOR": "1",
             }
         )
-        process = await asyncio.create_subprocess_exec(
-            self._executable,
-            "-y",
-            "@qwen-code/qwen-code@latest",
-            "--safe-mode",
-            "-m",
-            model,
-            "-p",
-            "",
-            "-o",
-            "json",
-            cwd=self._working_directory,
-            env=environment,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                self._executable,
+                "-y",
+                "@qwen-code/qwen-code@latest",
+                "--safe-mode",
+                "-m",
+                model,
+                "-p",
+                "",
+                "-o",
+                "json",
+                cwd=self._working_directory,
+                env=environment,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            raise ProviderUnavailable(
+                "AgentRouter client could not be started"
+            ) from error
+
         try:
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(prompt.encode("utf-8")),
                 timeout=self._timeout_seconds,
             )
+        except asyncio.CancelledError:
+            await _stop_process(process)
+            raise
         except TimeoutError as error:
-            process.kill()
-            await process.wait()
+            await _stop_process(process)
             raise ProviderUnavailable("AgentRouter generation timed out") from error
+        except Exception as error:
+            await _stop_process(process)
+            raise ProviderUnavailable(
+                "AgentRouter client communication failed"
+            ) from error
 
         output = stdout.decode("utf-8", errors="replace").strip()
         diagnostic = stderr.decode("utf-8", errors="replace").strip()
         if process.returncode != 0:
             raise _cli_error(output or diagnostic or f"exit code {process.returncode}")
         try:
-            return parse_qwen_json_output(output, model=model)
+            response = parse_qwen_json_output(output, model=model)
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
             raise InvalidModelResponse(
                 f"Qwen Code returned an invalid event stream: {type(error).__name__}"
             ) from error
+        if request.response_schema is not None and response.parsed is None:
+            raise InvalidModelResponse(
+                "Qwen Code did not return valid structured JSON data"
+            )
+        return response
+
+
+async def _stop_process(process: Any) -> None:
+    with suppress(Exception):
+        process.kill()
+    with suppress(Exception):
+        await process.wait()
 
 
 def parse_qwen_json_output(raw: str, *, model: str) -> ModelResponse:

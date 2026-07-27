@@ -9,6 +9,8 @@ from app.models.contracts import (
     ModelProviderError,
     ModelRequest,
     ModelResponse,
+    ProviderCapabilities,
+    UnsupportedModelRequest,
 )
 
 
@@ -18,6 +20,7 @@ class ProviderTarget:
     model: str
     input_price_microusd_per_million: int
     output_price_microusd_per_million: int
+    capabilities: ProviderCapabilities | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +96,7 @@ class ModelRouter:
                 raise ValueError(f"provider is not configured: {target.provider}") from error
             started = time.perf_counter()
             try:
+                _ensure_supported(provider, target, request)
                 response = await provider.generate(request, model=target.model)
             except ModelProviderError as error:
                 last_error = error
@@ -140,6 +144,26 @@ class ModelRouter:
         if last_error is not None:
             raise last_error
         raise RuntimeError("model policy contained no executable targets")
+
+
+def _ensure_supported(
+    provider: ModelProvider,
+    target: ProviderTarget,
+    request: ModelRequest,
+) -> None:
+    capabilities = target.capabilities or getattr(
+        provider,
+        "capabilities",
+        ProviderCapabilities(),
+    )
+    if request.images and not capabilities.images:
+        raise UnsupportedModelRequest(
+            f"{target.provider} does not support binary image inputs"
+        )
+    if request.response_schema is not None and not capabilities.structured_output:
+        raise UnsupportedModelRequest(
+            f"{target.provider} does not support structured output"
+        )
 
 
 def _elapsed_ms(started: float) -> int:

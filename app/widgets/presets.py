@@ -23,7 +23,6 @@ class WidgetPreset:
     quick_replies: tuple[str, ...]
     prompt: str
     temperature: float = 0.35
-    max_tokens: int = 1800
 
 
 def build_widget_html(preset: WidgetPreset) -> str:
@@ -536,7 +535,6 @@ PRESETS: tuple[WidgetPreset, ...] = (
             "и предлагай передать заявку менеджеру, если пользователь готов обсудить внедрение."
         ),
         temperature=0.35,
-        max_tokens=1600,
     ),
     WidgetPreset(
         key="dental",
@@ -569,7 +567,6 @@ PRESETS: tuple[WidgetPreset, ...] = (
             "Цель диалога - помочь выбрать направление и подготовить заявку для администратора."
         ),
         temperature=0.25,
-        max_tokens=1700,
     ),
     WidgetPreset(
         key="realty",
@@ -602,7 +599,6 @@ PRESETS: tuple[WidgetPreset, ...] = (
             "В конце кратко резюмируй заявку и предложи передать ее специалисту."
         ),
         temperature=0.4,
-        max_tokens=1800,
     ),
     WidgetPreset(
         key="auto",
@@ -634,7 +630,6 @@ PRESETS: tuple[WidgetPreset, ...] = (
             "Цель - подготовить заявку на диагностику, ТО или ремонт и предложить запись к мастеру."
         ),
         temperature=0.3,
-        max_tokens=1700,
     ),
     WidgetPreset(
         key="beauty",
@@ -666,7 +661,6 @@ PRESETS: tuple[WidgetPreset, ...] = (
             "Не обещай медицинский эффект и не давай противопоказаний как врач. Цель - подготовить заявку на запись."
         ),
         temperature=0.45,
-        max_tokens=1700,
     ),
 )
 

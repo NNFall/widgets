@@ -6,7 +6,14 @@ def test_builder_never_sets_a_gemini_output_token_limit():
     production_files = [
         *sorted((root / "builder_lab").rglob("*.py")),
         *sorted((root / "app" / "models").rglob("*.py")),
+        root / "app" / "admin" / "routes.py",
+        root / "app" / "widgets" / "presets.py",
+        root / "app" / "widgets" / "routes.py",
+        root / "core" / "api.py",
+        root / "core" / "ai_service.py",
+        root / "core" / "config.py",
         root / "scripts" / "analyze_reference_site.py",
+        root / "scripts" / "seed_widget_presets.py",
     ]
 
     forbidden = ("max_output_tokens", "max_tokens")
