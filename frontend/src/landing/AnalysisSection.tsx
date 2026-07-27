@@ -62,6 +62,7 @@ export function AnalysisSection() {
               <BrowserMockup
                 widgetVisible={false}
                 motionComplete={active}
+                motionActive={active}
                 reducedMotion={reducedMotion}
                 testIds={false}
               />

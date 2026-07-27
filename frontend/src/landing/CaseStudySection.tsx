@@ -70,7 +70,7 @@ export function CaseStudySection() {
               inert={beforeInactive || undefined}
             >
               <div className="case-panel__label"><span>До</span><p>Посетитель сам ищет проекты, условия и способ оставить заявку.</p></div>
-              <div className="case-browser"><BrowserMockup widgetVisible={false} motionComplete={false} reducedMotion testIds={false} /></div>
+              <div className="case-browser"><BrowserMockup widgetVisible={false} motionComplete={false} motionActive={false} reducedMotion testIds={false} /></div>
             </div>
           </Reveal>
           <Reveal className="case-panel-shell" delay={0.08}>
@@ -89,7 +89,7 @@ export function CaseStudySection() {
                   transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 148, damping: 13, mass: 0.82 }}
                 >
                   <span className="case-after-halo" aria-hidden="true" />
-                  <BrowserMockup widgetVisible motionComplete={active} reducedMotion={reducedMotion} testIds={false} />
+                  <BrowserMockup widgetVisible motionComplete={active} motionActive={active} reducedMotion={reducedMotion} testIds={false} />
                 </motion.div>
               </div>
             </div>

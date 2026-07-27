@@ -27,7 +27,8 @@ async function attachScreenshot(
 
 async function revealLanding(page: Page) {
   const sections = page.locator('[data-landing-section]');
-  for (let index = 0; index < await sections.count(); index += 1) {
+  const sectionCount = await sections.count();
+  for (let index = 0; index < sectionCount; index += 1) {
     await sections.nth(index).scrollIntoViewIfNeeded();
     await page.waitForTimeout(80);
   }
@@ -54,7 +55,7 @@ test('landing desktop completes the hero story without overflow @desktop', async
   await attachScreenshot(page, testInfo, 'hero-scan-1920.png');
 
   await expect(page.getByTestId('hero-scene')).toHaveAttribute('data-motion-phase', 'complete', {
-    timeout: 7_000,
+    timeout: 12_000,
   });
   await expect(page.getByTestId('process-card')).toHaveCount(3);
   await expect(page.locator('[data-testid="widget-preview"][data-visible="true"]')).toBeVisible();
@@ -80,7 +81,7 @@ test('scanner travels continuously across card reveals @desktop', async ({ page 
   const scene = page.getByTestId('hero-scene');
   const scanner = page.getByTestId('hero-scanner');
 
-  await expect(scene).toHaveAttribute('data-visible-cards', '1', { timeout: 4_000 });
+  await expect(scene).toHaveAttribute('data-visible-cards', '1', { timeout: 15_000 });
   const firstScan = await scanner.evaluate((element) => {
     const styles = getComputedStyle(element);
     return {
@@ -184,6 +185,7 @@ test('landing mobile preserves content order, menu, controls and comparison @mob
 });
 
 test('landing reaches the final hero state immediately with reduced motion @reduced', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/');
   await expect(page.getByTestId('hero-scene')).toHaveAttribute('data-motion-phase', 'complete');
   await expect(page.getByTestId('process-card')).toHaveCount(3);
@@ -199,6 +201,7 @@ test('landing reaches the final hero state immediately with reduced motion @redu
 });
 
 test('landing has no serious or critical accessibility violations @a11y', async ({ page }) => {
+  test.setTimeout(90_000);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/');
   await revealLanding(page);

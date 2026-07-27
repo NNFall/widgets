@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export type HeroMotionProgram = 'cinematic' | 'loop';
 export type HeroMotionPhase = 'source' | 'scanning' | 'widget' | 'complete' | 'resetting';
@@ -129,7 +129,8 @@ function getNextTransition(state: HeroMotionCycleState) {
     : loopTransition(state);
 }
 
-export function useHeroMotionCycle() {
+export function useHeroMotionCycle(active = true) {
+  const remainingDelayRef = useRef<number | null>(null);
   const [reducedMotion, setReducedMotion] = useState(reducedMotionRequested);
   const [motionState, setMotionState] = useState<HeroMotionCycleState>(() =>
     reducedMotion ? reducedMotionState : initialCinematicState,
@@ -153,6 +154,7 @@ export function useHeroMotionCycle() {
 
   useEffect(() => {
     if (reducedMotion) {
+      remainingDelayRef.current = null;
       setMotionState((current) => {
         if (current.phase === 'complete' && current.visibleCards === 3) return current;
         return { ...current, phase: 'complete', visibleCards: 3 };
@@ -160,11 +162,26 @@ export function useHeroMotionCycle() {
       return;
     }
 
-    const transition = getNextTransition(motionState);
-    const timer = window.setTimeout(() => setMotionState(transition.next), transition.delay);
+    if (!active) return;
 
-    return () => window.clearTimeout(timer);
-  }, [motionState, reducedMotion]);
+    const transition = getNextTransition(motionState);
+    const delay = remainingDelayRef.current ?? transition.delay;
+    remainingDelayRef.current = null;
+    const startedAt = performance.now();
+    let completed = false;
+    const timer = window.setTimeout(() => {
+      completed = true;
+      remainingDelayRef.current = null;
+      setMotionState(transition.next);
+    }, delay);
+
+    return () => {
+      window.clearTimeout(timer);
+      if (!completed) {
+        remainingDelayRef.current = Math.max(0, delay - (performance.now() - startedAt));
+      }
+    };
+  }, [active, motionState, reducedMotion]);
 
   return { ...motionState, reducedMotion };
 }

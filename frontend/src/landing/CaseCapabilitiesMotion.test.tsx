@@ -158,6 +158,9 @@ describe('capability motion', () => {
     expect(capabilitiesSource).toContain('CAPABILITY_CHAT_REVEAL_DELAY_SECONDS');
     expect(capabilitiesSource).toMatch(/preset=\{revealOrder % 2 === 0 \? 'fromLeft' : 'fromRight'\}/);
     expect(capabilitiesSource).toContain('className="capability-item__icon"');
+    expect(capabilitiesSource).toMatch(
+      /<Reveal className="chat-showcase-reveal"[\s\S]*?<div className="chat-showcase">/,
+    );
   });
 
   it('shows the restrained conversation states and gates icon-only float', () => {

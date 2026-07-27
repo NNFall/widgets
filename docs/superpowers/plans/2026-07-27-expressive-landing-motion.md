@@ -204,3 +204,17 @@ Push `codex/gemini-technical-foundation`, deploy through `scripts/deploy_marketi
 - [ ] **Step 4: Clean task-created subagents**
 
 Delete only completed agents created for this motion task using the approved cleanup workflow and report deleted count and reclaimed bytes.
+
+## Completion update — 2026-07-27
+
+Tasks 1–5 are complete. Task 6 is complete through local verification and evidence capture; push, production deployment and agent-storage cleanup are the remaining delivery operations at the time of this update.
+
+Delivered contracts:
+
+- deterministic cinematic and repeat hero timelines;
+- activity-gated motion for hero and every animated landing section;
+- reduced-motion final states without infinite animations;
+- responsive desktop/mobile composition without horizontal overflow;
+- independent visual, accessibility and technical review;
+- 92/92 Vitest tests, 11/11 Playwright scenarios, TypeScript, ESLint and production build passing;
+- evidence catalogued under `docs/evidence/2026-07-27-expressive-motion/`.

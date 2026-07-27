@@ -69,7 +69,7 @@ export function StudioSection() {
                   exit={reducedMotion ? undefined : { opacity: 0, x: -14 }}
                   transition={{ duration: reducedMotion ? 0 : 0.32 }}
                 >
-                  <BrowserMockup widgetVisible motionComplete reducedMotion={reducedMotion} testIds={false} />
+                  <BrowserMockup widgetVisible motionComplete motionActive={active} reducedMotion={reducedMotion} testIds={false} />
                   <span className="studio-demo__preview-wipe" aria-hidden="true" />
                   <span className="studio-demo__revision-note">{request}</span>
                 </motion.div>

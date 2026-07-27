@@ -89,26 +89,28 @@ export function CapabilitiesSection() {
             {capabilities.slice(0, 3).map(renderCapability)}
           </div>
 
-          <Reveal className="chat-showcase" delay={CAPABILITY_CHAT_REVEAL_DELAY_SECONDS} preset="scale">
-            <div className="chat-showcase__chrome"><span /><span /><span /></div>
-            <div className="chat-showcase__head"><KaigoLogo className="kaigo-logo--compact" /><span><strong>Kaigo AI</strong><small>Онлайн</small></span></div>
-            <div className="chat-showcase__body" data-chat-phase={conversationPhase}>
-              <div className="chat-showcase__message"><KaigoLogo className="kaigo-logo--compact" /><p>Расскажите, что вы ищете —<br />я помогу сориентироваться.</p></div>
-              <div className="chat-showcase__suggestions">
-                <span className={conversationPhase === 'suggestion' ? 'is-selected' : ''}>Хочу консультацию по проекту</span>
-                <span>Сколько стоит строительство?</span>
-                <span>Посмотреть реализованные проекты</span>
-              </div>
-              <div className="capability-chat__turns" aria-label="Пример диалога с AI-сотрудником">
-                <p className="capability-chat__user">Хочу консультацию по проекту</p>
-                <div className="capability-chat__typing" aria-hidden="true"><span /><span /><span /></div>
-                <div className="capability-chat__answer">
-                  <KaigoLogo className="kaigo-logo--compact" />
-                  <p>Конечно. Расскажите о доме — помогу выбрать подходящий проект и следующий шаг.</p>
+          <Reveal className="chat-showcase-reveal" delay={CAPABILITY_CHAT_REVEAL_DELAY_SECONDS} preset="scale">
+            <div className="chat-showcase">
+              <div className="chat-showcase__chrome"><span /><span /><span /></div>
+              <div className="chat-showcase__head"><KaigoLogo className="kaigo-logo--compact" /><span><strong>Kaigo AI</strong><small>Онлайн</small></span></div>
+              <div className="chat-showcase__body" data-chat-phase={conversationPhase}>
+                <div className="chat-showcase__message"><KaigoLogo className="kaigo-logo--compact" /><p>Расскажите, что вы ищете —<br />я помогу сориентироваться.</p></div>
+                <div className="chat-showcase__suggestions">
+                  <span className={conversationPhase === 'suggestion' ? 'is-selected' : ''}>Хочу консультацию по проекту</span>
+                  <span>Сколько стоит строительство?</span>
+                  <span>Посмотреть реализованные проекты</span>
                 </div>
+                <div className="capability-chat__turns" aria-label="Пример диалога с AI-сотрудником">
+                  <p className="capability-chat__user">Хочу консультацию по проекту</p>
+                  <div className="capability-chat__typing" aria-hidden="true"><span /><span /><span /></div>
+                  <div className="capability-chat__answer">
+                    <KaigoLogo className="kaigo-logo--compact" />
+                    <p>Конечно. Расскажите о доме — помогу выбрать подходящий проект и следующий шаг.</p>
+                  </div>
+                </div>
+                <div className="chat-showcase__input"><span>Введите сообщение...</span><ArrowRight size={19} weight="bold" /></div>
+                <small>AI-сотрудник может ошибаться. Проверяйте важное.</small>
               </div>
-              <div className="chat-showcase__input"><span>Введите сообщение...</span><ArrowRight size={19} weight="bold" /></div>
-              <small>AI-сотрудник может ошибаться. Проверяйте важное.</small>
             </div>
           </Reveal>
 

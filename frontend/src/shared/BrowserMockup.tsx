@@ -4,6 +4,7 @@ import { motion, type Variants } from 'motion/react';
 type BrowserMockupProps = {
   widgetVisible: boolean;
   motionComplete: boolean;
+  motionActive: boolean;
   reducedMotion: boolean;
   testIds?: boolean;
   variant?: 'default' | 'hero';
@@ -36,6 +37,7 @@ const miniatureFeatures = [
 export function BrowserMockup({
   widgetVisible,
   motionComplete,
+  motionActive,
   reducedMotion,
   testIds = true,
   variant = 'default',
@@ -135,12 +137,12 @@ export function BrowserMockup({
         <motion.span
           className="widget-preview__launcher"
           animate={
-            motionComplete && !reducedMotion
+            motionComplete && motionActive && !reducedMotion
               ? { scale: [1, 1.08, 1] }
               : { scale: 1 }
           }
           transition={
-            motionComplete && !reducedMotion
+            motionComplete && motionActive && !reducedMotion
               ? {
                 duration: 2.3,
                 repeat: Infinity,

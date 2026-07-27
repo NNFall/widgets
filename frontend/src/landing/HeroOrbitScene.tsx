@@ -2,6 +2,7 @@ import { ChatsCircle, LinkSimple, Scan } from '@phosphor-icons/react';
 import { motion, type Variants } from 'motion/react';
 
 import { BrowserMockup } from '../shared/BrowserMockup';
+import { useMotionActivity } from '../shared/MotionActivity';
 import { useHeroMotionCycle } from './useHeroMotionCycle';
 
 const processCards = [
@@ -60,7 +61,9 @@ const processCardVariants: Variants = {
 };
 
 export function HeroOrbitScene() {
-  const { program, phase, cycle, visibleCards, reducedMotion } = useHeroMotionCycle();
+  const { active: activityActive, ref } = useMotionActivity<HTMLDivElement>();
+  const { program, phase, cycle, visibleCards, reducedMotion } = useHeroMotionCycle(activityActive);
+  const motionActive = activityActive && !reducedMotion;
   const cardsVisible = visibleCards > 0;
   const widgetVisible = phase === 'widget' || phase === 'complete';
   const motionComplete = phase === 'complete';
@@ -73,7 +76,9 @@ export function HeroOrbitScene() {
       data-motion-phase={phase}
       data-motion-cycle={cycle}
       data-visible-cards={visibleCards}
+      data-motion-active={motionActive ? 'true' : 'false'}
       aria-describedby="hero-scene-description"
+      ref={ref}
     >
       <p className="sr-only" id="hero-scene-description">
         Анимация показывает, как Kaigo анализирует исходный сайт и добавляет готовый AI-виджет.
@@ -100,14 +105,14 @@ export function HeroOrbitScene() {
             data-visible={index < visibleCards ? 'true' : 'false'}
             data-reveal-direction={direction}
             data-resting={
-              motionComplete && !reducedMotion && index === cycle % processCards.length
+              motionComplete && motionActive && index === cycle % processCards.length
                 ? 'true'
                 : 'false'
             }
             key={number}
             initial={false}
             animate={
-              motionComplete && !reducedMotion
+              motionComplete && motionActive
                 ? index === cycle % processCards.length ? 'rest' : 'settled'
                 : index < visibleCards ? 'visible' : 'hidden'
             }
@@ -148,6 +153,7 @@ export function HeroOrbitScene() {
         <BrowserMockup
           widgetVisible={widgetVisible}
           motionComplete={motionComplete}
+          motionActive={motionActive}
           reducedMotion={reducedMotion}
           variant="hero"
         />

@@ -143,6 +143,35 @@ describe('useHeroMotionCycle', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('pauses the current phase while the hero is inactive and resumes with one timer', () => {
+    const { result, rerender, unmount } = renderHook(
+      ({ active }) => useHeroMotionCycle(active),
+      { initialProps: { active: true } },
+    );
+
+    advance(1_200);
+    expect(result.current.phase).toBe('scanning');
+    expect(vi.getTimerCount()).toBe(1);
+
+    advance(500);
+
+    rerender({ active: false });
+    expect(vi.getTimerCount()).toBe(0);
+
+    advance(60_000);
+    expect(result.current).toMatchObject({ phase: 'scanning', visibleCards: 0 });
+
+    rerender({ active: true });
+    expect(vi.getTimerCount()).toBe(1);
+    advance(699);
+    expect(result.current.visibleCards).toBe(0);
+    advance(1);
+    expect(result.current.visibleCards).toBe(1);
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('cancels the active transition when reduced motion is enabled', () => {
     const preference = installReducedMotionPreference(false);
     const { result, unmount } = renderHook(() => useHeroMotionCycle());

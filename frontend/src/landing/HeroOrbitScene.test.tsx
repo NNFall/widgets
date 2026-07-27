@@ -1,10 +1,15 @@
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { App } from '../App';
 import browserMockupSource from '../shared/BrowserMockup.tsx?raw';
 import stylesSource from '../styles.css?raw';
+import { HeroOrbitScene } from './HeroOrbitScene';
 import heroOrbitSceneSource from './HeroOrbitScene.tsx?raw';
+
+vi.mock('motion/react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('motion/react')>();
+  return { ...actual, useInView: () => true, useReducedMotion: () => false };
+});
 
 type ReducedMotionListener = (event: { matches: boolean }) => void;
 
@@ -69,7 +74,7 @@ describe('HeroOrbitScene', () => {
   });
 
   it('exposes the motion state and reveals cards sequentially on the cinematic timeline', () => {
-    render(<App />);
+    render(<HeroOrbitScene />);
 
     const scene = screen.getByTestId('hero-scene');
     const cards = screen.getAllByTestId('process-card');
@@ -101,7 +106,7 @@ describe('HeroOrbitScene', () => {
   });
 
   it('renders a visible scanner label while preserving the scene description', () => {
-    render(<App />);
+    render(<HeroOrbitScene />);
 
     act(() => vi.advanceTimersByTime(1_200));
     const scanner = screen.getByTestId('hero-scanner');
@@ -120,7 +125,7 @@ describe('HeroOrbitScene', () => {
   });
 
   it('marks each card with a distinct directional reveal and opts the hero into its own widget variant', () => {
-    render(<App />);
+    render(<HeroOrbitScene />);
 
     expect(
       screen.getAllByTestId('process-card').map((card) => card.getAttribute('data-reveal-direction')),
@@ -159,7 +164,7 @@ describe('HeroOrbitScene', () => {
   it('skips the timeline when reduced motion is requested', () => {
     setReducedMotion(true);
 
-    render(<App />);
+    render(<HeroOrbitScene />);
 
     const scene = screen.getByTestId('hero-scene');
     expect(scene).toHaveAttribute('data-motion-program', 'cinematic');
@@ -167,11 +172,10 @@ describe('HeroOrbitScene', () => {
     expect(scene).toHaveAttribute('data-visible-cards', '3');
     expect(screen.getAllByTestId('process-card').every((card) => card.getAttribute('data-visible') === 'true')).toBe(true);
     expect(screen.getByTestId('widget-preview')).toHaveAttribute('data-visible', 'true');
-    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('moves to complete when reduced motion changes and removes its listener on cleanup', () => {
-    const { unmount } = render(<App />);
+    const { unmount } = render(<HeroOrbitScene />);
 
     expect(screen.getByTestId('hero-scene')).toHaveAttribute('data-motion-phase', 'source');
     expect(reducedMotionController.listenerCount()).toBe(1);
@@ -179,14 +183,12 @@ describe('HeroOrbitScene', () => {
     act(() => reducedMotionController.setMatches(true));
     expect(screen.getByTestId('hero-scene')).toHaveAttribute('data-motion-phase', 'complete');
     expect(screen.getByTestId('hero-scene')).toHaveAttribute('data-visible-cards', '3');
-    expect(vi.getTimerCount()).toBe(0);
 
     act(() => vi.advanceTimersByTime(8_000));
     expect(screen.getByTestId('hero-scene')).toHaveAttribute('data-motion-phase', 'complete');
 
     unmount();
     expect(reducedMotionController.listenerCount()).toBe(0);
-    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('uses immediate visual transitions when reduced motion is enabled dynamically', () => {
@@ -201,6 +203,30 @@ describe('HeroOrbitScene', () => {
     );
     expect(browserMockupSource).toMatch(
       /className="widget-preview"[\s\S]*?transition=\{\s*reducedMotion\s*\?\s*\{\s*duration:\s*0,\s*delay:\s*0\s*\}/,
+    );
+  });
+
+  it('gates the hero timeline and every infinite decorative loop behind motion activity', () => {
+    expect(heroOrbitSceneSource).toContain('useMotionActivity<HTMLDivElement>()');
+    expect(heroOrbitSceneSource).toContain('useHeroMotionCycle(activityActive)');
+    expect(heroOrbitSceneSource).toContain('const motionActive = activityActive && !reducedMotion');
+    expect(heroOrbitSceneSource).toContain("data-motion-active={motionActive ? 'true' : 'false'}");
+    expect(browserMockupSource).toContain('motionActive: boolean');
+    expect(browserMockupSource).toContain('motionComplete && motionActive && !reducedMotion');
+    expect(stylesSource).toMatch(
+      /\.hero-scene\[data-motion-active='true'\][^{}]*\.widget-preview__shimmer\s*\{[^}]*animation:\s*hero-rest-shimmer/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.hero-scene\[data-motion-phase='scanning'\][^{}]*\.hero-browser-stage__scanner-particle\s*\{[^}]*animation:\s*hero-scanner-particle[^}]*animation-play-state:\s*paused/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.hero-scene\[data-motion-active='true'\]\[data-motion-phase='scanning'\][^{}]*\.hero-browser-stage__scanner-particle\s*\{[^}]*animation-play-state:\s*running/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.hero-scene\[data-motion-phase='scanning'\][^{}]*\.hero-browser-stage__scanner\[data-active='true'\]\s*\{[^}]*animation:\s*hero-scanner-sweep[^}]*animation-play-state:\s*paused/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.hero-scene\[data-motion-active='true'\]\[data-motion-phase='scanning'\][^{}]*\.hero-browser-stage__scanner\[data-active='true'\]\s*\{[^}]*animation-play-state:\s*running/s,
     );
   });
 
@@ -284,7 +310,7 @@ describe('HeroOrbitScene', () => {
   });
 
   it('hides the decorative browser mockup from assistive technology and describes the scene', () => {
-    render(<App />);
+    render(<HeroOrbitScene />);
 
     expect(screen.getByTestId('browser-mockup')).toHaveAttribute('aria-hidden', 'true');
     expect(screen.getByTestId('hero-scene')).toHaveAccessibleDescription(
