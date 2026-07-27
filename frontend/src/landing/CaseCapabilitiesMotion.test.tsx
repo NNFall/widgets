@@ -21,6 +21,7 @@ vi.mock('motion/react', async (importOriginal) => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe('case study motion', () => {
@@ -58,11 +59,52 @@ describe('case study motion', () => {
   it('keeps Reveal inline motion on a shell outside the mobile crossfade layer', () => {
     expect(caseStudySource).toContain('className="case-panel-shell"');
     expect(caseStudySource).toMatch(
-      /<Reveal className="case-panel-shell"[\s\S]*?<div className=\{`case-panel case-panel--before/,
+      /<Reveal className="case-panel-shell"[\s\S]*?<div[\s\S]*?className=\{`case-panel case-panel--before/,
     );
     expect(caseStudySource).toMatch(
-      /<Reveal className="case-panel-shell"[\s\S]*?<div className=\{`case-panel case-panel--after/,
+      /<Reveal className="case-panel-shell"[\s\S]*?<div[\s\S]*?className=\{`case-panel case-panel--after/,
     );
+  });
+
+  it('hides only the inactive mobile panel from assistive technology and cleans the media listener', async () => {
+    const user = userEvent.setup();
+    let mediaListener: ((event: MediaQueryListEvent) => void) | undefined;
+    const mediaQuery = {
+      matches: true,
+      media: '(max-width: 767px)',
+      onchange: null,
+      addEventListener: vi.fn((_event: string, listener: (event: MediaQueryListEvent) => void) => {
+        mediaListener = listener;
+      }),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    };
+    vi.stubGlobal('matchMedia', vi.fn(() => mediaQuery));
+
+    const { container, unmount } = render(<CaseStudySection />);
+    const beforePanel = container.querySelector('.case-panel--before');
+    const afterPanel = container.querySelector('.case-panel--after');
+
+    expect(beforePanel).toHaveAttribute('aria-hidden', 'true');
+    expect(beforePanel).toHaveAttribute('inert');
+    expect(afterPanel).not.toHaveAttribute('aria-hidden');
+    expect(afterPanel).not.toHaveAttribute('inert');
+
+    await user.click(screen.getByRole('button', { name: 'До' }));
+    expect(beforePanel).not.toHaveAttribute('aria-hidden');
+    expect(beforePanel).not.toHaveAttribute('inert');
+    expect(afterPanel).toHaveAttribute('aria-hidden', 'true');
+    expect(afterPanel).toHaveAttribute('inert');
+
+    mediaQuery.matches = false;
+    act(() => mediaListener?.({ matches: false } as MediaQueryListEvent));
+    expect(beforePanel).not.toHaveAttribute('aria-hidden');
+    expect(afterPanel).not.toHaveAttribute('aria-hidden');
+
+    unmount();
+    expect(mediaQuery.removeEventListener).toHaveBeenCalledWith('change', mediaListener);
   });
 
   it('makes before quiet and after vivid with a larger widget and transform-only halo', () => {

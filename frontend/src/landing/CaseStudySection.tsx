@@ -1,14 +1,46 @@
 import { CheckCircle, ShieldCheck, Sparkle } from '@phosphor-icons/react';
 import { motion } from 'motion/react';
-import { useState } from 'react';
+import { useCallback, useState, useSyncExternalStore } from 'react';
 
 import { BrowserMockup } from '../shared/BrowserMockup';
 import { useMotionActivity } from '../shared/MotionActivity';
 import { Reveal } from '../shared/Reveal';
 
+export const MOBILE_CASE_MEDIA_QUERY = '(max-width: 767px)';
+
+export function useMediaQuery(query: string): boolean {
+  const subscribe = useCallback((onStoreChange: () => void) => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return () => undefined;
+
+    const mediaQuery = window.matchMedia(query);
+    const handleChange = () => onStoreChange();
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleChange);
+      return () => mediaQuery.removeEventListener('change', handleChange);
+    }
+
+    mediaQuery.addListener(handleChange);
+    return () => mediaQuery.removeListener(handleChange);
+  }, [query]);
+
+  const getSnapshot = useCallback(
+    () => typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia(query).matches,
+    [query],
+  );
+  const getServerSnapshot = useCallback(() => false, []);
+
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+}
+
 export function CaseStudySection() {
   const [activeView, setActiveView] = useState<'before' | 'after'>('after');
   const { active, reducedMotion, ref } = useMotionActivity<HTMLElement>();
+  const mobileComparison = useMediaQuery(MOBILE_CASE_MEDIA_QUERY);
+  const beforeInactive = mobileComparison && activeView !== 'before';
+  const afterInactive = mobileComparison && activeView !== 'after';
 
   return (
     <section
@@ -32,13 +64,21 @@ export function CaseStudySection() {
 
         <div className="case-comparison">
           <Reveal className="case-panel-shell">
-            <div className={`case-panel case-panel--before${activeView === 'before' ? ' is-mobile-active is-active' : ''}`}>
+            <div
+              className={`case-panel case-panel--before${activeView === 'before' ? ' is-mobile-active is-active' : ''}`}
+              aria-hidden={beforeInactive || undefined}
+              inert={beforeInactive || undefined}
+            >
               <div className="case-panel__label"><span>До</span><p>Посетитель сам ищет проекты, условия и способ оставить заявку.</p></div>
               <div className="case-browser"><BrowserMockup widgetVisible={false} motionComplete={false} reducedMotion testIds={false} /></div>
             </div>
           </Reveal>
           <Reveal className="case-panel-shell" delay={0.08}>
-            <div className={`case-panel case-panel--after${activeView === 'after' ? ' is-mobile-active is-active' : ''}`}>
+            <div
+              className={`case-panel case-panel--after${activeView === 'after' ? ' is-mobile-active is-active' : ''}`}
+              aria-hidden={afterInactive || undefined}
+              inert={afterInactive || undefined}
+            >
               <div className="case-panel__label"><span>После</span><p>AI-виджет отвечает по услугам, помогает выбрать проект и подводит к обращению.</p></div>
               <div className="case-browser" data-case-widget="enhanced">
                 <motion.div

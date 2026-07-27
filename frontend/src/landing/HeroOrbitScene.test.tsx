@@ -24,9 +24,22 @@ const setReducedMotion = (initialMatches: boolean) => {
     dispatchEvent: vi.fn(),
   };
 
+  const fixedMediaQuery = (query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  });
+
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
-    value: vi.fn().mockImplementation(() => mediaQuery),
+    value: vi.fn().mockImplementation((query: string) => (
+      query === mediaQuery.media ? mediaQuery : fixedMediaQuery(query)
+    )),
   });
 
   return {
