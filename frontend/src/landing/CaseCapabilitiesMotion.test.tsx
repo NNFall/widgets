@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import stylesSource from '../styles.css?raw';
 import capabilitiesSource from './CapabilitiesSection.tsx?raw';
+import caseStudySource from './CaseStudySection.tsx?raw';
 import { CapabilitiesSection, useCapabilityConversationCycle } from './CapabilitiesSection';
 import { CaseStudySection } from './CaseStudySection';
 
@@ -49,8 +50,19 @@ describe('case study motion', () => {
     const mobileRules = stylesSource.slice(mobileStart);
 
     expect(mobileRules).not.toMatch(/\.case-panel\s*\{[^}]*display:\s*none/s);
-    expect(mobileRules).toMatch(/\.case-panel\s*\{[^}]*grid-area:\s*case/s);
+    expect(mobileRules).toMatch(/\.case-panel-shell\s*\{[^}]*grid-area:\s*case/s);
+    expect(mobileRules).toMatch(/\.case-panel\s*\{[^}]*opacity:\s*0/s);
     expect(mobileRules).toMatch(/\.case-panel\.is-mobile-active\s*\{[^}]*opacity:\s*1/s);
+  });
+
+  it('keeps Reveal inline motion on a shell outside the mobile crossfade layer', () => {
+    expect(caseStudySource).toContain('className="case-panel-shell"');
+    expect(caseStudySource).toMatch(
+      /<Reveal className="case-panel-shell"[\s\S]*?<div className=\{`case-panel case-panel--before/,
+    );
+    expect(caseStudySource).toMatch(
+      /<Reveal className="case-panel-shell"[\s\S]*?<div className=\{`case-panel case-panel--after/,
+    );
   });
 
   it('makes before quiet and after vivid with a larger widget and transform-only halo', () => {
