@@ -92,10 +92,25 @@ describe('HeroOrbitScene', () => {
 
     act(() => vi.advanceTimersByTime(1_200));
     expect(screen.getByText('Сканирование…')).toBeVisible();
+    expect(screen.getByTestId('hero-scanner')).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByTestId('hero-scanner-band')).toBeInTheDocument();
+    expect(screen.getByTestId('hero-scanner-core')).toBeInTheDocument();
+    expect(screen.getByTestId('hero-scanner-trail')).toBeInTheDocument();
+    expect(screen.getAllByTestId('hero-scanner-particle')).toHaveLength(3);
     expect(screen.getByTestId('hero-scene')).toHaveAttribute(
       'aria-describedby',
       'hero-scene-description',
     );
+  });
+
+  it('marks each card with a distinct directional reveal and opts the hero into its own widget variant', () => {
+    render(<App />);
+
+    expect(
+      screen.getAllByTestId('process-card').map((card) => card.getAttribute('data-reveal-direction')),
+    ).toEqual(['upper-left', 'left', 'lower-left']);
+    expect(screen.getByTestId('browser-mockup')).toHaveAttribute('data-variant', 'hero');
+    expect(screen.getByTestId('widget-preview')).toHaveAttribute('data-variant', 'hero');
   });
 
   it('skips the timeline when reduced motion is requested', () => {
@@ -168,6 +183,35 @@ describe('HeroOrbitScene', () => {
     expect(stylesSource).toContain('transform: translate3d(110px, 0, 0) scale(0.88) rotate(2.2deg);');
     expect(stylesSource).toMatch(/@media \(max-width:\s*980px\)[\s\S]*?\.hero-scene\s*\{[^}]*left:\s*0;/s);
     expect(stylesSource).toMatch(/@media \(max-width:\s*980px\)[\s\S]*?\.browser-stack\s*\{[^}]*aspect-ratio:\s*1\.27;/s);
+  });
+
+  it('progressively transforms the browser with card visibility and uses only current phase names', () => {
+    expect(stylesSource).toMatch(
+      /data-motion-phase='source'[\s\S]*?scale\(1\.1[2-6]\)\s+rotate\(-3deg\)/,
+    );
+    expect(stylesSource).toMatch(
+      /data-motion-phase='scanning'\]\[data-visible-cards='1'\][\s\S]*?translate3d\(34px, 7px, 0\)\s+scale\(1\.06\)/,
+    );
+    expect(stylesSource).toMatch(
+      /data-motion-phase='scanning'\]\[data-visible-cards='2'\][\s\S]*?translate3d\(67px, 4px, 0\)\s+scale\(0\.98\)/,
+    );
+    expect(stylesSource).toMatch(
+      /data-motion-phase='scanning'\]\[data-visible-cards='3'\][\s\S]*?translate3d\(92px, 1px, 0\)\s+scale\(0\.92\)/,
+    );
+    expect(stylesSource).toContain('transform: translate3d(110px, 0, 0) scale(0.88) rotate(2.2deg);');
+    expect(stylesSource).not.toContain("data-motion-phase='transforming'");
+    expect(stylesSource).not.toContain("data-motion-phase='cards'");
+  });
+
+  it('gives only the hero widget the larger desktop and mobile payoff sizes', () => {
+    expect(stylesSource).toMatch(
+      /\.browser-stack--hero\s+\.widget-preview\s*\{[^}]*width:\s*47%;/s,
+    );
+    expect(stylesSource).toMatch(
+      /@media \(max-width:\s*640px\)[\s\S]*?\.browser-stack--hero\s+\.widget-preview\s*\{[^}]*width:\s*58%;/s,
+    );
+    expect(browserMockupSource).toMatch(/variant\s*=\s*'default'/);
+    expect(heroOrbitSceneSource).toMatch(/<BrowserMockup[\s\S]*?variant="hero"/);
   });
 
   it('hides the decorative browser mockup from assistive technology and describes the scene', () => {

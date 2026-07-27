@@ -1,14 +1,30 @@
 import { ArrowRight, FileText, Heart, ShieldCheck, Sparkle } from '@phosphor-icons/react';
-import { motion } from 'motion/react';
+import { motion, type Variants } from 'motion/react';
 
 type BrowserMockupProps = {
   widgetVisible: boolean;
   motionComplete: boolean;
   reducedMotion: boolean;
   testIds?: boolean;
+  variant?: 'default' | 'hero';
 };
 
 export const WIDGET_LAUNCHER_REPEAT_DELAY_SECONDS = 10.7;
+
+const heroWidgetVariants: Variants = {
+  hidden: {
+    opacity: 0,
+    scale: 0.64,
+    y: 44,
+    rotate: 4,
+  },
+  visible: {
+    opacity: [0, 1, 1],
+    scale: [0.64, 1.08, 1],
+    y: [44, -8, 0],
+    rotate: [4, -0.7, 0],
+  },
+};
 
 const miniatureFeatures = [
   ['Современный', 'и стильный дизайн'],
@@ -22,9 +38,18 @@ export function BrowserMockup({
   motionComplete,
   reducedMotion,
   testIds = true,
+  variant = 'default',
 }: BrowserMockupProps) {
+  const heroVariant = variant === 'hero';
+
   return (
-    <div className="browser-stack" data-testid={testIds ? 'browser-mockup' : undefined} aria-hidden="true">
+    <div
+      className={`browser-stack${heroVariant ? ' browser-stack--hero' : ''}`}
+      data-testid={testIds ? 'browser-mockup' : undefined}
+      data-variant={variant}
+      data-motion-complete={motionComplete ? 'true' : 'false'}
+      aria-hidden="true"
+    >
       <div className="browser-stack__backing" aria-hidden="true" />
       <div className="browser-mockup">
         <div className="browser-mockup__chrome" aria-hidden="true">
@@ -73,19 +98,36 @@ export function BrowserMockup({
         className="widget-preview"
         data-testid={testIds ? 'widget-preview' : undefined}
         data-visible={widgetVisible ? 'true' : 'false'}
+        data-variant={variant}
         initial={false}
-        animate={{
-          opacity: widgetVisible ? 1 : 0,
-          scale: widgetVisible ? 1 : 0.82,
-          y: widgetVisible ? 0 : 18,
-        }}
+        animate={
+          heroVariant
+            ? widgetVisible ? 'visible' : 'hidden'
+            : {
+              opacity: widgetVisible ? 1 : 0,
+              scale: widgetVisible ? 1 : 0.82,
+              y: widgetVisible ? 0 : 18,
+            }
+        }
+        variants={heroVariant ? heroWidgetVariants : undefined}
         transition={
           reducedMotion
             ? { duration: 0, delay: 0 }
-            : { type: 'spring', stiffness: 120, damping: 18 }
+            : heroVariant
+              ? widgetVisible
+                ? { duration: 0.92, times: [0, 0.72, 1], ease: [0.16, 1, 0.3, 1] }
+                : { duration: 0.32, ease: 'easeOut' }
+              : { type: 'spring', stiffness: 120, damping: 18 }
         }
         aria-hidden={!widgetVisible}
       >
+        {heroVariant ? (
+          <>
+            <span className="widget-preview__halo" aria-hidden="true" />
+            <span className="widget-preview__burst" aria-hidden="true" />
+            <span className="widget-preview__shimmer" aria-hidden="true" />
+          </>
+        ) : null}
         <div className="widget-preview__message">
           <Sparkle size={20} weight="fill" aria-hidden="true" />
           <span>Я изучил ваш сайт.<br />Чем помочь?</span>

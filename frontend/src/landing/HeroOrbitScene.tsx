@@ -1,5 +1,5 @@
 import { ChatsCircle, LinkSimple, Scan } from '@phosphor-icons/react';
-import { motion } from 'motion/react';
+import { motion, type Variants } from 'motion/react';
 
 import { BrowserMockup } from '../shared/BrowserMockup';
 import { useHeroMotionCycle } from './useHeroMotionCycle';
@@ -7,23 +7,55 @@ import { useHeroMotionCycle } from './useHeroMotionCycle';
 const processCards = [
   {
     number: '1',
+    direction: 'upper-left',
     title: 'Ссылка на сайт',
     copy: 'Запуск без анкеты и кода',
     Icon: LinkSimple,
   },
   {
     number: '2',
+    direction: 'left',
     title: 'Визуальный анализ',
     copy: 'Контент, услуги, стиль и вопросы',
     Icon: Scan,
   },
   {
     number: '3',
+    direction: 'lower-left',
     title: 'AI-консультант',
     copy: 'Готов к проверке и доработке',
     Icon: ChatsCircle,
   },
 ] as const;
+
+export const SCANNER_DURATION_SECONDS = {
+  cinematic: 6.3,
+  loop: 3.8,
+} as const;
+
+const processCardVariants: Variants = {
+  hidden: {
+    opacity: 0,
+    x: 'var(--card-hidden-x)',
+    y: 'var(--card-hidden-y)',
+    scale: 0.82,
+    rotate: 'var(--card-hidden-rotate)',
+  },
+  visible: {
+    opacity: [0, 1, 1],
+    x: ['var(--card-hidden-x)', 'var(--card-overshoot-x)', '0px'],
+    y: ['var(--card-hidden-y)', 'var(--card-overshoot-y)', '0px'],
+    scale: [0.82, 1.04, 1],
+    rotate: ['var(--card-hidden-rotate)', 'var(--card-overshoot-rotate)', '0deg'],
+  },
+  rest: {
+    opacity: 1,
+    x: ['0px', 'var(--card-drift-x)', '0px'],
+    y: ['0px', 'var(--card-drift-y)', '0px'],
+    scale: 1,
+    rotate: ['0deg', 'var(--card-drift-rotate)', '0deg'],
+  },
+};
 
 export function HeroOrbitScene() {
   const { program, phase, cycle, visibleCards, reducedMotion } = useHeroMotionCycle();
@@ -59,24 +91,35 @@ export function HeroOrbitScene() {
       </svg>
 
       <div className="hero-scene__cards">
-        {processCards.map(({ number, title, copy, Icon }, index) => (
+        {processCards.map(({ number, direction, title, copy, Icon }, index) => (
           <motion.article
             className={`process-card process-card--${index + 1}`}
             data-testid="process-card"
             data-visible={index < visibleCards ? 'true' : 'false'}
+            data-reveal-direction={direction}
             key={number}
             initial={false}
-            animate={{
-              opacity: index < visibleCards ? 1 : 0,
-              y: motionComplete && !reducedMotion ? [0, -4, 0] : index < visibleCards ? 0 : 18,
-              scale: index < visibleCards ? 1 : 0.94,
-            }}
+            animate={
+              motionComplete && !reducedMotion ? 'rest' : index < visibleCards ? 'visible' : 'hidden'
+            }
+            variants={processCardVariants}
             transition={
               reducedMotion
                 ? { duration: 0, delay: 0 }
                 : motionComplete
-                  ? { duration: 5.2 + index * 0.35, repeat: Infinity, ease: 'easeInOut' }
-                  : { type: 'spring', stiffness: 100, damping: 18, delay: index < visibleCards ? index * 0.3 : 0 }
+                  ? {
+                    duration: 5.4 + index * 0.45,
+                    repeat: Infinity,
+                    repeatDelay: 0.8 + index * 0.35,
+                    ease: 'easeInOut',
+                  }
+                  : index < visibleCards
+                    ? {
+                      duration: 0.78,
+                      times: [0, 0.7, 1],
+                      ease: [0.16, 1, 0.3, 1],
+                    }
+                    : { duration: 0.34, ease: 'easeOut' }
             }
           >
             <span className="process-card__number">{number}</span>
@@ -95,8 +138,13 @@ export function HeroOrbitScene() {
           widgetVisible={widgetVisible}
           motionComplete={motionComplete}
           reducedMotion={reducedMotion}
+          variant="hero"
         />
-        <div className="hero-browser-stage__scanner-markup" aria-hidden="true">
+        <div
+          className="hero-browser-stage__scanner-markup"
+          data-testid="hero-scanner"
+          aria-hidden="true"
+        >
           <span className="hero-browser-stage__scanner-label" hidden={phase !== 'scanning'}>
             Сканирование…
           </span>
@@ -105,11 +153,35 @@ export function HeroOrbitScene() {
             initial={false}
             animate={
               phase === 'scanning'
-                ? { opacity: [0, 1, 1, 0], y: ['0%', '520%'] }
-                : { opacity: 0, y: '0%' }
+                ? { opacity: [0, 0.96, 1, 1, 0.96, 0], y: ['-65%', '625%'] }
+                : { opacity: 0, y: '-65%' }
             }
-            transition={{ duration: reducedMotion ? 0 : phase === 'scanning' ? 2.6 : 0.15, ease: 'easeInOut' }}
-          />
+            transition={{
+              duration: reducedMotion ? 0 : SCANNER_DURATION_SECONDS[program],
+              ease: 'linear',
+              times: [0, 0.06, 0.22, 0.78, 0.94, 1],
+            }}
+          >
+            <span
+              className="hero-browser-stage__scanner-band"
+              data-testid="hero-scanner-band"
+            />
+            <span
+              className="hero-browser-stage__scanner-core"
+              data-testid="hero-scanner-core"
+            />
+            <span
+              className="hero-browser-stage__scanner-trail"
+              data-testid="hero-scanner-trail"
+            />
+            {[0, 1, 2].map((particle) => (
+              <span
+                className={`hero-browser-stage__scanner-particle hero-browser-stage__scanner-particle--${particle + 1}`}
+                data-testid="hero-scanner-particle"
+                key={particle}
+              />
+            ))}
+          </motion.div>
         </div>
         <motion.div
           className="hero-browser-stage__widget-label"
