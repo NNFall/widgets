@@ -37,6 +37,29 @@ describe('landing accessibility contracts', () => {
     expect(screen.getAllByLabelText('Kaigo')).toHaveLength(1);
   });
 
+  it('isolates gradient references between Kaigo logo instances', () => {
+    render(
+      <>
+        <KaigoLogo />
+        <KaigoLogo />
+      </>,
+    );
+
+    const marks = screen.getAllByLabelText('Kaigo').map((logo) =>
+      logo.querySelector('[data-kaigo-mark="K"]'),
+    );
+    const gradientIds = marks.map((mark) => mark?.querySelector('linearGradient')?.id);
+
+    expect(gradientIds).toHaveLength(2);
+    expect(new Set(gradientIds).size).toBe(2);
+    for (const [index, mark] of marks.entries()) {
+      const gradientId = gradientIds[index];
+      expect(gradientId).toMatch(/^[A-Za-z0-9_-]+-kaigo-mark-gradient$/);
+      expect(Array.from(mark?.querySelectorAll('path') ?? []).map((path) => path.getAttribute('fill')))
+        .toEqual(Array(3).fill(`url(#${gradientId})`));
+    }
+  });
+
   it('uses dark ink on sage and coral interactive-state surfaces', () => {
     expect(stylesSource).toMatch(
       /\.case-panel--after \.case-panel__label > span\s*\{[^}]*color:\s*var\(--ink\)/s,
