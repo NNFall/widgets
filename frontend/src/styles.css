@@ -3459,3 +3459,40 @@ a {
     animation: none !important;
   }
 }
+.auth-gate {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 15% 15%, rgba(105, 166, 142, .18), transparent 34%),
+    radial-gradient(circle at 85% 82%, rgba(254, 105, 54, .14), transparent 30%),
+    var(--canvas);
+}
+
+.auth-gate--loading {
+  grid-auto-flow: column;
+  gap: 10px;
+  justify-content: center;
+}
+
+.auth-gate--loading svg { animation: studio-spin 1.2s linear infinite; }
+
+.auth-gate__card {
+  width: min(620px, 100%);
+  padding: clamp(28px, 5vw, 54px);
+  border: 1px solid rgba(7, 27, 47, .14);
+  border-radius: 28px;
+  background: rgba(255, 253, 250, .92);
+  box-shadow: 0 32px 80px rgba(60, 40, 30, .12);
+}
+
+.auth-gate__card > svg { color: var(--sage); }
+.auth-gate__eyebrow { color: #3f7c67; font-size: 13px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.auth-gate__card h1 { margin: 16px 0 12px; font-size: clamp(34px, 5vw, 54px); line-height: 1.02; }
+.auth-gate__card p { margin: 0; color: #5f6f79; font-size: 17px; line-height: 1.6; }
+.auth-gate__actions { display: grid; gap: 10px; margin: 28px 0 18px; }
+.auth-gate__actions a { min-height: 54px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; border: 1px solid rgba(7, 27, 47, .14); border-radius: 14px; color: var(--ink); background: #fff; font-weight: 800; text-decoration: none; }
+.auth-gate__actions a:first-child { color: white; border-color: var(--ink); background: var(--ink); }
+.auth-gate__card small { color: #7a858c; }

@@ -1,13 +1,20 @@
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from './App';
+
+beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+    new Response(JSON.stringify({ enabled: false, authenticated: false })),
+  ));
+});
 
 afterEach(() => {
   cleanup();
   window.history.replaceState({}, '', '/');
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('App', () => {
@@ -113,12 +120,12 @@ describe('App', () => {
     expect(cancelFrame).toHaveBeenCalledWith(41);
   });
 
-  it.each(['/studio', '/studio/'])('renders the functional Studio at %s', (pathname) => {
+  it.each(['/studio', '/studio/'])('renders the functional Studio at %s', async (pathname) => {
     window.history.replaceState({}, '', pathname);
 
     render(<App />);
 
-    expect(screen.getByRole('heading', { name: 'Студия Kaigo' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Студия Kaigo' })).toBeInTheDocument();
     expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(0);
   });
 
