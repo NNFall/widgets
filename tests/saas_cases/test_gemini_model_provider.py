@@ -10,11 +10,15 @@ import pytest
 from app.models.contracts import (
     InvalidModelResponse,
     ModelRequest,
+    ModelResponse,
     ModelUnavailable,
+    ProviderCapabilities,
     ProviderQuotaExceeded,
     ProviderUnavailable,
 )
 from app.models.providers.gemini import GeminiModelProvider
+from app.models.router import InMemoryModelCallAudit, ModelPolicy, ModelRouter, ProviderTarget
+from builder_lab.prompts import ARTIFACT_JSON_SCHEMA
 
 
 class FakeModels:
@@ -34,6 +38,13 @@ class FakeClient:
     def __init__(self, *, response: object = None, error: BaseException | None = None):
         self.models = FakeModels(response=response, error=error)
         self.aio = std_types.SimpleNamespace(models=self.models)
+
+
+class FallbackProvider:
+    capabilities = ProviderCapabilities(images=True, structured_output=True)
+
+    async def generate(self, request: ModelRequest, *, model: str) -> ModelResponse:
+        return ModelResponse(text='{"ok":true}', parsed={"ok": True})
 
 
 def fake_response(
@@ -159,6 +170,75 @@ async def test_invalid_structured_response_is_normalized() -> None:
             ModelRequest(prompt="Return JSON", response_schema={"type": "object"}),
             model="gemini-3.5-flash",
         )
+
+
+@pytest.mark.asyncio
+async def test_invalid_structured_response_audits_billed_usage_before_fallback() -> None:
+    primary = GeminiModelProvider(
+        api_key="unit-test-key",
+        client=FakeClient(response=fake_response(text="not json")),
+    )
+    audit = InMemoryModelCallAudit()
+    router = ModelRouter(
+        providers={"gemini": primary, "fallback": FallbackProvider()},
+        policies={
+            ("artifact", "standard"): ModelPolicy(
+                prompt_version="artifact-v1",
+                targets=(
+                    ProviderTarget("gemini", "gemini-3.5-flash", 1_000_000, 2_000_000),
+                    ProviderTarget("fallback", "fallback-model", 0, 0),
+                ),
+            )
+        },
+        audit=audit,
+    )
+
+    response = await router.generate(
+        role="artifact",
+        mode="standard",
+        request=ModelRequest(prompt="Return JSON", response_schema={"type": "object"}),
+    )
+
+    assert response.parsed == {"ok": True}
+    failure = audit.calls[0]
+    assert failure.status == "failed"
+    assert failure.error_code == "invalid_response"
+    assert failure.input_tokens == 120
+    assert failure.output_tokens == 50
+    assert failure.thinking_tokens == 10
+    assert failure.cost_microusd == 220
+    assert failure.request_id == "gemini-response-1"
+
+
+@pytest.mark.asyncio
+async def test_routed_gemini_uses_model_specific_provider_schema() -> None:
+    clients = {
+        model: FakeClient(response=fake_response())
+        for model in ("gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.6-flash")
+    }
+
+    for model, client in clients.items():
+        provider = GeminiModelProvider(api_key="unit-test-key", client=client)
+        await provider.generate(
+            ModelRequest(prompt="Return JSON", response_schema=ARTIFACT_JSON_SCHEMA),
+            model=model,
+        )
+
+    schema_25 = clients["gemini-2.5-flash"].models.calls[0]["config"].response_json_schema
+    schema_35 = clients["gemini-3.5-flash"].models.calls[0]["config"].response_json_schema
+    schema_36 = clients["gemini-3.6-flash"].models.calls[0]["config"].response_json_schema
+    assert "minimum" not in schema_25["properties"]["revision"]
+    assert "maxItems" not in schema_25["properties"]["suggested_actions"]
+    assert "enum" not in schema_25["properties"]["schema_version"]
+    assert schema_25["additionalProperties"] is False
+    assert "minimum" not in schema_35["properties"]["revision"]
+    assert "additionalProperties" not in schema_35
+    assert "maxItems" not in schema_35["properties"]["suggested_actions"]
+    assert schema_35["properties"]["schema_version"]["enum"] == ["1.0"]
+    assert schema_36["properties"]["revision"]["minimum"] == 1
+    assert "additionalProperties" not in schema_36
+    assert "maxItems" not in schema_36["properties"]["suggested_actions"]
+    assert schema_36["properties"]["schema_version"]["enum"] == ["1.0"]
 
 
 @pytest.mark.asyncio

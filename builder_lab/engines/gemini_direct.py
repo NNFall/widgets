@@ -9,6 +9,7 @@ from google.genai import types
 
 from app.models.providers.gemini import (
     build_http_options,
+    build_provider_json_schema,
     classify_gemini_error,
     gemini_usage_counts,
 )
@@ -58,90 +59,6 @@ def build_low_thinking_config(
         "low",
         include_thoughts=include_thoughts,
     ).thinking_config
-
-
-_GEMINI_25_SCHEMA_CONSTRAINTS = frozenset(
-    {
-        "enum",
-        "exclusiveMaximum",
-        "exclusiveMinimum",
-        "format",
-        "maxItems",
-        "maxLength",
-        "maxProperties",
-        "maximum",
-        "minItems",
-        "minLength",
-        "minProperties",
-        "minimum",
-        "multipleOf",
-        "pattern",
-        "uniqueItems",
-    }
-)
-
-_GEMINI_3X_SCHEMA_CONSTRAINTS = frozenset(
-    {
-        "additionalProperties",
-        "maxItems",
-        "minItems",
-    }
-)
-
-_GEMINI_35_EXTRA_SCHEMA_CONSTRAINTS = frozenset(
-    {
-        "maximum",
-        "minimum",
-    }
-)
-
-
-def build_provider_json_schema(schema: dict[str, Any], model: str) -> dict[str, Any]:
-    """Adapt the strict local schema to each Gemini serving implementation."""
-
-    normalized = model.strip().lower().removeprefix("models/")
-    if normalized.startswith(("gemini-3.5-", "gemini-3.6-")):
-        unsupported = _GEMINI_3X_SCHEMA_CONSTRAINTS
-        if normalized.startswith("gemini-3.5-"):
-            unsupported = unsupported | _GEMINI_35_EXTRA_SCHEMA_CONSTRAINTS
-
-        def simplify_3x(value: Any) -> Any:
-            if isinstance(value, dict):
-                simplified = {
-                    key: simplify_3x(item)
-                    for key, item in value.items()
-                    if key not in unsupported
-                }
-                declared_type = simplified.get("type")
-                if (
-                    isinstance(declared_type, list)
-                    and len(declared_type) == 2
-                    and "null" in declared_type
-                ):
-                    simplified["type"] = next(
-                        item for item in declared_type if item != "null"
-                    )
-                return simplified
-            if isinstance(value, list):
-                return [simplify_3x(item) for item in value]
-            return value
-
-        return simplify_3x(schema)
-    if not normalized.startswith("gemini-2.5-"):
-        return schema
-
-    def simplify(value: Any) -> Any:
-        if isinstance(value, dict):
-            return {
-                key: simplify(item)
-                for key, item in value.items()
-                if key not in _GEMINI_25_SCHEMA_CONSTRAINTS
-            }
-        if isinstance(value, list):
-            return [simplify(item) for item in value]
-        return value
-
-    return simplify(schema)
 
 
 def _provider_error(exc: Exception) -> BuilderEngineError:

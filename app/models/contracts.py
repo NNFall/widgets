@@ -57,7 +57,20 @@ class ProviderQuotaExceeded(ModelProviderError):
     error_code = "quota_exceeded"
 
 
-class InvalidModelResponse(ModelProviderError):
+class BilledModelProviderError(ModelProviderError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        usage: ModelUsage = ModelUsage(),
+        request_id: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.usage = usage
+        self.request_id = request_id
+
+
+class InvalidModelResponse(BilledModelProviderError):
     error_code = "invalid_response"
 
 

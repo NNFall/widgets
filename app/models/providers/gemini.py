@@ -62,6 +62,93 @@ def gemini_usage_counts(response: Any) -> GeminiUsageCounts:
     )
 
 
+_GEMINI_25_SCHEMA_CONSTRAINTS = frozenset(
+    {
+        "enum",
+        "exclusiveMaximum",
+        "exclusiveMinimum",
+        "format",
+        "maxItems",
+        "maxLength",
+        "maxProperties",
+        "maximum",
+        "minItems",
+        "minLength",
+        "minProperties",
+        "minimum",
+        "multipleOf",
+        "pattern",
+        "uniqueItems",
+    }
+)
+
+_GEMINI_3X_SCHEMA_CONSTRAINTS = frozenset(
+    {
+        "additionalProperties",
+        "maxItems",
+        "minItems",
+    }
+)
+
+_GEMINI_35_EXTRA_SCHEMA_CONSTRAINTS = frozenset(
+    {
+        "maximum",
+        "minimum",
+    }
+)
+
+
+def build_provider_json_schema(
+    schema: Mapping[str, Any],
+    model: str,
+) -> dict[str, Any]:
+    """Adapt the strict local schema to each Gemini serving implementation."""
+
+    normalized = model.strip().lower().removeprefix("models/")
+    if normalized.startswith(("gemini-3.5-", "gemini-3.6-")):
+        unsupported = _GEMINI_3X_SCHEMA_CONSTRAINTS
+        if normalized.startswith("gemini-3.5-"):
+            unsupported = unsupported | _GEMINI_35_EXTRA_SCHEMA_CONSTRAINTS
+
+        def simplify_3x(value: Any) -> Any:
+            if isinstance(value, Mapping):
+                simplified = {
+                    key: simplify_3x(item)
+                    for key, item in value.items()
+                    if key not in unsupported
+                }
+                declared_type = simplified.get("type")
+                if (
+                    isinstance(declared_type, list)
+                    and len(declared_type) == 2
+                    and "null" in declared_type
+                ):
+                    simplified["type"] = next(
+                        item for item in declared_type if item != "null"
+                    )
+                return simplified
+            if isinstance(value, list):
+                return [simplify_3x(item) for item in value]
+            return value
+
+        return simplify_3x(schema)
+    if not normalized.startswith("gemini-2.5-"):
+        return dict(schema)
+
+    def simplify_25(value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {
+                key: simplify_25(item)
+                for key, item in value.items()
+                if key not in _GEMINI_25_SCHEMA_CONSTRAINTS
+            }
+        if isinstance(value, list):
+            return [simplify_25(item) for item in value]
+        return value
+
+    return simplify_25(schema)
+
+
 def classify_gemini_error(error: Exception) -> str:
     diagnostic = f"{type(error).__name__}: {error}".lower()
     status = str(getattr(error, "status", "")).lower()
@@ -110,7 +197,10 @@ class GeminiModelProvider:
         if request.response_schema is not None:
             config_values.update(
                 response_mime_type="application/json",
-                response_json_schema=dict(request.response_schema),
+                response_json_schema=build_provider_json_schema(
+                    request.response_schema,
+                    model,
+                ),
                 tools=[],
             )
         config = types.GenerateContentConfig(**config_values)
@@ -144,9 +234,15 @@ class GeminiModelProvider:
 
 
 def _normalize_response(response: Any, *, structured: bool) -> ModelResponse:
+    usage = _normalized_usage(response)
+    request_id = _optional_string(getattr(response, "response_id", None))
     text = getattr(response, "text", None)
     if not isinstance(text, str) or not text.strip():
-        raise InvalidModelResponse("Gemini returned an empty response")
+        raise InvalidModelResponse(
+            "Gemini returned an empty response",
+            usage=usage,
+            request_id=request_id,
+        )
 
     parsed: Mapping[str, Any] | list[Any] | None = None
     if structured:
@@ -154,22 +250,37 @@ def _normalize_response(response: Any, *, structured: bool) -> ModelResponse:
         if isinstance(sdk_parsed, (Mapping, list)):
             parsed = sdk_parsed
         else:
-            decoded = json.loads(text)
+            try:
+                decoded = json.loads(text)
+            except json.JSONDecodeError as error:
+                raise InvalidModelResponse(
+                    "Gemini returned invalid structured JSON",
+                    usage=usage,
+                    request_id=request_id,
+                ) from error
             if not isinstance(decoded, (dict, list)):
-                raise InvalidModelResponse("Gemini structured response is not JSON data")
+                raise InvalidModelResponse(
+                    "Gemini structured response is not JSON data",
+                    usage=usage,
+                    request_id=request_id,
+                )
             parsed = decoded
 
-    counts = gemini_usage_counts(response)
     return ModelResponse(
         text=text,
         parsed=parsed,
-        usage=ModelUsage(
-            input_tokens=counts.input_tokens,
-            output_tokens=counts.candidate_tokens + counts.thinking_tokens,
-            thinking_tokens=counts.thinking_tokens,
-        ),
-        request_id=_optional_string(getattr(response, "response_id", None)),
+        usage=usage,
+        request_id=request_id,
         raw=_raw_response(response),
+    )
+
+
+def _normalized_usage(response: Any) -> ModelUsage:
+    counts = gemini_usage_counts(response)
+    return ModelUsage(
+        input_tokens=counts.input_tokens,
+        output_tokens=counts.candidate_tokens + counts.thinking_tokens,
+        thinking_tokens=counts.thinking_tokens,
     )
 
 

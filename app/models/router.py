@@ -5,10 +5,12 @@ from dataclasses import dataclass
 from typing import Mapping, Protocol
 
 from app.models.contracts import (
+    BilledModelProviderError,
     ModelProvider,
     ModelProviderError,
     ModelRequest,
     ModelResponse,
+    ModelUsage,
     ProviderCapabilities,
     UnsupportedModelRequest,
 )
@@ -100,6 +102,11 @@ class ModelRouter:
                 response = await provider.generate(request, model=target.model)
             except ModelProviderError as error:
                 last_error = error
+                usage = (
+                    error.usage
+                    if isinstance(error, BilledModelProviderError)
+                    else ModelUsage()
+                )
                 await self._audit.record(
                     ModelCallAuditRecord(
                         provider=target.provider,
@@ -109,11 +116,20 @@ class ModelRouter:
                         prompt_version=policy.prompt_version,
                         attempt=attempt,
                         status="failed",
-                        input_tokens=0,
-                        output_tokens=0,
-                        thinking_tokens=0,
+                        input_tokens=usage.input_tokens,
+                        output_tokens=usage.output_tokens,
+                        thinking_tokens=usage.thinking_tokens,
                         latency_ms=_elapsed_ms(started),
-                        cost_microusd=0,
+                        cost_microusd=_cost_microusd(
+                            target,
+                            usage.input_tokens,
+                            usage.output_tokens,
+                        ),
+                        request_id=(
+                            error.request_id
+                            if isinstance(error, BilledModelProviderError)
+                            else None
+                        ),
                         error_code=error.error_code,
                         error_message=str(error)[:1000],
                     )
