@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -71,6 +71,19 @@ function emptyEventStream() {
   }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
 }
 
+function eventStream(...events: Array<Record<string, unknown>>) {
+  const body = events
+    .map((event) => `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+    .join('');
+  return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => { resolve = next; });
+  return { promise, resolve };
+}
+
 beforeEach(() => {
   localStorage.clear();
   window.history.replaceState({}, '', `/studio?project=${PROJECT_ID}`);
@@ -110,6 +123,13 @@ describe('durable SaaS Studio flow', () => {
 
   it('creates the first run with project API, CSRF, and one persistent idempotency key', async () => {
     const queued = run();
+    const createdEvent = {
+      sequence: 1,
+      type: 'run.created',
+      message: 'Generation queued',
+      payload: { status: 'queued' },
+      created_at: '2026-07-28T10:00:00+00:00',
+    };
     const requests: Array<{ url: string; init?: RequestInit }> = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -117,8 +137,8 @@ describe('durable SaaS Studio flow', () => {
       if (url === '/api/auth/session') return sessionResponse();
       if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project());
       if (url === `/api/projects/${PROJECT_ID}/runs`) return jsonResponse(queued, 202);
-      if (url === `/api/runs/${RUN_ID}/events`) return emptyEventStream();
-      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(queued);
+      if (url === `/api/runs/${RUN_ID}/events`) return eventStream(createdEvent);
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(run({ events: [createdEvent] }));
       throw new Error(`unexpected request: ${url}`);
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -136,6 +156,9 @@ describe('durable SaaS Studio flow', () => {
     expect(JSON.parse(String(create.init?.body))).toEqual({ mode: 'express' });
     expect(requests.some(({ url }) => url.includes('/builder/api/runs'))).toBe(false);
     expect(localStorage.getItem(`kaigo.saas.project.${PROJECT_ID}.idempotency-key`)).toBe(headers.get('Idempotency-Key'));
+    const streamRequest = requests.find(({ url }) => url === `/api/runs/${RUN_ID}/events`)!;
+    expect(new Headers(streamRequest.init?.headers).get('Last-Event-ID')).toBeNull();
+    expect(await screen.findByText('Запуск поставлен в очередь')).toBeVisible();
   });
 
   it('shows a restorable free result before the upgrade gate, including after failure', async () => {
@@ -172,14 +195,13 @@ describe('durable SaaS Studio flow', () => {
 
     render(<StudioPage />);
 
-    const frame = await screen.findByTitle('Предпросмотр виджета');
-    expect(frame).toHaveAttribute('srcdoc', expect.stringContaining('Бесплатный результат'));
-    const srcDoc = frame.getAttribute('srcdoc')!;
-    expect(srcDoc).toContain('http-equiv="Content-Security-Policy"');
-    expect(srcDoc).toContain("connect-src 'none'");
-    expect(srcDoc).toContain("frame-src 'none'");
-    expect(srcDoc).not.toContain('</style><p>style escape</p>');
-    expect(srcDoc).not.toContain('</script><p>script escape</p>');
+    const frame = await screen.findByTitle('Предпросмотр AI-сотрудника Kaigo');
+    const previewUrl = new URL(frame.getAttribute('src')!);
+    expect(previewUrl.pathname).toBe(`/builder/api/runs/${RUN_ID}/preview`);
+    expect(previewUrl.searchParams.get('revision')).toBe('2');
+    expect(previewUrl.searchParams.get('channel')).toMatch(/^[a-f0-9]{36}$/);
+    expect(frame).not.toHaveAttribute('srcdoc');
+    expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
     expect(screen.getByRole('button', { name: 'Доработать и опубликовать' })).toBeVisible();
     expect(screen.getByText(/тариф/i)).toBeVisible();
   });
@@ -261,6 +283,172 @@ describe('durable SaaS Studio flow', () => {
     expect((await screen.findAllByText('Готово — виджет сохранён', {}, { timeout: 3_000 }))[0]).toBeVisible();
   });
 
+  it('keeps fallback polling single-flight while a slow request is pending', async () => {
+    vi.useFakeTimers();
+    const running = run({ status: 'running', state: 'running' });
+    const slowPoll = deferred<Response>();
+    let runRequests = 0;
+    let activePolls = 0;
+    let maximumConcurrentPolls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(running));
+      if (url === `/api/runs/${RUN_ID}`) {
+        runRequests += 1;
+        if (runRequests === 1) return jsonResponse(running);
+        activePolls += 1;
+        maximumConcurrentPolls = Math.max(maximumConcurrentPolls, activePolls);
+        return slowPoll.promise.finally(() => { activePolls -= 1; });
+      }
+      if (url === `/api/runs/${RUN_ID}/events`) throw new TypeError('stream disconnected');
+      throw new Error(`unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<StudioPage />);
+    await vi.waitFor(() => expect(screen.getByText('Резервный режим обновления')).toBeVisible());
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(runRequests).toBe(2);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+    expect(runRequests).toBe(2);
+    expect(maximumConcurrentPolls).toBe(1);
+
+    slowPoll.resolve(jsonResponse(run({ status: 'completed', state: 'completed', progress: 100 })));
+    await act(async () => { await Promise.resolve(); });
+  });
+
+  it.each([401, 404])('stops fallback polling permanently after nonretryable HTTP %s', async (status) => {
+    vi.useFakeTimers();
+    const running = run({ status: 'running', state: 'running' });
+    let runRequests = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(running));
+      if (url === `/api/runs/${RUN_ID}`) {
+        runRequests += 1;
+        return runRequests === 1
+          ? jsonResponse(running)
+          : jsonResponse({ error: { code: 'run_unavailable' } }, status);
+      }
+      if (url === `/api/runs/${RUN_ID}/events`) throw new TypeError('stream disconnected');
+      throw new Error(`unexpected request: ${url}`);
+    }));
+
+    render(<StudioPage />);
+    await vi.waitFor(() => expect(screen.getByText('Резервный режим обновления')).toBeVisible());
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_000); });
+
+    expect(runRequests).toBe(2);
+    expect(screen.queryByText('Резервный режим обновления')).not.toBeInTheDocument();
+  });
+
+  it.each([401, 404])('does not start polling when SSE returns HTTP %s', async (status) => {
+    vi.useFakeTimers();
+    const running = run({ status: 'running', state: 'running' });
+    let runRequests = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(running));
+      if (url === `/api/runs/${RUN_ID}`) {
+        runRequests += 1;
+        return jsonResponse(running);
+      }
+      if (url === `/api/runs/${RUN_ID}/events`) return jsonResponse({ error: 'not available' }, status);
+      throw new Error(`unexpected request: ${url}`);
+    }));
+
+    render(<StudioPage />);
+    await vi.waitFor(() => expect(screen.getByRole('alert')).toBeVisible());
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_000); });
+
+    expect(runRequests).toBe(1);
+    expect(screen.queryByText('Резервный режим обновления')).not.toBeInTheDocument();
+  });
+
+  it('aggregates usage deltas across every durable event', async () => {
+    const completed = run({
+      status: 'completed',
+      state: 'completed',
+      progress: 100,
+      latest_sequence: 2,
+      events: [
+        {
+          sequence: 1,
+          type: 'stage.completed',
+          message: 'Foundation complete',
+          payload: { status: 'completed', stage: 'foundation', usage: { prompt_tokens: 10, output_tokens: 5, thinking_tokens: 1, total_tokens: 16 } },
+          created_at: '2026-07-28T10:00:01+00:00',
+        },
+        {
+          sequence: 2,
+          type: 'stage.completed',
+          message: 'Conversation complete',
+          payload: { status: 'completed', stage: 'conversation', usage: { prompt_tokens: 20, output_tokens: 20, thinking_tokens: 4, total_tokens: 44 } },
+          created_at: '2026-07-28T10:00:02+00:00',
+        },
+      ],
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(completed));
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(completed);
+      throw new Error(`unexpected request: ${url}`);
+    }));
+
+    render(<StudioPage />);
+
+    const metrics = await screen.findByLabelText('Метрики запуска');
+    expect(within(metrics).getByText('60')).toBeVisible();
+  });
+
+  it('uses the server progress instead of estimating from event count', async () => {
+    const running = run({ status: 'running', state: 'running', progress: 63, latest_sequence: 0 });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(running));
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(running);
+      if (url === `/api/runs/${RUN_ID}/events`) return emptyEventStream();
+      throw new Error(`unexpected request: ${url}`);
+    }));
+
+    render(<StudioPage />);
+
+    expect(await screen.findByText('63%')).toBeVisible();
+  });
+
+  it('shows an accepted artifact as ready', async () => {
+    const completed = run({
+      status: 'completed',
+      state: 'completed',
+      progress: 100,
+      preview: {
+        revision: 3,
+        body_html: '<main>Ready</main>',
+        css: '',
+        javascript: '',
+        quality_status: 'accepted',
+        source: 'accepted_artifact',
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(completed));
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(completed);
+      throw new Error(`unexpected request: ${url}`);
+    }));
+
+    render(<StudioPage />);
+
+    expect((await screen.findAllByText('Готово')).length).toBeGreaterThanOrEqual(1);
+  });
+
   it('keeps the composer keyboard-usable with explicitly labeled controls', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input) === '/api/auth/session') return sessionResponse();
@@ -270,10 +458,11 @@ describe('durable SaaS Studio flow', () => {
     render(<StudioPage />);
 
     const url = await screen.findByLabelText('Ссылка на сайт');
-    const brief = screen.getByLabelText('Пожелание к AI-виджету');
+    const brief = screen.getByRole('textbox', { name: 'Сохранённое пожелание к AI-виджету' });
     expect(url).toHaveAttribute('readonly');
-    expect(brief).toHaveAttribute('readonly');
-    fireEvent.keyDown(brief, { key: 'Tab' });
+    expect(brief).toHaveAttribute('aria-readonly', 'true');
+    expect(brief.tagName).toBe('DIV');
+    await waitFor(() => expect(brief).toHaveTextContent('Спокойный консультант по услугам'));
     expect(screen.getByRole('button', { name: 'Создать AI-виджет' })).toBeEnabled();
   });
 });

@@ -59,8 +59,13 @@ function selectedArtifact(snapshot: BuilderRunSnapshot | null) {
 function progressFor(snapshot: BuilderRunSnapshot | null, eventCount: number) {
   if (!snapshot) return 0;
   if (snapshot.status === 'completed') return 100;
+  if (typeof snapshot.progress === 'number') return Math.max(0, Math.min(100, Math.round(snapshot.progress)));
   if (snapshot.status === 'failed' || snapshot.status === 'cancelled') return Math.min(96, 16 + eventCount * 7);
   return Math.min(92, 12 + eventCount * 7 + (selectedArtifact(snapshot) ? 18 : 0));
+}
+
+function readyQuality(status: string | undefined) {
+  return status === 'verified' || status === 'accepted';
 }
 
 function ErrorNotice({ error }: { error: StudioError }) {
@@ -347,8 +352,8 @@ export function StudioPage() {
             <div><span>Токены</span><strong>{controller.snapshot ? numberFormatter.format(controller.snapshot.usage.total_tokens) : '—'}</strong></div>
             <div><span>Время</span><strong>{controller.snapshot ? `${decimalFormatter.format(controller.snapshot.elapsed_seconds)} с` : '—'}</strong></div>
             <div className="studio-workspace__quality">
-              <CheckCircle aria-hidden size={19} weight={controller.snapshot?.quality_status === 'verified' ? 'fill' : 'regular'} />
-              <span>{controller.snapshot?.quality_status === 'verified' ? 'Проверено' : 'Черновик'}</span>
+              <CheckCircle aria-hidden size={19} weight={readyQuality(controller.snapshot?.quality_status) ? 'fill' : 'regular'} />
+              <span>{controller.snapshot?.quality_status === 'accepted' ? 'Готово' : controller.snapshot?.quality_status === 'verified' ? 'Проверено' : 'Черновик'}</span>
             </div>
           </div>
           <StudioPreview
@@ -358,12 +363,11 @@ export function StudioPage() {
             qualityStatus={controller.snapshot?.quality_status ?? 'pending'}
             viewport={viewport}
             onViewportChange={setViewport}
-            artifact={controller.projectMode ? artifact : null}
           />
           {controller.projectMode && artifact && <UpgradeGate />}
           <div className="studio-workspace__footer">
             <Code aria-hidden size={18} />
-            <span>Preview изолирован: скрипты разрешены только внутри sandbox, сеть заблокирована строгим CSP предпросмотра.</span>
+            <span>Preview использует изолированный runtime сборщика: launcher, composer и chat bridge работают внутри sandbox.</span>
           </div>
         </motion.section>
       </main>

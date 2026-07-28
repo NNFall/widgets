@@ -33,14 +33,18 @@ export function StudioComposer({
             readOnly={sourceLocked}
             aria-readonly={sourceLocked}
           />
-          <label htmlFor="saas-studio-brief">Пожелание к AI-виджету</label>
-          <textarea
-            id="saas-studio-brief"
-            value={brief}
-            maxLength={12_000}
-            readOnly
+          <p className="studio-composer__summary-label" id="saas-studio-brief-label">
+            Сохранённое пожелание к AI-виджету
+          </p>
+          <div
+            className="studio-composer__summary"
+            role="textbox"
             aria-readonly="true"
-          />
+            aria-labelledby="saas-studio-brief-label"
+          >
+            {brief || 'Без дополнительного пожелания'}
+          </div>
+          <small className="studio-composer__saved">Сохранено в проекте и будет использовано для этого запуска.</small>
           {error && <p className="studio-form__error" role="alert">{error}</p>}
           <button type="submit" className="studio-create" disabled={pending}>
             {pending ? <Clock aria-hidden size={20} /> : <PaperPlaneTilt aria-hidden size={20} weight="fill" />}

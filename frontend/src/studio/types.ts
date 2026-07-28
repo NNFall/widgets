@@ -69,6 +69,7 @@ export interface BuilderRunSnapshot {
   run_id: string;
   request: BuilderRequest;
   status: BuilderRunStatus;
+  progress?: number;
   created_at: string;
   updated_at: string;
   latest_sequence: number;

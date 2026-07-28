@@ -30,6 +30,7 @@ import type {
 
 export const ACTIVE_RUN_STORAGE_KEY = 'kaigo.builder.activeRun.v1';
 const POLL_INTERVAL_MS = 2_000;
+const POLL_MAX_INTERVAL_MS = 30_000;
 
 const TERMINAL_STATUSES = new Set<BuilderRunStatus>(['completed', 'failed', 'cancelled']);
 const EMPTY_USAGE: TokenUsage = { prompt_tokens: 0, output_tokens: 0, thinking_tokens: 0, total_tokens: 0 };
@@ -463,6 +464,9 @@ function saasStatus(run: SaasRunSnapshot): BuilderRunStatus {
 
 function adaptSaasEvent(runId: string, event: SaasEvent): BuilderEvent {
   const payload = event.payload ?? {};
+  const message = event.type === 'run.created' && event.message === 'Generation queued'
+    ? 'Запуск поставлен в очередь'
+    : event.message ?? '';
   return {
     run_id: runId,
     sequence: event.sequence,
@@ -470,13 +474,29 @@ function adaptSaasEvent(runId: string, event: SaasEvent): BuilderEvent {
     type: event.type,
     stage: payload.stage ?? null,
     status: payload.status ?? (event.type.endsWith('.failed') ? 'failed' : 'running'),
-    message: event.message ?? '',
+    message,
     revision: payload.revision ?? null,
     usage: { ...EMPTY_USAGE, ...(payload.usage ?? {}) },
     issues: payload.issues ?? [],
     changes: payload.changes ?? [],
     error_code: payload.error_code ?? null,
   };
+}
+
+function aggregateSaasUsage(events: SaasEvent[]): TokenUsage {
+  const usage = events.reduce((total, event) => {
+    const delta = event.payload?.usage;
+    if (!delta) return total;
+    const value = (candidate: number | undefined) => Number.isFinite(candidate) ? Math.max(0, candidate ?? 0) : 0;
+    total.prompt_tokens += value(delta.prompt_tokens);
+    total.output_tokens += value(delta.output_tokens);
+    total.thinking_tokens += value(delta.thinking_tokens);
+    total.total_tokens += value(delta.total_tokens);
+    return total;
+  }, { ...EMPTY_USAGE });
+  const componentTotal = usage.prompt_tokens + usage.output_tokens + usage.thinking_tokens;
+  if (componentTotal > 0) usage.total_tokens = componentTotal;
+  return usage;
 }
 
 function adaptPreview(preview: SaasRunSnapshot['preview']): WidgetArtifact | null {
@@ -502,7 +522,6 @@ function adaptSaasRun(project: SaasProject, run: SaasRunSnapshot): BuilderRunSna
   const createdAt = Date.parse(run.created_at);
   const finishedAt = Date.parse(run.finished_at ?? new Date().toISOString());
   const events = run.events ?? [];
-  const lastUsage = [...events].reverse().find((event) => event.payload?.usage)?.payload.usage;
   return {
     run_id: run.id,
     request: {
@@ -519,13 +538,14 @@ function adaptSaasRun(project: SaasProject, run: SaasRunSnapshot): BuilderRunSna
       visual_repair_limit: 8,
     },
     status,
+    progress: run.progress,
     created_at: run.created_at,
     updated_at: run.finished_at ?? run.started_at ?? run.created_at,
     latest_sequence: run.latest_sequence,
     artifact: preview && run.preview?.source !== 'restorable_draft' ? preview : null,
     draft_artifact: preview && run.preview?.source === 'restorable_draft' ? preview : null,
     quality_status: run.preview?.quality_status ?? (preview ? 'accepted' : 'pending'),
-    usage: { ...EMPTY_USAGE, ...(lastUsage ?? {}) },
+    usage: aggregateSaasUsage(events),
     elapsed_seconds: Number.isNaN(createdAt) || Number.isNaN(finishedAt)
       ? 0
       : Math.max(0, (finishedAt - createdAt) / 1_000),
@@ -554,6 +574,13 @@ function saasError(error: unknown, fallback: string): StudioError {
     raw: error instanceof Error ? error.message : String(error),
     code: null,
   };
+}
+
+function isNonRetryableClientError(error: unknown): error is BuilderApiError {
+  return error instanceof BuilderApiError
+    && error.status >= 400
+    && error.status < 500
+    && !error.retryable;
 }
 
 function idempotencyKey(projectId: string) {
@@ -598,14 +625,21 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     if (run.project_id !== owner.id) return;
     const previous = runRef.current;
     if (previous?.id === run.id && run.latest_sequence < Math.max(previous.latest_sequence, lastSequenceRef.current)) return;
+    if (previous?.id !== run.id) lastSequenceRef.current = 0;
     runRef.current = run;
-    lastSequenceRef.current = Math.max(lastSequenceRef.current, run.latest_sequence);
+    const hydratedSequence = Math.max(0, ...(run.events ?? []).map((event) => event.sequence));
+    lastSequenceRef.current = Math.max(lastSequenceRef.current, hydratedSequence);
     setRunId(run.id);
     setSnapshot(adaptSaasRun(owner, run));
     if (run.events) {
-      const unique = new Map<number, BuilderEvent>();
-      for (const item of run.events) unique.set(item.sequence, adaptSaasEvent(run.id, item));
-      setEvents([...unique.values()].sort((left, right) => left.sequence - right.sequence));
+      setEvents((current) => {
+        const unique = new Map<number, BuilderEvent>();
+        if (previous?.id === run.id) {
+          for (const item of current) unique.set(item.sequence, item);
+        }
+        for (const item of run.events ?? []) unique.set(item.sequence, adaptSaasEvent(run.id, item));
+        return [...unique.values()].sort((left, right) => left.sequence - right.sequence);
+      });
     }
     const status = saasStatus(run);
     setActivityMessage(activityFor(status));
@@ -642,7 +676,7 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
         projectRef.current = nextProject;
         setProject(nextProject);
         if (nextProject.active_run) {
-          const run = await getProjectRun(nextProject.active_run.id);
+          const run = await getProjectRun(nextProject.active_run.id, abort.signal);
           if (!abort.signal.aborted) applyRun(nextProject, run);
         } else {
           setActivityMessage('Проект готов к запуску');
@@ -666,34 +700,72 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
       return;
     }
     const abort = new AbortController();
-    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+    let refreshPromise: Promise<SaasRunSnapshot> | null = null;
+    let pollingStopped = false;
+    let retryCount = 0;
 
     const refresh = async () => {
-      try {
-        const run = await getProjectRun(runId);
+      if (refreshPromise) return refreshPromise;
+      const request = getProjectRun(runId, abort.signal).then((run) => {
         const owner = projectRef.current;
         if (!abort.signal.aborted && owner) applyRun(owner, run);
-        if (TERMINAL_STATUSES.has(saasStatus(run)) && pollTimer) {
-          clearInterval(pollTimer);
-          pollTimer = null;
-          setConnection('idle');
-        }
-      } catch (caught) {
-        if (!abort.signal.aborted) setError(saasError(caught, 'Не удалось обновить состояние запуска.'));
+        return run;
+      });
+      refreshPromise = request;
+      try {
+        return await request;
+      } finally {
+        if (refreshPromise === request) refreshPromise = null;
       }
     };
+    const stopPolling = () => {
+      pollingStopped = true;
+      if (pollTimer) clearTimeout(pollTimer);
+      pollTimer = null;
+      if (!abort.signal.aborted) setConnection('idle');
+    };
+    const schedulePolling = (delay: number) => {
+      if (abort.signal.aborted || pollingStopped || pollTimer) return;
+      pollTimer = setTimeout(async () => {
+        pollTimer = null;
+        if (abort.signal.aborted || pollingStopped) return;
+        try {
+          const run = await refresh();
+          retryCount = 0;
+          if (TERMINAL_STATUSES.has(saasStatus(run))) {
+            stopPolling();
+            return;
+          }
+          schedulePolling(POLL_INTERVAL_MS);
+        } catch (caught) {
+          if (abort.signal.aborted) return;
+          setError(saasError(caught, 'Не удалось обновить состояние запуска.'));
+          if (isNonRetryableClientError(caught)) {
+            stopPolling();
+            return;
+          }
+          retryCount += 1;
+          schedulePolling(Math.min(POLL_MAX_INTERVAL_MS, POLL_INTERVAL_MS * (2 ** retryCount)));
+        }
+      }, delay);
+    };
     const startPolling = () => {
-      if (abort.signal.aborted || pollTimer) return;
+      if (abort.signal.aborted || pollingStopped || pollTimer) return;
       setConnection('polling');
-      pollTimer = setInterval(() => void refresh(), POLL_INTERVAL_MS);
+      schedulePolling(POLL_INTERVAL_MS);
     };
     const onEvent = (incoming: SaasEvent) => {
       if (abort.signal.aborted || incoming.sequence <= lastSequenceRef.current) return;
       lastSequenceRef.current = incoming.sequence;
       const adapted = adaptSaasEvent(runId, incoming);
-      setEvents((current) => [...current, adapted]);
-      setActivityMessage(incoming.message || 'Генерация выполняется');
-      void refresh();
+      setEvents((current) => [...current, adapted].sort((left, right) => left.sequence - right.sequence));
+      setActivityMessage(adapted.message || 'Генерация выполняется');
+      void refresh().catch((caught) => {
+        if (abort.signal.aborted) return;
+        setError(saasError(caught, 'Не удалось обновить состояние запуска.'));
+        if (isNonRetryableClientError(caught)) stopPolling();
+      });
     };
 
     setConnection('streaming');
@@ -705,8 +777,10 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
       })
       .catch((caught) => {
         if (!abort.signal.aborted) {
-          if (caught instanceof BuilderApiError && caught.status < 500) {
+          if (isNonRetryableClientError(caught)) {
             setError(saasError(caught, 'Не удалось подключиться к событиям запуска.'));
+            stopPolling();
+            return;
           }
           startPolling();
         }
@@ -714,7 +788,7 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
 
     return () => {
       abort.abort();
-      if (pollTimer) clearInterval(pollTimer);
+      if (pollTimer) clearTimeout(pollTimer);
     };
   }, [applyRun, projectId, runId, snapshot?.status]);
 

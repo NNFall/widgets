@@ -103,8 +103,8 @@ export function createProjectRun(projectId: string, csrfToken: string, idempoten
   });
 }
 
-export function getProjectRun(runId: string) {
-  return saasRequestJson<SaasRunSnapshot>(`/api/runs/${encodeURIComponent(runId)}`);
+export function getProjectRun(runId: string, signal?: AbortSignal) {
+  return saasRequestJson<SaasRunSnapshot>(`/api/runs/${encodeURIComponent(runId)}`, { signal });
 }
 
 export async function streamProjectRunEvents(

@@ -3532,6 +3532,18 @@ a {
 }
 .studio-composer__card input[readonly] { color: #596a75; background: #f2f3f1; }
 .studio-composer__card textarea { min-height: 130px; resize: vertical; }
+.studio-composer__summary-label { margin: 8px 0 0; color: var(--ink); font-weight: 800; }
+.studio-composer__summary {
+  min-height: 96px;
+  padding: 14px 16px;
+  border: 1px solid rgba(7, 27, 47, .12);
+  border-radius: 14px;
+  color: #435761;
+  background: #f2f3f1;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.studio-composer__saved { color: #71818a; line-height: 1.45; }
 .studio-composer__loading { color: #5f6f79; }
 
 .studio-upgrade {
