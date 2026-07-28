@@ -75,6 +75,7 @@ def serialize_run(
         "id": str(run.id),
         "project_id": str(run.project_id),
         "mode": run.mode,
+        "status": run.state,
         "state": run.state,
         "progress": run.progress,
         "current_stage": run.current_stage,

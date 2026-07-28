@@ -123,6 +123,8 @@ async def create_run(request: web.Request) -> web.Response:
         body = await request.json()
     except Exception as error:  # noqa: BLE001
         raise web.HTTPBadRequest(text=_error("invalid_json"), content_type="application/json") from error
+    if not isinstance(body, dict):
+        raise web.HTTPBadRequest(text=_error("invalid_body"), content_type="application/json")
     if str(body.get("mode", "express")).strip() != "express":
         raise web.HTTPBadRequest(text=_error("unsupported_mode"), content_type="application/json")
     factory = get_session_factory(request.app)
@@ -176,16 +178,25 @@ async def create_run(request: web.Request) -> web.Response:
 
 
 async def _preview(database, run_id: UUID) -> dict | None:
-    accepted = await database.scalar(
+    accepted = (await database.execute(
         select(GenerationArtifact)
         .where(
             GenerationArtifact.run_id == run_id,
             GenerationArtifact.quality_status.in_(("accepted", "verified")),
         )
-        .order_by(GenerationArtifact.revision.desc()).limit(1)
-    )
-    if accepted is not None:
-        return serialize_artifact(accepted, source="accepted_artifact")
+        .order_by(GenerationArtifact.revision.desc()).limit(50)
+    )).scalars().all()
+    for artifact in accepted:
+        candidate_payload = artifact.config.get("artifact") if isinstance(artifact.config, dict) else None
+        if not isinstance(candidate_payload, dict):
+            continue
+        try:
+            candidate = WidgetArtifact.from_dict(candidate_payload)
+            valid = not validate_artifact(candidate, previous_revision=max(0, candidate.revision - 1))
+        except (KeyError, TypeError, ValueError):
+            valid = False
+        if valid:
+            return serialize_artifact(artifact, source="accepted_artifact")
     drafts = (await database.execute(
         select(GenerationEvent.payload)
         .where(

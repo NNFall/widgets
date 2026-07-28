@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import pytest
 from aiohttp import web
@@ -134,7 +135,7 @@ async def test_create_run_is_202_idempotent_and_never_calls_engine_inline(tmp_pa
         )
         assert first.status == second.status == 202
         first_payload, second_payload = await first.json(), await second.json()
-        assert first_payload["state"] == "queued"
+        assert first_payload["status"] == "queued"
         assert second_payload["id"] == first_payload["id"]
 
         async with factory() as database:
@@ -156,6 +157,36 @@ async def test_create_run_is_202_idempotent_and_never_calls_engine_inline(tmp_pa
                 .select_from(UsageLedger)
                 .where(UsageLedger.entry_type == "trial.reserve")
             ) == 2
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [[], "express", None, 7])
+async def test_create_run_rejects_non_object_json_with_structured_400(
+    tmp_path,
+    body,
+) -> None:
+    engine, factory, client, project_id, _ = await _project_app(tmp_path)
+    try:
+        await client.post("/test/login/10")
+        response = await client.post(
+            f"/api/projects/{project_id}/runs",
+            data=json.dumps(body),
+            headers={
+                "Content-Type": "application/json",
+                "Idempotency-Key": "invalid-body",
+                "X-CSRF-Token": "test-csrf",
+            },
+        )
+
+        assert response.status == 400
+        assert (await response.json()) == {"error": {"code": "invalid_body"}}
+        async with factory() as database:
+            assert await database.scalar(
+                select(func.count()).select_from(GenerationRun)
+            ) == 0
     finally:
         await client.close()
         await engine.dispose()
@@ -227,6 +258,7 @@ async def test_project_run_and_preview_reads_are_owner_scoped_and_restore_state(
         snapshot = await client.get(f"/api/runs/{run_id}")
         payload = await snapshot.json()
         assert snapshot.status == 200
+        assert payload["status"] == "running"
         assert [event["sequence"] for event in payload["events"]] == [1, 2]
         assert payload["events"][1]["payload"] == {
             "status": "needs_repair",
@@ -428,6 +460,75 @@ async def test_preview_ignores_newer_unaccepted_artifact(tmp_path) -> None:
         assert (await artifact_response.json())["revision"] == 1
         await client.post("/test/login/11")
         assert (await client.get(f"/api/artifacts/{accepted_id}")).status == 404
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_preview_skips_malformed_verified_artifacts_and_uses_valid_draft(
+    tmp_path,
+) -> None:
+    engine, factory, client, project_id, _ = await _project_app(tmp_path)
+    try:
+        async with factory() as database, database.begin():
+            with_draft = GenerationRun(
+                project_id=project_id,
+                mode="express",
+                state="failed",
+                idempotency_key="malformed-verified-with-draft",
+            )
+            malformed_only = GenerationRun(
+                project_id=project_id,
+                mode="express",
+                state="failed",
+                idempotency_key="malformed-verified-only",
+            )
+            database.add_all([with_draft, malformed_only])
+            await database.flush()
+            database.add_all([
+                GenerationArtifact(
+                    run_id=with_draft.id,
+                    revision=2,
+                    stage="foundation",
+                    html="<main>malformed</main>",
+                    css="",
+                    javascript="",
+                    config={"artifact": {"invalid": True}},
+                    quality_status="verified",
+                ),
+                GenerationEvent(
+                    id=401,
+                    run_id=with_draft.id,
+                    sequence=1,
+                    event_type="artifact.draft_staged",
+                    public_message="Restorable draft",
+                    payload={"artifact": _artifact_payload(1)},
+                ),
+                GenerationArtifact(
+                    run_id=malformed_only.id,
+                    revision=1,
+                    stage="foundation",
+                    html="<main>malformed</main>",
+                    css="",
+                    javascript="",
+                    config={"artifact": {"invalid": True}},
+                    quality_status="accepted",
+                ),
+            ])
+            with_draft_id = with_draft.id
+            malformed_only_id = malformed_only.id
+
+        await client.post("/test/login/10")
+        restored = await client.get(f"/api/runs/{with_draft_id}/preview")
+        missing = await client.get(f"/api/runs/{malformed_only_id}/preview")
+
+        assert restored.status == 200
+        restored_payload = (await restored.json())["artifact"]
+        assert restored_payload["revision"] == 1
+        assert restored_payload["source"] == "restorable_draft"
+        assert missing.status == 404
+        assert (await missing.json()) == {"error": {"code": "preview_not_found"}}
     finally:
         await client.close()
         await engine.dispose()
