@@ -13,21 +13,32 @@ from typing import Any, cast
 from uuid import UUID, uuid4
 from weakref import WeakValueDictionary
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.analytics.service import record_funnel_event
 from app.billing.service import TrialFailureKind
 from app.saas.models import (
     GenerationArtifact,
     GenerationEvent,
     GenerationRun,
+    ModelCall,
     Project,
+    WorkerServiceLease,
 )
 from builder_lab.models import BuilderRequest, TokenUsage, WidgetArtifact
 from builder_lab.directions import run_direction_board
-from builder_lab.engines.base import BuilderEngine, BuilderEngineError
+from builder_lab.engines.base import (
+    BuilderEngine,
+    BuilderEngineError,
+    DirectBuilderEngine,
+)
 from builder_lab.models import DirectionProposal, EngineName, Stage
 from builder_lab.modes import get_mode_policy
+from builder_lab.patterns.models import CompositionPlan
+from builder_lab.patterns.planner import CompositionPlanningError, plan_composition
+from builder_lab.patterns.registry import load_builtin_registry
+from builder_lab.patterns.resolver import ResolvedComposition, resolve_composition
 from builder_lab.orchestrator import BuilderOrchestrator
 from builder_lab.reference_pipeline import (
     ReferenceAnalysisResult,
@@ -45,6 +56,7 @@ logger = logging.getLogger(__name__)
 DIRECT_STAGE_SEQUENCE = (
     "reference_analysis",
     "art_direction",
+    "composition",
     "foundation",
     "identity",
     "conversation",
@@ -54,6 +66,7 @@ ANTIGRAVITY_STAGE_SEQUENCE = ("reference_analysis", "agent_build")
 STAGE_PUBLIC_NAMES = {
     "reference_analysis": "анализ исходного сайта",
     "art_direction": "выбор визуального направления",
+    "composition": "выбор проверенной композиции",
     "foundation": "создание основы виджета",
     "identity": "настройка фирменного стиля",
     "conversation": "настройка диалога",
@@ -170,6 +183,11 @@ class RunClaim:
     last_completed_stage: str | None
     lease_expires_at: datetime
     attempt_id: UUID = field(default_factory=uuid4)
+
+
+@dataclass(frozen=True, slots=True)
+class _TerminalRun:
+    run_id: UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -447,6 +465,7 @@ class OrchestratorStageHandler:
     ) -> StageResult:
         usage = TokenUsage()
         selected_direction: DirectionProposal | None = None
+        composition: ResolvedComposition | None = None
         next_context = dict(context)
         if request.engine is EngineName.DIRECT:
             if stage is Stage.ART_DIRECTION:
@@ -465,7 +484,53 @@ class OrchestratorStageHandler:
                         "Не найдено выбранное визуальное направление",
                     )
                 selected_direction = DirectionProposal.from_dict(raw_direction)
+            if stage is Stage.COMPOSITION:
+                registry = load_builtin_registry()
+                try:
+                    planned = await plan_composition(
+                        cast(DirectBuilderEngine, engine),
+                        request,
+                        selected_direction,
+                        registry,
+                    )
+                except CompositionPlanningError as exc:
+                    raise BuilderEngineError(
+                        "invalid_structured_output",
+                        "Не удалось подобрать проверенную композицию виджета",
+                        diagnostic=str(exc),
+                        usage=exc.usage,
+                    ) from exc
+                next_context["composition_plan"] = planned.plan.to_dict()
+                return StageResult(
+                    public_message=planned.plan.summary,
+                    output_refs=planned.provider_request_ids,
+                    usage=usage + planned.usage,
+                    context=next_context,
+                )
+            if stage is not Stage.ART_DIRECTION:
+                raw_plan = next_context.get("composition_plan")
+                if not isinstance(raw_plan, dict):
+                    raise BuilderEngineError(
+                        "internal_error",
+                        "Не найден сохранённый план композиции",
+                    )
+                try:
+                    composition = resolve_composition(
+                        CompositionPlan.from_dict(raw_plan),
+                        load_builtin_registry(),
+                    )
+                except ValueError as exc:
+                    raise BuilderEngineError(
+                        "internal_error",
+                        "Сохранённый план композиции повреждён",
+                        diagnostic=str(exc),
+                    ) from exc
         revision = (previous.revision if previous is not None else 0) + 1
+        if request.engine is EngineName.ANTIGRAVITY:
+            await self._queue.arm_provider_dispatch(
+                claim,
+                provider="antigravity",
+            )
         result = await BuilderOrchestrator.execute_stage(
             request=request,
             engine=engine,
@@ -473,6 +538,7 @@ class OrchestratorStageHandler:
             revision=revision,
             previous_artifact=previous,
             selected_direction=selected_direction,
+            composition=composition,
         )
         usage = usage + result.usage
         output_refs = [
@@ -494,6 +560,7 @@ class OrchestratorStageHandler:
                 previous_artifact=candidate,
                 selected_direction=selected_direction,
                 repair_issues=issues,
+                composition=composition,
             )
             usage = usage + repaired.usage
             if repaired.provider_request_id is not None:
@@ -538,6 +605,7 @@ class OrchestratorStageHandler:
                 candidate=candidate,
                 previous=previous,
                 selected_direction=selected_direction,
+                composition=composition,
             )
         return StageResult(
             public_message=(
@@ -590,6 +658,64 @@ class PostgresWorkerQueue:
         if not normalized or len(normalized) > 128 or "\x00" in normalized:
             raise ValueError("worker_id is invalid")
         return normalized
+
+    @staticmethod
+    def _validate_service_identity(name: str, value: str, *, maximum: int) -> str:
+        if not isinstance(value, str):
+            raise ValueError(f"{name} must be text")
+        normalized = value.strip()
+        if not normalized or len(normalized) > maximum or "\x00" in normalized:
+            raise ValueError(f"{name} is invalid")
+        return normalized
+
+    async def publish_service_heartbeat(
+        self,
+        *,
+        worker_id: str,
+        boot_id: str,
+        deployment_id: str,
+        image_identity: str,
+        started_at: datetime,
+    ) -> None:
+        """Upsert the O(1) singleton lease used by application readiness."""
+
+        worker_id = self._validate_worker_id(worker_id)
+        boot_id = self._validate_service_identity("boot_id", boot_id, maximum=128)
+        deployment_id = self._validate_service_identity(
+            "deployment_id", deployment_id, maximum=128
+        )
+        image_identity = self._validate_service_identity(
+            "image_identity", image_identity, maximum=512
+        )
+        if not isinstance(started_at, datetime):
+            raise ValueError("started_at must be a datetime")
+        started_at = self._utc(started_at)
+        async with self._sessions() as database, database.begin():
+            now = self._now()
+            lease = await database.get(
+                WorkerServiceLease,
+                "builder",
+                with_for_update=self._dialect_name != "sqlite",
+            )
+            if lease is None:
+                database.add(
+                    WorkerServiceLease(
+                        service_name="builder",
+                        worker_id=worker_id,
+                        boot_id=boot_id,
+                        deployment_id=deployment_id,
+                        image_identity=image_identity,
+                        started_at=started_at,
+                        heartbeat_at=now,
+                    )
+                )
+                return
+            lease.worker_id = worker_id
+            lease.boot_id = boot_id
+            lease.deployment_id = deployment_id
+            lease.image_identity = image_identity
+            lease.started_at = started_at
+            lease.heartbeat_at = now
 
     @staticmethod
     def stage_sequence(mode: str) -> tuple[str, ...]:
@@ -732,6 +858,156 @@ class PostgresWorkerQueue:
         raise LeaseLostError(f"run {run_id} has no valid stage attempt")
 
     @staticmethod
+    async def _ambiguous_dispatched_claim(
+        database: AsyncSession,
+        run: GenerationRun,
+        stage: str,
+    ) -> RunClaim | None:
+        started_records = (
+            await database.execute(
+                select(GenerationEvent)
+                .where(
+                    GenerationEvent.run_id == run.id,
+                    GenerationEvent.event_type == "stage.started",
+                )
+                .order_by(GenerationEvent.sequence.desc())
+                .limit(20)
+            )
+        ).scalars().all()
+        started = next(
+            (
+                record
+                for record in started_records
+                if record.payload.get("stage") == stage
+            ),
+            None,
+        )
+        if started is None:
+            return None
+        try:
+            attempt_id = UUID(str(started.payload["attempt_id"]))
+            worker_id = PostgresWorkerQueue._validate_worker_id(
+                started.payload["worker_id"]
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+        dispatched_count = await PostgresWorkerQueue._provider_dispatch_count(
+            database,
+            run.id,
+        )
+        baseline = started.payload.get("provider_dispatch_count")
+        if (
+            not isinstance(baseline, bool)
+            and isinstance(baseline, int)
+            and baseline >= 0
+        ):
+            ambiguous = dispatched_count > baseline
+        else:
+            # Events created before dispatch baselines were introduced cannot be
+            # correlated safely. Any paid call makes the expired attempt ambiguous.
+            ambiguous = dispatched_count > 0
+        if not ambiguous:
+            return None
+        if run.lease_expires_at is None:
+            return None
+        return RunClaim(
+            run_id=run.id,
+            project_id=run.project_id,
+            worker_id=worker_id,
+            mode=run.mode,
+            next_stage=stage,
+            last_completed_stage=run.last_completed_stage,
+            lease_expires_at=PostgresWorkerQueue._utc(run.lease_expires_at),
+            attempt_id=attempt_id,
+        )
+
+    @staticmethod
+    async def _provider_dispatch_count(
+        database: AsyncSession,
+        run_id: UUID,
+    ) -> int:
+        model_calls = int(
+            await database.scalar(
+                select(func.count())
+                .select_from(ModelCall)
+                .where(
+                    ModelCall.run_id == run_id,
+                    ModelCall.provider_dispatched.is_(True),
+                    ModelCall.role != "chat_visitor",
+                )
+            )
+            or 0
+        )
+        dispatch_receipts = int(
+            await database.scalar(
+                select(func.count())
+                .select_from(GenerationEvent)
+                .where(
+                    GenerationEvent.run_id == run_id,
+                    GenerationEvent.event_type == "provider.dispatch_armed",
+                )
+            )
+            or 0
+        )
+        return model_calls + dispatch_receipts
+
+    async def arm_provider_dispatch(
+        self,
+        claim: RunClaim,
+        *,
+        provider: str,
+    ) -> None:
+        """Persist dispatch intent before a non-router provider can incur cost."""
+
+        provider = provider.strip()
+        if not provider or len(provider) > 64:
+            raise ValueError("provider is invalid")
+        async with self._sessions() as database, database.begin():
+            now = self._now()
+            run = (
+                await database.execute(
+                    select(GenerationRun)
+                    .where(GenerationRun.id == claim.run_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if run is None:
+                raise LeaseLostError(f"run {claim.run_id} no longer exists")
+            await self._assert_claim(database, run, claim, now)
+            receipt_records = (
+                await database.execute(
+                    select(GenerationEvent)
+                    .where(
+                        GenerationEvent.run_id == claim.run_id,
+                        GenerationEvent.event_type == "provider.dispatch_armed",
+                    )
+                    .order_by(GenerationEvent.sequence.desc())
+                    .limit(20)
+                )
+            ).scalars().all()
+            if any(
+                record.payload.get("stage") == claim.next_stage
+                and record.payload.get("attempt_id") == str(claim.attempt_id)
+                and record.payload.get("provider") == provider
+                for record in receipt_records
+            ):
+                return
+            self._append_event(
+                database,
+                run,
+                event_type="provider.dispatch_armed",
+                message="Отправка провайдеру зафиксирована",
+                now=now,
+                payload={
+                    "stage": claim.next_stage,
+                    "status": "armed",
+                    "worker_id": claim.worker_id,
+                    "attempt_id": str(claim.attempt_id),
+                    "provider": provider,
+                },
+            )
+
+    @staticmethod
     def _assert_live_lease(
         run: GenerationRun,
         *,
@@ -751,7 +1027,7 @@ class PostgresWorkerQueue:
         ):
             raise LeaseLostError(f"worker {worker_id!r} lost lease for run {run.id}")
 
-    async def claim(self, worker_id: str) -> RunClaim | None:
+    async def claim(self, worker_id: str) -> RunClaim | _TerminalRun | None:
         worker_id = self._validate_worker_id(worker_id)
         async with self._claim_guard():
             async with self._sessions() as database, database.begin():
@@ -771,6 +1047,39 @@ class PostgresWorkerQueue:
                     run.lease_owner = None
                     run.lease_expires_at = None
                     return None
+                expired_attempt = (
+                    run.lease_owner is not None
+                    and run.lease_expires_at is not None
+                    and self._utc(run.lease_expires_at) <= now
+                )
+                if expired_attempt:
+                    staged = await self._staged_result_record(
+                        database,
+                        run.id,
+                        next_stage,
+                    )
+                    ambiguous_claim = (
+                        await self._ambiguous_dispatched_claim(
+                            database,
+                            run,
+                            next_stage,
+                        )
+                        if staged is None
+                        else None
+                    )
+                    if ambiguous_claim is not None:
+                        await self._fail_locked(
+                            database,
+                            run,
+                            ambiguous_claim,
+                            BuilderEngineError(
+                                "provider_dispatch_ambiguous",
+                                "Generation stopped because the provider result could not "
+                                "be reconciled safely",
+                            ),
+                            now,
+                        )
+                        return _TerminalRun(run_id=run.id)
                 run.state = "running"
                 run.current_stage = next_stage
                 run.started_at = run.started_at or now
@@ -778,6 +1087,10 @@ class PostgresWorkerQueue:
                 run.heartbeat_at = now
                 run.lease_expires_at = self._lease_expiry(now)
                 attempt_id = uuid4()
+                provider_dispatch_count = await self._provider_dispatch_count(
+                    database,
+                    run.id,
+                )
                 self._append_event(
                     database,
                     run,
@@ -793,6 +1106,7 @@ class PostgresWorkerQueue:
                         "status": "running",
                         "worker_id": worker_id,
                         "attempt_id": str(attempt_id),
+                        "provider_dispatch_count": provider_dispatch_count,
                     },
                 )
                 await database.flush()
@@ -840,6 +1154,10 @@ class PostgresWorkerQueue:
             run.heartbeat_at = now
             run.lease_expires_at = self._lease_expiry(now)
             attempt_id = uuid4()
+            provider_dispatch_count = await self._provider_dispatch_count(
+                database,
+                run.id,
+            )
             self._append_event(
                 database,
                 run,
@@ -851,6 +1169,7 @@ class PostgresWorkerQueue:
                     "status": "running",
                     "worker_id": worker_id,
                     "attempt_id": str(attempt_id),
+                    "provider_dispatch_count": provider_dispatch_count,
                 },
             )
             await database.flush()
@@ -939,6 +1258,36 @@ class PostgresWorkerQueue:
             if run is None:
                 raise LeaseLostError(f"run {claim.run_id} no longer exists")
             await self._assert_claim(database, run, claim, now)
+            staged = await self._staged_result_record(
+                database,
+                run.id,
+                claim.next_stage,
+            )
+            ambiguous_claim = (
+                await self._ambiguous_dispatched_claim(
+                    database,
+                    run,
+                    claim.next_stage,
+                )
+                if staged is None
+                else None
+            )
+            if (
+                ambiguous_claim is not None
+                and ambiguous_claim.attempt_id == claim.attempt_id
+            ):
+                await self._fail_locked(
+                    database,
+                    run,
+                    claim,
+                    BuilderEngineError(
+                        "provider_dispatch_ambiguous",
+                        "Generation stopped because the provider result could not "
+                        "be reconciled safely",
+                    ),
+                    now,
+                )
+                return
             run.state = "queued"
             run.heartbeat_at = now
             run.lease_owner = None
@@ -1008,6 +1357,32 @@ class PostgresWorkerQueue:
                 Project.active_run_id == run.id,
             )
             .values(status="failed")
+        )
+        await self._record_free_result_if_available(database, run)
+
+    @staticmethod
+    async def _record_free_result_if_available(
+        database: AsyncSession,
+        run: GenerationRun,
+    ) -> None:
+        artifact_record = await database.scalar(
+            select(GenerationArtifact)
+            .where(
+                GenerationArtifact.run_id == run.id,
+                GenerationArtifact.quality_status.in_(("accepted", "verified")),
+            )
+            .order_by(GenerationArtifact.revision.desc())
+            .limit(1)
+        )
+        if artifact_record is None:
+            return
+        await record_funnel_event(
+            database,
+            event_type="free_result",
+            event_key=f"free_result:run:{run.id}",
+            project_id=run.project_id,
+            run_id=run.id,
+            artifact_id=artifact_record.id,
         )
 
     async def fail_claim(
@@ -1338,6 +1713,12 @@ class PostgresWorkerQueue:
             if result.artifact is not None:
                 raise ValueError("reference analysis cannot stage an artifact")
             return
+        if claim.next_stage == "composition":
+            if result.artifact is not None:
+                raise ValueError("composition cannot stage an artifact")
+            if not isinstance(result.context.get("composition_plan"), dict):
+                raise ValueError("composition must stage a durable plan")
+            return
         if result.request is not None:
             raise ValueError("only reference analysis can update the builder request")
         if result.artifact is None:
@@ -1390,7 +1771,7 @@ class PostgresWorkerQueue:
             created.payload = payload
         artifact = result.artifact
         if artifact is not None:
-            existing = (
+            artifact_record = (
                 await database.execute(
                     select(GenerationArtifact).where(
                         GenerationArtifact.run_id == run.id,
@@ -1399,22 +1780,30 @@ class PostgresWorkerQueue:
                 )
             ).scalar_one_or_none()
             artifact_payload = artifact.to_dict()
-            if existing is None:
-                database.add(
-                    GenerationArtifact(
-                        run_id=run.id,
-                        revision=artifact.revision,
-                        stage=artifact.stage.value,
-                        html=artifact.body_html,
-                        css=artifact.css,
-                        javascript=artifact.javascript,
-                        config={"artifact": artifact_payload},
-                        quality_status="verified",
-                        provenance={"output_refs": list(result.output_refs)},
-                    )
+            if artifact_record is None:
+                artifact_record = GenerationArtifact(
+                    run_id=run.id,
+                    revision=artifact.revision,
+                    stage=artifact.stage.value,
+                    html=artifact.body_html,
+                    css=artifact.css,
+                    javascript=artifact.javascript,
+                    config={"artifact": artifact_payload},
+                    quality_status="verified",
+                    provenance={"output_refs": list(result.output_refs)},
                 )
-            elif existing.config.get("artifact") != artifact_payload:
+                database.add(artifact_record)
+                await database.flush()
+            elif artifact_record.config.get("artifact") != artifact_payload:
                 raise RuntimeError("staged artifact revision conflicts with persistence")
+            await record_funnel_event(
+                database,
+                event_type="first_artifact",
+                event_key=f"first_artifact:run:{run.id}",
+                project_id=run.project_id,
+                run_id=run.id,
+                artifact_id=artifact_record.id,
+            )
         for event in result.events:
             event_type = str(event.get("event_type", "")).strip()
             message = str(event.get("message", "")).strip()
@@ -1498,6 +1887,7 @@ class PostgresWorkerQueue:
                 payload={"status": "completed", "worker_id": worker_id},
             )
             project_status = "free_result_ready"
+            await self._record_free_result_if_available(database, run)
         else:
             run.state = "running"
             run.lease_expires_at = self._lease_expiry(now)
@@ -1580,6 +1970,7 @@ class BuilderWorker:
         idle_poll_interval: float = 0.5,
         terminal_hook: Callable[[UUID], Awaitable[object]] | None = None,
         terminal_reconciler: Callable[[], Awaitable[object]] | None = None,
+        service_heartbeat: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self.queue = queue
         self.worker_id = queue._validate_worker_id(worker_id)
@@ -1590,6 +1981,7 @@ class BuilderWorker:
         self.idle_poll_interval = float(idle_poll_interval)
         self.terminal_hook = terminal_hook
         self.terminal_reconciler = terminal_reconciler
+        self.service_heartbeat = service_heartbeat
         self._stop = asyncio.Event()
         self._active_claim: RunClaim | None = None
         self._active_stage_task: asyncio.Task[StageResult] | None = None
@@ -1604,6 +1996,17 @@ class BuilderWorker:
         try:
             await task
         except asyncio.CancelledError:
+            pass
+
+    @staticmethod
+    async def _abort_stage_task(task: asyncio.Task[StageResult]) -> None:
+        """Cancel provider work and wait for its cleanup without masking control errors."""
+
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except BaseException:
             pass
 
     async def _run_claim(self, claim: RunClaim) -> str | None:
@@ -1632,8 +2035,15 @@ class BuilderWorker:
                 )
                 if done:
                     break
-                if await self.queue.cancellation_requested(claim.run_id):
-                    await self._cancel_task(task)
+                try:
+                    cancel_requested = await self.queue.cancellation_requested(
+                        claim.run_id
+                    )
+                except BaseException:
+                    await self._abort_stage_task(task)
+                    raise
+                if cancel_requested:
+                    await self._abort_stage_task(task)
                     await self.queue.cancel_claim(
                         claim.run_id, worker_id=self.worker_id
                     )
@@ -1642,8 +2052,8 @@ class BuilderWorker:
                     await self.queue.heartbeat(
                         claim.run_id, worker_id=self.worker_id
                     )
-                except LeaseLostError:
-                    await self._cancel_task(task)
+                except BaseException:
+                    await self._abort_stage_task(task)
                     raise
             result = await task
         except asyncio.CancelledError:
@@ -1682,9 +2092,14 @@ class BuilderWorker:
                 await self.terminal_reconciler()
             if self._stop.is_set():
                 return False
-            claim = await self.queue.claim(self.worker_id)
-            if claim is None:
+            claim_result = await self.queue.claim(self.worker_id)
+            if isinstance(claim_result, _TerminalRun):
+                if self.terminal_hook is not None:
+                    await self.terminal_hook(claim_result.run_id)
+                return True
+            if claim_result is None:
                 return False
+            claim = claim_result
             self._active_claim = claim
             try:
                 while True:
@@ -1711,21 +2126,43 @@ class BuilderWorker:
             self._active_done.set()
 
     async def run_forever(self) -> None:
-        while not self._stop.is_set():
-            try:
-                worked = await self.run_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("builder worker iteration failed")
-                worked = True
-            if not worked:
+        heartbeat_task: asyncio.Task[None] | None = None
+        if self.service_heartbeat is not None:
+            await self.service_heartbeat()
+
+            async def publish_heartbeats() -> None:
+                while not self._stop.is_set():
+                    try:
+                        await asyncio.wait_for(
+                            self._stop.wait(), timeout=self.heartbeat_interval
+                        )
+                    except TimeoutError:
+                        await self.service_heartbeat()
+
+            heartbeat_task = asyncio.create_task(
+                publish_heartbeats(), name="kaigo-worker-service-heartbeat"
+            )
+        try:
+            while not self._stop.is_set():
+                if heartbeat_task is not None and heartbeat_task.done():
+                    await heartbeat_task
                 try:
-                    await asyncio.wait_for(
-                        self._stop.wait(), timeout=self.idle_poll_interval
-                    )
-                except TimeoutError:
-                    pass
+                    worked = await self.run_once()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("builder worker iteration failed")
+                    worked = True
+                if not worked:
+                    try:
+                        await asyncio.wait_for(
+                            self._stop.wait(), timeout=self.idle_poll_interval
+                        )
+                    except TimeoutError:
+                        pass
+        finally:
+            if heartbeat_task is not None:
+                await self._cancel_task(heartbeat_task)
 
     def stop(self) -> None:
         self._stop.set()

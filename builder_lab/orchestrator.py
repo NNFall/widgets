@@ -38,6 +38,8 @@ from .validation import (
 from .visual_gate import VisualRepairGate
 from .reference_pipeline import ReferenceAnalysisResult, ReferencePipelineError
 from .modes import get_mode_policy
+from .patterns.planner import CompositionPlanningError, plan_composition
+from .patterns.registry import load_builtin_registry
 
 
 DIRECT_STAGES = (
@@ -253,6 +255,7 @@ class BuilderOrchestrator:
         previous_artifact: WidgetArtifact | None = None,
         selected_direction: DirectionProposal | None = None,
         repair_issues: tuple[ValidationIssue, ...] = (),
+        composition: Any | None = None,
     ) -> EngineResult:
         """Execute one requested generation stage without advancing a run."""
         if request.engine is EngineName.DIRECT:
@@ -263,6 +266,7 @@ class BuilderOrchestrator:
                 previous_artifact=previous_artifact,
                 selected_direction=selected_direction,
                 repair_issues=repair_issues,
+                composition=composition,
             )
         return await engine.generate(
             request=request,
@@ -270,6 +274,7 @@ class BuilderOrchestrator:
             revision=revision,
             previous_artifact=previous_artifact,
             repair_issues=repair_issues,
+            composition=composition,
         )
 
     async def _run(
@@ -608,6 +613,7 @@ class BuilderOrchestrator:
             usage=direction.usage,
         )
         previous: WidgetArtifact | None = None
+        composition: Any | None = None
         for stage in stages_for_mode("direct"):
             if await self._cancelled(run_id):
                 raise asyncio.CancelledError
@@ -621,6 +627,33 @@ class BuilderOrchestrator:
                 message=f"Начат этап: {stage_display_name(stage)}",
                 revision=revision,
             )
+            if stage is Stage.COMPOSITION:
+                try:
+                    planned = await plan_composition(
+                        direct_engine,
+                        request,
+                        selected_direction,
+                        load_builtin_registry(),
+                    )
+                except CompositionPlanningError as exc:
+                    raise BuilderEngineError(
+                        "invalid_structured_output",
+                        "Не удалось подобрать проверенную композицию виджета",
+                        diagnostic=str(exc),
+                        usage=exc.usage,
+                    ) from exc
+                composition = planned.resolved
+                await self.store.append_event(
+                    run_id,
+                    event_type="stage.completed",
+                    stage=stage,
+                    status="completed",
+                    message=planned.plan.summary,
+                    revision=previous.revision if previous else None,
+                    usage=planned.usage,
+                    diagnostic="pattern composition persisted in the durable worker",
+                )
+                continue
             result = await self.execute_stage(
                 request=request,
                 engine=direct_engine,
@@ -628,6 +661,7 @@ class BuilderOrchestrator:
                 revision=revision,
                 previous_artifact=previous,
                 selected_direction=selected_direction,
+                composition=composition,
             )
             await self.store.append_event(
                 run_id,
@@ -646,6 +680,7 @@ class BuilderOrchestrator:
                 candidate=result.artifact,
                 previous=previous,
                 selected_direction=selected_direction,
+                composition=composition,
             )
             self._stages[run_id] = stage
             commit_event_recorded = False
@@ -663,6 +698,7 @@ class BuilderOrchestrator:
                     candidate=candidate,
                     previous=previous,
                     selected_direction=selected_direction,
+                    composition=composition,
                 )
                 await self.store.commit_visual_candidate(run_id)
                 commit_event_recorded = True
@@ -689,6 +725,7 @@ class BuilderOrchestrator:
         candidate: WidgetArtifact,
         previous: WidgetArtifact | None,
         selected_direction: DirectionProposal,
+        composition: Any | None = None,
     ) -> WidgetArtifact:
         previous_revision = previous.revision if previous else 0
         candidate = strip_reserved_runtime_attributes(candidate)
@@ -716,6 +753,7 @@ class BuilderOrchestrator:
                 previous_artifact=candidate,
                 repair_issues=issues,
                 selected_direction=selected_direction,
+                composition=composition,
             )
             candidate = strip_reserved_runtime_attributes(result.artifact)
             await self.store.append_event(

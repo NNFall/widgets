@@ -38,6 +38,7 @@ def test_express_policy_is_a_complete_reviewable_build() -> None:
 def test_durable_worker_and_orchestrator_use_same_express_sequence() -> None:
     expected = (
         Stage.ART_DIRECTION,
+        Stage.COMPOSITION,
         Stage.FOUNDATION,
         Stage.IDENTITY,
         Stage.CONVERSATION,
@@ -49,6 +50,7 @@ def test_durable_worker_and_orchestrator_use_same_express_sequence() -> None:
         *(stage.value for stage in expected),
     )
     assert stages_for_mode("express") == expected
+    assert EXPRESS_MODE_POLICY.model_role_for("composition") == "composition_planner"
 
 
 def test_express_policy_applies_budgets_without_mutating_original_request() -> None:

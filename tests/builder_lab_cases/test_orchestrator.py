@@ -3,6 +3,7 @@ import unittest
 
 from builder_lab.engines.base import (
     BuilderEngineError,
+    CompositionPlanResult,
     DirectionJudgeResult,
     DirectionProposalResult,
     EngineResult,
@@ -60,6 +61,36 @@ class ScriptedEngine:
                 rationale="Best matrix score.",
             ),
             usage=TokenUsage(prompt_tokens=3, output_tokens=1),
+        )
+
+    async def plan_composition(self, **kwargs):
+        self.calls.append({"kind": "composition", **kwargs})
+        ids = (
+            ("launcher", "orb-pulse"),
+            ("shell", "compact-chat"),
+            ("messages", "paired-bubbles"),
+            ("composer", "single-line-pill"),
+            ("motion", "spring-reveal"),
+        )
+        return CompositionPlanResult(
+            payload={
+                "schema_version": 1,
+                "direction_id": kwargs["selected_direction"].proposal_id,
+                "selections": [
+                    {
+                        "slot": slot,
+                        "pattern_id": pattern_id,
+                        "version": 1,
+                        "parameters": {},
+                        "reason": "Проверенный паттерн",
+                    }
+                    for slot, pattern_id in ids
+                ],
+                "custom_escape": None,
+                "summary": "Проверенная композиция выбрана",
+            },
+            usage=TokenUsage(prompt_tokens=10, output_tokens=4),
+            provider_request_id="composition-call",
         )
 
     async def generate(self, **kwargs):
@@ -166,7 +197,7 @@ class BuilderOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         ))
         self.assertEqual(snapshot.artifact.revision, 5)
         self.assertEqual(snapshot.artifact.stage, Stage.MOTION_POLISH)
-        self.assertEqual(snapshot.usage.prompt_tokens, 59)
+        self.assertEqual(snapshot.usage.prompt_tokens, 69)
         events = await self.store.events_after(snapshot.run_id, 0)
         committed = [event for event in events if event.event_type == "artifact.committed"]
         self.assertEqual([event.revision for event in committed], [1, 2, 3, 4, 5])
@@ -205,7 +236,7 @@ class BuilderOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         judged = events[judged_index]
         self.assertEqual(judged.usage.prompt_tokens, 9)
         self.assertEqual(judged.usage.output_tokens, 4)
-        self.assertEqual(snapshot.usage.prompt_tokens, 59)
+        self.assertEqual(snapshot.usage.prompt_tokens, 69)
 
     async def test_stage_progress_messages_use_russian_display_names(self):
         engine = ScriptedEngine()
@@ -218,7 +249,7 @@ class BuilderOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             if event.event_type in {"stage.started", "stage.completed"}
         ]
 
-        self.assertEqual(len(progress), len(DIRECT_STAGES) * 2)
+        self.assertEqual(len(progress), (len(DIRECT_STAGES) + 1) * 2)
         for event in progress:
             self.assertNotIn(event.stage.value, event.message)
         self.assertIn("арт-направление", progress[0].message)
@@ -278,7 +309,7 @@ class BuilderOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             event for event in events if event.event_type == "reference.completed"
         )
         self.assertEqual(reference_event.usage.total_tokens, 12)
-        self.assertEqual(snapshot.usage.prompt_tokens, 66)
+        self.assertEqual(snapshot.usage.prompt_tokens, 76)
 
     async def test_reference_failure_becomes_stable_failed_run(self):
         engine = ScriptedEngine()

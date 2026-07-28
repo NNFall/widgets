@@ -27,6 +27,7 @@ from builder_lab.visual_models import (
     VisualFinding,
     VisualSeverity,
 )
+from builder_lab.patterns.registry import load_builtin_registry
 
 
 class FakeModels:
@@ -573,6 +574,47 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(BuilderEngineError) as caught:
             await engine.judge_directions(request=self.request, proposals=proposals)
         self.assertEqual(caught.exception.error_code, "invalid_artifact")
+
+    async def test_composition_planner_uses_structured_catalog_without_assets(self):
+        payload = {
+            "schema_version": 1,
+            "direction_id": "candidate-2",
+            "selections": [],
+            "custom_escape": None,
+            "summary": "Черновой план",
+        }
+        response = std_types.SimpleNamespace(
+            text=json.dumps(payload, ensure_ascii=False),
+            parsed=None,
+            response_id="composition-1",
+            usage_metadata=None,
+            model_version="gemini-3.6-flash",
+        )
+        client = FakeClient(response=response)
+        engine = GeminiDirectEngine(api_key="secret", client=client)
+        selected = DirectionProposal(
+            proposal_id="candidate-2",
+            role=DirectionRole.INTERACTION_INVENTOR,
+            title="Плавающая проектная заметка",
+            art_direction="Тёплая компактная карточка.",
+            interaction_model="Открывается по запросу.",
+            safeguards=("Не перекрывать страницу",),
+        )
+
+        result = await engine.plan_composition(
+            request=self.request,
+            selected_direction=selected,
+            public_catalog=load_builtin_registry().public_catalog(),
+            correction="required slots are missing",
+        )
+
+        self.assertEqual(result.payload, payload)
+        self.assertEqual(result.provider_request_id, "composition-1")
+        call = client.models.calls[0]
+        self.assertIn("orb-pulse", call["contents"])
+        self.assertIn("required slots are missing", call["contents"])
+        self.assertNotIn("fragment.html", call["contents"])
+        self.assertIn("custom_escape", call["config"].response_json_schema["properties"])
 
     async def test_stage_prompt_contains_selected_direction_and_flexible_widget_bounds(self):
         client = FakeClient(response=fake_response(artifact(revision=1, stage=Stage.ART_DIRECTION)))

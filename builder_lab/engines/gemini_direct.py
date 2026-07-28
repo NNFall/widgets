@@ -32,16 +32,19 @@ from ..models import (
 from ..visual_models import VisualFinding
 from ..prompts import (
     ARTIFACT_JSON_SCHEMA,
+    COMPOSITION_PLAN_JSON_SCHEMA,
     CONCEPT_ROLE_BRIEF_JSON_SCHEMA,
     DIRECTION_JUDGE_JSON_SCHEMA,
     DIRECTION_PROPOSAL_JSON_SCHEMA,
     build_direction_judge_prompt,
     build_direction_proposal_prompt,
     build_concept_role_prompt,
+    build_composition_plan_prompt,
     build_stage_prompt,
 )
 from .base import (
     BuilderEngineError,
+    CompositionPlanResult,
     ConceptRoleResult,
     DirectionJudgeResult,
     DirectionProposalResult,
@@ -375,6 +378,44 @@ class GeminiDirectEngine:
             diagnostic=f"model={getattr(response, 'model_version', None) or self.model}",
         )
 
+    async def plan_composition(
+        self,
+        *,
+        request: BuilderRequest,
+        selected_direction: DirectionProposal,
+        public_catalog: tuple[dict[str, Any], ...],
+        correction: str | None = None,
+    ) -> CompositionPlanResult:
+        prompt = build_composition_plan_prompt(
+            request=request,
+            selected_direction=selected_direction,
+            public_catalog=public_catalog,
+            correction=correction,
+        )
+        response = await self._generate_structured(
+            prompt=prompt,
+            schema=COMPOSITION_PLAN_JSON_SCHEMA,
+            temperature=0.25,
+        )
+        try:
+            payload = _response_payload(response)
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise BuilderEngineError(
+                "invalid_structured_output",
+                "Gemini вернул некорректный план композиции",
+                diagnostic=f"{type(exc).__name__}: {exc}",
+                usage=_usage(response),
+            ) from exc
+        return CompositionPlanResult(
+            payload=payload,
+            usage=_usage(response),
+            provider_request_id=(
+                getattr(response, "request_id", None)
+                or getattr(response, "response_id", None)
+            ),
+            diagnostic=f"model={getattr(response, 'model_version', None) or self.model}",
+        )
+
     async def generate(
         self,
         *,
@@ -385,6 +426,7 @@ class GeminiDirectEngine:
         repair_issues: tuple[ValidationIssue, ...] = (),
         visual_findings: tuple[VisualFinding, ...] = (),
         selected_direction: DirectionProposal | None = None,
+        composition: Any | None = None,
     ) -> EngineResult:
         prompt = build_stage_prompt(
             request=request,
@@ -394,6 +436,7 @@ class GeminiDirectEngine:
             repair_issues=repair_issues,
             visual_findings=visual_findings,
             selected_direction=selected_direction,
+            composition=composition,
         )
         temperature = (
             min(request.creativity, 0.35)

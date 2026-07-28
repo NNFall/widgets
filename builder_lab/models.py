@@ -37,6 +37,7 @@ class DirectionRole(str, Enum):
 
 class Stage(str, Enum):
     ART_DIRECTION = "art_direction"
+    COMPOSITION = "composition"
     FOUNDATION = "foundation"
     IDENTITY = "identity"
     CONVERSATION = "conversation"
@@ -47,6 +48,7 @@ class Stage(str, Enum):
 
 STAGE_DISPLAY_NAMES = {
     Stage.ART_DIRECTION: "арт-направление",
+    Stage.COMPOSITION: "композиция проверенных паттернов",
     Stage.FOUNDATION: "основа виджета",
     Stage.IDENTITY: "фирменный стиль",
     Stage.CONVERSATION: "диалог",

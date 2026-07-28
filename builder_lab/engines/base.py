@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Mapping, Protocol
 
 from ..models import (
     BuilderRequest,
@@ -50,6 +50,14 @@ class ConceptRoleResult:
     diagnostic: str | None = None
 
 
+@dataclass(frozen=True)
+class CompositionPlanResult:
+    payload: Mapping[str, object]
+    usage: TokenUsage = TokenUsage()
+    provider_request_id: str | None = None
+    diagnostic: str | None = None
+
+
 class BuilderEngineError(RuntimeError):
     def __init__(
         self,
@@ -76,6 +84,7 @@ class BuilderEngine(Protocol):
         previous_artifact: WidgetArtifact | None = None,
         repair_issues: tuple[ValidationIssue, ...] = (),
         visual_findings: tuple[VisualFinding, ...] = (),
+        composition: Any | None = None,
     ) -> EngineResult: ...
 
     async def cancel(self) -> None: ...
@@ -84,6 +93,15 @@ class BuilderEngine(Protocol):
 
 
 class DirectBuilderEngine(BuilderEngine, Protocol):
+    async def plan_composition(
+        self,
+        *,
+        request: BuilderRequest,
+        selected_direction: DirectionProposal,
+        public_catalog: tuple[dict[str, Any], ...],
+        correction: str | None = None,
+    ) -> CompositionPlanResult: ...
+
     async def develop_concept_role(
         self,
         *,
@@ -117,4 +135,5 @@ class DirectBuilderEngine(BuilderEngine, Protocol):
         repair_issues: tuple[ValidationIssue, ...] = (),
         visual_findings: tuple[VisualFinding, ...] = (),
         selected_direction: DirectionProposal | None = None,
+        composition: Any | None = None,
     ) -> EngineResult: ...

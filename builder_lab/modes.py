@@ -69,6 +69,7 @@ class BuildModePolicy:
 _DIRECT_STAGES = (
     "reference_analysis",
     "art_direction",
+    "composition",
     "foundation",
     "identity",
     "conversation",
@@ -77,6 +78,7 @@ _DIRECT_STAGES = (
 _DIRECT_ROLES = {
     "reference_analysis": "reference_analyst",
     "art_direction": "art_director",
+    "composition": "composition_planner",
     "foundation": "widget_generator",
     "identity": "brand_designer",
     "conversation": "conversation_designer",

@@ -17,8 +17,18 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db.base import Base
 from app.db.models import Tenant, User
-from app.saas.models import GenerationArtifact, GenerationEvent, GenerationRun, Project
-from builder_lab.engines.base import BuilderEngineError, EngineResult
+from app.saas.models import (
+    GenerationArtifact,
+    GenerationEvent,
+    GenerationRun,
+    ModelCall,
+    Project,
+)
+from builder_lab.engines.base import (
+    BuilderEngineError,
+    CompositionPlanResult,
+    EngineResult,
+)
 from builder_lab.models import (
     BuilderRequest,
     DirectionProposal,
@@ -28,6 +38,7 @@ from builder_lab.models import (
     TokenUsage,
 )
 from builder_lab.postgres_store import PostgresRunStore
+from builder_lab.patterns.models import PatternCategory
 from builder_lab.worker import (
     BuilderWorker,
     DurableVisualStore,
@@ -71,7 +82,11 @@ def test_worker_cli_rejects_sync_stage_handler() -> None:
         load_stage_handler("builder_lab.worker:STAGE_PUBLIC_NAMES")
 
 
-def test_runtime_router_has_explicit_repair_and_code_review_policies() -> None:
+def test_runtime_router_has_explicit_repair_and_code_review_policies(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION", "100")
+    monkeypatch.setenv("GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION", "200")
     config = SimpleNamespace(
         gemini_api_key="test-key",
         gemini_base_url="https://example.test",
@@ -161,6 +176,11 @@ async def test_worker_run_closes_router_and_engine_when_shutdown_raises(
     monkeypatch.setattr(run_builder_worker, "BuilderWorker", lambda **kwargs: FakeWorker())
     monkeypatch.setattr(run_builder_worker, "install_signal_handlers", lambda _worker: None)
     monkeypatch.delenv("KAIGO_BUILDER_STAGE_HANDLER", raising=False)
+    monkeypatch.setenv("KAIGO_BUILDER_WORKER_BOOT_ID", "test-boot")
+    monkeypatch.setenv("KAIGO_RELEASE_ID", "test-release")
+    monkeypatch.setenv(
+        "KAIGO_BUILDER_WORKER_IMAGE_IDENTITY", "sha256:" + "a" * 64
+    )
 
     with pytest.raises(RuntimeError, match="shutdown failed"):
         await run_builder_worker.run()
@@ -183,6 +203,8 @@ def test_compose_config_wires_builtin_handler_without_project_env(tmp_path) -> N
             "compose",
             "--env-file",
             str(empty_env),
+            "--profile",
+            "saas-worker",
             "config",
         ],
         cwd=project_root,
@@ -201,10 +223,18 @@ async def test_builtin_handler_executes_only_claimed_engine_stage() -> None:
         engine=EngineName.ANTIGRAVITY,
         brief="Build one durable stage",
     )
+    dispatch_order = []
 
     class FakeQueue:
+        def __init__(self):
+            self.dispatch_receipts = []
+
         async def stage_input(self, claim):
             return StageInput(request=request)
+
+        async def arm_provider_dispatch(self, claim, *, provider):
+            self.dispatch_receipts.append((claim, provider))
+            dispatch_order.append("receipt_committed")
 
     class FakeEngine:
         def __init__(self):
@@ -213,6 +243,7 @@ async def test_builtin_handler_executes_only_claimed_engine_stage() -> None:
 
         async def generate(self, **kwargs):
             self.calls.append(kwargs)
+            dispatch_order.append("provider_dispatched")
             return EngineResult(
                 artifact=artifact(revision=1, stage=kwargs["stage"]),
                 usage=TokenUsage(prompt_tokens=7, output_tokens=3),
@@ -226,8 +257,9 @@ async def test_builtin_handler_executes_only_claimed_engine_stage() -> None:
             self.closed = True
 
     engine = FakeEngine()
+    queue = FakeQueue()
     handler = OrchestratorStageHandler(
-        queue=FakeQueue(),
+        queue=queue,
         engine_factories={EngineName.ANTIGRAVITY: lambda: engine},
         reference_analyzer=lambda _url: None,
     )
@@ -248,6 +280,157 @@ async def test_builtin_handler_executes_only_claimed_engine_stage() -> None:
     assert result.artifact.stage is Stage.AGENT_BUILD
     assert result.output_refs == ("provider-call-1",)
     assert result.usage.total_tokens == 10
+    assert engine.closed
+    assert queue.dispatch_receipts == [(claim, "antigravity")]
+    assert dispatch_order == ["receipt_committed", "provider_dispatched"]
+
+
+def _composition_payload() -> dict[str, object]:
+    ids = {
+        PatternCategory.LAUNCHER: "orb-pulse",
+        PatternCategory.SHELL: "compact-chat",
+        PatternCategory.MESSAGES: "paired-bubbles",
+        PatternCategory.COMPOSER: "single-line-pill",
+        PatternCategory.MOTION: "spring-reveal",
+    }
+    return {
+        "schema_version": 1,
+        "direction_id": "candidate-2",
+        "selections": [
+            {
+                "slot": category.value,
+                "pattern_id": pattern_id,
+                "version": 1,
+                "parameters": {},
+                "reason": "Поддерживает выбранное направление",
+            }
+            for category, pattern_id in ids.items()
+        ],
+        "custom_escape": None,
+        "summary": "Компактный брендовый консультант",
+    }
+
+
+def _composition_direction() -> DirectionProposal:
+    return DirectionProposal(
+        proposal_id="candidate-2",
+        role=DirectionRole.INTERACTION_INVENTOR,
+        title="Живой эксперт",
+        art_direction="Компактный брендовый чат.",
+        interaction_model="Launcher раскрывает panel.",
+        safeguards=("Не перекрывать страницу",),
+    )
+
+
+@pytest.mark.asyncio
+async def test_builtin_handler_persists_composition_without_artifact() -> None:
+    request = BuilderRequest(engine=EngineName.DIRECT, brief="Собери виджет")
+    direction = _composition_direction()
+
+    class FakeQueue:
+        async def stage_input(self, _claim):
+            return StageInput(
+                request=request,
+                context={"selected_direction": direction.to_dict()},
+            )
+
+    class FakeEngine:
+        def __init__(self):
+            self.plan_calls = 0
+            self.closed = False
+
+        async def plan_composition(self, **_kwargs):
+            self.plan_calls += 1
+            return CompositionPlanResult(
+                payload=_composition_payload(),
+                usage=TokenUsage(prompt_tokens=12, output_tokens=5),
+                provider_request_id="composition-call",
+            )
+
+        async def close(self):
+            self.closed = True
+
+    engine = FakeEngine()
+    handler = OrchestratorStageHandler(
+        queue=FakeQueue(),
+        engine_factories={EngineName.DIRECT: lambda: engine},
+        reference_analyzer=lambda _url: None,
+    )
+    claim = RunClaim(
+        run_id=uuid4(),
+        project_id=uuid4(),
+        worker_id="worker",
+        mode="direct",
+        next_stage="composition",
+        last_completed_stage="art_direction",
+        lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=60),
+    )
+
+    result = await handler(claim)
+
+    assert result.artifact is None
+    assert result.context["composition_plan"] == _composition_payload()
+    assert result.output_refs == ("composition-call",)
+    assert result.usage.total_tokens == 17
+    assert engine.plan_calls == 1
+    assert engine.closed
+
+
+@pytest.mark.asyncio
+async def test_builtin_handler_resumes_foundation_from_durable_composition() -> None:
+    request = BuilderRequest(engine=EngineName.DIRECT, brief="Собери виджет")
+    direction = _composition_direction()
+
+    class FakeQueue:
+        async def stage_input(self, _claim):
+            return StageInput(
+                request=request,
+                previous_artifact=artifact(revision=1, stage=Stage.ART_DIRECTION),
+                context={
+                    "selected_direction": direction.to_dict(),
+                    "composition_plan": _composition_payload(),
+                },
+            )
+
+    class FakeEngine:
+        def __init__(self):
+            self.generate_calls = []
+            self.closed = False
+
+        async def plan_composition(self, **_kwargs):
+            raise AssertionError("durable resume must not replan")
+
+        async def generate(self, **kwargs):
+            self.generate_calls.append(kwargs)
+            return EngineResult(
+                artifact=artifact(revision=2, stage=Stage.FOUNDATION),
+                provider_request_id="foundation-call",
+            )
+
+        async def close(self):
+            self.closed = True
+
+    engine = FakeEngine()
+    handler = OrchestratorStageHandler(
+        queue=FakeQueue(),
+        engine_factories={EngineName.DIRECT: lambda: engine},
+        reference_analyzer=lambda _url: None,
+    )
+    claim = RunClaim(
+        run_id=uuid4(),
+        project_id=uuid4(),
+        worker_id="worker",
+        mode="direct",
+        next_stage="foundation",
+        last_completed_stage="composition",
+        lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=60),
+    )
+
+    result = await handler(claim)
+
+    assert result.artifact is not None
+    assert result.artifact.stage is Stage.FOUNDATION
+    assert engine.generate_calls[0]["composition"].plan.to_dict() == _composition_payload()
     assert engine.closed
 
 
@@ -299,6 +482,7 @@ async def _motion_polish_run(factory, project_id):
                             public_message="Диалог готов",
                             context={
                                 "selected_direction": direction.to_dict(),
+                                "composition_plan": _composition_payload(),
                             },
                         ).to_dict(),
                     },
@@ -682,7 +866,7 @@ async def test_checkpoint_event_and_next_stage_are_committed_together(tmp_path) 
             ).scalars().all()
             assert run.last_completed_stage == "reference_analysis"
             assert run.current_stage == "art_direction"
-            assert run.progress == 16
+            assert run.progress == 14
             assert [event.event_type for event in events] == [
                 "stage.started",
                 "stage.completed",
@@ -885,6 +1069,224 @@ async def test_handler_crash_leaves_checkpoint_retryable_after_expiry(tmp_path) 
         assert replacement is not None
         assert replacement.run_id == run_id
         assert replacement.next_stage == "reference_analysis"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_visitor_chat_does_not_block_predispatch_stage_retry(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id, mode="antigravity")
+    first = await queue.claim("crashed-before-dispatch")
+    assert first is not None
+
+    async with factory() as database, database.begin():
+        database.add(
+            ModelCall(
+                run_id=run_id,
+                provider="chat-provider",
+                model="chat-model",
+                role="chat_visitor",
+                mode="express",
+                prompt_version="chat-v1",
+                request_id="chat-call-1",
+                attempt=1,
+                provider_dispatched=True,
+                status="completed",
+                input_tokens=10,
+                output_tokens=5,
+                thinking_tokens=0,
+                latency_ms=10,
+                cost_microusd=1,
+                pricing_snapshot={"currency": "USD"},
+            )
+        )
+        run = await database.get(GenerationRun, run_id)
+        assert run is not None
+        run.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+
+    try:
+        replacement = await queue.claim("replacement")
+
+        assert isinstance(replacement, RunClaim)
+        assert replacement.run_id == run_id
+        assert replacement.next_stage == "reference_analysis"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_expired_paid_dispatch_fails_closed_without_reexecuting_stage(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id, mode="antigravity")
+    first = await queue.claim("crashed")
+    assert first is not None
+
+    async with factory() as database, database.begin():
+        started = await database.scalar(
+            select(GenerationEvent).where(
+                GenerationEvent.run_id == run_id,
+                GenerationEvent.event_type == "stage.started",
+            )
+        )
+        assert started is not None
+        database.add(
+            ModelCall(
+                run_id=run_id,
+                provider="paid-provider",
+                model="paid-model",
+                role="reference_analysis",
+                mode="antigravity",
+                prompt_version="paid-v1",
+                request_id="provider-success-1",
+                attempt=1,
+                provider_dispatched=True,
+                status="completed",
+                input_tokens=100,
+                output_tokens=50,
+                thinking_tokens=0,
+                latency_ms=25,
+                cost_microusd=10,
+                pricing_snapshot={"currency": "USD"},
+                # Provider audit uses the database clock while stage events use the
+                # worker clock. Dispatch reconciliation must not depend on ordering
+                # timestamps from those separate clocks.
+                created_at=started.created_at - timedelta(days=1),
+            )
+        )
+        run = await database.get(GenerationRun, run_id)
+        assert run is not None
+        run.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+
+    calls = 0
+    settled_runs = []
+
+    async def handle(_claim):
+        nonlocal calls
+        calls += 1
+        return StageResult(public_message="must not run")
+
+    async def settle(run_id):
+        settled_runs.append(run_id)
+
+    replacement = BuilderWorker(
+        queue=queue,
+        worker_id="replacement",
+        stage_handler=handle,
+        terminal_hook=settle,
+    )
+    try:
+        assert await replacement.run_once()
+        assert calls == 0
+        assert settled_runs == [run_id]
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_id)
+            assert run is not None
+            model_calls = list(
+                (
+                    await database.execute(
+                        select(ModelCall).where(ModelCall.run_id == run_id)
+                    )
+                ).scalars()
+            )
+            events = list(
+                (
+                    await database.execute(
+                        select(GenerationEvent)
+                        .where(GenerationEvent.run_id == run_id)
+                        .order_by(GenerationEvent.sequence)
+                    )
+                ).scalars()
+            )
+            assert run.state == "failed"
+            assert run.error_code == "provider_dispatch_ambiguous"
+            assert run.failure_category == "platform"
+            assert run.lease_owner is None
+            assert len(model_calls) == 1
+            assert model_calls[0].status == "completed"
+            assert [event.event_type for event in events][-2:] == [
+                "stage.failed",
+                "run.failed",
+            ]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_expired_antigravity_dispatch_receipt_fails_closed_without_reexecution(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id, mode="antigravity")
+    first = await queue.claim("crashed")
+    assert isinstance(first, RunClaim)
+    assert (
+        await queue.complete_stage(
+            run_id,
+            "reference_analysis",
+            worker_id="crashed",
+        )
+        == "agent_build"
+    )
+    agent_claim = await queue.continue_claim(run_id, worker_id="crashed")
+
+    await queue.arm_provider_dispatch(agent_claim, provider="antigravity")
+    await queue.arm_provider_dispatch(agent_claim, provider="antigravity")
+
+    async with factory() as database, database.begin():
+        run = await database.get(GenerationRun, run_id)
+        assert run is not None
+        run.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+
+    calls = 0
+
+    async def handle(_claim):
+        nonlocal calls
+        calls += 1
+        return StageResult(public_message="must not run")
+
+    replacement = BuilderWorker(
+        queue=queue,
+        worker_id="replacement",
+        stage_handler=handle,
+    )
+    try:
+        assert await replacement.run_once()
+        assert calls == 0
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_id)
+            receipts = list(
+                (
+                    await database.execute(
+                        select(GenerationEvent).where(
+                            GenerationEvent.run_id == run_id,
+                            GenerationEvent.event_type == "provider.dispatch_armed",
+                        )
+                    )
+                ).scalars()
+            )
+            assert run is not None
+            assert run.state == "failed"
+            assert run.error_code == "provider_dispatch_ambiguous"
+            assert len(receipts) == 1
+            payload = receipts[0].payload
+            assert payload["run_id"] == str(run_id)
+            assert payload["sequence"] == receipts[0].sequence
+            assert payload["type"] == "provider.dispatch_armed"
+            assert payload["message"] == "Отправка провайдеру зафиксирована"
+            assert payload["stage"] == "agent_build"
+            assert payload["status"] == "armed"
+            assert payload["worker_id"] == "crashed"
+            assert payload["attempt_id"] == str(agent_claim.attempt_id)
+            assert payload["provider"] == "antigravity"
+            assert datetime.fromisoformat(payload["timestamp"]).tzinfo is not None
     finally:
         await engine.dispose()
 
@@ -1297,6 +1699,143 @@ async def test_shutdown_cancels_handler_cleanup_and_releases_lease_immediately(
             ).scalars().all()
             assert len(interrupted) == 1
     finally:
+        if not run_task.done():
+            run_task.cancel()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_after_armed_antigravity_dispatch_fails_closed_and_settles(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id, mode="antigravity")
+    dispatch_armed = asyncio.Event()
+    cleaned = asyncio.Event()
+    settled_runs = []
+
+    async def handle(claim):
+        if claim.next_stage == "reference_analysis":
+            return StageResult(public_message="analysis ready")
+        await queue.arm_provider_dispatch(claim, provider="antigravity")
+        dispatch_armed.set()
+        try:
+            await asyncio.Future()
+        finally:
+            cleaned.set()
+
+    async def settle(terminal_run_id):
+        settled_runs.append(terminal_run_id)
+
+    worker = BuilderWorker(
+        queue=queue,
+        worker_id="terminating-after-dispatch",
+        stage_handler=handle,
+        heartbeat_interval=1,
+        terminal_hook=settle,
+    )
+    run_task = asyncio.create_task(worker.run_once())
+    try:
+        await asyncio.wait_for(dispatch_armed.wait(), timeout=2)
+        await asyncio.wait_for(worker.shutdown(), timeout=2)
+        results = await asyncio.gather(run_task, return_exceptions=True)
+
+        assert results == [True]
+        assert cleaned.is_set()
+        assert settled_runs == [run_id]
+        assert await queue.claim("replacement") is None
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_id)
+            assert run is not None
+            assert run.state == "failed"
+            assert run.error_code == "provider_dispatch_ambiguous"
+            assert run.lease_owner is None
+    finally:
+        if not run_task.done():
+            run_task.cancel()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_error_cancels_and_awaits_provider_task_before_reraise(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=0.15)
+    run_id = await _queued_run(factory, project_id, mode="antigravity")
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+    allow_cleanup = asyncio.Event()
+    cleaned = asyncio.Event()
+
+    async def handle(claim):
+        await queue.arm_provider_dispatch(claim, provider="antigravity")
+        entered.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            cancelled.set()
+            await allow_cleanup.wait()
+            raise
+        finally:
+            cleaned.set()
+
+    async def broken_heartbeat(_run_id, *, worker_id):
+        assert worker_id == "heartbeat-error"
+        await entered.wait()
+        raise RuntimeError("heartbeat database unavailable")
+
+    monkeypatch.setattr(queue, "heartbeat", broken_heartbeat)
+    worker = BuilderWorker(
+        queue=queue,
+        worker_id="heartbeat-error",
+        stage_handler=handle,
+        heartbeat_interval=0.01,
+    )
+    run_task = asyncio.create_task(worker.run_once())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        await asyncio.wait_for(cancelled.wait(), timeout=2)
+
+        assert worker._active_stage_task is not None
+        assert not worker._active_stage_task.done()
+        assert not run_task.done()
+        allow_cleanup.set()
+
+        with pytest.raises(RuntimeError, match="heartbeat database unavailable"):
+            await asyncio.wait_for(run_task, timeout=2)
+        assert cleaned.is_set()
+        assert worker._active_stage_task is None
+
+        async with factory() as database, database.begin():
+            run = await database.get(GenerationRun, run_id)
+            assert run is not None
+            run.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+
+        replacement_calls = 0
+        settled_runs = []
+
+        async def replacement_handle(_claim):
+            nonlocal replacement_calls
+            replacement_calls += 1
+            return StageResult(public_message="must not run")
+
+        async def settle(terminal_run_id):
+            settled_runs.append(terminal_run_id)
+
+        replacement = BuilderWorker(
+            queue=queue,
+            worker_id="replacement",
+            stage_handler=replacement_handle,
+            terminal_hook=settle,
+        )
+        assert await replacement.run_once()
+        assert replacement_calls == 0
+        assert settled_runs == [run_id]
+    finally:
+        allow_cleanup.set()
         if not run_task.done():
             run_task.cancel()
         await engine.dispose()
