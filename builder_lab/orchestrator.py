@@ -37,6 +37,7 @@ from .validation import (
 )
 from .visual_gate import VisualRepairGate
 from .reference_pipeline import ReferenceAnalysisResult, ReferencePipelineError
+from .modes import get_mode_policy
 
 
 DIRECT_STAGES = (
@@ -46,6 +47,14 @@ DIRECT_STAGES = (
     Stage.CONVERSATION,
     Stage.MOTION_POLISH,
 )
+
+
+def stages_for_mode(mode: str) -> tuple[Stage, ...]:
+    return tuple(
+        Stage(stage)
+        for stage in get_mode_policy(mode).stage_sequence
+        if stage != "reference_analysis"
+    )
 
 
 def _artifact_fingerprint(candidate: WidgetArtifact) -> str:
@@ -599,7 +608,7 @@ class BuilderOrchestrator:
             usage=direction.usage,
         )
         previous: WidgetArtifact | None = None
-        for stage in DIRECT_STAGES:
+        for stage in stages_for_mode("direct"):
             if await self._cancelled(run_id):
                 raise asyncio.CancelledError
             self._stages[run_id] = stage

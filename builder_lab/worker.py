@@ -26,6 +26,7 @@ from builder_lab.models import BuilderRequest, TokenUsage, WidgetArtifact
 from builder_lab.directions import run_direction_board
 from builder_lab.engines.base import BuilderEngine, BuilderEngineError
 from builder_lab.models import DirectionProposal, EngineName, Stage
+from builder_lab.modes import get_mode_policy
 from builder_lab.orchestrator import BuilderOrchestrator
 from builder_lab.reference_pipeline import (
     ReferenceAnalysisResult,
@@ -292,8 +293,10 @@ class OrchestratorStageHandler:
 
     async def __call__(self, claim: RunClaim) -> StageResult:
         stage_input = await self._queue.stage_input(claim)
+        policy = get_mode_policy(claim.mode)
+        request = policy.apply_to_request(stage_input.request)
         if claim.next_stage == "reference_analysis":
-            return await self._analyze_reference(stage_input.request)
+            return await self._analyze_reference(request)
         try:
             stage = Stage(claim.next_stage)
         except ValueError as exc:
@@ -302,7 +305,7 @@ class OrchestratorStageHandler:
                 "В очереди обнаружен неподдерживаемый этап генерации",
                 diagnostic=claim.next_stage,
             ) from exc
-        factory = self._factories.get(stage_input.request.engine)
+        factory = self._factories.get(request.engine)
         if factory is None:
             raise BuilderEngineError(
                 "provider_unavailable",
@@ -311,7 +314,7 @@ class OrchestratorStageHandler:
         engine = factory()
         try:
             return await self._generate_stage(
-                request=stage_input.request,
+                request=request,
                 engine=engine,
                 stage=stage,
                 previous=stage_input.previous_artifact,
@@ -366,7 +369,10 @@ class OrchestratorStageHandler:
     ) -> StageResult:
         usage = TokenUsage()
         selected_direction: DirectionProposal | None = None
-        next_context = dict(context)
+        next_context = {
+            **context,
+            "model_role": get_mode_policy(claim.mode).model_role_for(claim.next_stage),
+        }
         if request.engine is EngineName.DIRECT:
             if stage is Stage.ART_DIRECTION:
                 board = await run_direction_board(
@@ -512,11 +518,7 @@ class PostgresWorkerQueue:
 
     @staticmethod
     def stage_sequence(mode: str) -> tuple[str, ...]:
-        return (
-            ANTIGRAVITY_STAGE_SEQUENCE
-            if mode.strip().lower() == "antigravity"
-            else DIRECT_STAGE_SEQUENCE
-        )
+        return get_mode_policy(mode).stage_sequence
 
     @classmethod
     def next_stage(cls, mode: str, last_completed_stage: str | None) -> str | None:
