@@ -319,13 +319,28 @@ class Publication(Base):
     stable_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     allowed_domains: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     state: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
-    active_release_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    active_release_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "publication_releases.id",
+            ondelete="SET NULL",
+            name="fk_publications_active_release_id",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
+        )
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class PublicationRelease(Base):
     __tablename__ = "publication_releases"
-    __table_args__ = (UniqueConstraint("publication_id", "revision", name="uq_publication_release_revision"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "publication_id",
+            "artifact_id",
+            name="uq_publication_release_artifact",
+        ),
+    )
 
     id: Mapped[UUID] = _uuid_pk()
     publication_id: Mapped[UUID] = mapped_column(ForeignKey("publications.id", ondelete="CASCADE"), nullable=False, index=True)

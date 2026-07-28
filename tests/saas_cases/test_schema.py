@@ -60,3 +60,21 @@ def test_terminal_trial_settlement_fields_and_recovery_index_are_persisted() -> 
     runs = Base.metadata.tables["generation_runs"]
     assert {"failure_category", "trial_settlement", "trial_settled_at"} <= set(runs.c.keys())
     assert "ix_generation_runs_unsettled_terminal" in {index.name for index in runs.indexes}
+
+
+def test_publication_release_constraints_are_artifact_idempotent_and_referential() -> None:
+    assert "uq_publication_release_artifact" in _constraint_names(
+        "publication_releases", UniqueConstraint
+    )
+    assert "uq_publication_release_revision" not in _constraint_names(
+        "publication_releases", UniqueConstraint
+    )
+    active_release = next(
+        foreign_key
+        for foreign_key in Base.metadata.tables["publications"].foreign_keys
+        if foreign_key.parent.name == "active_release_id"
+    )
+    assert active_release.target_fullname == "publication_releases.id"
+    assert active_release.ondelete == "SET NULL"
+    assert active_release.deferrable is True
+    assert active_release.initially == "DEFERRED"

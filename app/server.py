@@ -16,6 +16,7 @@ from app.db import init_db_signals
 from app.db.session import session_scope
 from app.logging_config import setup_logging
 from app.projects.routes import setup_project_routes
+from app.publication.routes import setup_publication_routes
 from app.widgets.routes import setup_widget_routes
 from app.client.routes import CLIENT_SESSION_USER_ID, setup_client_routes
 from core import database as history_db
@@ -377,6 +378,7 @@ async def create_app(config: AppConfig | None = None) -> web.Application:
         public_auth_enabled=cfg.public_auth_enabled,
     )
     setup_project_routes(app)
+    setup_publication_routes(app)
     return app
 
 

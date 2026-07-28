@@ -23,6 +23,7 @@ class AppConfig:
     google_oauth_client_secret: str | None = field(default=None, repr=False)
     yandex_oauth_client_id: str | None = None
     yandex_oauth_client_secret: str | None = field(default=None, repr=False)
+    publication_allow_insecure_origins: bool = False
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -65,4 +66,7 @@ def load_config() -> AppConfig:
         google_oauth_client_secret=os.getenv('GOOGLE_OAUTH_CLIENT_SECRET'),
         yandex_oauth_client_id=os.getenv('YANDEX_OAUTH_CLIENT_ID'),
         yandex_oauth_client_secret=os.getenv('YANDEX_OAUTH_CLIENT_SECRET'),
+        publication_allow_insecure_origins=_env_flag(
+            'KAIGO_PUBLICATION_ALLOW_INSECURE_ORIGINS'
+        ),
     )
