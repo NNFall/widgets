@@ -5,6 +5,7 @@ import inspect
 import json
 from dataclasses import dataclass
 from typing import Any, Mapping
+from uuid import UUID
 
 from google import genai
 from google.genai import types
@@ -446,7 +447,7 @@ class GeminiVisualJudge:
         model_router: ModelRouter | None = None,
         routing_mode: str = "direct",
         routing_role: str = "visual_judge",
-        run_id: Any | None = None,
+        run_id: UUID | None = None,
     ) -> None:
         if model_router is None and client is None and (not api_key or not api_key.strip()):
             raise VisualJudgeError(
@@ -611,8 +612,16 @@ class GeminiRepairVerifier:
         base_url: str = "https://generativelanguage.googleapis.com",
         timeout_seconds: float = 60,
         client: Any | None = None,
+        model_router: ModelRouter | None = None,
+        routing_mode: str = "direct",
+        routing_role: str = "code_review",
+        run_id: UUID | None = None,
     ) -> None:
-        if client is None and (not api_key or not api_key.strip()):
+        if (
+            model_router is None
+            and client is None
+            and (not api_key or not api_key.strip())
+        ):
             raise RepairVerificationError(
                 "missing_api_key",
                 "Для проверки исправлений Gemini не настроен API-ключ",
@@ -620,11 +629,17 @@ class GeminiRepairVerifier:
         self.model = model
         self.thinking_level = normalize_thinking_level(thinking_level)
         self.timeout_seconds = timeout_seconds
-        self._owned_client = client is None
-        self._client = client or genai.Client(
-            api_key=api_key.strip(),  # type: ignore[union-attr]
-            http_options=build_http_options(base_url),
-        )
+        self._model_router = model_router
+        self._routing_mode = routing_mode
+        self._routing_role = routing_role
+        self._run_id = run_id
+        self._owned_client = model_router is None and client is None
+        self._client = None
+        if model_router is None:
+            self._client = client or genai.Client(
+                api_key=api_key.strip(),  # type: ignore[union-attr]
+                http_options=build_http_options(base_url),
+            )
 
     async def verify(
         self,
@@ -644,25 +659,22 @@ class GeminiRepairVerifier:
             if before.to_dict().get(field) != after.to_dict().get(field)
         }
         for attempt in range(2):
-            contents = [
-                types.Part.from_text(
-                    text=(
-                        "UNTRUSTED JUDGE FINDINGS JSON:\n"
-                        + json.dumps(
-                            [finding.to_dict() for finding in findings],
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        )
-                        + "\nUNTRUSTED ARTIFACT DIFF JSON:\n"
-                        + json.dumps(
-                            changed_fields,
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        )
-                        + correction
-                    )
+            evidence_prompt = (
+                "UNTRUSTED JUDGE FINDINGS JSON:\n"
+                + json.dumps(
+                    [finding.to_dict() for finding in findings],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
                 )
-            ]
+                + "\nUNTRUSTED ARTIFACT DIFF JSON:\n"
+                + json.dumps(
+                    changed_fields,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + correction
+            )
+            contents = [types.Part.from_text(text=evidence_prompt)]
             policy = generation_policy(
                 self.model,
                 self.thinking_level,
@@ -688,12 +700,26 @@ class GeminiRepairVerifier:
                 thinking_config=policy.thinking_config,
             )
             try:
-                async with asyncio.timeout(self.timeout_seconds):
-                    response = await self._client.aio.models.generate_content(
-                        model=self.model,
-                        contents=contents,
-                        config=config,
+                if self._model_router is not None:
+                    response = await self._model_router.generate(
+                        role=self._routing_role,
+                        mode=self._routing_mode,
+                        run_id=self._run_id,
+                        request=ModelRequest(
+                            prompt=config.system_instruction + "\n\n" + evidence_prompt,
+                            response_schema=REPAIR_VERIFICATION_SCHEMA,
+                            temperature=0.1,
+                            metadata={"thinking_level": self.thinking_level},
+                        ),
+                        timeout_seconds=self.timeout_seconds,
                     )
+                else:
+                    async with asyncio.timeout(self.timeout_seconds):
+                        response = await self._client.aio.models.generate_content(  # type: ignore[union-attr]
+                            model=self.model,
+                            contents=contents,
+                            config=config,
+                        )
             except asyncio.CancelledError:
                 raise
             except TimeoutError as exc:

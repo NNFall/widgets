@@ -35,6 +35,30 @@ POSTGRES_URL = os.getenv("KAIGO_TEST_POSTGRES_URL")
 
 
 @pytest.mark.asyncio
+async def test_routed_reference_backend_forwards_analyzer_deadline() -> None:
+    class Router:
+        def __init__(self) -> None:
+            self.timeout_seconds = None
+
+        async def generate(self, **kwargs):
+            self.timeout_seconds = kwargs["timeout_seconds"]
+            return ModelResponse(text="{}", parsed={})
+
+    router = Router()
+    backend = RoutedStructuredGenerationBackend(
+        router=router,
+        role="reference_analyst",
+        mode="express",
+        run_id=__import__("uuid").uuid4(),
+        timeout_seconds=17,
+    )
+
+    await backend.generate(ModelRequest(prompt="Analyze"))
+
+    assert router.timeout_seconds == 17
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "database_url",
     [

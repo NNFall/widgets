@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
+import math
 import time
 from dataclasses import dataclass, replace
 from typing import Mapping, Protocol
@@ -17,6 +20,7 @@ from app.models.contracts import (
     ModelResponse,
     ModelUsage,
     ProviderCapabilities,
+    ProviderTimeout,
     UnsupportedModelRequest,
 )
 
@@ -115,6 +119,8 @@ class ModelRouter:
         self._providers = dict(providers)
         self._policies = dict(policies)
         self._audit = audit
+        self._close_lock = asyncio.Lock()
+        self._closed = False
 
     async def generate(
         self,
@@ -123,7 +129,14 @@ class ModelRouter:
         mode: str,
         request: ModelRequest,
         run_id: UUID | None = None,
+        timeout_seconds: float | None = None,
     ) -> ModelResponse:
+        if timeout_seconds is not None and (
+            isinstance(timeout_seconds, bool)
+            or not math.isfinite(timeout_seconds)
+            or timeout_seconds <= 0
+        ):
+            raise ValueError("model request timeout must be positive and finite")
         try:
             policy = self._policies[(role, mode)]
         except KeyError as error:
@@ -138,7 +151,19 @@ class ModelRouter:
             started = time.perf_counter()
             try:
                 _ensure_supported(provider, target, request)
-                response = await provider.generate(request, model=target.model)
+                if timeout_seconds is None:
+                    response = await provider.generate(request, model=target.model)
+                else:
+                    try:
+                        async with asyncio.timeout(timeout_seconds):
+                            response = await provider.generate(
+                                request,
+                                model=target.model,
+                            )
+                    except TimeoutError as error:
+                        raise ProviderTimeout(
+                            f"provider attempt exceeded {timeout_seconds:g} seconds"
+                        ) from error
             except ModelProviderError as error:
                 last_error = error
                 usage = (
@@ -210,6 +235,26 @@ class ModelRouter:
         if last_error is not None:
             raise last_error
         raise RuntimeError("model policy contained no executable targets")
+
+    async def aclose(self) -> None:
+        async with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+            providers = tuple({id(provider): provider for provider in self._providers.values()}.values())
+            errors: list[BaseException] = []
+            for provider in providers:
+                close = getattr(provider, "aclose", None)
+                if not callable(close):
+                    continue
+                try:
+                    result = close()
+                    if inspect.isawaitable(result):
+                        await result
+                except BaseException as error:
+                    errors.append(error)
+            if errors:
+                raise errors[0]
 
 
 def _ensure_supported(

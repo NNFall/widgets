@@ -191,6 +191,20 @@ class TrialService:
         return entitlement
 
     @staticmethod
+    async def _locked_run(
+        database: AsyncSession,
+        run_id: UUID,
+    ) -> GenerationRun:
+        run = (
+            await database.execute(
+                select(GenerationRun)
+                .where(GenerationRun.id == run_id)
+                .with_for_update()
+            )
+        ).scalar_one()
+        return run
+
+    @staticmethod
     def _add_transition(
         database: AsyncSession,
         *,
@@ -402,6 +416,10 @@ class TrialService:
             )
         async with self._user_guard(reservation.user_id):
             async with self._sessions() as database, database.begin():
+                # Any transaction needing both rows locks run -> entitlement.
+                # Worker finalization holds this run lock while materializing,
+                # so result eligibility and compensation are one decision.
+                await self._locked_run(database, reservation.run_id)
                 entitlement = await self._locked_entitlement(
                     database, reservation.user_id
                 )

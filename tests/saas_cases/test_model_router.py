@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.models.contracts import (
@@ -132,3 +134,82 @@ def test_model_request_has_no_output_token_limit() -> None:
 
     assert "max_output" not in request.__dataclass_fields__
     assert "max_tokens" not in request.__dataclass_fields__
+
+
+def test_model_usage_rejects_thinking_greater_than_billed_output() -> None:
+    with pytest.raises(ValueError, match="thinking_tokens cannot exceed output_tokens"):
+        ModelUsage(input_tokens=10, output_tokens=3, thinking_tokens=4)
+
+
+@pytest.mark.asyncio
+async def test_provider_attempt_deadline_audits_timeout_then_falls_back() -> None:
+    class NeverReturningProvider(FakeProvider):
+        async def generate(self, request: ModelRequest, *, model: str) -> ModelResponse:
+            self.requests.append(request)
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    primary = NeverReturningProvider()
+    fallback = FakeProvider()
+    audit = InMemoryModelCallAudit()
+    router = ModelRouter(
+        providers={"primary": primary, "fallback": fallback},
+        policies={
+            ("reference_analyst", "express"): ModelPolicy(
+                prompt_version="reference-v1",
+                targets=(
+                    ProviderTarget("primary", "hung", 1, 1),
+                    ProviderTarget("fallback", "working", 1, 1),
+                ),
+            )
+        },
+        audit=audit,
+    )
+
+    response = await asyncio.wait_for(
+        router.generate(
+            role="reference_analyst",
+            mode="express",
+            request=ModelRequest(prompt="Bound this call"),
+            timeout_seconds=0.01,
+        ),
+        timeout=1,
+    )
+
+    assert response.request_id == "request-working"
+    assert [call.status for call in audit.calls] == ["failed", "completed"]
+    assert audit.calls[0].error_code == "generation_timeout"
+    assert (
+        audit.calls[0].input_tokens,
+        audit.calls[0].output_tokens,
+        audit.calls[0].thinking_tokens,
+        audit.calls[0].cost_microusd,
+    ) == (0, 0, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_router_closes_each_unique_provider_once_and_is_idempotent() -> None:
+    class ClosableProvider(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_calls = 0
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    shared = ClosableProvider()
+    router = ModelRouter(
+        providers={"primary": shared, "alias": shared},
+        policies={
+            ("widget_generator", "express"): ModelPolicy(
+                prompt_version="builder-v1",
+                targets=(ProviderTarget("primary", "model", 1, 1),),
+            )
+        },
+        audit=InMemoryModelCallAudit(),
+    )
+
+    await asyncio.gather(router.aclose(), router.aclose())
+    await router.aclose()
+
+    assert shared.close_calls == 1

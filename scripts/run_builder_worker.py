@@ -10,6 +10,7 @@ import socket
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from uuid import UUID
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -190,6 +191,28 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
                     ),
                 ),
             )
+        policies[("repair", policy.name)] = ModelPolicy(
+            prompt_version="repair-v1",
+            targets=(
+                ProviderTarget(
+                    "gemini",
+                    config.direct_model,
+                    input_rate,
+                    output_rate,
+                ),
+            ),
+        )
+        policies[("code_review", policy.name)] = ModelPolicy(
+            prompt_version="code-review-v1",
+            targets=(
+                ProviderTarget(
+                    "gemini",
+                    config.visual_critic_model,
+                    input_rate,
+                    output_rate,
+                ),
+            ),
+        )
     return ModelRouter(
         providers={
             "gemini": GeminiModelProvider(
@@ -202,101 +225,129 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
     )
 
 
+def make_repair_verifier_factory(
+    config,
+    *,
+    mode: str,
+    model_router: ModelRouter,
+    run_id: UUID | None,
+):
+    return lambda: GeminiRepairVerifier(
+        model=config.visual_critic_model,
+        thinking_level=config.visual_critic_thinking_level,
+        timeout_seconds=config.visual_critic_timeout_seconds,
+        model_router=model_router,
+        routing_mode=mode,
+        routing_role="code_review",
+        run_id=run_id,
+    )
+
+
 async def run() -> None:
     engine = create_async_engine(_database_url(), future=True, echo=False)
     factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-    lease_seconds = _positive_float("KAIGO_BUILDER_LEASE_SECONDS", "90")
-    heartbeat_interval = _positive_float(
-        "KAIGO_BUILDER_HEARTBEAT_SECONDS", "20"
-    )
-    if heartbeat_interval >= lease_seconds:
-        await engine.dispose()
-        raise RuntimeError(
-            "KAIGO_BUILDER_HEARTBEAT_SECONDS must be shorter than the lease"
+    model_router: ModelRouter | None = None
+    worker: BuilderWorker | None = None
+    try:
+        lease_seconds = _positive_float("KAIGO_BUILDER_LEASE_SECONDS", "90")
+        heartbeat_interval = _positive_float(
+            "KAIGO_BUILDER_HEARTBEAT_SECONDS", "20"
         )
-    worker_id = os.getenv("KAIGO_BUILDER_WORKER_ID", "").strip() or (
-        f"{socket.gethostname()}-{os.getpid()}"
-    )
-    queue = PostgresWorkerQueue(factory, lease_seconds=lease_seconds)
-    configured_handler = (
-        os.getenv("KAIGO_BUILDER_STAGE_HANDLER", "").strip()
-        or BUILTIN_STAGE_HANDLER
-    )
-    default_handler = None
-    if configured_handler == BUILTIN_STAGE_HANDLER:
-        config = BuilderLabConfig.from_env()
-        model_router = make_runtime_model_router(config, factory)
-        engine_factories = make_engine_factories(config)
-        if not engine_factories:
-            await engine.dispose()
+        if heartbeat_interval >= lease_seconds:
             raise RuntimeError(
-                "GEMINI_API_KEY (or GOOGLE_AI_API_KEY) is required for the builder worker"
+                "KAIGO_BUILDER_HEARTBEAT_SECONDS must be shorter than the lease"
             )
-        reference_pipeline = GeminiReferencePipeline.from_config(config)
-        default_handler = OrchestratorStageHandler(
-            queue=queue,
-            engine_factories=engine_factories,
-            reference_analyzer=reference_pipeline.analyze,
-            routed_reference_analyzer=lambda claim, source_url: (
-                reference_pipeline.analyze(
-                    source_url,
-                    structured_backend=RoutedStructuredGenerationBackend(
-                        router=model_router,
-                        role="reference_analyst",
-                        mode=get_mode_policy(claim.mode).name,
-                        run_id=claim.run_id,
-                    ),
+        worker_id = os.getenv("KAIGO_BUILDER_WORKER_ID", "").strip() or (
+            f"{socket.gethostname()}-{os.getpid()}"
+        )
+        queue = PostgresWorkerQueue(factory, lease_seconds=lease_seconds)
+        configured_handler = (
+            os.getenv("KAIGO_BUILDER_STAGE_HANDLER", "").strip()
+            or BUILTIN_STAGE_HANDLER
+        )
+        default_handler = None
+        if configured_handler == BUILTIN_STAGE_HANDLER:
+            config = BuilderLabConfig.from_env()
+            model_router = make_runtime_model_router(config, factory)
+            engine_factories = make_engine_factories(config)
+            if not engine_factories:
+                raise RuntimeError(
+                    "GEMINI_API_KEY (or GOOGLE_AI_API_KEY) is required for the builder worker"
                 )
-            ),
-            routed_engine_factory=lambda claim, role: GeminiDirectEngine(
-                model_router=model_router,
-                routing_role=role,
-                routing_mode=get_mode_policy(claim.mode).name,
-                run_id=claim.run_id,
-                model=config.direct_model,
-                thinking_level=config.builder_thinking_level,
-            ),
-            visual_gate_factory=lambda claim: VisualRepairGate(
-                store=DurableVisualStore(queue, claim),
-                audit_factory=lambda: BrowserAudit(
-                    timeout_ms=config.browser_audit_timeout_ms,
-                    total_timeout_seconds=(
-                        config.browser_audit_total_timeout_seconds
+            reference_pipeline = GeminiReferencePipeline.from_config(config)
+            default_handler = OrchestratorStageHandler(
+                queue=queue,
+                engine_factories=engine_factories,
+                reference_analyzer=reference_pipeline.analyze,
+                routed_reference_analyzer=lambda claim, source_url: (
+                    reference_pipeline.analyze(
+                        source_url,
+                        structured_backend=RoutedStructuredGenerationBackend(
+                            router=model_router,
+                            role="reference_analyst",
+                            mode=get_mode_policy(claim.mode).name,
+                            run_id=claim.run_id,
+                            timeout_seconds=min(
+                                180,
+                                config.reference_timeout_seconds,
+                            ),
+                        ),
                     ),
                 ),
-                critic_factory=make_visual_critic_factory(
-                    config,
-                    policy=get_mode_policy(claim.mode),
+                routed_engine_factory=lambda claim, role: GeminiDirectEngine(
                     model_router=model_router,
                     run_id=claim.run_id,
+                    routing_role=role,
+                    routing_mode=get_mode_policy(claim.mode).name,
+                    model=config.direct_model,
+                    thinking_level=config.builder_thinking_level,
                 ),
-                verifier_factory=lambda: GeminiRepairVerifier(
-                    api_key=config.gemini_api_key,
-                    model=config.visual_critic_model,
-                    thinking_level=config.visual_critic_thinking_level,
-                    base_url=config.gemini_base_url,
-                    timeout_seconds=config.visual_critic_timeout_seconds,
+                visual_gate_factory=lambda claim: VisualRepairGate(
+                    store=DurableVisualStore(queue, claim),
+                    audit_factory=lambda: BrowserAudit(
+                        timeout_ms=config.browser_audit_timeout_ms,
+                        total_timeout_seconds=(
+                            config.browser_audit_total_timeout_seconds
+                        ),
+                    ),
+                    critic_factory=make_visual_critic_factory(
+                        config,
+                        policy=get_mode_policy(claim.mode),
+                        model_router=model_router,
+                        run_id=claim.run_id,
+                    ),
+                    verifier_factory=make_repair_verifier_factory(
+                        config,
+                        mode=get_mode_policy(claim.mode).name,
+                        model_router=model_router,
+                        run_id=claim.run_id,
+                    ),
                 ),
-            ),
+            )
+        handler = load_stage_handler(
+            configured_handler,
+            default_handler=default_handler,
         )
-    handler = load_stage_handler(
-        configured_handler,
-        default_handler=default_handler,
-    )
-    worker = BuilderWorker(
-        queue=queue,
-        worker_id=worker_id,
-        stage_handler=handler,
-        heartbeat_interval=heartbeat_interval,
-        idle_poll_interval=_positive_float("KAIGO_BUILDER_POLL_SECONDS", "0.5"),
-    )
-    logging.getLogger(__name__).info("starting durable builder worker %s", worker_id)
-    install_signal_handlers(worker)
-    try:
+        worker = BuilderWorker(
+            queue=queue,
+            worker_id=worker_id,
+            stage_handler=handler,
+            heartbeat_interval=heartbeat_interval,
+            idle_poll_interval=_positive_float("KAIGO_BUILDER_POLL_SECONDS", "0.5"),
+        )
+        logging.getLogger(__name__).info("starting durable builder worker %s", worker_id)
+        install_signal_handlers(worker)
         await worker.run_forever()
     finally:
-        await worker.shutdown()
-        await engine.dispose()
+        try:
+            if worker is not None:
+                await worker.shutdown()
+        finally:
+            try:
+                if model_router is not None:
+                    await model_router.aclose()
+            finally:
+                await engine.dispose()
 
 
 def main() -> None:

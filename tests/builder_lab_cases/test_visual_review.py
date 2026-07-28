@@ -1,5 +1,9 @@
 import pytest
+from sqlalchemy import select
 
+from app.models.contracts import ModelRequest, ModelResponse, ModelUsage, ProviderCapabilities
+from app.models.router import ModelPolicy, ModelRouter, ProviderTarget, SqlModelCallAudit
+from app.saas.models import ModelCall
 from builder_lab.models import TokenUsage
 from builder_lab.visual_critic import VisualCriticResult, VisualCriticRole
 from builder_lab.visual_models import (
@@ -12,9 +16,13 @@ from builder_lab.visual_models import (
 )
 from builder_lab.visual_review import VisualJudgeError, validate_visual_judgement
 from builder_lab.visual_review import (
+    GeminiRepairVerifier,
     RepairVerificationError,
+    REPAIR_VERIFICATION_SCHEMA,
     validate_repair_verification,
 )
+from tests.builder_lab_cases.test_validation import artifact
+from tests.saas_cases.test_trial_service import _database
 
 
 def finding(finding_id, evidence):
@@ -179,3 +187,83 @@ def test_repair_verifier_rejects_missing_or_fabricated_finding_ids():
             },
             (original,),
         )
+
+
+@pytest.mark.asyncio
+async def test_repair_verifier_routes_every_semantic_attempt_as_code_review(
+    tmp_path,
+) -> None:
+    engine, factory, _, run_ids = await _database(tmp_path)
+    original = finding("judge-1", "The mobile composer is clipped.")
+
+    class Provider:
+        capabilities = ProviderCapabilities(structured_output=True)
+
+        def __init__(self) -> None:
+            self.requests: list[ModelRequest] = []
+
+        async def generate(self, request: ModelRequest, *, model: str) -> ModelResponse:
+            assert model == "review-model"
+            self.requests.append(request)
+            finding_id = "invented" if len(self.requests) == 1 else "judge-1"
+            return ModelResponse(
+                text="{}",
+                parsed={
+                    "summary": "Проверка исправления завершена.",
+                    "checks": [
+                        {
+                            "finding_id": finding_id,
+                            "status": "fixed",
+                            "evidence": "Поле сообщения остаётся внутри панели.",
+                        }
+                    ],
+                },
+                usage=ModelUsage(input_tokens=20, output_tokens=5, thinking_tokens=2),
+                request_id=f"review-{len(self.requests)}",
+            )
+
+    provider = Provider()
+    router = ModelRouter(
+        providers={"provider": provider},
+        policies={
+            ("code_review", "express"): ModelPolicy(
+                prompt_version="code-review-v1",
+                targets=(ProviderTarget("provider", "review-model", 10, 20),),
+            )
+        },
+        audit=SqlModelCallAudit(factory),
+    )
+    verifier = GeminiRepairVerifier(
+        model_router=router,
+        routing_mode="express",
+        routing_role="code_review",
+        run_id=run_ids[0],
+        timeout_seconds=5,
+    )
+    try:
+        result = await verifier.verify(
+            findings=(original,),
+            before=artifact(revision=4),
+            after=artifact(revision=4, css=artifact().css + "\n.fixed {}"),
+        )
+
+        assert result.unresolved == ()
+        assert len(provider.requests) == 2
+        assert all(
+            request.response_schema == REPAIR_VERIFICATION_SCHEMA
+            for request in provider.requests
+        )
+        assert "Previous verifier response failed local validation" in provider.requests[1].prompt
+        async with factory() as database:
+            calls = (
+                await database.execute(
+                    select(ModelCall).where(ModelCall.run_id == run_ids[0]).order_by(ModelCall.attempt)
+                )
+            ).scalars().all()
+        assert [(call.role, call.mode) for call in calls] == [
+            ("code_review", "express"),
+            ("code_review", "express"),
+        ]
+        assert [call.request_id for call in calls] == ["review-1", "review-2"]
+    finally:
+        await engine.dispose()

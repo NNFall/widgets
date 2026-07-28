@@ -4,6 +4,7 @@ import os
 import signal
 import shutil
 import subprocess
+from types import SimpleNamespace
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -38,6 +39,7 @@ from builder_lab.worker import (
     StageResult,
 )
 from scripts.run_builder_worker import install_signal_handlers, load_stage_handler
+from scripts import run_builder_worker
 from tests.builder_lab_cases.test_validation import artifact
 
 
@@ -67,6 +69,104 @@ def test_worker_cli_uses_configured_builtin_handler_by_default(
 def test_worker_cli_rejects_sync_stage_handler() -> None:
     with pytest.raises(RuntimeError, match="must be an async callable"):
         load_stage_handler("builder_lab.worker:STAGE_PUBLIC_NAMES")
+
+
+def test_runtime_router_has_explicit_repair_and_code_review_policies() -> None:
+    config = SimpleNamespace(
+        gemini_api_key="test-key",
+        gemini_base_url="https://example.test",
+        direct_model="gemini-builder",
+        reference_analyzer_model="gemini-reference",
+        visual_critic_model="gemini-review",
+    )
+    router = run_builder_worker.make_runtime_model_router(config, None)
+
+    assert ("repair", "direct") in router._policies
+    assert ("repair", "express") in router._policies
+    assert ("code_review", "direct") in router._policies
+    assert ("code_review", "express") in router._policies
+
+
+def test_production_repair_verifier_factory_uses_router_not_direct_gemini() -> None:
+    make_factory = getattr(run_builder_worker, "make_repair_verifier_factory", None)
+    assert callable(make_factory)
+    config = SimpleNamespace(
+        visual_critic_model="gemini-review",
+        visual_critic_thinking_level="high",
+        visual_critic_timeout_seconds=12,
+    )
+    router = SimpleNamespace(generate=object())
+    run_id = uuid4()
+
+    verifier = make_factory(
+        config,
+        mode="express",
+        model_router=router,
+        run_id=run_id,
+    )()
+
+    assert verifier._model_router is router
+    assert verifier._routing_role == "code_review"
+    assert verifier._routing_mode == "express"
+    assert verifier._run_id == run_id
+    assert verifier._client is None
+
+
+@pytest.mark.asyncio
+async def test_worker_run_closes_router_and_engine_when_shutdown_raises(
+    monkeypatch,
+) -> None:
+    class FakeEngine:
+        def __init__(self) -> None:
+            self.disposed = False
+
+        async def dispose(self) -> None:
+            self.disposed = True
+
+    class FakeRouter:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    class FakeWorker:
+        async def run_forever(self) -> None:
+            raise RuntimeError("worker failed")
+
+        async def shutdown(self) -> None:
+            raise RuntimeError("shutdown failed")
+
+    engine = FakeEngine()
+    router = FakeRouter()
+    config = SimpleNamespace(
+        reference_timeout_seconds=60,
+        direct_model="builder",
+        builder_thinking_level="high",
+    )
+    monkeypatch.setattr(run_builder_worker, "_database_url", lambda: "postgresql+asyncpg://test")
+    monkeypatch.setattr(run_builder_worker, "create_async_engine", lambda *args, **kwargs: engine)
+    monkeypatch.setattr(run_builder_worker, "async_sessionmaker", lambda *args, **kwargs: object())
+    monkeypatch.setattr(run_builder_worker, "PostgresWorkerQueue", lambda *args, **kwargs: object())
+    monkeypatch.setattr(run_builder_worker.BuilderLabConfig, "from_env", lambda: config)
+    monkeypatch.setattr(run_builder_worker, "make_runtime_model_router", lambda *args: router)
+    monkeypatch.setattr(run_builder_worker, "make_engine_factories", lambda _config: {EngineName.DIRECT: object()})
+    monkeypatch.setattr(
+        run_builder_worker.GeminiReferencePipeline,
+        "from_config",
+        lambda _config: SimpleNamespace(analyze=None),
+    )
+    monkeypatch.setattr(run_builder_worker, "OrchestratorStageHandler", lambda **kwargs: object())
+    monkeypatch.setattr(run_builder_worker, "load_stage_handler", lambda *args, **kwargs: object())
+    monkeypatch.setattr(run_builder_worker, "BuilderWorker", lambda **kwargs: FakeWorker())
+    monkeypatch.setattr(run_builder_worker, "install_signal_handlers", lambda _worker: None)
+    monkeypatch.delenv("KAIGO_BUILDER_STAGE_HANDLER", raising=False)
+
+    with pytest.raises(RuntimeError, match="shutdown failed"):
+        await run_builder_worker.run()
+
+    assert router.closed
+    assert engine.disposed
 
 
 def test_compose_config_wires_builtin_handler_without_project_env(tmp_path) -> None:
@@ -725,7 +825,7 @@ async def test_cancelled_claim_never_invokes_stage_handler(tmp_path) -> None:
 async def test_lost_lease_cancels_inflight_stage_and_replacement_resumes(tmp_path) -> None:
     engine, factory, project_id = await _database(tmp_path)
     queue = PostgresWorkerQueue(factory, lease_seconds=0.15)
-    run_id = await _queued_run(factory, project_id)
+    await _queued_run(factory, project_id)
     entered = asyncio.Event()
     cancelled = asyncio.Event()
 

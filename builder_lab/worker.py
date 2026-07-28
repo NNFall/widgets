@@ -323,10 +323,16 @@ class OrchestratorStageHandler:
             if self._routed_engine_factory is not None and request.engine is EngineName.DIRECT
             else factory()  # type: ignore[misc]
         )
+        repair_engine = (
+            self._routed_engine_factory(claim, "repair")
+            if self._routed_engine_factory is not None and request.engine is EngineName.DIRECT
+            else engine
+        )
         try:
             return await self._generate_stage(
                 request=request,
                 engine=engine,
+                repair_engine=repair_engine,
                 stage=stage,
                 previous=stage_input.previous_artifact,
                 context=stage_input.context,
@@ -334,6 +340,8 @@ class OrchestratorStageHandler:
             )
         finally:
             await engine.close()
+            if repair_engine is not engine:
+                await repair_engine.close()
 
     async def _analyze_reference(
         self,
@@ -381,6 +389,7 @@ class OrchestratorStageHandler:
         *,
         request: BuilderRequest,
         engine: BuilderEngine,
+        repair_engine: BuilderEngine,
         stage: Stage,
         previous: WidgetArtifact | None,
         context: dict,
@@ -429,7 +438,7 @@ class OrchestratorStageHandler:
                 break
             repaired = await BuilderOrchestrator.execute_stage(
                 request=request,
-                engine=engine,
+                engine=repair_engine,
                 stage=stage,
                 revision=revision,
                 previous_artifact=candidate,
@@ -475,7 +484,7 @@ class OrchestratorStageHandler:
             candidate = await visual_gate.evaluate(
                 run_id=str(claim.run_id),
                 request=request,
-                engine=cast(Any, engine),
+                engine=cast(Any, repair_engine),
                 candidate=candidate,
                 previous=previous,
                 selected_direction=selected_direction,

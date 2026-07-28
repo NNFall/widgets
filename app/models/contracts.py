@@ -21,6 +21,8 @@ class ModelUsage:
     def __post_init__(self) -> None:
         if min(self.input_tokens, self.output_tokens, self.thinking_tokens) < 0:
             raise ValueError("model usage cannot be negative")
+        if self.thinking_tokens > self.output_tokens:
+            raise ValueError("thinking_tokens cannot exceed output_tokens")
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +49,10 @@ class ModelProviderError(RuntimeError):
 
 class ProviderUnavailable(ModelProviderError):
     error_code = "provider_unavailable"
+
+
+class ProviderTimeout(ModelProviderError):
+    error_code = "generation_timeout"
 
 
 class ModelUnavailable(ModelProviderError):

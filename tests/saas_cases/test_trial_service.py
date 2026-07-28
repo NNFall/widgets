@@ -4,7 +4,7 @@ import asyncio
 import os
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.billing.service import (
@@ -773,6 +773,80 @@ async def test_postgres_concurrent_trial_reservation_is_atomic() -> None:
         assert len(entries) == 4
         assert sum(entry.amount for entry in entries) == 0
     finally:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.drop_all)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not POSTGRES_URL, reason="KAIGO_TEST_POSTGRES_URL is not configured")
+async def test_postgres_artifact_materialization_wins_compensation_race() -> None:
+    engine, factory, _, run_ids = await _database(
+        None,
+        database_url=POSTGRES_URL,
+    )
+    service = TrialService(factory)
+    reservation = await service.reserve_trial(10, run_ids[0], request_id="race")
+    materialization_locked = asyncio.Event()
+    allow_materialization = asyncio.Event()
+
+    async def materialize_valid_artifact() -> None:
+        async with factory() as database, database.begin():
+            run = (
+                await database.execute(
+                    select(GenerationRun)
+                    .where(GenerationRun.id == run_ids[0])
+                    .with_for_update()
+                )
+            ).scalar_one()
+            materialization_locked.set()
+            await allow_materialization.wait()
+            candidate = artifact(revision=1, stage=Stage.FOUNDATION)
+            database.add(
+                GenerationArtifact(
+                    run_id=run.id,
+                    revision=candidate.revision,
+                    stage=candidate.stage.value,
+                    html=candidate.body_html,
+                    css=candidate.css,
+                    javascript=candidate.javascript,
+                    config={"artifact": candidate.to_dict()},
+                    quality_status="verified",
+                )
+            )
+
+    materialization = asyncio.create_task(materialize_valid_artifact())
+    try:
+        await asyncio.wait_for(materialization_locked.wait(), timeout=2)
+        compensation = asyncio.create_task(
+            service.compensate_if_eligible(
+                reservation,
+                failure_kind=TrialFailureKind.INFRASTRUCTURE,
+            )
+        )
+        await asyncio.sleep(0.1)
+        assert not compensation.done(), "compensation must wait for the run materialization lock"
+
+        allow_materialization.set()
+        await asyncio.wait_for(materialization, timeout=2)
+        with pytest.raises(TrialCompensationDenied, match="полезный результат"):
+            await asyncio.wait_for(compensation, timeout=2)
+
+        async with factory() as database:
+            entitlement = await database.scalar(
+                select(TrialEntitlement).where(TrialEntitlement.user_id == 10)
+            )
+            assert entitlement.state == "reserved"
+            compensations = await database.scalar(
+                select(func.count())
+                .select_from(UsageLedger)
+                .where(UsageLedger.entry_type == "trial.compensation")
+            )
+            assert compensations == 0
+    finally:
+        allow_materialization.set()
+        if not materialization.done():
+            await materialization
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.drop_all)
         await engine.dispose()

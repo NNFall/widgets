@@ -26,11 +26,13 @@ class RoutedStructuredGenerationBackend:
         role: str,
         mode: str,
         run_id: UUID,
+        timeout_seconds: float | None = None,
     ) -> None:
         self._router = router
         self._role = role
         self._mode = mode
         self._run_id = run_id
+        self._timeout_seconds = timeout_seconds
 
     @property
     def model_name(self) -> str:
@@ -42,6 +44,7 @@ class RoutedStructuredGenerationBackend:
             mode=self._mode,
             run_id=self._run_id,
             request=request,
+            timeout_seconds=self._timeout_seconds,
         )
 
     async def aclose(self) -> None:
