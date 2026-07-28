@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+from typing import Any, cast
 from uuid import UUID, uuid4
 from weakref import WeakValueDictionary
 
@@ -155,6 +156,48 @@ class StageInput:
     context: dict = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class _VisualSnapshot:
+    cancel_requested: bool
+
+
+class DurableVisualStore:
+    """Persist visual audit evidence without advancing the durable checkpoint."""
+
+    def __init__(self, queue: "PostgresWorkerQueue", claim: RunClaim) -> None:
+        self._queue = queue
+        self._claim = claim
+
+    def _assert_run(self, run_id: str) -> None:
+        if run_id != str(self._claim.run_id):
+            raise ValueError("visual store run does not match the worker claim")
+
+    async def snapshot(self, run_id: str) -> _VisualSnapshot:
+        self._assert_run(run_id)
+        return _VisualSnapshot(
+            cancel_requested=await self._queue.cancellation_requested(
+                self._claim.run_id
+            )
+        )
+
+    async def append_event(self, run_id: str, **event: Any) -> None:
+        self._assert_run(run_id)
+        await self._queue.append_attempt_event(self._claim, **event)
+
+    async def stage_visual_candidate(
+        self, run_id: str, artifact: WidgetArtifact
+    ) -> None:
+        self._assert_run(run_id)
+        if artifact.stage is not Stage.MOTION_POLISH:
+            raise ValueError("visual candidate must be motion_polish")
+
+    async def stage_visual_draft(
+        self, run_id: str, artifact: WidgetArtifact
+    ) -> None:
+        self._assert_run(run_id)
+        await self._queue.stage_visual_draft(self._claim, artifact)
+
+
 class OrchestratorStageHandler:
     """Execute exactly the stage named by a durable worker claim."""
 
@@ -164,10 +207,12 @@ class OrchestratorStageHandler:
         queue: "PostgresWorkerQueue",
         engine_factories: dict[EngineName, Callable[[], BuilderEngine]],
         reference_analyzer: Callable[[str], Awaitable[ReferenceAnalysisResult]],
+        visual_gate_factory: Callable[[RunClaim], Any] | None = None,
     ) -> None:
         self._queue = queue
         self._factories = dict(engine_factories)
         self._reference_analyzer = reference_analyzer
+        self._visual_gate_factory = visual_gate_factory
 
     async def __call__(self, claim: RunClaim) -> StageResult:
         stage_input = await self._queue.stage_input(claim)
@@ -195,6 +240,7 @@ class OrchestratorStageHandler:
                 stage=stage,
                 previous=stage_input.previous_artifact,
                 context=stage_input.context,
+                claim=claim,
             )
         finally:
             await engine.close()
@@ -240,6 +286,7 @@ class OrchestratorStageHandler:
         stage: Stage,
         previous: WidgetArtifact | None,
         context: dict,
+        claim: RunClaim,
     ) -> StageResult:
         usage = TokenUsage()
         selected_direction: DirectionProposal | None = None
@@ -315,6 +362,25 @@ class OrchestratorStageHandler:
                 "invalid_artifact",
                 "Артефакт не прошёл безопасную проверку",
                 diagnostic="; ".join(issue.code for issue in issues),
+            )
+        if stage is Stage.MOTION_POLISH:
+            if (
+                self._visual_gate_factory is None
+                or previous is None
+                or selected_direction is None
+            ):
+                raise BuilderEngineError(
+                    "provider_unavailable",
+                    "Финальная визуальная проверка не настроена",
+                )
+            visual_gate = self._visual_gate_factory(claim)
+            candidate = await visual_gate.evaluate(
+                run_id=str(claim.run_id),
+                request=request,
+                engine=cast(Any, engine),
+                candidate=candidate,
+                previous=previous,
+                selected_direction=selected_direction,
             )
         return StageResult(
             public_message=(
@@ -698,6 +764,64 @@ class PostgresWorkerQueue:
                 .values(status="cancelled")
             )
 
+    async def fail_claim(
+        self,
+        claim: RunClaim,
+        error: BuilderEngineError,
+    ) -> None:
+        async with self._sessions() as database, database.begin():
+            now = self._now()
+            run = (
+                await database.execute(
+                    select(GenerationRun)
+                    .where(GenerationRun.id == claim.run_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if run is None:
+                raise LeaseLostError(f"run {claim.run_id} no longer exists")
+            await self._assert_claim(database, run, claim, now)
+            run.state = "failed"
+            run.finished_at = now
+            run.heartbeat_at = now
+            run.lease_owner = None
+            run.lease_expires_at = None
+            self._append_event(
+                database,
+                run,
+                event_type="stage.failed",
+                message=error.public_message,
+                now=now,
+                payload={
+                    "stage": claim.next_stage,
+                    "status": "failed",
+                    "worker_id": claim.worker_id,
+                    "attempt_id": str(claim.attempt_id),
+                    "error_code": error.error_code,
+                    "diagnostic": error.diagnostic,
+                },
+            )
+            self._append_event(
+                database,
+                run,
+                event_type="run.failed",
+                message=error.public_message,
+                now=now,
+                payload={
+                    "stage": claim.next_stage,
+                    "status": "failed",
+                    "error_code": error.error_code,
+                },
+            )
+            await database.execute(
+                update(Project)
+                .where(
+                    Project.id == run.project_id,
+                    Project.active_run_id == run.id,
+                )
+                .values(status="failed")
+            )
+
     async def _assert_claim(
         self,
         database: AsyncSession,
@@ -810,6 +934,102 @@ class PostgresWorkerQueue:
                 request=request,
                 previous_artifact=previous,
                 context=context,
+            )
+
+    async def append_attempt_event(
+        self,
+        claim: RunClaim,
+        *,
+        event_type: str,
+        stage: Stage | None,
+        status: str,
+        message: str,
+        revision: int | None = None,
+        usage: TokenUsage | None = None,
+        issues: tuple = (),
+        changes: tuple[str, ...] = (),
+        error_code: str | None = None,
+        diagnostic: str | None = None,
+    ) -> None:
+        async with self._sessions() as database, database.begin():
+            now = self._now()
+            run = (
+                await database.execute(
+                    select(GenerationRun)
+                    .where(GenerationRun.id == claim.run_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if run is None:
+                raise LeaseLostError(f"run {claim.run_id} no longer exists")
+            await self._assert_claim(database, run, claim, now)
+            self._append_event(
+                database,
+                run,
+                event_type=event_type,
+                message=message,
+                now=now,
+                payload={
+                    "stage": stage.value if stage is not None else None,
+                    "status": status,
+                    "revision": revision,
+                    "usage": (usage or TokenUsage()).to_dict(),
+                    "issues": [issue.to_dict() for issue in issues],
+                    "changes": list(changes),
+                    "error_code": error_code,
+                    "diagnostic": diagnostic,
+                    "worker_id": claim.worker_id,
+                    "attempt_id": str(claim.attempt_id),
+                },
+            )
+
+    async def stage_visual_draft(
+        self,
+        claim: RunClaim,
+        artifact: WidgetArtifact,
+    ) -> None:
+        async with self._sessions() as database, database.begin():
+            now = self._now()
+            run = (
+                await database.execute(
+                    select(GenerationRun)
+                    .where(GenerationRun.id == claim.run_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if run is None:
+                raise LeaseLostError(f"run {claim.run_id} no longer exists")
+            await self._assert_claim(database, run, claim, now)
+            previous_draft = (
+                await database.execute(
+                    select(GenerationEvent)
+                    .where(
+                        GenerationEvent.run_id == run.id,
+                        GenerationEvent.event_type == "artifact.draft_staged",
+                    )
+                    .order_by(GenerationEvent.sequence.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            self._append_event(
+                database,
+                run,
+                event_type="artifact.draft_staged",
+                message="Черновик визуальной проверки сохранён",
+                now=now,
+                payload={
+                    "stage": artifact.stage.value,
+                    "status": "needs_repair",
+                    "revision": artifact.revision,
+                    "artifact": artifact.to_dict(),
+                    "supersedes_sequence": (
+                        previous_draft.sequence
+                        if previous_draft is not None
+                        else None
+                    ),
+                    "worker_id": claim.worker_id,
+                    "attempt_id": str(claim.attempt_id),
+                },
             )
 
     async def stage_result(
@@ -1103,7 +1323,16 @@ class BuilderWorker:
             except LeaseLostError:
                 await self._cancel_task(task)
                 raise
-        result = await task
+        try:
+            result = await task
+        except BuilderEngineError as error:
+            if error.error_code not in {
+                "visual_quality_failed",
+                "visual_review_inconclusive",
+            }:
+                raise
+            await self.queue.fail_claim(claim, error)
+            return None
         if not isinstance(result, StageResult):
             raise TypeError("stage handler must return StageResult")
         if await self.queue.cancellation_requested(claim.run_id):
@@ -1152,6 +1381,7 @@ class BuilderWorker:
 
 __all__ = [
     "BuilderWorker",
+    "DurableVisualStore",
     "LeaseLostError",
     "OrchestratorStageHandler",
     "PostgresWorkerQueue",

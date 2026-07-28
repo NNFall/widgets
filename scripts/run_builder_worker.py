@@ -17,15 +17,19 @@ from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from builder_lab.config import BuilderLabConfig
+from builder_lab.browser_audit import BrowserAudit
 from builder_lab.reference_pipeline import GeminiReferencePipeline
+from builder_lab.visual_gate import VisualRepairGate
+from builder_lab.visual_review import GeminiRepairVerifier
 from builder_lab.worker import (
     BuilderWorker,
+    DurableVisualStore,
     OrchestratorStageHandler,
     PostgresWorkerQueue,
     RunClaim,
     StageResult,
 )
-from scripts.run_builder_lab import make_engine_factories
+from scripts.run_builder_lab import make_engine_factories, make_visual_critic_factory
 
 
 StageHandler = Callable[[RunClaim], Awaitable[StageResult]]
@@ -126,6 +130,23 @@ async def run() -> None:
             queue=queue,
             engine_factories=engine_factories,
             reference_analyzer=reference_pipeline.analyze,
+            visual_gate_factory=lambda claim: VisualRepairGate(
+                store=DurableVisualStore(queue, claim),
+                audit_factory=lambda: BrowserAudit(
+                    timeout_ms=config.browser_audit_timeout_ms,
+                    total_timeout_seconds=(
+                        config.browser_audit_total_timeout_seconds
+                    ),
+                ),
+                critic_factory=make_visual_critic_factory(config),
+                verifier_factory=lambda: GeminiRepairVerifier(
+                    api_key=config.gemini_api_key,
+                    model=config.visual_critic_model,
+                    thinking_level=config.visual_critic_thinking_level,
+                    base_url=config.gemini_base_url,
+                    timeout_seconds=config.visual_critic_timeout_seconds,
+                ),
+            ),
         )
     handler = load_stage_handler(
         configured_handler,

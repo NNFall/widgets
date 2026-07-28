@@ -3,6 +3,7 @@ import importlib
 import os
 import shutil
 import subprocess
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -14,11 +15,20 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db.base import Base
 from app.db.models import Tenant, User
-from app.saas.models import GenerationEvent, GenerationRun, Project
-from builder_lab.engines.base import EngineResult
-from builder_lab.models import BuilderRequest, EngineName, Stage, TokenUsage
+from app.saas.models import GenerationArtifact, GenerationEvent, GenerationRun, Project
+from builder_lab.engines.base import BuilderEngineError, EngineResult
+from builder_lab.models import (
+    BuilderRequest,
+    DirectionProposal,
+    DirectionRole,
+    EngineName,
+    Stage,
+    TokenUsage,
+)
+from builder_lab.postgres_store import PostgresRunStore
 from builder_lab.worker import (
     BuilderWorker,
+    DurableVisualStore,
     LeaseLostError,
     OrchestratorStageHandler,
     PostgresWorkerQueue,
@@ -137,6 +147,245 @@ async def test_builtin_handler_executes_only_claimed_engine_stage() -> None:
     assert result.output_refs == ("provider-call-1",)
     assert result.usage.total_tokens == 10
     assert engine.closed
+
+
+async def _motion_polish_run(factory, project_id):
+    request = BuilderRequest(
+        engine=EngineName.DIRECT,
+        brief="Visually verify the durable candidate",
+    )
+    previous = artifact(revision=4, stage=Stage.CONVERSATION)
+    direction = DirectionProposal(
+        proposal_id="candidate-1",
+        role=DirectionRole.INTERACTION_INVENTOR,
+        title="Durable visual direction",
+        art_direction="A compact branded conversation widget.",
+        interaction_model="The panel opens without obscuring the page.",
+        safeguards=("Keep all chat controls functional",),
+    )
+    async with factory() as database, database.begin():
+        run = GenerationRun(
+            project_id=project_id,
+            mode="direct",
+            state="queued",
+            progress=66,
+            last_completed_stage="conversation",
+            next_event_sequence=3,
+            idempotency_key=f"worker-motion-{uuid4()}",
+        )
+        database.add(run)
+        await database.flush()
+        database.add_all(
+            [
+                GenerationEvent(
+                    id=1,
+                    run_id=run.id,
+                    sequence=1,
+                    event_type="run.created",
+                    public_message="Запуск создан",
+                    payload={"request": request.to_dict()},
+                ),
+                GenerationEvent(
+                    id=2,
+                    run_id=run.id,
+                    sequence=2,
+                    event_type="stage.result_staged",
+                    public_message="Контекст направления сохранён",
+                    payload={
+                        "stage": "conversation",
+                        "result": StageResult(
+                            public_message="Диалог готов",
+                            context={
+                                "selected_direction": direction.to_dict(),
+                            },
+                        ).to_dict(),
+                    },
+                ),
+                GenerationArtifact(
+                    run_id=run.id,
+                    revision=previous.revision,
+                    stage=previous.stage.value,
+                    html=previous.body_html,
+                    css=previous.css,
+                    javascript=previous.javascript,
+                    config={"artifact": previous.to_dict()},
+                    quality_status="verified",
+                ),
+            ]
+        )
+        return run.id, request, previous, direction
+
+
+class _MotionEngine:
+    def __init__(self):
+        self.closed = False
+
+    async def generate(self, **kwargs):
+        return EngineResult(
+            artifact=artifact(
+                revision=kwargs["revision"],
+                stage=kwargs["stage"],
+                change_summary="Сырой motion polish",
+            ),
+            usage=TokenUsage(prompt_tokens=11, output_tokens=5),
+            provider_request_id="motion-call",
+        )
+
+    async def close(self):
+        self.closed = True
+
+    async def cancel(self):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_motion_polish_is_fenced_only_after_visual_gate_success(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    run_id, _, previous, _ = await _motion_polish_run(factory, project_id)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    motion_engine = _MotionEngine()
+
+    class PassingGate:
+        def __init__(self):
+            self.calls = 0
+            self.accepted = None
+
+        async def evaluate(self, **kwargs):
+            self.calls += 1
+            async with factory() as database:
+                run = await database.get(GenerationRun, run_id)
+                revision_five = (
+                    await database.execute(
+                        select(GenerationArtifact).where(
+                            GenerationArtifact.run_id == run_id,
+                            GenerationArtifact.revision == 5,
+                        )
+                    )
+                ).scalar_one_or_none()
+                assert run.state == "running"
+                assert revision_five is None
+            self.accepted = replace(
+                kwargs["candidate"],
+                css=kwargs["candidate"].css + "\n/* visually accepted */",
+                change_summary="Визуальная проверка пройдена",
+            )
+            return self.accepted
+
+    gate = PassingGate()
+    handler = OrchestratorStageHandler(
+        queue=queue,
+        engine_factories={EngineName.DIRECT: lambda: motion_engine},
+        reference_analyzer=lambda _url: None,
+        visual_gate_factory=lambda _claim: gate,
+    )
+    worker = BuilderWorker(
+        queue=queue,
+        worker_id="visual-worker",
+        stage_handler=handler,
+        heartbeat_interval=1,
+    )
+    try:
+        assert await worker.run_once()
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_id)
+            persisted = (
+                await database.execute(
+                    select(GenerationArtifact).where(
+                        GenerationArtifact.run_id == run_id,
+                        GenerationArtifact.revision == previous.revision + 1,
+                    )
+                )
+            ).scalar_one()
+            assert gate.calls == 1
+            assert run.state == "completed"
+            assert persisted.quality_status == "verified"
+            assert persisted.config["artifact"] == gate.accepted.to_dict()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_visual_gate_failure_preserves_draft_and_never_completes(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    run_id, _, _, _ = await _motion_polish_run(factory, project_id)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    durable_store = PostgresRunStore(factory, project_id=project_id)
+
+    class FailingGate:
+        def __init__(self, store):
+            self.store = store
+
+        async def evaluate(self, **kwargs):
+            await self.store.append_event(
+                str(run_id),
+                event_type="visual_audit.completed",
+                stage=Stage.MOTION_POLISH,
+                status="completed",
+                message="Критики завершили проверку",
+                revision=kwargs["candidate"].revision,
+            )
+            await self.store.stage_visual_draft(
+                str(run_id), kwargs["candidate"]
+            )
+            raise BuilderEngineError(
+                "visual_quality_failed",
+                "Финальная визуальная проверка виджета не пройдена",
+            )
+
+    handler = OrchestratorStageHandler(
+        queue=queue,
+        engine_factories={EngineName.DIRECT: _MotionEngine},
+        reference_analyzer=lambda _url: None,
+        visual_gate_factory=lambda claim: FailingGate(
+            DurableVisualStore(queue, claim)
+        ),
+    )
+    worker = BuilderWorker(
+        queue=queue,
+        worker_id="visual-worker",
+        stage_handler=handler,
+        heartbeat_interval=1,
+    )
+    try:
+        assert await worker.run_once()
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_id)
+            revision_five = (
+                await database.execute(
+                    select(GenerationArtifact).where(
+                        GenerationArtifact.run_id == run_id,
+                        GenerationArtifact.revision == 5,
+                    )
+                )
+            ).scalar_one_or_none()
+            assert run.state == "failed"
+            assert run.last_completed_stage == "conversation"
+            assert revision_five is None
+            visual_events = (
+                await database.execute(
+                    select(GenerationEvent).where(
+                        GenerationEvent.run_id == run_id,
+                        GenerationEvent.event_type == "visual_audit.completed",
+                    )
+                )
+            ).scalars().all()
+            assert len(visual_events) == 1
+            terminal_events = (
+                await database.execute(
+                    select(GenerationEvent.event_type).where(
+                        GenerationEvent.run_id == run_id,
+                        GenerationEvent.event_type.in_((
+                            "stage.failed",
+                            "run.failed",
+                        )),
+                    ).order_by(GenerationEvent.sequence)
+                )
+            ).scalars().all()
+            assert terminal_events == ["stage.failed", "run.failed"]
+        draft = await durable_store.preview_artifact(str(run_id), revision=5)
+        assert draft.stage is Stage.MOTION_POLISH
+    finally:
+        await engine.dispose()
 
 
 async def _database(tmp_path):
