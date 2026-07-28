@@ -11,11 +11,13 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    Index,
     JSON,
     String,
     Text,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -115,6 +117,13 @@ class GenerationRun(Base):
     lease_owner: Mapped[str | None] = mapped_column(String(128))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    stage_retry_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    retry_not_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_code: Mapped[str | None] = mapped_column(String(128))
     error_message: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -133,6 +142,23 @@ class GenerationEvent(Base):
     public_message: Mapped[str | None] = mapped_column(Text)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+Index(
+    "ix_generation_runs_worker_claim",
+    GenerationRun.state,
+    GenerationRun.retry_not_before,
+    GenerationRun.lease_expires_at,
+    GenerationRun.created_at,
+    GenerationRun.id,
+    postgresql_where=text("state IN ('queued', 'running')"),
+)
+Index(
+    "ix_generation_events_run_type_sequence_desc",
+    GenerationEvent.run_id,
+    GenerationEvent.event_type,
+    GenerationEvent.sequence.desc(),
+)
 
 
 class GenerationArtifact(Base):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import secrets
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -58,6 +59,46 @@ STAGE_PUBLIC_NAMES = {
     "agent_build": "агентская сборка виджета",
 }
 _CLAIM_LOCKS: WeakValueDictionary[int, asyncio.Lock] = WeakValueDictionary()
+RETRYABLE_ENGINE_ERRORS = frozenset({"quota_exceeded", "generation_timeout"})
+MAX_STAGE_EXECUTIONS = 3
+MAX_STAGE_RESULT_BYTES = 1_048_576
+MAX_STAGE_CONTEXT_BYTES = 131_072
+MAX_STAGE_OUTPUT_REFS = 32
+MAX_STAGE_EVENTS = 64
+ALLOWED_STAGE_RESULT_EVENTS = frozenset({"repair.completed"})
+
+
+def _strict_json_clone(value: Any, *, field_name: str) -> Any:
+    def validate(item: Any) -> None:
+        if item is None or isinstance(item, (str, bool, int)):
+            return
+        if isinstance(item, float):
+            if not math.isfinite(item):
+                raise ValueError(f"stage result {field_name} contains a non-finite number")
+            return
+        if isinstance(item, list):
+            for child in item:
+                validate(child)
+            return
+        if isinstance(item, dict):
+            if any(not isinstance(key, str) for key in item):
+                raise ValueError(f"stage result {field_name} has a non-string key")
+            for child in item.values():
+                validate(child)
+            return
+        raise ValueError(f"stage result {field_name} is not strict JSON")
+
+    validate(value)
+    try:
+        encoded = json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"stage result {field_name} is not strict JSON") from exc
+    return json.loads(encoded)
 
 
 class LeaseLostError(RuntimeError):
@@ -93,27 +134,62 @@ class StageResult:
     context: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.public_message, str):
+            raise ValueError("stage result public_message is invalid")
         message = self.public_message.strip()
         if not message or len(message) > 2_000 or "\x00" in message:
             raise ValueError("stage result public_message is invalid")
-        refs = tuple(str(ref).strip() for ref in self.output_refs)
-        if any(not ref or len(ref) > 512 for ref in refs):
+        if any(not isinstance(ref, str) for ref in self.output_refs):
             raise ValueError("stage result output_refs are invalid")
+        refs = tuple(ref.strip() for ref in self.output_refs)
+        if len(refs) > MAX_STAGE_OUTPUT_REFS or any(
+            not ref or len(ref) > 512 for ref in refs
+        ):
+            raise ValueError("stage result output_refs are invalid")
+        if len(self.events) > MAX_STAGE_EVENTS:
+            raise ValueError("stage result events are invalid")
+        events = _strict_json_clone(list(self.events), field_name="events")
+        for event in events:
+            if not isinstance(event, dict):
+                raise ValueError("stage result events are invalid")
+            event_type = event.get("event_type")
+            event_message = event.get("message")
+            if event_type not in ALLOWED_STAGE_RESULT_EVENTS:
+                raise ValueError("stage result event type is not allowed")
+            if (
+                not isinstance(event_message, str)
+                or not event_message.strip()
+                or len(event_message) > 2_000
+            ):
+                raise ValueError("stage result events are invalid")
+            if set(event) - {"event_type", "message", "status"}:
+                raise ValueError("stage result events contain unsupported fields")
+            if "status" in event and not isinstance(event["status"], str):
+                raise ValueError("stage result events are invalid")
+        context = _strict_json_clone(self.context, field_name="context")
+        if not isinstance(context, dict):
+            raise ValueError("stage result context must be an object")
+        context_size = len(
+            json.dumps(
+                context, ensure_ascii=False, allow_nan=False, separators=(",", ":")
+            ).encode("utf-8")
+        )
+        if context_size > MAX_STAGE_CONTEXT_BYTES:
+            raise ValueError("stage result context is too large")
         object.__setattr__(self, "public_message", message)
         object.__setattr__(self, "output_refs", refs)
-        object.__setattr__(
-            self,
-            "events",
-            tuple(
-                json.loads(json.dumps(event, ensure_ascii=False))
-                for event in self.events
-            ),
+        object.__setattr__(self, "events", tuple(events))
+        object.__setattr__(self, "context", context)
+        total_size = len(
+            json.dumps(
+                self.to_dict(),
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
         )
-        object.__setattr__(
-            self,
-            "context",
-            json.loads(json.dumps(self.context, ensure_ascii=False)),
-        )
+        if total_size > MAX_STAGE_RESULT_BYTES:
+            raise ValueError("stage result is too large")
 
     def to_dict(self) -> dict:
         return {
@@ -401,11 +477,13 @@ class PostgresWorkerQueue:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         lease_seconds: float = 60.0,
+        retry_backoff_seconds: float = 5.0,
     ) -> None:
-        if lease_seconds <= 0:
-            raise ValueError("lease_seconds must be positive")
+        if lease_seconds <= 0 or retry_backoff_seconds <= 0:
+            raise ValueError("worker timing values must be positive")
         self._sessions = session_factory
         self.lease_seconds = float(lease_seconds)
+        self.retry_backoff_seconds = float(retry_backoff_seconds)
         bind = session_factory.kw.get("bind")
         self._dialect_name = bind.dialect.name if bind is not None else ""
         namespace = id(bind)
@@ -462,11 +540,16 @@ class PostgresWorkerQueue:
             GenerationRun.lease_expires_at.is_(None),
             GenerationRun.lease_expires_at <= now,
         )
+        retry_ready = or_(
+            GenerationRun.retry_not_before.is_(None),
+            GenerationRun.retry_not_before <= now,
+        )
         return (
             select(GenerationRun)
             .where(
                 GenerationRun.state.in_(("queued", "running")),
                 available_lease,
+                retry_ready,
             )
             .order_by(GenerationRun.created_at, GenerationRun.id)
             .with_for_update(skip_locked=True)
@@ -764,6 +847,91 @@ class PostgresWorkerQueue:
                 .values(status="cancelled")
             )
 
+    async def release_claim(self, claim: RunClaim) -> None:
+        """Release an interrupted attempt without discarding a staged result."""
+
+        async with self._sessions() as database, database.begin():
+            now = self._now()
+            run = (
+                await database.execute(
+                    select(GenerationRun)
+                    .where(GenerationRun.id == claim.run_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if run is None:
+                raise LeaseLostError(f"run {claim.run_id} no longer exists")
+            await self._assert_claim(database, run, claim, now)
+            run.state = "queued"
+            run.heartbeat_at = now
+            run.lease_owner = None
+            run.lease_expires_at = None
+            self._append_event(
+                database,
+                run,
+                event_type="stage.interrupted",
+                message="Работа этапа безопасно приостановлена",
+                now=now,
+                payload={
+                    "stage": claim.next_stage,
+                    "status": "queued",
+                    "worker_id": claim.worker_id,
+                    "attempt_id": str(claim.attempt_id),
+                },
+            )
+
+    async def _fail_locked(
+        self,
+        database: AsyncSession,
+        run: GenerationRun,
+        claim: RunClaim,
+        error: BuilderEngineError,
+        now: datetime,
+    ) -> None:
+        run.state = "failed"
+        run.finished_at = now
+        run.heartbeat_at = now
+        run.retry_not_before = None
+        run.error_code = error.error_code
+        run.error_message = error.public_message[:2_000]
+        run.lease_owner = None
+        run.lease_expires_at = None
+        self._append_event(
+            database,
+            run,
+            event_type="stage.failed",
+            message=error.public_message,
+            now=now,
+            payload={
+                "stage": claim.next_stage,
+                "status": "failed",
+                "worker_id": claim.worker_id,
+                "attempt_id": str(claim.attempt_id),
+                "error_code": error.error_code,
+                "diagnostic": error.diagnostic,
+            },
+        )
+        self._append_event(
+            database,
+            run,
+            event_type="run.failed",
+            message=error.public_message,
+            now=now,
+            payload={
+                "stage": claim.next_stage,
+                "status": "failed",
+                "error_code": error.error_code,
+            },
+        )
+        await database.execute(
+            update(Project)
+            .where(
+                Project.id == run.project_id,
+                Project.active_run_id == run.id,
+            )
+            .values(status="failed")
+        )
+
     async def fail_claim(
         self,
         claim: RunClaim,
@@ -781,46 +949,55 @@ class PostgresWorkerQueue:
             if run is None:
                 raise LeaseLostError(f"run {claim.run_id} no longer exists")
             await self._assert_claim(database, run, claim, now)
-            run.state = "failed"
-            run.finished_at = now
+            await self._fail_locked(database, run, claim, error, now)
+
+    async def retry_claim(
+        self,
+        claim: RunClaim,
+        error: BuilderEngineError,
+    ) -> bool:
+        async with self._sessions() as database, database.begin():
+            now = self._now()
+            run = (
+                await database.execute(
+                    select(GenerationRun)
+                    .where(GenerationRun.id == claim.run_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if run is None:
+                raise LeaseLostError(f"run {claim.run_id} no longer exists")
+            await self._assert_claim(database, run, claim, now)
+            failed_execution = run.stage_retry_count + 1
+            if failed_execution >= MAX_STAGE_EXECUTIONS:
+                await self._fail_locked(database, run, claim, error, now)
+                return False
+            delay = self.retry_backoff_seconds * (2 ** (failed_execution - 1))
+            not_before = now + timedelta(seconds=delay)
+            run.stage_retry_count = failed_execution
+            run.retry_not_before = not_before
+            run.state = "queued"
             run.heartbeat_at = now
             run.lease_owner = None
             run.lease_expires_at = None
             self._append_event(
                 database,
                 run,
-                event_type="stage.failed",
-                message=error.public_message,
+                event_type="stage.retry_scheduled",
+                message="Этап будет повторён после временной ошибки провайдера",
                 now=now,
                 payload={
                     "stage": claim.next_stage,
-                    "status": "failed",
+                    "status": "retry_scheduled",
+                    "attempt": failed_execution,
+                    "max_executions": MAX_STAGE_EXECUTIONS,
+                    "not_before": not_before.isoformat(),
+                    "error_code": error.error_code,
                     "worker_id": claim.worker_id,
                     "attempt_id": str(claim.attempt_id),
-                    "error_code": error.error_code,
-                    "diagnostic": error.diagnostic,
                 },
             )
-            self._append_event(
-                database,
-                run,
-                event_type="run.failed",
-                message=error.public_message,
-                now=now,
-                payload={
-                    "stage": claim.next_stage,
-                    "status": "failed",
-                    "error_code": error.error_code,
-                },
-            )
-            await database.execute(
-                update(Project)
-                .where(
-                    Project.id == run.project_id,
-                    Project.active_run_id == run.id,
-                )
-                .values(status="failed")
-            )
+            return True
 
     async def _assert_claim(
         self,
@@ -1052,6 +1229,11 @@ class PostgresWorkerQueue:
             )
             if existing is not None:
                 return StageResult.from_dict(existing.payload["result"])
+            await self._validate_stage_result_boundary(
+                database,
+                claim=claim,
+                result=result,
+            )
             self._append_event(
                 database,
                 run,
@@ -1066,6 +1248,48 @@ class PostgresWorkerQueue:
                 },
             )
             return result
+
+    @staticmethod
+    async def _validate_stage_result_boundary(
+        database: AsyncSession,
+        *,
+        claim: RunClaim,
+        result: StageResult,
+    ) -> None:
+        if claim.next_stage == "reference_analysis":
+            if result.artifact is not None:
+                raise ValueError("reference analysis cannot stage an artifact")
+            return
+        if result.request is not None:
+            raise ValueError("only reference analysis can update the builder request")
+        if result.artifact is None:
+            return
+        expected_stage = Stage(claim.next_stage)
+        if result.artifact.stage is not expected_stage:
+            raise ValueError(
+                f"artifact stage {result.artifact.stage.value!r} does not match "
+                f"claimed stage {expected_stage.value!r}"
+            )
+        previous = (
+            await database.execute(
+                select(GenerationArtifact)
+                .where(GenerationArtifact.run_id == claim.run_id)
+                .order_by(GenerationArtifact.revision.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        previous_revision = previous.revision if previous is not None else 0
+        if result.artifact.revision != previous_revision + 1:
+            raise ValueError(
+                "artifact revision must be exactly one greater than the latest revision"
+            )
+        issues = validate_artifact(
+            result.artifact,
+            previous_revision=previous_revision,
+        )
+        if issues:
+            codes = ", ".join(sorted({issue.code for issue in issues}))
+            raise ValueError(f"artifact failed stage boundary validation: {codes}")
 
     async def _materialize_result(
         self,
@@ -1151,6 +1375,10 @@ class PostgresWorkerQueue:
         next_stage = stages[stage_index + 1] if stage_index + 1 < len(stages) else None
         run.last_completed_stage = stage
         run.current_stage = next_stage
+        run.stage_retry_count = 0
+        run.retry_not_before = None
+        run.error_code = None
+        run.error_message = None
         run.progress = int(((stage_index + 1) * 100) / len(stages))
         run.heartbeat_at = now
         self._append_event(
@@ -1280,6 +1508,12 @@ class BuilderWorker:
         self.heartbeat_interval = float(heartbeat_interval)
         self.idle_poll_interval = float(idle_poll_interval)
         self._stop = asyncio.Event()
+        self._active_claim: RunClaim | None = None
+        self._active_stage_task: asyncio.Task[StageResult] | None = None
+        self._active_execution_task: asyncio.Task[bool] | None = None
+        self._active_done = asyncio.Event()
+        self._active_done.set()
+        self._shutdown_lock = asyncio.Lock()
 
     async def _cancel_task(self, task: asyncio.Task[None]) -> None:
         if not task.done():
@@ -1290,6 +1524,9 @@ class BuilderWorker:
             pass
 
     async def _run_claim(self, claim: RunClaim) -> str | None:
+        if self._stop.is_set():
+            await self.queue.release_claim(claim)
+            return None
         if await self.queue.cancellation_requested(claim.run_id):
             await self.queue.cancel_claim(claim.run_id, worker_id=self.worker_id)
             return None
@@ -1304,35 +1541,42 @@ class BuilderWorker:
         )
         if task is None:
             return await self.queue.finalize_stage(claim)
-        while not task.done():
-            done, _ = await asyncio.wait(
-                {task}, timeout=self.heartbeat_interval
-            )
-            if done:
-                break
-            if await self.queue.cancellation_requested(claim.run_id):
-                await self._cancel_task(task)
-                await self.queue.cancel_claim(
-                    claim.run_id, worker_id=self.worker_id
-                )
-                return None
-            try:
-                await self.queue.heartbeat(
-                    claim.run_id, worker_id=self.worker_id
-                )
-            except LeaseLostError:
-                await self._cancel_task(task)
-                raise
+        self._active_stage_task = task
         try:
+            while not task.done():
+                done, _ = await asyncio.wait(
+                    {task}, timeout=self.heartbeat_interval
+                )
+                if done:
+                    break
+                if await self.queue.cancellation_requested(claim.run_id):
+                    await self._cancel_task(task)
+                    await self.queue.cancel_claim(
+                        claim.run_id, worker_id=self.worker_id
+                    )
+                    return None
+                try:
+                    await self.queue.heartbeat(
+                        claim.run_id, worker_id=self.worker_id
+                    )
+                except LeaseLostError:
+                    await self._cancel_task(task)
+                    raise
             result = await task
+        except asyncio.CancelledError:
+            if self._stop.is_set():
+                await asyncio.shield(self.queue.release_claim(claim))
+                return None
+            raise
         except BuilderEngineError as error:
-            if error.error_code not in {
-                "visual_quality_failed",
-                "visual_review_inconclusive",
-            }:
-                raise
-            await self.queue.fail_claim(claim, error)
+            if error.error_code in RETRYABLE_ENGINE_ERRORS:
+                await self.queue.retry_claim(claim, error)
+            else:
+                await self.queue.fail_claim(claim, error)
             return None
+        finally:
+            if self._active_stage_task is task:
+                self._active_stage_task = None
         if not isinstance(result, StageResult):
             raise TypeError("stage handler must return StageResult")
         if await self.queue.cancellation_requested(claim.run_id):
@@ -1346,17 +1590,35 @@ class BuilderWorker:
             return None
 
     async def run_once(self) -> bool:
+        if self._stop.is_set():
+            return False
         claim = await self.queue.claim(self.worker_id)
         if claim is None:
             return False
-        while True:
-            next_stage = await self._run_claim(claim)
-            if next_stage is None:
-                break
-            claim = await self.queue.continue_claim(
-                claim.run_id, worker_id=self.worker_id
-            )
-        return True
+        self._active_done.clear()
+        self._active_execution_task = asyncio.current_task()
+        self._active_claim = claim
+        try:
+            while True:
+                self._active_claim = claim
+                next_stage = await self._run_claim(claim)
+                if next_stage is None or self._stop.is_set():
+                    break
+                claim = await self.queue.continue_claim(
+                    claim.run_id, worker_id=self.worker_id
+                )
+            return True
+        except asyncio.CancelledError:
+            if self._stop.is_set() and self._active_claim is not None:
+                try:
+                    await asyncio.shield(self.queue.release_claim(self._active_claim))
+                except LeaseLostError:
+                    pass
+            raise
+        finally:
+            self._active_claim = None
+            self._active_execution_task = None
+            self._active_done.set()
 
     async def run_forever(self) -> None:
         while not self._stop.is_set():
@@ -1377,6 +1639,26 @@ class BuilderWorker:
 
     def stop(self) -> None:
         self._stop.set()
+
+    async def shutdown(self) -> None:
+        """Stop new claims, cancel provider work, and release the active lease."""
+
+        async with self._shutdown_lock:
+            self._stop.set()
+            stage_task = self._active_stage_task
+            if stage_task is not None and not stage_task.done():
+                stage_task.cancel()
+            execution_task = self._active_execution_task
+            if (
+                execution_task is not None
+                and execution_task is not asyncio.current_task()
+                and not execution_task.done()
+            ):
+                try:
+                    await execution_task
+                except asyncio.CancelledError:
+                    pass
+            await self._active_done.wait()
 
 
 __all__ = [

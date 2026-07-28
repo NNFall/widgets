@@ -5,6 +5,7 @@ import importlib
 import inspect
 import logging
 import os
+import signal
 import socket
 import sys
 from collections.abc import Awaitable, Callable
@@ -34,6 +35,30 @@ from scripts.run_builder_lab import make_engine_factories, make_visual_critic_fa
 
 StageHandler = Callable[[RunClaim], Awaitable[StageResult]]
 BUILTIN_STAGE_HANDLER = "builtin:orchestrator"
+
+
+def install_signal_handlers(
+    worker: BuilderWorker,
+    *,
+    loop=None,
+) -> None:
+    """Translate process termination signals into a fenced worker shutdown."""
+
+    event_loop = loop or asyncio.get_running_loop()
+
+    def request_shutdown() -> None:
+        event_loop.create_task(worker.shutdown())
+
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        try:
+            event_loop.add_signal_handler(signum, request_shutdown)
+        except (NotImplementedError, RuntimeError):
+            signal.signal(
+                signum,
+                lambda *_args, callback=request_shutdown: event_loop.call_soon_threadsafe(
+                    callback
+                ),
+            )
 
 
 def _database_url() -> str:
@@ -160,9 +185,11 @@ async def run() -> None:
         idle_poll_interval=_positive_float("KAIGO_BUILDER_POLL_SECONDS", "0.5"),
     )
     logging.getLogger(__name__).info("starting durable builder worker %s", worker_id)
+    install_signal_handlers(worker)
     try:
         await worker.run_forever()
     finally:
+        await worker.shutdown()
         await engine.dispose()
 
 

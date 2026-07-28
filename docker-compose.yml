@@ -20,7 +20,9 @@ services:
       - 8.8.8.8
 
   builder-worker:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.builder-lab
     container_name: ai_project_builder_worker
     restart: unless-stopped
     init: true

@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import os
+import signal
 import shutil
 import subprocess
 from dataclasses import replace
@@ -36,7 +37,7 @@ from builder_lab.worker import (
     StageInput,
     StageResult,
 )
-from scripts.run_builder_worker import load_stage_handler
+from scripts.run_builder_worker import install_signal_handlers, load_stage_handler
 from tests.builder_lab_cases.test_validation import artifact
 
 
@@ -91,6 +92,7 @@ def test_compose_config_wires_builtin_handler_without_project_env(tmp_path) -> N
     )
 
     assert "KAIGO_BUILDER_STAGE_HANDLER: builtin:orchestrator" in completed.stdout
+    assert "dockerfile: Dockerfile.builder-lab" in completed.stdout
 
 
 @pytest.mark.asyncio
@@ -788,6 +790,143 @@ async def test_handler_crash_leaves_checkpoint_retryable_after_expiry(tmp_path) 
 
 
 @pytest.mark.asyncio
+async def test_retryable_engine_error_has_three_total_attempts_and_not_before(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(
+        factory,
+        lease_seconds=30,
+        retry_backoff_seconds=0.05,
+    )
+    run_id = await _queued_run(factory, project_id, mode="antigravity")
+    calls = 0
+
+    async def handle(claim):
+        nonlocal calls
+        if claim.next_stage == "reference_analysis":
+            calls += 1
+            if calls < 3:
+                raise BuilderEngineError(
+                    "quota_exceeded",
+                    "Провайдер временно ограничил запросы",
+                )
+        return StageResult(public_message=f"Готов этап {claim.next_stage}")
+
+    worker = BuilderWorker(
+        queue=queue,
+        worker_id="retry-worker",
+        stage_handler=handle,
+        heartbeat_interval=1,
+    )
+    try:
+        assert await worker.run_once()
+        assert await queue.claim("too-early") is None
+        await asyncio.sleep(0.06)
+        assert await worker.run_once()
+        assert await queue.claim("still-too-early") is None
+        await asyncio.sleep(0.11)
+        assert await worker.run_once()
+
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_id)
+            retries = (
+                await database.execute(
+                    select(GenerationEvent)
+                    .where(
+                        GenerationEvent.run_id == run_id,
+                        GenerationEvent.event_type == "stage.retry_scheduled",
+                    )
+                    .order_by(GenerationEvent.sequence)
+                )
+            ).scalars().all()
+            assert calls == 3
+            assert len(retries) == 2
+            assert [event.payload["attempt"] for event in retries] == [1, 2]
+            assert run.state == "completed"
+            assert run.stage_retry_count == 0
+            assert run.retry_not_before is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_third_retryable_failure_fails_run_without_fourth_attempt(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(
+        factory,
+        lease_seconds=30,
+        retry_backoff_seconds=0.01,
+    )
+    run_id = await _queued_run(factory, project_id, mode="antigravity")
+    calls = 0
+
+    async def handle(_claim):
+        nonlocal calls
+        calls += 1
+        raise BuilderEngineError(
+            "generation_timeout",
+            "Провайдер не ответил вовремя",
+        )
+
+    worker = BuilderWorker(
+        queue=queue,
+        worker_id="retry-worker",
+        stage_handler=handle,
+        heartbeat_interval=1,
+    )
+    try:
+        for delay in (0.02, 0.03, 0):
+            assert await worker.run_once()
+            if delay:
+                await asyncio.sleep(delay)
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_id)
+            assert calls == 3
+            assert run.state == "failed"
+            assert run.error_code == "generation_timeout"
+            assert run.error_message == "Провайдер не ответил вовремя"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_deterministic_engine_error_fails_immediately_with_safe_fields(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id)
+    calls = 0
+
+    async def handle(_claim):
+        nonlocal calls
+        calls += 1
+        raise BuilderEngineError(
+            "provider_unavailable",
+            "Модель генерации сейчас не настроена",
+            diagnostic="secret upstream diagnostic",
+        )
+
+    worker = BuilderWorker(
+        queue=queue,
+        worker_id="deterministic-worker",
+        stage_handler=handle,
+    )
+    try:
+        assert await worker.run_once()
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_id)
+            assert calls == 1
+            assert run.state == "failed"
+            assert run.error_code == "provider_unavailable"
+            assert run.error_message == "Модель генерации сейчас не настроена"
+            assert "secret" not in run.error_message
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_staged_result_survives_crash_without_reexecuting_stage(
     tmp_path, monkeypatch
 ) -> None:
@@ -871,6 +1010,232 @@ async def test_stale_attempt_cannot_finalize_staged_result(tmp_path) -> None:
             await queue.finalize_stage(stale)
 
         assert await queue.finalize_stage(replacement) == "art_direction"
+    finally:
+        await engine.dispose()
+
+
+def test_stage_result_rejects_unbounded_or_non_json_payloads() -> None:
+    with pytest.raises(ValueError, match="output_refs"):
+        StageResult(public_message="ok", output_refs=tuple(f"ref-{i}" for i in range(33)))
+    with pytest.raises(ValueError, match="output_refs"):
+        StageResult(public_message="ok", output_refs=(123,))
+    with pytest.raises(ValueError, match="events"):
+        StageResult(
+            public_message="ok",
+            events=tuple(
+                {"event_type": "repair.completed", "message": "ok"}
+                for _ in range(65)
+            ),
+        )
+    with pytest.raises(ValueError, match="context"):
+        StageResult(public_message="ok", context={"bad": float("nan")})
+    with pytest.raises(ValueError, match="non-string key"):
+        StageResult(public_message="ok", context={1: "bad"})
+    with pytest.raises(ValueError, match="context is too large"):
+        StageResult(public_message="ok", context={"blob": "x" * 131_073})
+    with pytest.raises(ValueError, match="stage result is too large"):
+        StageResult(
+            public_message="ok",
+            artifact=artifact(javascript="x" * 1_048_576),
+        )
+    with pytest.raises(ValueError, match="event type"):
+        StageResult(
+            public_message="ok",
+            events=({"event_type": "run.completed", "message": "forged"},),
+        )
+
+
+@pytest.mark.asyncio
+async def test_stage_result_boundary_rejects_wrong_stage_artifact_before_event(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    run_id, _request, _previous, _direction = await _motion_polish_run(
+        factory, project_id
+    )
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    try:
+        claim = await queue.claim("validator")
+        assert claim is not None
+        assert claim.next_stage == "motion_polish"
+        candidate = artifact(revision=5, stage=Stage.CONVERSATION)
+
+        with pytest.raises(ValueError, match="artifact stage"):
+            await queue.stage_result(
+                claim,
+                StageResult(public_message="bad", artifact=candidate),
+            )
+        with pytest.raises(ValueError, match="exactly one greater"):
+            await queue.stage_result(
+                claim,
+                StageResult(
+                    public_message="bad revision",
+                    artifact=artifact(revision=4, stage=Stage.MOTION_POLISH),
+                ),
+            )
+        with pytest.raises(ValueError, match="exactly one greater"):
+            await queue.stage_result(
+                claim,
+                StageResult(
+                    public_message="revision gap",
+                    artifact=artifact(revision=6, stage=Stage.MOTION_POLISH),
+                ),
+            )
+        with pytest.raises(ValueError, match="missing_region"):
+            await queue.stage_result(
+                claim,
+                StageResult(
+                    public_message="invalid fields",
+                    artifact=artifact(
+                        revision=5,
+                        stage=Stage.MOTION_POLISH,
+                        body_html="<section></section>",
+                    ),
+                ),
+            )
+
+        async with factory() as database:
+            staged = (
+                await database.execute(
+                    select(GenerationEvent).where(
+                        GenerationEvent.run_id == run_id,
+                        GenerationEvent.event_type == "stage.result_staged",
+                    )
+                )
+            ).scalars().all()
+            assert all(event.payload.get("stage") != "motion_polish" for event in staged)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_handler_cleanup_and_releases_lease_immediately(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id, mode="antigravity")
+    entered = asyncio.Event()
+    cleaned = asyncio.Event()
+
+    async def handle(_claim):
+        entered.set()
+        try:
+            await asyncio.Future()
+        finally:
+            cleaned.set()
+
+    worker = BuilderWorker(
+        queue=queue,
+        worker_id="terminating",
+        stage_handler=handle,
+        heartbeat_interval=1,
+    )
+    run_task = asyncio.create_task(worker.run_once())
+    try:
+        await entered.wait()
+        await worker.shutdown()
+        await asyncio.gather(run_task, return_exceptions=True)
+
+        assert cleaned.is_set()
+        replacement = await queue.claim("replacement")
+        assert replacement is not None
+        assert replacement.run_id == run_id
+        assert replacement.next_stage == "reference_analysis"
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_id)
+            assert run.state == "running"
+            assert run.lease_owner == "replacement"
+            interrupted = (
+                await database.execute(
+                    select(GenerationEvent).where(
+                        GenerationEvent.run_id == run_id,
+                        GenerationEvent.event_type == "stage.interrupted",
+                    )
+                )
+            ).scalars().all()
+            assert len(interrupted) == 1
+    finally:
+        if not run_task.done():
+            run_task.cancel()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cli_sigterm_handler_shuts_down_long_stage(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    await _queued_run(factory, project_id, mode="antigravity")
+    entered = asyncio.Event()
+    cleaned = asyncio.Event()
+
+    async def handle(_claim):
+        entered.set()
+        try:
+            await asyncio.Future()
+        finally:
+            cleaned.set()
+
+    worker = BuilderWorker(
+        queue=queue,
+        worker_id="signal-worker",
+        stage_handler=handle,
+        heartbeat_interval=1,
+    )
+
+    class FakeLoop:
+        def __init__(self):
+            self.handlers = {}
+
+        def add_signal_handler(self, signum, callback):
+            self.handlers[signum] = callback
+
+        def create_task(self, coroutine):
+            return asyncio.create_task(coroutine)
+
+    fake_loop = FakeLoop()
+    install_signal_handlers(worker, loop=fake_loop)
+    run_task = asyncio.create_task(worker.run_once())
+    try:
+        await entered.wait()
+        fake_loop.handlers[signal.SIGTERM]()
+        await asyncio.wait_for(cleaned.wait(), timeout=2)
+        await asyncio.wait_for(run_task, timeout=2)
+        assert await queue.claim("replacement") is not None
+    finally:
+        if not run_task.done():
+            run_task.cancel()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_released_staged_result_is_finalized_without_reexecution(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id, mode="antigravity")
+    first = await queue.claim("terminating")
+    assert first is not None
+    await queue.stage_result(first, StageResult(public_message="analysis ready"))
+    await queue.release_claim(first)
+    calls = 0
+
+    async def handle(claim):
+        nonlocal calls
+        calls += 1
+        return StageResult(public_message=f"done {claim.next_stage}")
+
+    replacement = BuilderWorker(
+        queue=queue,
+        worker_id="replacement",
+        stage_handler=handle,
+        heartbeat_interval=1,
+    )
+    try:
+        assert await replacement.run_once()
+        assert calls == 1
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_id)
+            assert run.state == "completed"
     finally:
         await engine.dispose()
 
