@@ -4,7 +4,8 @@ services:
     container_name: ai_project_app
     restart: unless-stopped
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       MESSAGE_DATABASE_URL: ${MESSAGE_DATABASE_URL:-/app/data/dialogs.sqlite3}
     ports:
@@ -24,10 +25,11 @@ services:
     restart: unless-stopped
     init: true
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://widget_admin:change-me@db:5432/widget_platform}
-      KAIGO_BUILDER_STAGE_HANDLER: ${KAIGO_BUILDER_STAGE_HANDLER:-}
+      KAIGO_BUILDER_STAGE_HANDLER: ${KAIGO_BUILDER_STAGE_HANDLER:-builtin:orchestrator}
       KAIGO_BUILDER_LEASE_SECONDS: ${KAIGO_BUILDER_LEASE_SECONDS:-90}
       KAIGO_BUILDER_HEARTBEAT_SECONDS: ${KAIGO_BUILDER_HEARTBEAT_SECONDS:-20}
       KAIGO_BUILDER_POLL_SECONDS: ${KAIGO_BUILDER_POLL_SECONDS:-0.5}
@@ -127,7 +129,8 @@ services:
     container_name: ai_project_db
     restart: unless-stopped
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - postgres_data:/var/lib/postgresql/data/
     ports:

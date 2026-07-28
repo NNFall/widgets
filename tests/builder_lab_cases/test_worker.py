@@ -1,8 +1,11 @@
 import asyncio
 import importlib
 import os
+import shutil
+import subprocess
 from datetime import datetime, timedelta, timezone
-from uuid import UUID
+from pathlib import Path
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import select
@@ -12,12 +15,19 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.db.base import Base
 from app.db.models import Tenant, User
 from app.saas.models import GenerationEvent, GenerationRun, Project
+from builder_lab.engines.base import EngineResult
+from builder_lab.models import BuilderRequest, EngineName, Stage, TokenUsage
 from builder_lab.worker import (
     BuilderWorker,
     LeaseLostError,
+    OrchestratorStageHandler,
     PostgresWorkerQueue,
+    RunClaim,
+    StageInput,
+    StageResult,
 )
 from scripts.run_builder_worker import load_stage_handler
+from tests.builder_lab_cases.test_validation import artifact
 
 
 POSTGRES_URL = os.getenv("KAIGO_TEST_POSTGRES_URL")
@@ -32,18 +42,101 @@ def test_worker_module_exposes_durable_queue_contract() -> None:
     assert worker.LeaseLostError
 
 
-def test_worker_cli_fails_fast_without_executable_stage_handler(
+def test_worker_cli_uses_configured_builtin_handler_by_default(
     monkeypatch,
 ) -> None:
     monkeypatch.delenv("KAIGO_BUILDER_STAGE_HANDLER", raising=False)
 
-    with pytest.raises(RuntimeError, match="must name an async callable"):
-        load_stage_handler()
+    async def builtin_handler(claim):
+        return StageResult(public_message=f"Готов этап {claim.next_stage}")
+
+    assert load_stage_handler(default_handler=builtin_handler) is builtin_handler
 
 
 def test_worker_cli_rejects_sync_stage_handler() -> None:
     with pytest.raises(RuntimeError, match="must be an async callable"):
         load_stage_handler("builder_lab.worker:STAGE_PUBLIC_NAMES")
+
+
+def test_compose_config_wires_builtin_handler_without_project_env(tmp_path) -> None:
+    docker = shutil.which("docker")
+    if docker is None:
+        pytest.skip("docker CLI is not installed")
+    empty_env = tmp_path / "empty.env"
+    empty_env.write_text("", encoding="utf-8")
+    project_root = Path(__file__).resolve().parents[2]
+
+    completed = subprocess.run(
+        [
+            docker,
+            "compose",
+            "--env-file",
+            str(empty_env),
+            "config",
+        ],
+        cwd=project_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "KAIGO_BUILDER_STAGE_HANDLER: builtin:orchestrator" in completed.stdout
+
+
+@pytest.mark.asyncio
+async def test_builtin_handler_executes_only_claimed_engine_stage() -> None:
+    request = BuilderRequest(
+        engine=EngineName.ANTIGRAVITY,
+        brief="Build one durable stage",
+    )
+
+    class FakeQueue:
+        async def stage_input(self, claim):
+            return StageInput(request=request)
+
+    class FakeEngine:
+        def __init__(self):
+            self.calls = []
+            self.closed = False
+
+        async def generate(self, **kwargs):
+            self.calls.append(kwargs)
+            return EngineResult(
+                artifact=artifact(revision=1, stage=kwargs["stage"]),
+                usage=TokenUsage(prompt_tokens=7, output_tokens=3),
+                provider_request_id="provider-call-1",
+            )
+
+        async def cancel(self):
+            return None
+
+        async def close(self):
+            self.closed = True
+
+    engine = FakeEngine()
+    handler = OrchestratorStageHandler(
+        queue=FakeQueue(),
+        engine_factories={EngineName.ANTIGRAVITY: lambda: engine},
+        reference_analyzer=lambda _url: None,
+    )
+    claim = RunClaim(
+        run_id=uuid4(),
+        project_id=uuid4(),
+        worker_id="worker",
+        mode="antigravity",
+        next_stage="agent_build",
+        last_completed_stage="reference_analysis",
+        lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=60),
+    )
+
+    result = await handler(claim)
+
+    assert [call["stage"] for call in engine.calls] == [Stage.AGENT_BUILD]
+    assert result.artifact is not None
+    assert result.artifact.stage is Stage.AGENT_BUILD
+    assert result.output_refs == ("provider-call-1",)
+    assert result.usage.total_tokens == 10
+    assert engine.closed
 
 
 async def _database(tmp_path):
@@ -79,6 +172,51 @@ async def _queued_run(factory, project_id, *, mode="direct", state="queued") -> 
         database.add(run)
         await database.flush()
         return run.id
+
+
+@pytest.mark.asyncio
+async def test_stage_input_loads_durable_request_under_attempt_fence(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    request = BuilderRequest(
+        engine=EngineName.DIRECT,
+        brief="Load the durable request",
+        source_url="https://example.com/",
+    )
+    async with factory() as database, database.begin():
+        run = GenerationRun(
+            project_id=project_id,
+            mode="direct",
+            state="queued",
+            progress=0,
+            next_event_sequence=2,
+            idempotency_key="worker-durable-input",
+        )
+        database.add(run)
+        await database.flush()
+        database.add(
+            GenerationEvent(
+                id=1,
+                run_id=run.id,
+                sequence=1,
+                event_type="run.created",
+                public_message="Запуск создан",
+                payload={"request": request.to_dict()},
+            )
+        )
+        run_id = run.id
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    try:
+        claim = await queue.claim("worker")
+        assert claim is not None
+        assert claim.run_id == run_id
+
+        stage_input = await queue.stage_input(claim)
+
+        assert stage_input.request == request
+        assert stage_input.previous_artifact is None
+        assert stage_input.context == {}
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -282,6 +420,7 @@ async def test_worker_continues_all_stages_under_its_claim(tmp_path) -> None:
 
     async def handle(claim) -> None:
         handled.append(claim.next_stage)
+        return StageResult(public_message=f"Готов этап {claim.next_stage}")
 
     worker = BuilderWorker(
         queue=queue,
@@ -373,7 +512,7 @@ async def test_lost_lease_cancels_inflight_stage_and_replacement_resumes(tmp_pat
 @pytest.mark.asyncio
 async def test_handler_crash_leaves_checkpoint_retryable_after_expiry(tmp_path) -> None:
     engine, factory, project_id = await _database(tmp_path)
-    queue = PostgresWorkerQueue(factory, lease_seconds=0.05)
+    queue = PostgresWorkerQueue(factory, lease_seconds=0.2)
     run_id = await _queued_run(factory, project_id)
 
     async def crash(_claim) -> None:
@@ -388,13 +527,101 @@ async def test_handler_crash_leaves_checkpoint_retryable_after_expiry(tmp_path) 
     try:
         with pytest.raises(RuntimeError, match="worker process failed"):
             await worker.run_once()
-        await asyncio.sleep(0.06)
+        await asyncio.sleep(0.21)
 
         replacement = await queue.claim("replacement")
 
         assert replacement is not None
         assert replacement.run_id == run_id
         assert replacement.next_stage == "reference_analysis"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_staged_result_survives_crash_without_reexecuting_stage(
+    tmp_path, monkeypatch
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=0.2)
+    run_id = await _queued_run(factory, project_id, mode="antigravity")
+    calls = {"reference_analysis": 0, "agent_build": 0}
+
+    async def handle(claim):
+        calls[claim.next_stage] += 1
+        return StageResult(
+            public_message=f"Готов этап {claim.next_stage}",
+            output_refs=(f"model-call:{claim.next_stage}",),
+        )
+
+    original_finalize = queue.finalize_stage
+
+    async def crash_after_staging(_claim):
+        raise RuntimeError("process died after persisted side effect")
+
+    monkeypatch.setattr(queue, "finalize_stage", crash_after_staging)
+    first = BuilderWorker(
+        queue=queue,
+        worker_id="crashed",
+        stage_handler=handle,
+        heartbeat_interval=0.01,
+    )
+    try:
+        with pytest.raises(RuntimeError, match="process died"):
+            await first.run_once()
+        await asyncio.sleep(0.21)
+        monkeypatch.setattr(queue, "finalize_stage", original_finalize)
+        replacement = BuilderWorker(
+            queue=queue,
+            worker_id="replacement",
+            stage_handler=handle,
+            heartbeat_interval=0.01,
+        )
+
+        assert await replacement.run_once()
+
+        assert calls["reference_analysis"] == 1
+        assert calls["agent_build"] == 1
+        async with factory() as database:
+            staged = (
+                await database.execute(
+                    select(GenerationEvent).where(
+                        GenerationEvent.run_id == run_id,
+                        GenerationEvent.event_type == "stage.result_staged",
+                    )
+                )
+            ).scalars().all()
+            assert len(staged) == 2
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_stale_attempt_cannot_finalize_staged_result(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id)
+    try:
+        stale = await queue.claim("stale")
+        assert stale is not None
+        await queue.stage_result(
+            stale,
+            StageResult(
+                public_message="Анализ готов",
+                output_refs=("model-call:reference",),
+            ),
+        )
+        async with factory() as database, database.begin():
+            run = await database.get(GenerationRun, run_id)
+            run.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        replacement = await queue.claim("replacement")
+        assert replacement is not None
+        assert replacement.attempt_id != stale.attempt_id
+
+        with pytest.raises(LeaseLostError):
+            await queue.finalize_stage(stale)
+
+        assert await queue.finalize_stage(replacement) == "art_direction"
     finally:
         await engine.dispose()
 

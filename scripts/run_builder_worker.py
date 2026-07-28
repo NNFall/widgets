@@ -16,10 +16,20 @@ if __package__ in {None, ""}:
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from builder_lab.worker import BuilderWorker, PostgresWorkerQueue, RunClaim
+from builder_lab.config import BuilderLabConfig
+from builder_lab.reference_pipeline import GeminiReferencePipeline
+from builder_lab.worker import (
+    BuilderWorker,
+    OrchestratorStageHandler,
+    PostgresWorkerQueue,
+    RunClaim,
+    StageResult,
+)
+from scripts.run_builder_lab import make_engine_factories
 
 
-StageHandler = Callable[[RunClaim], Awaitable[None]]
+StageHandler = Callable[[RunClaim], Awaitable[StageResult]]
+BUILTIN_STAGE_HANDLER = "builtin:orchestrator"
 
 
 def _database_url() -> str:
@@ -33,22 +43,41 @@ def _database_url() -> str:
     return database_url
 
 
-def load_stage_handler(reference: str | None = None) -> StageHandler:
-    dotted = (reference or os.getenv("KAIGO_BUILDER_STAGE_HANDLER", "")).strip()
-    if not dotted or ":" not in dotted:
+def _is_async_callable(handler: object) -> bool:
+    return inspect.iscoroutinefunction(handler) or inspect.iscoroutinefunction(
+        getattr(handler, "__call__", None)
+    )
+
+
+def load_stage_handler(
+    reference: str | None = None,
+    *,
+    default_handler: StageHandler | None = None,
+) -> StageHandler:
+    dotted = (
+        reference
+        or os.getenv("KAIGO_BUILDER_STAGE_HANDLER", "")
+        or BUILTIN_STAGE_HANDLER
+    ).strip()
+    if dotted == BUILTIN_STAGE_HANDLER:
+        if default_handler is None:
+            raise RuntimeError("builtin builder stage handler is not configured")
+        handler = default_handler
+    elif ":" not in dotted:
         raise RuntimeError(
             "KAIGO_BUILDER_STAGE_HANDLER must name an async callable as module:attribute"
         )
-    module_name, attribute_name = dotted.split(":", 1)
-    if not module_name or not attribute_name:
-        raise RuntimeError("KAIGO_BUILDER_STAGE_HANDLER is invalid")
-    try:
-        handler = getattr(importlib.import_module(module_name), attribute_name)
-    except (AttributeError, ImportError) as exc:
-        raise RuntimeError(
-            f"cannot load builder stage handler {dotted!r}"
-        ) from exc
-    if not callable(handler) or not inspect.iscoroutinefunction(handler):
+    else:
+        module_name, attribute_name = dotted.split(":", 1)
+        if not module_name or not attribute_name:
+            raise RuntimeError("KAIGO_BUILDER_STAGE_HANDLER is invalid")
+        try:
+            handler = getattr(importlib.import_module(module_name), attribute_name)
+        except (AttributeError, ImportError) as exc:
+            raise RuntimeError(
+                f"cannot load builder stage handler {dotted!r}"
+            ) from exc
+    if not callable(handler) or not _is_async_callable(handler):
         raise RuntimeError("builder stage handler must be an async callable")
     return handler
 
@@ -64,9 +93,6 @@ def _positive_float(name: str, default: str) -> float:
 
 
 async def run() -> None:
-    # Resolve the executable handler before opening PostgreSQL or claiming work.
-    # A missing integration must fail fast instead of silently completing jobs.
-    handler = load_stage_handler()
     engine = create_async_engine(_database_url(), future=True, echo=False)
     factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     lease_seconds = _positive_float("KAIGO_BUILDER_LEASE_SECONDS", "90")
@@ -82,6 +108,29 @@ async def run() -> None:
         f"{socket.gethostname()}-{os.getpid()}"
     )
     queue = PostgresWorkerQueue(factory, lease_seconds=lease_seconds)
+    configured_handler = (
+        os.getenv("KAIGO_BUILDER_STAGE_HANDLER", "").strip()
+        or BUILTIN_STAGE_HANDLER
+    )
+    default_handler = None
+    if configured_handler == BUILTIN_STAGE_HANDLER:
+        config = BuilderLabConfig.from_env()
+        engine_factories = make_engine_factories(config)
+        if not engine_factories:
+            await engine.dispose()
+            raise RuntimeError(
+                "GEMINI_API_KEY (or GOOGLE_AI_API_KEY) is required for the builder worker"
+            )
+        reference_pipeline = GeminiReferencePipeline.from_config(config)
+        default_handler = OrchestratorStageHandler(
+            queue=queue,
+            engine_factories=engine_factories,
+            reference_analyzer=reference_pipeline.analyze,
+        )
+    handler = load_stage_handler(
+        configured_handler,
+        default_handler=default_handler,
+    )
     worker = BuilderWorker(
         queue=queue,
         worker_id=worker_id,

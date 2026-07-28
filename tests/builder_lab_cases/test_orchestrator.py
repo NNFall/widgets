@@ -11,6 +11,7 @@ from builder_lab.models import (
     BuilderRequest,
     DirectionJudgement,
     DirectionProposal,
+    DirectionRole,
     EngineName,
     RunStatus,
     Stage,
@@ -114,6 +115,42 @@ class BuilderOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         )
         await orchestrator.wait(snapshot.run_id)
         return orchestrator, await self.store.snapshot(snapshot.run_id)
+
+    async def test_execute_stage_calls_engine_for_exact_requested_stage_once(self):
+        engine = ScriptedEngine()
+        orchestrator = BuilderOrchestrator(
+            store=self.store,
+            engine_factories={EngineName.DIRECT: lambda: engine},
+        )
+        request = BuilderRequest(
+            engine=EngineName.DIRECT,
+            brief="Execute only foundation",
+        )
+        previous = artifact(revision=1, stage=Stage.ART_DIRECTION)
+        direction = DirectionProposal(
+            proposal_id="candidate-1",
+            role=DirectionRole.INTERACTION_INVENTOR,
+            title="Focused direction",
+            art_direction="Compact editorial widget.",
+            interaction_model="A bounded conversation panel.",
+            safeguards=("Keep controls functional",),
+        )
+
+        result = await orchestrator.execute_stage(
+            request=request,
+            engine=engine,
+            stage=Stage.FOUNDATION,
+            revision=2,
+            previous_artifact=previous,
+            selected_direction=direction,
+        )
+
+        generation_calls = [call for call in engine.calls if "stage" in call]
+        self.assertEqual(len(generation_calls), 1)
+        self.assertEqual(generation_calls[0]["stage"], Stage.FOUNDATION)
+        self.assertEqual(generation_calls[0]["previous_artifact"], previous)
+        self.assertEqual(generation_calls[0]["selected_direction"], direction)
+        self.assertEqual(result.artifact.stage, Stage.FOUNDATION)
 
     async def test_direct_run_commits_each_real_stage_in_order(self):
         engine = ScriptedEngine()

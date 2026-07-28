@@ -234,6 +234,35 @@ class BuilderOrchestrator:
     async def _cancelled(self, run_id: str) -> bool:
         return (await self.store.snapshot(run_id)).cancel_requested
 
+    @staticmethod
+    async def execute_stage(
+        *,
+        request: BuilderRequest,
+        engine: BuilderEngine,
+        stage: Stage,
+        revision: int,
+        previous_artifact: WidgetArtifact | None = None,
+        selected_direction: DirectionProposal | None = None,
+        repair_issues: tuple[ValidationIssue, ...] = (),
+    ) -> EngineResult:
+        """Execute one requested generation stage without advancing a run."""
+        if request.engine is EngineName.DIRECT:
+            return await cast(DirectBuilderEngine, engine).generate(
+                request=request,
+                stage=stage,
+                revision=revision,
+                previous_artifact=previous_artifact,
+                selected_direction=selected_direction,
+                repair_issues=repair_issues,
+            )
+        return await engine.generate(
+            request=request,
+            stage=stage,
+            revision=revision,
+            previous_artifact=previous_artifact,
+            repair_issues=repair_issues,
+        )
+
     async def _run(
         self,
         run_id: str,
@@ -583,8 +612,9 @@ class BuilderOrchestrator:
                 message=f"Начат этап: {stage_display_name(stage)}",
                 revision=revision,
             )
-            result = await direct_engine.generate(
+            result = await self.execute_stage(
                 request=request,
+                engine=direct_engine,
                 stage=stage,
                 revision=revision,
                 previous_artifact=previous,
@@ -669,8 +699,9 @@ class BuilderOrchestrator:
                 revision=candidate.revision,
                 issues=issues,
             )
-            result = await engine.generate(
+            result = await self.execute_stage(
                 request=request,
+                engine=engine,
                 stage=candidate.stage,
                 revision=candidate.revision,
                 previous_artifact=candidate,
@@ -741,8 +772,9 @@ class BuilderOrchestrator:
             message="Antigravity начал агентскую сборку",
             revision=1,
         )
-        result: EngineResult = await engine.generate(
+        result: EngineResult = await self.execute_stage(
             request=request,
+            engine=engine,
             stage=stage,
             revision=1,
         )
@@ -773,8 +805,9 @@ class BuilderOrchestrator:
                 revision=candidate.revision,
                 issues=issues,
             )
-            repaired = await engine.generate(
+            repaired = await self.execute_stage(
                 request=request,
+                engine=engine,
                 stage=Stage.AGENT_BUILD,
                 revision=1,
                 previous_artifact=candidate,
