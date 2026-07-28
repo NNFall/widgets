@@ -2,7 +2,7 @@ import { Desktop, DeviceMobile, Eye, Sparkle } from '@phosphor-icons/react';
 import { useEffect, useMemo, useRef } from 'react';
 
 import { BuilderApiError, builderUrl, sendPreviewChat } from './api';
-import type { PreviewViewport } from './types';
+import type { PreviewViewport, WidgetArtifact } from './types';
 
 const REQUEST_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{7,95}$/;
 
@@ -19,6 +19,14 @@ interface StudioPreviewProps {
   qualityStatus: string;
   viewport: PreviewViewport;
   onViewportChange: (viewport: PreviewViewport) => void;
+  artifact?: WidgetArtifact | null;
+}
+
+function artifactDocument(artifact: WidgetArtifact) {
+  const style = artifact.css.replace(/<\/style/gi, '<\\/style');
+  const script = artifact.javascript.replace(/<\/script/gi, '<\\/script');
+  const policy = "default-src 'none'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; img-src data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'";
+  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${style}</style></head><body>${artifact.body_html}<script>${script}</script></body></html>`;
 }
 
 export function StudioPreview({
@@ -28,6 +36,7 @@ export function StudioPreview({
   qualityStatus,
   viewport,
   onViewportChange,
+  artifact = null,
 }: StudioPreviewProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const requestsRef = useRef(new Set<string>());
@@ -35,6 +44,7 @@ export function StudioPreview({
   const previewUrl = runId && revision
     ? builderUrl(`api/runs/${encodeURIComponent(runId)}/preview?revision=${revision}&channel=${encodeURIComponent(channel)}`)
     : '';
+  const previewDocument = useMemo(() => artifact ? artifactDocument(artifact) : undefined, [artifact]);
 
   useEffect(() => {
     requestsRef.current.clear();
@@ -133,14 +143,15 @@ export function StudioPreview({
       </div>
       <div className="studio-preview__canvas" data-viewport={viewport} data-testid="studio-preview-canvas">
         <div className="studio-preview__grid" aria-hidden />
-        {previewUrl ? (
+        {previewUrl || previewDocument ? (
           <div className="studio-preview__device">
             <iframe
               ref={iframeRef}
-              src={previewUrl}
+              src={previewDocument ? undefined : previewUrl}
+              srcDoc={previewDocument}
               sandbox="allow-scripts"
               referrerPolicy="no-referrer"
-              title="Предпросмотр AI-сотрудника Kaigo"
+              title={previewDocument ? 'Предпросмотр виджета' : 'Предпросмотр AI-сотрудника Kaigo'}
             />
           </div>
         ) : (

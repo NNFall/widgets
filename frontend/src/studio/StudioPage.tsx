@@ -17,6 +17,8 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { KaigoLogo } from '../shared/KaigoLogo';
 import { StudioPreview } from './StudioPreview';
 import { StudioTimeline } from './StudioTimeline';
+import { StudioComposer } from './StudioComposer';
+import { UpgradeGate } from './UpgradeGate';
 import type { BuilderEngine, BuilderRunSnapshot, PreviewViewport, StudioError } from './types';
 import { useBuilderRun } from './useBuilderRun';
 
@@ -26,6 +28,10 @@ const decimalFormatter = new Intl.NumberFormat('ru-RU', { minimumFractionDigits:
 
 function querySourceUrl() {
   return new URLSearchParams(window.location.search).get('url') ?? '';
+}
+
+function queryProjectId() {
+  return new URLSearchParams(window.location.search).get('project');
 }
 
 function validateSourceUrl(value: string) {
@@ -74,7 +80,8 @@ function ErrorNotice({ error }: { error: StudioError }) {
 }
 
 export function StudioPage() {
-  const controller = useBuilderRun();
+  const [projectId] = useState(queryProjectId);
+  const controller = useBuilderRun(projectId);
   const [sourceUrl, setSourceUrl] = useState(querySourceUrl);
   const [brief, setBrief] = useState('');
   const [engine, setEngine] = useState<BuilderEngine>('direct');
@@ -86,10 +93,10 @@ export function StudioPage() {
   const previewAnchorRef = useRef<HTMLElement>(null);
   const artifact = selectedArtifact(controller.snapshot);
   const status = controller.snapshot?.status ?? null;
-  const running = status === 'created' || status === 'running';
+  const running = status === 'created' || status === 'queued' || status === 'running';
   const controlsLocked = running || controller.mutationPending;
   const progress = progressFor(controller.snapshot, controller.events.length);
-  const refinable = status === 'completed'
+  const refinable = !controller.projectMode && status === 'completed'
     && controller.snapshot?.request.engine === 'direct'
     && Boolean(artifact);
 
@@ -102,6 +109,12 @@ export function StudioPage() {
     setEngine(next.request.engine);
     setCreativity(next.request.creativity);
   }, [controller.snapshot]);
+
+  useEffect(() => {
+    if (!controller.project || controller.snapshot) return;
+    setSourceUrl(controller.project.source_url);
+    setBrief(controller.project.brief ?? '');
+  }, [controller.project, controller.snapshot]);
 
   const formattedSession = useMemo(() => {
     if (!controller.runId) return 'Новая сессия';
@@ -140,6 +153,40 @@ export function StudioPage() {
     previewAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  if (controller.projectMode && !controller.runId) {
+    return (
+      <div className="studio-app studio-app--composer">
+        <header className="studio-header">
+          <a className="studio-header__logo" href="/" aria-label="Kaigo — на главную">
+            <KaigoLogo />
+          </a>
+          <div className="studio-header__session" aria-live="polite">
+            <span>Kaigo Studio</span>
+            <strong data-connection={controller.connection}>{controller.activityMessage}</strong>
+            {controller.connection === 'polling' && <small>Резервный режим обновления</small>}
+          </div>
+        </header>
+        <main className="studio-shell studio-shell--composer">
+          {controller.error && !controller.project ? (
+            <ErrorNotice error={controller.error} />
+          ) : controller.isHydrating || !controller.project ? (
+            <p className="studio-composer__loading" role="status">Загружаем проект…</p>
+          ) : (
+            <StudioComposer
+              sourceUrl={sourceUrl}
+              brief={brief}
+              sourceLocked
+              pending={controller.mutationPending}
+              error={formError}
+              onSubmit={submitRun}
+            />
+          )}
+          {controller.error && controller.project && <ErrorNotice error={controller.error} />}
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="studio-app">
       <header className="studio-header">
@@ -149,6 +196,7 @@ export function StudioPage() {
         <div className="studio-header__session">
           <span>{formattedSession}</span>
           <strong data-connection={controller.connection}>{controller.activityMessage}</strong>
+          {controller.connection === 'polling' && <small>Резервный режим обновления</small>}
         </div>
         <div className="studio-header__actions">
           <button type="button" className="studio-header__preview" onClick={scrollToPreview}>
@@ -188,6 +236,7 @@ export function StudioPage() {
                 placeholder="https://example.com"
                 value={sourceUrl}
                 onChange={(event) => setSourceUrl(event.target.value)}
+                readOnly={controller.projectMode}
                 disabled={controlsLocked}
               />
             </div>
@@ -200,6 +249,7 @@ export function StudioPage() {
               maxLength={12_000}
               value={brief}
               onChange={(event) => setBrief(event.target.value)}
+              readOnly={controller.projectMode}
               disabled={controlsLocked}
             />
 
@@ -207,7 +257,7 @@ export function StudioPage() {
               <summary>Параметры прототипа</summary>
               <div>
                 <label htmlFor="studio-engine">Движок</label>
-                <select id="studio-engine" value={engine} onChange={(event) => setEngine(event.target.value as BuilderEngine)} disabled={controlsLocked}>
+                <select id="studio-engine" value={engine} onChange={(event) => setEngine(event.target.value as BuilderEngine)} disabled={controller.projectMode || controlsLocked}>
                   <option value="direct">Gemini staged</option>
                   <option value="antigravity">Antigravity agent</option>
                 </select>
@@ -220,13 +270,13 @@ export function StudioPage() {
                   step="0.05"
                   value={creativity}
                   onChange={(event) => setCreativity(Number(event.target.value))}
-                  disabled={controlsLocked || engine !== 'direct'}
+                  disabled={controller.projectMode || controlsLocked || engine !== 'direct'}
                 />
               </div>
             </details>
 
             {formError && <p className="studio-form__error" role="alert">{formError}</p>}
-            <button type="submit" className="studio-create" disabled={running || controller.isHydrating || controller.mutationPending}>
+            <button type="submit" className="studio-create" disabled={controller.projectMode || running || controller.isHydrating || controller.mutationPending}>
               {controller.isHydrating || controller.mutationPending ? <Clock aria-hidden size={20} /> : <PaperPlaneTilt aria-hidden size={20} weight="fill" />}
               {running ? 'Генерация идёт' : 'Создать AI-виджет'}
               {!running && !controller.isHydrating && !controller.mutationPending && <ArrowRight aria-hidden size={18} />}
@@ -242,10 +292,10 @@ export function StudioPage() {
           )}
 
           <div className="studio-run-actions">
-            <button type="button" onClick={() => void controller.cancelRun()} disabled={!running || controller.mutationPending}>
+            <button type="button" onClick={() => void controller.cancelRun()} disabled={controller.projectMode || !running || controller.mutationPending}>
               <StopCircle aria-hidden size={18} /> Отменить генерацию
             </button>
-            <button type="button" onClick={() => void controller.retryRun()} disabled={controller.mutationPending || (status !== 'failed' && status !== 'cancelled')}>
+            <button type="button" onClick={() => void controller.retryRun()} disabled={controller.projectMode || controller.mutationPending || (status !== 'failed' && status !== 'cancelled')}>
               <ArrowsClockwise aria-hidden size={18} /> Повторить запуск
             </button>
           </div>
@@ -308,10 +358,12 @@ export function StudioPage() {
             qualityStatus={controller.snapshot?.quality_status ?? 'pending'}
             viewport={viewport}
             onViewportChange={setViewport}
+            artifact={controller.projectMode ? artifact : null}
           />
+          {controller.projectMode && artifact && <UpgradeGate />}
           <div className="studio-workspace__footer">
             <Code aria-hidden size={18} />
-            <span>Preview изолирован: скрипты разрешены только внутри sandbox, сеть заблокирована серверным CSP.</span>
+            <span>Preview изолирован: скрипты разрешены только внутри sandbox, сеть заблокирована строгим CSP предпросмотра.</span>
           </div>
         </motion.section>
       </main>

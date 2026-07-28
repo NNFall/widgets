@@ -1,5 +1,5 @@
 export type BuilderEngine = 'direct' | 'antigravity';
-export type BuilderRunStatus = 'created' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type BuilderRunStatus = 'created' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type BuilderStage =
   | 'art_direction'
   | 'foundation'
@@ -79,6 +79,73 @@ export interface BuilderRunSnapshot {
   elapsed_seconds: number;
   error_code: string | null;
   cancel_requested: boolean;
+}
+
+export interface AuthSessionSnapshot {
+  enabled: boolean;
+  authenticated: boolean;
+  user_id: number | null;
+  email: string | null;
+  csrf_token: string | null;
+}
+
+export interface SaasProject {
+  id: string;
+  tenant_id: number;
+  owner_user_id: number;
+  source_url: string;
+  brief: string | null;
+  status: string;
+  active_revision: number | null;
+  active_run: SaasRunSnapshot | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SaasEvent {
+  sequence: number;
+  type: string;
+  message: string | null;
+  payload: {
+    status?: string;
+    stage?: BuilderStage | null;
+    revision?: number | null;
+    usage?: Partial<TokenUsage>;
+    issues?: ValidationIssue[];
+    changes?: string[];
+    error_code?: string | null;
+  };
+  created_at: string | null;
+}
+
+export interface SaasPreviewArtifact extends Partial<WidgetArtifact> {
+  revision: number;
+  body_html: string;
+  css: string;
+  javascript: string;
+  quality_status?: string;
+  source: 'accepted_artifact' | 'restorable_draft' | 'artifact' | string;
+}
+
+export interface SaasRunSnapshot {
+  id: string;
+  project_id: string;
+  mode: 'express' | string;
+  /** Canonical status returned by the SaaS API. */
+  status: BuilderRunStatus;
+  /** Temporary compatibility mirror; consumers must prefer status. */
+  state?: BuilderRunStatus;
+  progress: number;
+  current_stage: BuilderStage | null;
+  last_completed_stage: BuilderStage | null;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  latest_sequence: number;
+  events?: SaasEvent[];
+  preview?: SaasPreviewArtifact | null;
 }
 
 export interface BuilderRunInput {

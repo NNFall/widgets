@@ -1,4 +1,11 @@
-import type { BuilderRunInput, BuilderRunSnapshot } from './types';
+import type {
+  AuthSessionSnapshot,
+  BuilderRunInput,
+  BuilderRunSnapshot,
+  SaasEvent,
+  SaasProject,
+  SaasRunSnapshot,
+} from './types';
 
 const configuredBase = import.meta.env.VITE_BUILDER_BASE_URL ?? '/builder/';
 const BUILDER_BASE = configuredBase.replace(/\/?$/, '/');
@@ -50,6 +57,106 @@ async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> 
     });
   }
   return payload;
+}
+
+async function saasRequestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(path, {
+    ...init,
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...init.headers,
+    },
+  });
+  const payload = await response.json().catch(() => ({})) as {
+    error?: string | { code?: string; message?: string; retryable?: boolean };
+  } & T;
+  if (!response.ok) {
+    const structured = typeof payload.error === 'object' ? payload.error : null;
+    const raw = structured?.message || structured?.code || (typeof payload.error === 'string' ? payload.error : `HTTP ${response.status}`);
+    throw new BuilderApiError(raw, {
+      status: response.status,
+      code: structured?.code ?? null,
+      raw,
+      retryable: structured?.retryable ?? response.status >= 500,
+    });
+  }
+  return payload;
+}
+
+export function getAuthSession() {
+  return saasRequestJson<AuthSessionSnapshot>('/api/auth/session');
+}
+
+export function getProject(projectId: string) {
+  return saasRequestJson<SaasProject>(`/api/projects/${encodeURIComponent(projectId)}`);
+}
+
+export function createProjectRun(projectId: string, csrfToken: string, idempotencyKey: string) {
+  return saasRequestJson<SaasRunSnapshot>(`/api/projects/${encodeURIComponent(projectId)}/runs`, {
+    method: 'POST',
+    headers: {
+      'Idempotency-Key': idempotencyKey,
+      'X-CSRF-Token': csrfToken,
+    },
+    body: JSON.stringify({ mode: 'express' }),
+  });
+}
+
+export function getProjectRun(runId: string) {
+  return saasRequestJson<SaasRunSnapshot>(`/api/runs/${encodeURIComponent(runId)}`);
+}
+
+export async function streamProjectRunEvents(
+  runId: string,
+  afterSequence: number,
+  onEvent: (event: SaasEvent) => void,
+  signal: AbortSignal,
+) {
+  const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/events`, {
+    credentials: 'include',
+    headers: afterSequence > 0 ? { 'Last-Event-ID': String(afterSequence) } : {},
+    signal,
+  });
+  if (!response.ok) {
+    throw new BuilderApiError(`HTTP ${response.status}`, {
+      status: response.status,
+      code: null,
+      raw: `HTTP ${response.status}`,
+      retryable: response.status >= 500,
+    });
+  }
+  if (!response.body) throw new Error('SSE response body is unavailable');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const consume = (block: string) => {
+    if (!block || block.startsWith(':')) return;
+    const data = block
+      .split('\n')
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart())
+      .join('\n');
+    if (!data) return;
+    const event = JSON.parse(data) as SaasEvent;
+    if (Number.isInteger(event.sequence)) onEvent(event);
+  };
+
+  while (!signal.aborted) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, '\n');
+    let boundary = buffer.indexOf('\n\n');
+    while (boundary >= 0) {
+      consume(buffer.slice(0, boundary));
+      buffer = buffer.slice(boundary + 2);
+      boundary = buffer.indexOf('\n\n');
+    }
+    if (done) {
+      consume(buffer);
+      break;
+    }
+  }
 }
 
 export function createBuilderRun(input: BuilderRunInput) {

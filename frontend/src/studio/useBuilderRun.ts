@@ -4,10 +4,15 @@ import {
   BuilderApiError,
   builderUrl,
   cancelBuilderRun,
+  createProjectRun,
   createBuilderRun,
+  getAuthSession,
   getBuilderRun,
+  getProject,
+  getProjectRun,
   refineBuilderRun,
   retryBuilderRun,
+  streamProjectRunEvents,
 } from './api';
 import { russianErrorMessage, russianRequestErrorMessage, safeEventMessage } from './errors';
 import type {
@@ -15,13 +20,19 @@ import type {
   BuilderRunInput,
   BuilderRunSnapshot,
   BuilderRunStatus,
+  SaasEvent,
+  SaasProject,
+  SaasRunSnapshot,
   StudioError,
+  TokenUsage,
+  WidgetArtifact,
 } from './types';
 
 export const ACTIVE_RUN_STORAGE_KEY = 'kaigo.builder.activeRun.v1';
 const POLL_INTERVAL_MS = 2_000;
 
 const TERMINAL_STATUSES = new Set<BuilderRunStatus>(['completed', 'failed', 'cancelled']);
+const EMPTY_USAGE: TokenUsage = { prompt_tokens: 0, output_tokens: 0, thinking_tokens: 0, total_tokens: 0 };
 
 interface SnapshotWatermark {
   runId: string;
@@ -102,6 +113,8 @@ function terminalError(code: string | null, raw: string): StudioError {
 }
 
 export interface BuilderRunController {
+  project: SaasProject | null;
+  projectMode: boolean;
   runId: string | null;
   snapshot: BuilderRunSnapshot | null;
   events: BuilderEvent[];
@@ -117,8 +130,8 @@ export interface BuilderRunController {
   clearError: () => void;
 }
 
-export function useBuilderRun(): BuilderRunController {
-  const [runId, setRunId] = useState<string | null>(() => readStoredRun());
+function useLegacyBuilderRun(enabled: boolean): BuilderRunController {
+  const [runId, setRunId] = useState<string | null>(() => enabled ? readStoredRun() : null);
   const [snapshot, setSnapshot] = useState<BuilderRunSnapshot | null>(null);
   const [events, setEvents] = useState<BuilderEvent[]>([]);
   const [error, setError] = useState<StudioError | null>(null);
@@ -204,6 +217,7 @@ export function useBuilderRun(): BuilderRunController {
   }, [applySnapshot]);
 
   useEffect(() => {
+    if (!enabled) return;
     if (!runId) {
       activeRunRef.current = null;
       snapshotWatermarkRef.current = null;
@@ -340,7 +354,7 @@ export function useBuilderRun(): BuilderRunController {
       stream?.close();
       stopPolling();
     };
-  }, [applySnapshot, runId, streamVersion]);
+  }, [applySnapshot, enabled, runId, streamVersion]);
 
   const createRun = useCallback(async (input: BuilderRunInput) => {
     const expectedRunId = activeRunRef.current;
@@ -421,6 +435,8 @@ export function useBuilderRun(): BuilderRunController {
   }, [adoptRun, beginMutation, finishMutation, isCurrentOperation]);
 
   return {
+    project: null,
+    projectMode: false,
     runId,
     snapshot,
     events,
@@ -435,4 +451,323 @@ export function useBuilderRun(): BuilderRunController {
     refineRun,
     clearError: () => setError(null),
   };
+}
+
+function saasStatus(run: SaasRunSnapshot): BuilderRunStatus {
+  const status = run.status ?? run.state;
+  return status === 'queued' || status === 'running' || status === 'completed'
+    || status === 'failed' || status === 'cancelled' || status === 'created'
+    ? status
+    : 'failed';
+}
+
+function adaptSaasEvent(runId: string, event: SaasEvent): BuilderEvent {
+  const payload = event.payload ?? {};
+  return {
+    run_id: runId,
+    sequence: event.sequence,
+    timestamp: event.created_at ?? '',
+    type: event.type,
+    stage: payload.stage ?? null,
+    status: payload.status ?? (event.type.endsWith('.failed') ? 'failed' : 'running'),
+    message: event.message ?? '',
+    revision: payload.revision ?? null,
+    usage: { ...EMPTY_USAGE, ...(payload.usage ?? {}) },
+    issues: payload.issues ?? [],
+    changes: payload.changes ?? [],
+    error_code: payload.error_code ?? null,
+  };
+}
+
+function adaptPreview(preview: SaasRunSnapshot['preview']): WidgetArtifact | null {
+  if (!preview) return null;
+  return {
+    schema_version: preview.schema_version ?? '1',
+    revision: preview.revision,
+    stage: preview.stage ?? 'validation',
+    art_direction: preview.art_direction ?? '',
+    body_html: preview.body_html,
+    css: preview.css,
+    javascript: preview.javascript,
+    theme_tokens: preview.theme_tokens ?? {},
+    suggested_actions: preview.suggested_actions ?? [],
+    change_summary: preview.change_summary ?? '',
+    layout_contract: preview.layout_contract ?? {},
+  };
+}
+
+function adaptSaasRun(project: SaasProject, run: SaasRunSnapshot): BuilderRunSnapshot {
+  const preview = adaptPreview(run.preview);
+  const status = saasStatus(run);
+  const createdAt = Date.parse(run.created_at);
+  const finishedAt = Date.parse(run.finished_at ?? new Date().toISOString());
+  const events = run.events ?? [];
+  const lastUsage = [...events].reverse().find((event) => event.payload?.usage)?.payload.usage;
+  return {
+    run_id: run.id,
+    request: {
+      engine: 'direct',
+      brief: project.brief ?? '',
+      reference_context: '',
+      source_url: project.source_url,
+      locale: 'ru',
+      creativity: 0.9,
+      viewport_targets: ['desktop', 'mobile'],
+      max_repairs: 3,
+      contract_id: 'chat-v1',
+      creative_profile: 'balanced',
+      visual_repair_limit: 8,
+    },
+    status,
+    created_at: run.created_at,
+    updated_at: run.finished_at ?? run.started_at ?? run.created_at,
+    latest_sequence: run.latest_sequence,
+    artifact: preview && run.preview?.source !== 'restorable_draft' ? preview : null,
+    draft_artifact: preview && run.preview?.source === 'restorable_draft' ? preview : null,
+    quality_status: run.preview?.quality_status ?? (preview ? 'accepted' : 'pending'),
+    usage: { ...EMPTY_USAGE, ...(lastUsage ?? {}) },
+    elapsed_seconds: Number.isNaN(createdAt) || Number.isNaN(finishedAt)
+      ? 0
+      : Math.max(0, (finishedAt - createdAt) / 1_000),
+    error_code: run.error_code,
+    cancel_requested: false,
+  };
+}
+
+function saasError(error: unknown, fallback: string): StudioError {
+  if (error instanceof BuilderApiError) {
+    const message = error.status === 401
+      ? 'Войдите в аккаунт, чтобы открыть проект.'
+      : error.status === 403
+        ? 'Нет доступа к этому действию. Обновите страницу и войдите снова.'
+        : error.status === 404
+          ? 'Проект не найден или у вас нет к нему доступа.'
+          : error.status === 409
+            ? 'Бесплатный запуск уже использован. Сохранённый результат остаётся доступен.'
+            : error.status >= 500
+              ? 'Сервис временно недоступен. Сохранённые данные не потеряны.'
+              : fallback;
+    return { message, raw: error.raw, code: error.code };
+  }
+  return {
+    message: fallback,
+    raw: error instanceof Error ? error.message : String(error),
+    code: null,
+  };
+}
+
+function idempotencyKey(projectId: string) {
+  const storageKey = `kaigo.saas.project.${projectId}.idempotency-key`;
+  // A project-scoped value closes the localStorage first-write race between tabs.
+  // Project UUIDs are unique, and the free project flow intentionally has one first run.
+  const projectKey = `studio-${projectId}`;
+  try {
+    const saved = localStorage.getItem(storageKey);
+    if (saved) return saved;
+    localStorage.setItem(storageKey, projectKey);
+  } catch {
+    // Determinism still prevents duplicate server runs when storage is unavailable.
+  }
+  return projectKey;
+}
+
+function activityFor(status: BuilderRunStatus) {
+  if (status === 'queued' || status === 'created') return 'Запуск в очереди';
+  if (status === 'running') return 'Генерация выполняется';
+  if (status === 'completed') return 'Готово — виджет сохранён';
+  if (status === 'failed') return 'Генерация завершилась с ошибкой';
+  return 'Генерация отменена';
+}
+
+function useSaasProjectRun(projectId: string | null): BuilderRunController {
+  const [project, setProject] = useState<SaasProject | null>(null);
+  const [runId, setRunId] = useState<string | null>(null);
+  const [snapshot, setSnapshot] = useState<BuilderRunSnapshot | null>(null);
+  const [events, setEvents] = useState<BuilderEvent[]>([]);
+  const [error, setError] = useState<StudioError | null>(null);
+  const [activityMessage, setActivityMessage] = useState('Загружаем проект');
+  const [connection, setConnection] = useState<'idle' | 'streaming' | 'polling'>('idle');
+  const [isHydrating, setIsHydrating] = useState(Boolean(projectId));
+  const [mutationPending, setMutationPending] = useState(false);
+  const csrfRef = useRef<string | null>(null);
+  const projectRef = useRef<SaasProject | null>(null);
+  const runRef = useRef<SaasRunSnapshot | null>(null);
+  const lastSequenceRef = useRef(0);
+
+  const applyRun = useCallback((owner: SaasProject, run: SaasRunSnapshot) => {
+    if (run.project_id !== owner.id) return;
+    const previous = runRef.current;
+    if (previous?.id === run.id && run.latest_sequence < Math.max(previous.latest_sequence, lastSequenceRef.current)) return;
+    runRef.current = run;
+    lastSequenceRef.current = Math.max(lastSequenceRef.current, run.latest_sequence);
+    setRunId(run.id);
+    setSnapshot(adaptSaasRun(owner, run));
+    if (run.events) {
+      const unique = new Map<number, BuilderEvent>();
+      for (const item of run.events) unique.set(item.sequence, adaptSaasEvent(run.id, item));
+      setEvents([...unique.values()].sort((left, right) => left.sequence - right.sequence));
+    }
+    const status = saasStatus(run);
+    setActivityMessage(activityFor(status));
+    if (status === 'failed') {
+      setError({
+        message: run.preview
+          ? 'Генерация остановилась, но рабочий черновик сохранён.'
+          : 'Генерация завершилась с ошибкой.',
+        raw: run.error_message ?? run.error_code ?? 'Подробности не переданы',
+        code: run.error_code,
+      });
+    } else if (status !== 'cancelled') {
+      setError(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!projectId) return;
+    const abort = new AbortController();
+    setIsHydrating(true);
+    const hydrate = async () => {
+      try {
+        const session = await getAuthSession();
+        if (!session.authenticated || !session.csrf_token) {
+          throw new BuilderApiError('authentication_required', {
+            status: 401,
+            code: 'authentication_required',
+            raw: 'authentication_required',
+          });
+        }
+        csrfRef.current = session.csrf_token;
+        const nextProject = await getProject(projectId);
+        if (abort.signal.aborted) return;
+        projectRef.current = nextProject;
+        setProject(nextProject);
+        if (nextProject.active_run) {
+          const run = await getProjectRun(nextProject.active_run.id);
+          if (!abort.signal.aborted) applyRun(nextProject, run);
+        } else {
+          setActivityMessage('Проект готов к запуску');
+        }
+      } catch (caught) {
+        if (!abort.signal.aborted) {
+          setError(saasError(caught, 'Не удалось загрузить проект.'));
+          setActivityMessage('Проект не загружен');
+        }
+      } finally {
+        if (!abort.signal.aborted) setIsHydrating(false);
+      }
+    };
+    void hydrate();
+    return () => abort.abort();
+  }, [applyRun, projectId]);
+
+  useEffect(() => {
+    if (!projectId || !runId || TERMINAL_STATUSES.has(snapshot?.status ?? 'created')) {
+      setConnection('idle');
+      return;
+    }
+    const abort = new AbortController();
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+    const refresh = async () => {
+      try {
+        const run = await getProjectRun(runId);
+        const owner = projectRef.current;
+        if (!abort.signal.aborted && owner) applyRun(owner, run);
+        if (TERMINAL_STATUSES.has(saasStatus(run)) && pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+          setConnection('idle');
+        }
+      } catch (caught) {
+        if (!abort.signal.aborted) setError(saasError(caught, 'Не удалось обновить состояние запуска.'));
+      }
+    };
+    const startPolling = () => {
+      if (abort.signal.aborted || pollTimer) return;
+      setConnection('polling');
+      pollTimer = setInterval(() => void refresh(), POLL_INTERVAL_MS);
+    };
+    const onEvent = (incoming: SaasEvent) => {
+      if (abort.signal.aborted || incoming.sequence <= lastSequenceRef.current) return;
+      lastSequenceRef.current = incoming.sequence;
+      const adapted = adaptSaasEvent(runId, incoming);
+      setEvents((current) => [...current, adapted]);
+      setActivityMessage(incoming.message || 'Генерация выполняется');
+      void refresh();
+    };
+
+    setConnection('streaming');
+    void streamProjectRunEvents(runId, lastSequenceRef.current, onEvent, abort.signal)
+      .then(() => {
+        if (!abort.signal.aborted && !TERMINAL_STATUSES.has(runRef.current ? saasStatus(runRef.current) : 'created')) {
+          startPolling();
+        }
+      })
+      .catch((caught) => {
+        if (!abort.signal.aborted) {
+          if (caught instanceof BuilderApiError && caught.status < 500) {
+            setError(saasError(caught, 'Не удалось подключиться к событиям запуска.'));
+          }
+          startPolling();
+        }
+      });
+
+    return () => {
+      abort.abort();
+      if (pollTimer) clearInterval(pollTimer);
+    };
+  }, [applyRun, projectId, runId, snapshot?.status]);
+
+  const createRun: BuilderRunController['createRun'] = useCallback(async () => {
+    const owner = projectRef.current;
+    const csrf = csrfRef.current;
+    if (!projectId || !owner || !csrf || mutationPending) return;
+    setMutationPending(true);
+    setError(null);
+    setActivityMessage('Создаём запуск');
+    try {
+      const run = await createProjectRun(projectId, csrf, idempotencyKey(projectId));
+      const updated = { ...owner, status: run.status, active_run: run };
+      projectRef.current = updated;
+      setProject(updated);
+      applyRun(updated, run);
+    } catch (caught) {
+      setError(saasError(caught, 'Не удалось создать запуск.'));
+      setActivityMessage('Запуск не создан');
+    } finally {
+      setMutationPending(false);
+    }
+  }, [applyRun, mutationPending, projectId]);
+
+  const unavailable = useCallback(async () => {
+    setError({
+      message: 'Дальнейшая доработка будет доступна на тарифе.',
+      raw: 'billing_not_implemented',
+      code: 'upgrade_required',
+    });
+  }, []);
+
+  return {
+    project,
+    projectMode: Boolean(projectId),
+    runId,
+    snapshot,
+    events,
+    error,
+    activityMessage,
+    connection,
+    isHydrating,
+    mutationPending,
+    createRun,
+    cancelRun: unavailable,
+    retryRun: unavailable,
+    refineRun: unavailable,
+    clearError: () => setError(null),
+  };
+}
+
+export function useBuilderRun(projectId: string | null = null): BuilderRunController {
+  const legacy = useLegacyBuilderRun(!projectId);
+  const saas = useSaasProjectRun(projectId);
+  return projectId ? saas : legacy;
 }
