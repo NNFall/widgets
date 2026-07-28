@@ -792,13 +792,16 @@ async def test_handler_crash_leaves_checkpoint_retryable_after_expiry(tmp_path) 
 @pytest.mark.asyncio
 async def test_retryable_engine_error_has_three_total_attempts_and_not_before(
     tmp_path,
+    monkeypatch,
 ) -> None:
     engine, factory, project_id = await _database(tmp_path)
     queue = PostgresWorkerQueue(
         factory,
         lease_seconds=30,
-        retry_backoff_seconds=0.05,
+        retry_backoff_seconds=5,
     )
+    clock = {"now": datetime(2026, 7, 28, 1, 0, tzinfo=timezone.utc)}
+    monkeypatch.setattr(queue, "_now", lambda: clock["now"])
     run_id = await _queued_run(factory, project_id, mode="antigravity")
     calls = 0
 
@@ -822,10 +825,10 @@ async def test_retryable_engine_error_has_three_total_attempts_and_not_before(
     try:
         assert await worker.run_once()
         assert await queue.claim("too-early") is None
-        await asyncio.sleep(0.06)
+        clock["now"] += timedelta(seconds=6)
         assert await worker.run_once()
         assert await queue.claim("still-too-early") is None
-        await asyncio.sleep(0.11)
+        clock["now"] += timedelta(seconds=11)
         assert await worker.run_once()
 
         async with factory() as database:
@@ -851,13 +854,18 @@ async def test_retryable_engine_error_has_three_total_attempts_and_not_before(
 
 
 @pytest.mark.asyncio
-async def test_third_retryable_failure_fails_run_without_fourth_attempt(tmp_path) -> None:
+async def test_third_retryable_failure_fails_run_without_fourth_attempt(
+    tmp_path,
+    monkeypatch,
+) -> None:
     engine, factory, project_id = await _database(tmp_path)
     queue = PostgresWorkerQueue(
         factory,
         lease_seconds=30,
-        retry_backoff_seconds=0.01,
+        retry_backoff_seconds=5,
     )
+    clock = {"now": datetime(2026, 7, 28, 2, 0, tzinfo=timezone.utc)}
+    monkeypatch.setattr(queue, "_now", lambda: clock["now"])
     run_id = await _queued_run(factory, project_id, mode="antigravity")
     calls = 0
 
@@ -876,10 +884,9 @@ async def test_third_retryable_failure_fails_run_without_fourth_attempt(tmp_path
         heartbeat_interval=1,
     )
     try:
-        for delay in (0.02, 0.03, 0):
+        for advance in (6, 11, 0):
             assert await worker.run_once()
-            if delay:
-                await asyncio.sleep(delay)
+            clock["now"] += timedelta(seconds=advance)
         async with factory() as database:
             run = await database.get(GenerationRun, run_id)
             assert calls == 3
@@ -1010,6 +1017,40 @@ async def test_stale_attempt_cannot_finalize_staged_result(tmp_path) -> None:
             await queue.finalize_stage(stale)
 
         assert await queue.finalize_stage(replacement) == "art_direction"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_finalize_renews_lease_from_clock_after_slow_materialization(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=0.5)
+    clock = {"now": datetime(2026, 7, 28, 3, 0, tzinfo=timezone.utc)}
+    monkeypatch.setattr(queue, "_now", lambda: clock["now"])
+    run_id = await _queued_run(factory, project_id)
+    claim = await queue.claim("slow-finalizer")
+    assert claim is not None
+    await queue.stage_result(claim, StageResult(public_message="analysis ready"))
+    materialize = queue._materialize_result
+
+    async def slow_materialize(database, run, result, now):
+        await materialize(database, run, result, now)
+        clock["now"] += timedelta(seconds=0.6)
+
+    monkeypatch.setattr(queue, "_materialize_result", slow_materialize)
+    try:
+        assert await queue.finalize_stage(claim) == "art_direction"
+
+        continued = await queue.continue_claim(
+            run_id,
+            worker_id="slow-finalizer",
+        )
+
+        assert continued.next_stage == "art_direction"
+        assert continued.lease_expires_at > clock["now"]
     finally:
         await engine.dispose()
 
@@ -1282,3 +1323,61 @@ async def test_postgres_workers_use_skip_locked_for_single_claim() -> None:
             await connection.run_sync(Base.metadata.drop_all)
         await second_engine.dispose()
         await first_engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.postgres
+@pytest.mark.skipif(
+    not POSTGRES_URL,
+    reason="set KAIGO_TEST_POSTGRES_URL to a disposable PostgreSQL 15 database",
+)
+async def test_postgres_finalize_renews_short_lease_after_materialization(
+    monkeypatch,
+) -> None:
+    engine = create_async_engine(POSTGRES_URL)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.drop_all)
+            await connection.run_sync(Base.metadata.create_all)
+        async with factory() as database, database.begin():
+            database.add(Tenant(id=1, name="Alpha", slug="alpha"))
+            await database.flush()
+            database.add(User(id=10, tenant_id=1, email="owner@example.com"))
+            await database.flush()
+            project = Project(
+                tenant_id=1,
+                owner_user_id=10,
+                source_url="https://example.com/",
+            )
+            database.add(project)
+            await database.flush()
+            project_id = project.id
+        run_id = await _queued_run(factory, project_id)
+        queue = PostgresWorkerQueue(factory, lease_seconds=1)
+        claim = await queue.claim("postgres-slow-finalizer")
+        assert claim is not None
+        await queue.stage_result(
+            claim,
+            StageResult(public_message="analysis ready"),
+        )
+        materialize = queue._materialize_result
+
+        async def slow_materialize(database, run, result, now):
+            await materialize(database, run, result, now)
+            await asyncio.sleep(1.1)
+
+        monkeypatch.setattr(queue, "_materialize_result", slow_materialize)
+
+        assert await queue.finalize_stage(claim) == "art_direction"
+        continued = await queue.continue_claim(
+            run_id,
+            worker_id="postgres-slow-finalizer",
+        )
+
+        assert continued.next_stage == "art_direction"
+        assert continued.lease_expires_at > datetime.now(timezone.utc)
+    finally:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.drop_all)
+        await engine.dispose()

@@ -1362,9 +1362,12 @@ class PostgresWorkerQueue:
         *,
         stage: str,
         worker_id: str,
-        now: datetime,
         result: StageResult | None = None,
     ) -> str | None:
+        # Lease extension belongs at the checkpoint boundary. In particular,
+        # never reuse the timestamp captured before staged-result parsing and
+        # artifact materialization, which may take longer than a short lease.
+        now = self._now()
         expected_stage = self.next_stage(run.mode, run.last_completed_stage)
         if stage != expected_stage or run.current_stage != expected_stage:
             raise ValueError(
@@ -1455,7 +1458,6 @@ class PostgresWorkerQueue:
                 run,
                 stage=claim.next_stage,
                 worker_id=claim.worker_id,
-                now=now,
                 result=result,
             )
 
@@ -1486,7 +1488,6 @@ class PostgresWorkerQueue:
                 run,
                 stage=stage,
                 worker_id=worker_id,
-                now=now,
             )
 
 
