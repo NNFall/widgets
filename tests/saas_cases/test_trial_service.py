@@ -45,14 +45,22 @@ from tests.builder_lab_cases.test_validation import artifact
 POSTGRES_URL = os.getenv("KAIGO_TEST_POSTGRES_URL")
 
 
-async def _database(tmp_path, *, verified: bool = True):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'trial.db'}")
+async def _database(
+    tmp_path,
+    *,
+    verified: bool = True,
+    database_url: str | None = None,
+):
+    engine = create_async_engine(
+        database_url or f"sqlite+aiosqlite:///{tmp_path / 'trial.db'}"
+    )
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as database, database.begin():
         database.add(Tenant(id=1, name="Alpha", slug="alpha"))
         database.add(User(id=10, tenant_id=1, email="owner@example.com"))
+        await database.flush()
         database.add(
             UserIdentity(
                 user_id=10,

@@ -286,19 +286,23 @@ class OrchestratorStageHandler:
         reference_analyzer: Callable[[str], Awaitable[ReferenceAnalysisResult]],
         visual_gate_factory: Callable[[RunClaim], Any] | None = None,
         routed_engine_factory: Callable[[RunClaim, str], BuilderEngine] | None = None,
+        routed_reference_analyzer: Callable[
+            [RunClaim, str], Awaitable[ReferenceAnalysisResult]
+        ] | None = None,
     ) -> None:
         self._queue = queue
         self._factories = dict(engine_factories)
         self._reference_analyzer = reference_analyzer
         self._visual_gate_factory = visual_gate_factory
         self._routed_engine_factory = routed_engine_factory
+        self._routed_reference_analyzer = routed_reference_analyzer
 
     async def __call__(self, claim: RunClaim) -> StageResult:
         stage_input = await self._queue.stage_input(claim)
         policy = get_mode_policy(claim.mode)
         request = policy.apply_to_request(stage_input.request)
         if claim.next_stage == "reference_analysis":
-            return await self._analyze_reference(request)
+            return await self._analyze_reference(request, claim)
         try:
             stage = Stage(claim.next_stage)
         except ValueError as exc:
@@ -331,14 +335,22 @@ class OrchestratorStageHandler:
         finally:
             await engine.close()
 
-    async def _analyze_reference(self, request: BuilderRequest) -> StageResult:
+    async def _analyze_reference(
+        self,
+        request: BuilderRequest,
+        claim: RunClaim,
+    ) -> StageResult:
         if not request.source_url or request.reference_context:
             return StageResult(
                 public_message="Анализ исходного сайта завершён",
                 request=request,
             )
         try:
-            analysis = await self._reference_analyzer(request.source_url)
+            analysis = (
+                await self._routed_reference_analyzer(claim, request.source_url)
+                if self._routed_reference_analyzer is not None
+                else await self._reference_analyzer(request.source_url)
+            )
         except ReferencePipelineError as exc:
             raise BuilderEngineError(
                 exc.error_code,

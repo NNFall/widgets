@@ -20,15 +20,13 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
-from google import genai
-from google.genai import types
 from PIL import Image, UnidentifiedImageError
 
-from builder_lab.engines.gemini_direct import (
-    build_http_options,
-    build_provider_json_schema,
+from app.models.contracts import ModelRequest
+from app.models.structured_generation import (
+    GeminiStructuredGenerationBackend,
+    StructuredGenerationBackend,
 )
-from builder_lab.model_config import generation_policy, normalize_thinking_level
 
 
 MAX_SCREENSHOT_BYTES = 1_500_000
@@ -392,33 +390,6 @@ def _response_payload(response: Any) -> dict[str, Any]:
     return payload
 
 
-def _response_provenance(response: Any) -> tuple[str | None, dict[str, int]]:
-    raw_request_id = getattr(response, "response_id", None)
-    request_id = None
-    if isinstance(raw_request_id, str) and re.fullmatch(r"[A-Za-z0-9._:-]{1,200}", raw_request_id):
-        request_id = raw_request_id
-    metadata = getattr(response, "usage_metadata", None)
-
-    def count(name: str) -> int:
-        value = getattr(metadata, name, 0) if metadata is not None else 0
-        try:
-            value = int(value or 0)
-        except (TypeError, ValueError):
-            value = 0
-        return max(0, value)
-
-    prompt = count("prompt_token_count")
-    output = count("candidates_token_count")
-    thinking = count("thoughts_token_count")
-    total = count("total_token_count") or prompt + output + thinking
-    return request_id, {
-        "prompt_tokens": prompt,
-        "output_tokens": output,
-        "thinking_tokens": thinking,
-        "total_tokens": total,
-    }
-
-
 def _bounded_text(value: Any, *, minimum: int, maximum: int, field: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{field} must be text")
@@ -507,27 +478,6 @@ def _prompt(source_url: str, labels: Iterable[str]) -> str:
     )
 
 
-def _transient_provider_error(exc: Exception) -> bool:
-    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
-        return True
-    diagnostic = f"{type(exc).__name__}: {exc}".casefold()
-    return any(
-        token in diagnostic
-        for token in (
-            "500",
-            "502",
-            "503",
-            "504",
-            "unavailable",
-            "high demand",
-            "temporarily",
-            "connection reset",
-            "service unavailable",
-            "gateway timeout",
-        )
-    )
-
-
 async def analyze_reference_site(
     *,
     source_url: str,
@@ -543,6 +493,7 @@ async def analyze_reference_site(
     base_url: str | None = None,
     timeout_seconds: float = 60,
     client: Any | None = None,
+    structured_backend: StructuredGenerationBackend | None = None,
 ) -> dict[str, Any]:
     safe_url = validate_source_url(source_url, allowed_hosts=allowed_hosts)
     captured_at, coverage_status = _validate_capture(captured_at, coverage_status)
@@ -565,70 +516,39 @@ async def analyze_reference_site(
     )
     if not isinstance(model, str) or not model.strip() or len(model) > 100:
         raise ReferenceAnalysisError("invalid_model", "Gemini model is invalid")
-    if client is None and (not isinstance(api_key, str) or not api_key.strip()):
+    if (
+        structured_backend is None
+        and client is None
+        and (not isinstance(api_key, str) or not api_key.strip())
+    ):
         raise ReferenceAnalysisError("missing_api_key", "Google AI API key is required")
-    owned_client = client is None
+    owned_backend = structured_backend is None
     native_base_url = (
         base_url
         or os.environ.get("GOOGLE_AI_NATIVE_BASE_URL")
         or "https://generativelanguage.googleapis.com/v1beta"
     )
-    gemini_client = client or genai.Client(
-        api_key=api_key.strip(),
-        http_options=build_http_options(native_base_url),
+    backend = structured_backend or GeminiStructuredGenerationBackend(
+        api_key=api_key,
+        model=model,
+        base_url=native_base_url,
+        timeout_seconds=timeout_seconds,
+        client=client,
     )
     prompt = _prompt(safe_url, (item.label for item in screenshots))
-    contents: list[types.Part] = [types.Part.from_text(text=prompt)]
-    for screenshot in screenshots:
-        contents.append(types.Part.from_text(text=f"EVIDENCE {screenshot.label}"))
-        contents.append(types.Part.from_bytes(data=screenshot.data, mime_type="image/jpeg"))
-    policy = generation_policy(
-        model,
-        normalize_thinking_level(thinking_level),
-        temperature=0.1,
-    )
-    config = types.GenerateContentConfig(
-        **policy.sampling_kwargs,
-        response_mime_type="application/json",
-        response_json_schema=build_provider_json_schema(
-            REFERENCE_ANALYSIS_SCHEMA,
-            model,
-        ),
-        tools=[],
-        thinking_config=policy.thinking_config,
-    )
+    images = tuple(screenshot.data for screenshot in screenshots)
+    image_labels = tuple(screenshot.label for screenshot in screenshots)
     request_id: str | None = None
     usage = {key: 0 for key in ("prompt_tokens", "output_tokens", "thinking_tokens", "total_tokens")}
     attempt_count = 0
     semantic_attempt_limit = 4
     last_semantic_error = ""
 
-    async def generate(attempt_contents: Sequence[types.Part]) -> Any:
-        retry_delays = (0.5, 1.5, 3.0, 5.0)
-        for provider_attempt in range(len(retry_delays) + 1):
-            try:
-                async with asyncio.timeout(timeout_seconds):
-                    return await gemini_client.aio.models.generate_content(
-                        model=model.strip(),
-                        contents=attempt_contents,
-                        config=config,
-                    )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                if (
-                    not _transient_provider_error(exc)
-                    or provider_attempt == len(retry_delays)
-                ):
-                    raise
-                await asyncio.sleep(retry_delays[provider_attempt])
-        raise AssertionError("unreachable reference provider retry loop")
-
     try:
         for attempt_count in range(1, semantic_attempt_limit + 1):
-            attempt_contents = contents
+            attempt_prompt = prompt
             if attempt_count > 1:
-                retry_prompt = (
+                attempt_prompt = (
                     prompt
                     + "\nCORRECTION: The previous response violated the local JSON contract. Return a fresh, "
                     "complete object within every numeric budget above; do not repeat the invalid output."
@@ -638,14 +558,36 @@ async def analyze_reference_site(
                         else ""
                     )
                 )
-                attempt_contents = [types.Part.from_text(text=retry_prompt), *contents[1:]]
-            response = await generate(attempt_contents)
-            current_request_id, current_usage = _response_provenance(response)
-            request_id = current_request_id or request_id
+            response = await backend.generate(
+                ModelRequest(
+                    prompt=attempt_prompt,
+                    images=images,
+                    response_schema=REFERENCE_ANALYSIS_SCHEMA,
+                    temperature=0.1,
+                    metadata={
+                        "thinking_level": thinking_level,
+                        "image_labels": image_labels,
+                    },
+                )
+            )
+            request_id = response.request_id or request_id
+            current_usage = {
+                "prompt_tokens": response.usage.input_tokens,
+                # Reference provenance keeps visible output and hidden thinking
+                # separate for legacy Builder TokenUsage display semantics.
+                "output_tokens": max(
+                    0,
+                    response.usage.output_tokens - response.usage.thinking_tokens,
+                ),
+                "thinking_tokens": response.usage.thinking_tokens,
+                "total_tokens": (
+                    response.usage.input_tokens + response.usage.output_tokens
+                ),
+            }
             usage = {key: usage[key] + current_usage[key] for key in usage}
             try:
                 analysis = _validate_semantic_output(
-                    _response_payload(response), {item.label for item in screenshots}
+                    _response_payload(response), set(image_labels)
                 )
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 last_semantic_error = f"{type(exc).__name__}: {str(exc)[:500]}"
@@ -668,16 +610,12 @@ async def analyze_reference_site(
     except Exception as exc:
         raise ReferenceAnalysisError("analysis_unavailable", "Gemini reference analysis is unavailable") from exc
     finally:
-        if owned_client:
-            close = getattr(getattr(gemini_client, "aio", None), "aclose", None)
-            if callable(close):
-                await close()
-            else:
-                close = getattr(gemini_client, "close", None)
-                if callable(close):
-                    result = close()
-                    if asyncio.iscoroutine(result):
-                        await result
+        if owned_backend:
+            await backend.aclose()
+
+    response_model = (response.raw or {}).get("model")
+    if not isinstance(response_model, str) or not response_model.strip():
+        response_model = backend.model_name
 
     return {
         "schema_version": "kaigo.reference.v1",
@@ -702,8 +640,8 @@ async def analyze_reference_site(
         ],
         "analysis": analysis,
         "provenance": {
-            "method": "official google-genai structured visual analysis",
-            "model": model.strip(),
+            "method": "provider-routed structured visual analysis",
+            "model": response_model,
             "request_id": request_id,
             "usage": usage,
             "attempt_count": attempt_count,

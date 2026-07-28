@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Mapping, Protocol
 from uuid import UUID
 
@@ -198,7 +198,14 @@ class ModelRouter:
                     pricing_snapshot=_pricing_snapshot(target),
                 )
             )
-            return response
+            return replace(
+                response,
+                raw={
+                    **dict(response.raw or {}),
+                    "provider": target.provider,
+                    "model": target.model,
+                },
+            )
 
         if last_error is not None:
             raise last_error

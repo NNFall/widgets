@@ -24,6 +24,7 @@ from app.models.router import (
     ProviderTarget,
     SqlModelCallAudit,
 )
+from app.models.structured_generation import RoutedStructuredGenerationBackend
 
 from builder_lab.config import BuilderLabConfig
 from builder_lab.browser_audit import BrowserAudit
@@ -154,12 +155,22 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
     for mode in ("direct", "express"):
         policy = get_mode_policy(mode)
         for role in set(policy.model_roles.values()):
+            target_model = (
+                config.reference_analyzer_model
+                if role == "reference_analyst"
+                else config.direct_model
+            )
+            prompt_version = (
+                "reference-v1"
+                if role == "reference_analyst"
+                else "builder-v1"
+            )
             policies[(role, policy.name)] = ModelPolicy(
-                prompt_version="builder-v1",
+                prompt_version=prompt_version,
                 targets=(
                     ProviderTarget(
                         "gemini",
-                        config.direct_model,
+                        target_model,
                         input_rate,
                         output_rate,
                     ),
@@ -226,6 +237,17 @@ async def run() -> None:
             queue=queue,
             engine_factories=engine_factories,
             reference_analyzer=reference_pipeline.analyze,
+            routed_reference_analyzer=lambda claim, source_url: (
+                reference_pipeline.analyze(
+                    source_url,
+                    structured_backend=RoutedStructuredGenerationBackend(
+                        router=model_router,
+                        role="reference_analyst",
+                        mode=get_mode_policy(claim.mode).name,
+                        run_id=claim.run_id,
+                    ),
+                )
+            ),
             routed_engine_factory=lambda claim, role: GeminiDirectEngine(
                 model_router=model_router,
                 routing_role=role,

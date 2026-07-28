@@ -467,7 +467,7 @@ class ReferenceGeminiAnalysisTests(unittest.IsolatedAsyncioTestCase):
             with patch.dict(
                 os.environ,
                 {"GOOGLE_AI_NATIVE_BASE_URL": "https://proxy.test/protected/v1beta"},
-            ), patch("scripts.analyze_reference_site.genai.Client", return_value=fake) as factory:
+            ), patch("app.models.providers.gemini.genai.Client", return_value=fake) as factory:
                 await analyze_reference_site(
                     source_url="https://rawbureau.ru/",
                     allowed_hosts={"rawbureau.ru"},

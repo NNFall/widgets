@@ -13,6 +13,7 @@ from scripts.analyze_reference_site import (
 )
 
 from .models import TokenUsage
+from app.models.structured_generation import StructuredGenerationBackend
 from .reference_crawler import (
     ReferenceCrawlLimits,
     UnsafeReferenceUrl,
@@ -222,6 +223,7 @@ class GeminiReferencePipeline:
         thinking_level: str,
         base_url: str,
         timeout_seconds: float = 120,
+        structured_backend: StructuredGenerationBackend | None = None,
     ) -> None:
         self._crawler = crawler
         self._analyzer = analyzer
@@ -230,6 +232,7 @@ class GeminiReferencePipeline:
         self._thinking_level = thinking_level
         self._base_url = base_url
         self._timeout_seconds = timeout_seconds
+        self._structured_backend = structured_backend
 
     @classmethod
     def from_config(cls, config: Any) -> "GeminiReferencePipeline":
@@ -258,7 +261,12 @@ class GeminiReferencePipeline:
             timeout_seconds=min(180, config.reference_timeout_seconds),
         )
 
-    async def analyze(self, source_url: str) -> ReferenceAnalysisResult:
+    async def analyze(
+        self,
+        source_url: str,
+        *,
+        structured_backend: StructuredGenerationBackend | None = None,
+    ) -> ReferenceAnalysisResult:
         try:
             crawl = await self._crawler.crawl(source_url)
         except UnsafeReferenceUrl as exc:
@@ -311,6 +319,9 @@ class GeminiReferencePipeline:
                     thinking_level=self._thinking_level,
                     base_url=self._base_url,
                     timeout_seconds=self._timeout_seconds,
+                    structured_backend=(
+                        structured_backend or self._structured_backend
+                    ),
                 )
             except ReferenceAnalysisError as exc:
                 error_code = (

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from dataclasses import dataclass
 from typing import Any, Mapping
@@ -180,14 +181,15 @@ class GeminiModelProvider:
     def __init__(
         self,
         *,
-        api_key: str,
+        api_key: str | None,
         base_url: str = "https://generativelanguage.googleapis.com",
         client: Any | None = None,
     ) -> None:
-        if not api_key or not api_key.strip():
+        if client is None and (not api_key or not api_key.strip()):
             raise ValueError("Gemini API key is required")
+        self._owned_client = client is None
         self._client = client or genai.Client(
-            api_key=api_key.strip(),
+            api_key=api_key.strip(),  # type: ignore[union-attr]
             http_options=build_http_options(base_url),
         )
 
@@ -220,10 +222,25 @@ class GeminiModelProvider:
         contents: str | list[types.Part]
         if request.images:
             contents = [types.Part.from_text(text=request.prompt)]
-            contents.extend(
-                types.Part.from_bytes(data=image, mime_type=_image_mime_type(image))
-                for image in request.images
-            )
+            labels = request.metadata.get("image_labels")
+            if (
+                isinstance(labels, (tuple, list))
+                and len(labels) == len(request.images)
+                and all(isinstance(label, str) and label.strip() for label in labels)
+            ):
+                for label, image in zip(labels, request.images):
+                    contents.append(types.Part.from_text(text=f"EVIDENCE {label.strip()}"))
+                    contents.append(
+                        types.Part.from_bytes(
+                            data=image,
+                            mime_type=_image_mime_type(image),
+                        )
+                    )
+            else:
+                contents.extend(
+                    types.Part.from_bytes(data=image, mime_type=_image_mime_type(image))
+                    for image in request.images
+                )
         else:
             contents = request.prompt
 
@@ -244,6 +261,17 @@ class GeminiModelProvider:
             raise
         except (json.JSONDecodeError, TypeError, ValueError) as error:
             raise InvalidModelResponse("Gemini returned an invalid response") from error
+
+    async def aclose(self) -> None:
+        if not self._owned_client:
+            return
+        close = getattr(getattr(self._client, "aio", None), "aclose", None)
+        if not callable(close):
+            close = getattr(self._client, "close", None)
+        if callable(close):
+            result = close()
+            if inspect.isawaitable(result):
+                await result
 
 
 def _normalize_response(response: Any, *, structured: bool) -> ModelResponse:
