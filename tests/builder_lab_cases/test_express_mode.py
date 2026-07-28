@@ -10,6 +10,7 @@ from builder_lab.modes import (
     get_mode_policy,
 )
 from builder_lab.models import BuilderRequest, EngineName, Stage
+from builder_lab.visual_critic import VisualCriticRole
 from builder_lab.orchestrator import stages_for_mode
 from builder_lab.worker import (
     DIRECT_STAGE_SEQUENCE,
@@ -27,6 +28,8 @@ def test_express_policy_is_a_complete_reviewable_build() -> None:
     assert policy.requires_browser_chat_gate
     assert policy.requires_visual_gate
     assert policy.critic_roles
+    assert policy.critic_roles == tuple(role.value for role in VisualCriticRole)
+    assert policy.judge_role == "visual_judge"
     assert policy.max_repairs >= 1
     assert policy.visual_repair_limit >= 1
     assert set(policy.model_roles) == set(policy.stage_sequence)

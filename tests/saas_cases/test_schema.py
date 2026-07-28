@@ -49,3 +49,8 @@ def test_idempotency_and_ledger_constraints_are_registered() -> None:
 
 def test_oauth_only_users_may_have_no_password() -> None:
     assert Base.metadata.tables["users"].c.password_hash.nullable is True
+
+
+def test_trial_cycles_and_model_call_mode_are_persisted() -> None:
+    assert "reservation_epoch" in Base.metadata.tables["trial_entitlements"].c
+    assert "mode" in Base.metadata.tables["model_calls"].c

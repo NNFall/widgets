@@ -3,6 +3,11 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from typing import Mapping, Protocol
+from uuid import UUID
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.saas.models import ModelCall
 
 from app.models.contracts import (
     BilledModelProviderError,
@@ -37,6 +42,7 @@ class ModelPolicy:
 
 @dataclass(frozen=True, slots=True)
 class ModelCallAuditRecord:
+    run_id: UUID | None
     provider: str
     model: str
     role: str
@@ -52,6 +58,7 @@ class ModelCallAuditRecord:
     request_id: str | None = None
     error_code: str | None = None
     error_message: str | None = None
+    pricing_snapshot: Mapping[str, int | str] | None = None
 
 
 class ModelCallAudit(Protocol):
@@ -64,6 +71,37 @@ class InMemoryModelCallAudit:
 
     async def record(self, call: ModelCallAuditRecord) -> None:
         self.calls.append(call)
+
+
+class SqlModelCallAudit:
+    """Persist provider accounting only; prompts and secrets never enter the audit row."""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = session_factory
+
+    async def record(self, call: ModelCallAuditRecord) -> None:
+        async with self._sessions() as database, database.begin():
+            database.add(
+                ModelCall(
+                    run_id=call.run_id,
+                    provider=call.provider,
+                    model=call.model,
+                    role=call.role,
+                    mode=call.mode,
+                    prompt_version=call.prompt_version,
+                    request_id=call.request_id,
+                    attempt=call.attempt,
+                    input_tokens=call.input_tokens,
+                    output_tokens=call.output_tokens,
+                    thinking_tokens=call.thinking_tokens,
+                    latency_ms=call.latency_ms,
+                    status=call.status,
+                    error_code=call.error_code,
+                    error_message=call.error_message,
+                    cost_microusd=call.cost_microusd,
+                    pricing_snapshot=dict(call.pricing_snapshot or {}),
+                )
+            )
 
 
 class ModelRouter:
@@ -84,6 +122,7 @@ class ModelRouter:
         role: str,
         mode: str,
         request: ModelRequest,
+        run_id: UUID | None = None,
     ) -> ModelResponse:
         try:
             policy = self._policies[(role, mode)]
@@ -109,6 +148,7 @@ class ModelRouter:
                 )
                 await self._audit.record(
                     ModelCallAuditRecord(
+                        run_id=run_id,
                         provider=target.provider,
                         model=target.model,
                         role=role,
@@ -132,6 +172,7 @@ class ModelRouter:
                         ),
                         error_code=error.error_code,
                         error_message=str(error)[:1000],
+                        pricing_snapshot=_pricing_snapshot(target),
                     )
                 )
                 continue
@@ -140,6 +181,7 @@ class ModelRouter:
             cost = _cost_microusd(target, usage.input_tokens, usage.output_tokens)
             await self._audit.record(
                 ModelCallAuditRecord(
+                    run_id=run_id,
                     provider=target.provider,
                     model=target.model,
                     role=role,
@@ -153,6 +195,7 @@ class ModelRouter:
                     latency_ms=_elapsed_ms(started),
                     cost_microusd=cost,
                     request_id=response.request_id,
+                    pricing_snapshot=_pricing_snapshot(target),
                 )
             )
             return response
@@ -196,3 +239,16 @@ def _cost_microusd(
         + output_tokens * target.output_price_microusd_per_million
     )
     return round(numerator / 1_000_000)
+
+
+def _pricing_snapshot(target: ProviderTarget) -> dict[str, int | str]:
+    return {
+        "currency": "USD",
+        "billing_unit_tokens": 1_000_000,
+        "input_price_microusd_per_million": (
+            target.input_price_microusd_per_million
+        ),
+        "output_price_microusd_per_million": (
+            target.output_price_microusd_per_million
+        ),
+    }

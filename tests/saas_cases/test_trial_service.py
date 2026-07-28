@@ -14,6 +14,18 @@ from app.billing.service import (
     TrialUnavailable,
     UnverifiedTrialUser,
 )
+from app.models.contracts import (
+    ModelRequest,
+    ModelResponse,
+    ModelUsage,
+    ProviderCapabilities,
+)
+from app.models.router import (
+    ModelPolicy,
+    ModelRouter,
+    ProviderTarget,
+    SqlModelCallAudit,
+)
 from app.db.base import Base
 from app.db.models import Tenant, User
 from app.saas.models import (
@@ -26,7 +38,8 @@ from app.saas.models import (
     UsageLedger,
     UserIdentity,
 )
-from builder_lab.models import Stage
+from builder_lab.engines.gemini_direct import GeminiDirectEngine
+from builder_lab.models import BuilderRequest, EngineName, Stage
 from tests.builder_lab_cases.test_validation import artifact
 
 POSTGRES_URL = os.getenv("KAIGO_TEST_POSTGRES_URL")
@@ -203,6 +216,45 @@ async def test_infrastructure_failure_before_any_artifact_compensates(tmp_path) 
 
 
 @pytest.mark.asyncio
+async def test_compensated_request_can_reserve_a_new_immutable_cycle(tmp_path) -> None:
+    engine, factory, _, run_ids = await _database(tmp_path)
+    service = TrialService(factory)
+    try:
+        first = await service.reserve_trial(10, run_ids[0], request_id="same-request")
+        await service.compensate_if_eligible(
+            first,
+            failure_kind=TrialFailureKind.INFRASTRUCTURE,
+        )
+
+        second = await service.reserve_trial(10, run_ids[0], request_id="same-request")
+
+        assert second.key != first.key
+        assert second.key.endswith(":2")
+        assert await service.compensate_if_eligible(
+            first,
+            failure_kind=TrialFailureKind.INFRASTRUCTURE,
+        )
+        async with factory() as database:
+            keys = (
+                await database.execute(
+                    select(UsageLedger.idempotency_key)
+                    .where(UsageLedger.user_id == 10)
+                    .order_by(UsageLedger.created_at, UsageLedger.id)
+                )
+            ).scalars().all()
+            entitlement = (
+                await database.execute(
+                    select(TrialEntitlement).where(TrialEntitlement.user_id == 10)
+                )
+            ).scalar_one()
+        assert len(keys) == len(set(keys)) == 6
+        assert entitlement.state == "reserved"
+        assert entitlement.reservation_key == second.key
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "failure_kind",
     [TrialFailureKind.USER, TrialFailureKind.CONTENT, TrialFailureKind.VALIDATION],
@@ -351,6 +403,37 @@ async def test_malformed_draft_does_not_block_infrastructure_compensation(
 
 
 @pytest.mark.asyncio
+async def test_contract_invalid_draft_does_not_block_compensation(tmp_path) -> None:
+    engine, factory, _, run_ids = await _database(tmp_path)
+    service = TrialService(factory)
+    try:
+        reservation = await service.reserve_trial(10, run_ids[0])
+        invalid = artifact(revision=1, stage=Stage.FOUNDATION).to_dict()
+        invalid["body_html"] = "<section>looks parseable but has no widget regions</section>"
+        async with factory() as database, database.begin():
+            run = await database.get(GenerationRun, run_ids[0])
+            assert run is not None
+            database.add(
+                GenerationEvent(
+                    id=103,
+                    run_id=run.id,
+                    sequence=run.next_event_sequence,
+                    event_type="artifact.draft_staged",
+                    public_message="Contract-invalid draft",
+                    payload={"artifact": invalid},
+                )
+            )
+            run.next_event_sequence += 1
+
+        assert await service.compensate_if_eligible(
+            reservation,
+            failure_kind=TrialFailureKind.MODEL_INVALID_OUTPUT,
+        )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_accepted_artifact_blocks_compensation(tmp_path) -> None:
     engine, factory, _, run_ids = await _database(tmp_path)
     service = TrialService(factory)
@@ -427,6 +510,96 @@ async def test_model_usage_ledger_uses_actual_cost_without_double_counting_think
             ).scalars().all()
         assert len(records) == 2
     finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_express_stage_routes_and_persists_exact_model_call_then_ledgers_usage(
+    tmp_path,
+) -> None:
+    engine, factory, _, run_ids = await _database(tmp_path)
+
+    class Provider:
+        capabilities = ProviderCapabilities(structured_output=True)
+
+        async def generate(self, request: ModelRequest, *, model: str) -> ModelResponse:
+            assert model == "glm-5.2"
+            assert request.response_schema is not None
+            payload = artifact(revision=1, stage=Stage.FOUNDATION).to_dict()
+            payload.pop("schema_version")
+            return ModelResponse(
+                text="{}",
+                parsed=payload,
+                usage=ModelUsage(
+                    input_tokens=80,
+                    output_tokens=10,
+                    thinking_tokens=3,
+                ),
+                request_id="agentrouter-stage-1",
+            )
+
+    provider = Provider()
+    router = ModelRouter(
+        providers={"agentrouter": provider},
+        policies={
+            ("widget_generator", "express"): ModelPolicy(
+                prompt_version="widget-v2",
+                targets=(
+                    ProviderTarget(
+                        "agentrouter",
+                        "glm-5.2",
+                        6_000_000,
+                        6_000_000,
+                    ),
+                ),
+            )
+        },
+        audit=SqlModelCallAudit(factory),
+    )
+    builder = GeminiDirectEngine(
+        model_router=router,
+        routing_role="widget_generator",
+        routing_mode="express",
+        run_id=run_ids[0],
+    )
+    try:
+        result = await builder.generate(
+            request=BuilderRequest(
+                engine=EngineName.DIRECT,
+                brief="Build an express widget",
+            ),
+            stage=Stage.FOUNDATION,
+            revision=1,
+        )
+        assert result.provider_request_id == "agentrouter-stage-1"
+
+        async with factory() as database:
+            call = (await database.execute(select(ModelCall))).scalar_one()
+            assert (call.run_id, call.role, call.mode) == (
+                run_ids[0],
+                "widget_generator",
+                "express",
+            )
+            assert (call.provider, call.model, call.prompt_version) == (
+                "agentrouter",
+                "glm-5.2",
+                "widget-v2",
+            )
+            assert call.pricing_snapshot == {
+                "currency": "USD",
+                "billing_unit_tokens": 1_000_000,
+                "input_price_microusd_per_million": 6_000_000,
+                "output_price_microusd_per_million": 6_000_000,
+            }
+            call_id = call.id
+
+        entries = await TrialService(factory).record_model_call_usage(10, call_id)
+        assert {entry.bucket: entry.amount for entry in entries} == {
+            "tokens": -90,
+            "cost_microusd": -540,
+        }
+    finally:
+        await builder.close()
         await engine.dispose()
 
 
@@ -563,6 +736,24 @@ async def test_postgres_concurrent_trial_reservation_is_atomic() -> None:
 
         assert sum(not isinstance(result, Exception) for result in results) == 1
         assert sum(isinstance(result, TrialUnavailable) for result in results) == 1
+        winner_index = next(
+            index
+            for index, result in enumerate(results)
+            if not isinstance(result, Exception)
+        )
+        winner = results[winner_index]
+        assert not isinstance(winner, Exception)
+        await first_service.compensate_if_eligible(
+            winner,
+            failure_kind=TrialFailureKind.INFRASTRUCTURE,
+        )
+        retried = await second_service.reserve_trial(
+            10,
+            run_ids[winner_index],
+            request_id=f"parallel-{'a' if winner_index == 0 else 'b'}",
+        )
+        assert retried.key != winner.key
+        assert retried.key.endswith(":2")
         async with factory() as database:
             entries = (
                 await database.execute(
@@ -571,7 +762,7 @@ async def test_postgres_concurrent_trial_reservation_is_atomic() -> None:
                     )
                 )
             ).scalars().all()
-        assert len(entries) == 2
+        assert len(entries) == 4
         assert sum(entry.amount for entry in entries) == 0
     finally:
         async with engine.begin() as connection:

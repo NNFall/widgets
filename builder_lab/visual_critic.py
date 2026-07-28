@@ -18,6 +18,9 @@ from google import genai
 from google.genai import types
 from PIL import Image, ImageDraw, ImageFont
 
+from app.models.contracts import ModelRequest, ModelResponse
+from app.models.router import ModelRouter
+
 from .browser_audit import (
     BrowserAuditReport,
     MAX_INLINE_BYTES,
@@ -265,6 +268,12 @@ def _random_code(_state: ScreenshotState) -> str:
 
 
 def _usage(response: Any) -> TokenUsage:
+    if isinstance(response, ModelResponse):
+        return TokenUsage(
+            prompt_tokens=response.usage.input_tokens,
+            output_tokens=max(0, response.usage.output_tokens - response.usage.thinking_tokens),
+            thinking_tokens=response.usage.thinking_tokens,
+        )
     metadata = getattr(response, "usage_metadata", None)
     if metadata is None:
         return TokenUsage()
@@ -767,8 +776,11 @@ class GeminiVisualCritic:
         client: Any | None = None,
         proof_code_factory: Callable[[ScreenshotState], str] = _random_code,
         role: VisualCriticRole = VisualCriticRole.ADVERSARIAL_CUSTOMER,
+        model_router: ModelRouter | None = None,
+        routing_mode: str = "direct",
+        run_id: Any | None = None,
     ) -> None:
-        if client is None and (not api_key or not api_key.strip()):
+        if model_router is None and client is None and (not api_key or not api_key.strip()):
             raise VisualCriticError(
                 "missing_api_key", "Для Gemini visual critic не настроен API-ключ"
             )
@@ -776,11 +788,16 @@ class GeminiVisualCritic:
         self.thinking_level = normalize_thinking_level(thinking_level)
         self.timeout_seconds = timeout_seconds
         self.role = VisualCriticRole(role)
+        self._model_router = model_router
+        self._routing_mode = routing_mode
+        self._run_id = run_id
         self._proof_code_factory = proof_code_factory
-        self._owned_client = client is None
-        self._client = client or genai.Client(
-            api_key=api_key.strip(), http_options=build_http_options(base_url)  # type: ignore[union-attr]
-        )
+        self._owned_client = model_router is None and client is None
+        self._client = None
+        if model_router is None:
+            self._client = client or genai.Client(
+                api_key=api_key.strip(), http_options=build_http_options(base_url)  # type: ignore[union-attr]
+            )
 
     async def critique(
         self,
@@ -833,15 +850,18 @@ class GeminiVisualCritic:
             raise ValueError("brief is invalid")
         if not isinstance(art_direction, str) or not art_direction.strip() or len(art_direction) > 8_000:
             raise ValueError("art_direction is invalid")
+        initial_prompt = (
+            "UNTRUSTED BRIEF DATA:\n"
+            f"{brief.strip()}\n\nUNTRUSTED ART DIRECTION DATA:\n{art_direction.strip()}\n\n"
+            f"DETERMINISTIC LAYOUT METRICS DATA:\n{_compact_metrics(audit)}"
+        )
         contents: list[types.Part] = [
             types.Part.from_text(
-                text=(
-                    "UNTRUSTED BRIEF DATA:\n"
-                    f"{brief.strip()}\n\nUNTRUSTED ART DIRECTION DATA:\n{art_direction.strip()}\n\n"
-                    f"DETERMINISTIC LAYOUT METRICS DATA:\n{_compact_metrics(audit)}"
-                )
+                text=initial_prompt
             )
         ]
+        router_text = [initial_prompt]
+        router_images: list[bytes] = []
         total = 0
         for index, screenshot in enumerate(audit.screenshots, start=1):
             data = screenshot.data
@@ -857,6 +877,8 @@ class GeminiVisualCritic:
                 )
             )
             contents.append(types.Part.from_bytes(data=data, mime_type="image/jpeg"))
+            router_text.append(f"SCREENSHOT {index}/6 — {screenshot.evidence.screenshot_id}")
+            router_images.append(data)
         for index, (crop_id, source_id, data) in enumerate(
             _context_crops(audit),
             start=1,
@@ -876,6 +898,10 @@ class GeminiVisualCritic:
                 )
             )
             contents.append(types.Part.from_bytes(data=data, mime_type="image/jpeg"))
+            router_text.append(
+                f"CONTEXT CROP {index}/3 — {crop_id}; source full frame: {source_id}"
+            )
+            router_images.append(data)
         if validation_correction is not None:
             contents.append(
                 types.Part.from_text(
@@ -887,6 +913,7 @@ class GeminiVisualCritic:
                     )
                 )
             )
+            router_text.append(str(validation_correction))
 
         policy = generation_policy(
             self.model,
@@ -934,11 +961,25 @@ class GeminiVisualCritic:
         )
         try:
             async with asyncio.timeout(self.timeout_seconds):
-                response = await self._client.aio.models.generate_content(
-                    model=self.model,
-                    contents=contents,
-                    config=config,
-                )
+                if self._model_router is not None:
+                    response = await self._model_router.generate(
+                        role=self.role.value,
+                        mode=self._routing_mode,
+                        run_id=self._run_id,
+                        request=ModelRequest(
+                            prompt=config.system_instruction + "\n\n" + "\n".join(router_text),
+                            images=tuple(router_images),
+                            response_schema=VISUAL_CRITIC_SCHEMA,
+                            temperature=0.1,
+                            metadata={"thinking_level": self.thinking_level},
+                        ),
+                    )
+                else:
+                    response = await self._client.aio.models.generate_content(  # type: ignore[union-attr]
+                        model=self.model,
+                        contents=contents,
+                        config=config,
+                    )
         except asyncio.CancelledError:
             raise
         except TimeoutError as exc:
@@ -1321,6 +1362,8 @@ class GeminiVisualCritic:
 
     async def aclose(self) -> None:
         if not self._owned_client:
+            return
+        if self._client is None:
             return
         aio_error: BaseException | None = None
         sync_error: BaseException | None = None

@@ -16,6 +16,7 @@ from builder_lab.chat import GeminiDemoChatService
 from builder_lab.engines.antigravity import AntigravityEngine
 from builder_lab.engines.gemini_direct import GeminiDirectEngine
 from builder_lab.models import EngineName
+from builder_lab.modes import BuildModePolicy, get_mode_policy
 from builder_lab.orchestrator import BuilderOrchestrator
 from builder_lab.reference_pipeline import GeminiReferencePipeline
 from builder_lab.store import RunStore
@@ -52,7 +53,19 @@ def make_engine_factories(config: BuilderLabConfig):
     return factories
 
 
-def make_visual_critic_factory(config: BuilderLabConfig):
+def make_visual_critic_factory(
+    config: BuilderLabConfig,
+    *,
+    policy: BuildModePolicy | None = None,
+    model_router=None,
+    mode: str = "direct",
+    run_id=None,
+):
+    selected_policy = policy or get_mode_policy(mode)
+    critic_roles = tuple(
+        VisualCriticRole(role) for role in selected_policy.critic_roles
+    )
+
     def make_committee() -> VisualCriticCommittee:
         return VisualCriticCommittee(
             {
@@ -64,9 +77,12 @@ def make_visual_critic_factory(config: BuilderLabConfig):
                         base_url=config.gemini_base_url,
                         timeout_seconds=config.visual_critic_timeout_seconds,
                         role=role,
+                        model_router=model_router,
+                        routing_mode=selected_policy.name,
+                        run_id=run_id,
                     )
                 )
-                for role in VisualCriticRole
+                for role in critic_roles
             },
             judge_factory=lambda: GeminiVisualJudge(
                 api_key=config.gemini_api_key,
@@ -74,6 +90,10 @@ def make_visual_critic_factory(config: BuilderLabConfig):
                 thinking_level=config.visual_critic_thinking_level,
                 base_url=config.gemini_base_url,
                 timeout_seconds=config.visual_critic_timeout_seconds,
+                model_router=model_router,
+                routing_mode=selected_policy.name,
+                routing_role=selected_policy.judge_role or "visual_judge",
+                run_id=run_id,
             ),
         )
 

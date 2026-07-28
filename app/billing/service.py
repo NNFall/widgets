@@ -25,6 +25,7 @@ from app.saas.models import (
     UserIdentity,
 )
 from builder_lab.models import WidgetArtifact
+from builder_lab.validation import validate_artifact
 
 
 class TrialUnavailable(RuntimeError):
@@ -104,12 +105,15 @@ class TrialService:
         user_id: int,
         run_id: UUID,
         request_id: str | None,
+        epoch: int,
     ) -> str:
         request = (request_id or "default").strip()
         if not request or "\x00" in request:
             raise ValueError("trial request_id is invalid")
         request_hash = hashlib.sha256(request.encode("utf-8")).hexdigest()[:20]
-        return f"trial:{user_id}:{run_id.hex}:{request_hash}"
+        if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 1:
+            raise ValueError("trial reservation epoch is invalid")
+        return f"trial:{user_id}:{run_id.hex}:{request_hash}:{epoch}"
 
     async def _validate_verified_owned_run(
         self,
@@ -152,6 +156,7 @@ class TrialService:
             "granted_units": 1,
             "reserved_units": 0,
             "consumed_units": 0,
+            "reservation_epoch": 0,
         }
         if database.get_bind().dialect.name == "postgresql":
             statement = postgresql_insert(TrialEntitlement).values(**values)
@@ -223,11 +228,6 @@ class TrialService:
             raise ValueError("trial user_id is invalid")
         if not isinstance(run_id, UUID):
             raise ValueError("trial run_id is invalid")
-        reservation = TrialReservation(
-            user_id=user_id,
-            run_id=run_id,
-            key=self._reservation_key(user_id, run_id, request_id),
-        )
         async with self._user_guard(user_id):
             async with self._sessions() as database, database.begin():
                 await self._validate_verified_owned_run(
@@ -237,11 +237,20 @@ class TrialService:
                 )
                 await self._ensure_entitlement(database, user_id=user_id)
                 entitlement = await self._locked_entitlement(database, user_id)
-                if (
-                    entitlement.state == "reserved"
-                    and entitlement.reservation_key == reservation.key
-                ):
-                    return reservation
+                base_key = self._reservation_key(
+                    user_id,
+                    run_id,
+                    request_id,
+                    max(1, entitlement.reservation_epoch),
+                ).rsplit(":", 1)[0]
+                if entitlement.state == "reserved":
+                    current_key = entitlement.reservation_key or ""
+                    if current_key.rsplit(":", 1)[0] == base_key:
+                        return TrialReservation(
+                            user_id=user_id,
+                            run_id=run_id,
+                            key=current_key,
+                        )
                 if entitlement.state != "available":
                     raise TrialUnavailable("Пробная полная сборка уже использована")
                 if (
@@ -251,6 +260,17 @@ class TrialService:
                     < 1
                 ):
                     raise TrialUnavailable("Пробная полная сборка уже использована")
+                entitlement.reservation_epoch += 1
+                reservation = TrialReservation(
+                    user_id=user_id,
+                    run_id=run_id,
+                    key=self._reservation_key(
+                        user_id,
+                        run_id,
+                        request_id,
+                        entitlement.reservation_epoch,
+                    ),
+                )
                 entitlement.state = "reserved"
                 entitlement.reserved_units = 1
                 entitlement.reservation_key = reservation.key
@@ -357,10 +377,15 @@ class TrialService:
             if not isinstance(artifact, dict):
                 continue
             try:
-                WidgetArtifact.from_dict(artifact)
+                candidate = WidgetArtifact.from_dict(artifact)
             except (KeyError, TypeError, ValueError):
                 continue
-            return True
+            previous_revision = max(0, candidate.revision - 1)
+            if not validate_artifact(
+                candidate,
+                previous_revision=previous_revision,
+            ):
+                return True
         return False
 
     async def compensate_if_eligible(
@@ -381,14 +406,13 @@ class TrialService:
                     database, reservation.user_id
                 )
                 compensation_key = f"{reservation.key}:compensation:trial_available"
-                if entitlement.state == "available":
-                    existing = await database.scalar(
-                        select(UsageLedger.id).where(
-                            UsageLedger.idempotency_key == compensation_key
-                        )
+                existing = await database.scalar(
+                    select(UsageLedger.id).where(
+                        UsageLedger.idempotency_key == compensation_key
                     )
-                    if existing is not None:
-                        return True
+                )
+                if existing is not None:
+                    return True
                 if (
                     entitlement.state != "reserved"
                     or entitlement.reservation_key != reservation.key

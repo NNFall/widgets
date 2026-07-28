@@ -125,6 +125,26 @@ async def test_structured_request_preserves_images_and_normalizes_billable_usage
 
 
 @pytest.mark.asyncio
+async def test_routed_gemini_36_keeps_high_thinking_and_omits_sampling() -> None:
+    client = FakeClient(response=fake_response())
+    provider = GeminiModelProvider(api_key="secret", client=client)
+
+    await provider.generate(
+        ModelRequest(
+            prompt="Generate",
+            temperature=0.9,
+            metadata={"thinking_level": "high"},
+        ),
+        model="gemini-3.6-flash",
+    )
+
+    config = client.models.calls[0]["config"]
+    assert config.thinking_config.thinking_level.value == "HIGH"
+    assert config.temperature is None
+    assert config.top_p is None
+
+
+@pytest.mark.asyncio
 async def test_sdk_parsed_json_is_preserved_without_rewriting_exact_text() -> None:
     parsed = [{"artifact": "one"}, {"artifact": "two"}]
     text = json.dumps(parsed, separators=(",", ":"))

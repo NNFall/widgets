@@ -18,6 +18,7 @@ from app.models.contracts import (
     ProviderQuotaExceeded,
     ProviderUnavailable,
 )
+from app.models.generation_policy import generation_policy
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,9 +192,21 @@ class GeminiModelProvider:
         )
 
     async def generate(self, request: ModelRequest, *, model: str) -> ModelResponse:
-        config_values: dict[str, Any] = {}
-        if request.temperature is not None:
-            config_values["temperature"] = request.temperature
+        raw_thinking_level = request.metadata.get("thinking_level")
+        thinking_level = (
+            raw_thinking_level
+            if isinstance(raw_thinking_level, str)
+            else "high"
+        )
+        policy = generation_policy(
+            model,
+            thinking_level,
+            temperature=request.temperature,
+        )
+        config_values: dict[str, Any] = {
+            **policy.sampling_kwargs,
+            "thinking_config": policy.thinking_config,
+        }
         if request.response_schema is not None:
             config_values.update(
                 response_mime_type="application/json",

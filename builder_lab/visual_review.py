@@ -9,6 +9,9 @@ from typing import Any, Mapping
 from google import genai
 from google.genai import types
 
+from app.models.contracts import ModelRequest, ModelResponse
+from app.models.router import ModelRouter
+
 from .engines.gemini_direct import (
     build_http_options,
     build_provider_json_schema,
@@ -284,6 +287,12 @@ def validate_repair_verification(
 
 
 def _response_usage(response: Any) -> TokenUsage:
+    if isinstance(response, ModelResponse):
+        return TokenUsage(
+            prompt_tokens=response.usage.input_tokens,
+            output_tokens=max(0, response.usage.output_tokens - response.usage.thinking_tokens),
+            thinking_tokens=response.usage.thinking_tokens,
+        )
     metadata = getattr(response, "usage_metadata", None)
     if metadata is None:
         return TokenUsage()
@@ -434,8 +443,12 @@ class GeminiVisualJudge:
         base_url: str = "https://generativelanguage.googleapis.com",
         timeout_seconds: float = 60,
         client: Any | None = None,
+        model_router: ModelRouter | None = None,
+        routing_mode: str = "direct",
+        routing_role: str = "visual_judge",
+        run_id: Any | None = None,
     ) -> None:
-        if client is None and (not api_key or not api_key.strip()):
+        if model_router is None and client is None and (not api_key or not api_key.strip()):
             raise VisualJudgeError(
                 "missing_api_key",
                 "Для визуального судьи Gemini не настроен API-ключ",
@@ -443,11 +456,17 @@ class GeminiVisualJudge:
         self.model = model
         self.thinking_level = normalize_thinking_level(thinking_level)
         self.timeout_seconds = timeout_seconds
-        self._owned_client = client is None
-        self._client = client or genai.Client(
-            api_key=api_key.strip(),  # type: ignore[union-attr]
-            http_options=build_http_options(base_url),
-        )
+        self._model_router = model_router
+        self._routing_mode = routing_mode
+        self._routing_role = routing_role
+        self._run_id = run_id
+        self._owned_client = model_router is None and client is None
+        self._client = None
+        if model_router is None:
+            self._client = client or genai.Client(
+                api_key=api_key.strip(),  # type: ignore[union-attr]
+                http_options=build_http_options(base_url),
+            )
 
     async def judge(
         self,
@@ -502,11 +521,24 @@ class GeminiVisualJudge:
             )
             try:
                 async with asyncio.timeout(self.timeout_seconds):
-                    response = await self._client.aio.models.generate_content(
-                        model=self.model,
-                        contents=contents,
-                        config=config,
-                    )
+                    if self._model_router is not None:
+                        response = await self._model_router.generate(
+                            role=self._routing_role,
+                            mode=self._routing_mode,
+                            run_id=self._run_id,
+                            request=ModelRequest(
+                                prompt=config.system_instruction + "\n\n" + contents[0].text,
+                                response_schema=VISUAL_JUDGE_SCHEMA,
+                                temperature=0.1,
+                                metadata={"thinking_level": self.thinking_level},
+                            ),
+                        )
+                    else:
+                        response = await self._client.aio.models.generate_content(  # type: ignore[union-attr]
+                            model=self.model,
+                            contents=contents,
+                            config=config,
+                        )
             except asyncio.CancelledError:
                 raise
             except TimeoutError as exc:
@@ -554,6 +586,8 @@ class GeminiVisualJudge:
 
     async def aclose(self) -> None:
         if not self._owned_client:
+            return
+        if self._client is None:
             return
         close = getattr(getattr(self._client, "aio", None), "aclose", None)
         if callable(close):

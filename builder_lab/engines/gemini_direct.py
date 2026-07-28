@@ -13,6 +13,8 @@ from app.models.providers.gemini import (
     classify_gemini_error,
     gemini_usage_counts,
 )
+from app.models.contracts import ModelRequest, ModelResponse
+from app.models.router import ModelRouter
 
 from ..model_config import generation_policy, normalize_thinking_level
 from ..models import (
@@ -90,6 +92,15 @@ def _provider_error(exc: Exception) -> BuilderEngineError:
 
 
 def _usage(response: Any) -> TokenUsage:
+    if isinstance(response, ModelResponse):
+        return TokenUsage(
+            prompt_tokens=response.usage.input_tokens,
+            output_tokens=max(
+                0,
+                response.usage.output_tokens - response.usage.thinking_tokens,
+            ),
+            thinking_tokens=response.usage.thinking_tokens,
+        )
     counts = gemini_usage_counts(response)
     # Builder Lab's historical TokenUsage adds thinking_tokens in total_tokens,
     # unlike ModelUsage where thinking is already a subset of output_tokens.
@@ -122,23 +133,35 @@ class GeminiDirectEngine:
     def __init__(
         self,
         *,
-        api_key: str | None,
+        api_key: str | None = None,
         model: str = "gemini-3.6-flash",
         thinking_level: str = "high",
         base_url: str = "https://generativelanguage.googleapis.com",
         client: Any | None = None,
+        model_router: ModelRouter | None = None,
+        routing_role: str | None = None,
+        routing_mode: str = "direct",
+        run_id: Any | None = None,
     ) -> None:
-        if not api_key or not api_key.strip():
+        if model_router is None and (not api_key or not api_key.strip()):
             raise BuilderEngineError(
                 "missing_api_key", "Для direct-режима не настроен ключ Gemini"
             )
         self.model = model
         self.thinking_level = normalize_thinking_level(thinking_level)
-        self._owned_client = client is None
-        self._client = client or genai.Client(
-            api_key=api_key.strip(),
-            http_options=build_http_options(base_url),
-        )
+        if model_router is not None and not routing_role:
+            raise ValueError("routing_role is required with model_router")
+        self._model_router = model_router
+        self._routing_role = routing_role
+        self._routing_mode = routing_mode
+        self._run_id = run_id
+        self._owned_client = model_router is None and client is None
+        self._client = None
+        if model_router is None:
+            self._client = client or genai.Client(
+                api_key=api_key.strip(),  # type: ignore[union-attr]
+                http_options=build_http_options(base_url),
+            )
 
     async def _generate_structured(
         self,
@@ -147,6 +170,18 @@ class GeminiDirectEngine:
         schema: dict[str, Any],
         temperature: float,
     ) -> Any:
+        if self._model_router is not None:
+            return await self._model_router.generate(
+                role=str(self._routing_role),
+                mode=self._routing_mode,
+                run_id=self._run_id,
+                request=ModelRequest(
+                    prompt=prompt,
+                    response_schema=schema,
+                    temperature=temperature,
+                    metadata={"thinking_level": self.thinking_level},
+                ),
+            )
         policy = generation_policy(
             self.model,
             self.thinking_level,
@@ -162,7 +197,7 @@ class GeminiDirectEngine:
         retry_delays = (0.5, 1.5, 3.0, 5.0)
         for attempt in range(len(retry_delays) + 1):
             try:
-                return await self._client.aio.models.generate_content(
+                return await self._client.aio.models.generate_content(  # type: ignore[union-attr]
                     model=self.model,
                     contents=prompt,
                     config=config,
@@ -234,7 +269,10 @@ class GeminiDirectEngine:
             return DirectionProposalResult(
                 proposal=proposal,
                 usage=total_usage,
-                provider_request_id=getattr(response, "response_id", None),
+                provider_request_id=(
+                    getattr(response, "request_id", None)
+                    or getattr(response, "response_id", None)
+                ),
                 diagnostic=f"model={getattr(response, 'model_version', None) or self.model}",
             )
         raise AssertionError("unreachable direction proposal loop")
@@ -285,7 +323,10 @@ class GeminiDirectEngine:
             return ConceptRoleResult(
                 brief=brief,
                 usage=total_usage,
-                provider_request_id=getattr(response, "response_id", None),
+                provider_request_id=(
+                    getattr(response, "request_id", None)
+                    or getattr(response, "response_id", None)
+                ),
                 diagnostic=(
                     f"model={getattr(response, 'model_version', None) or self.model}"
                 ),
@@ -327,7 +368,10 @@ class GeminiDirectEngine:
         return DirectionJudgeResult(
             judgement=judgement,
             usage=_usage(response),
-            provider_request_id=getattr(response, "response_id", None),
+            provider_request_id=(
+                getattr(response, "request_id", None)
+                or getattr(response, "response_id", None)
+            ),
             diagnostic=f"model={getattr(response, 'model_version', None) or self.model}",
         )
 
@@ -392,7 +436,10 @@ class GeminiDirectEngine:
             return EngineResult(
                 artifact=artifact,
                 usage=total_usage,
-                provider_request_id=getattr(response, "response_id", None),
+                provider_request_id=(
+                    getattr(response, "request_id", None)
+                    or getattr(response, "response_id", None)
+                ),
                 diagnostic=(
                     f"model={getattr(response, 'model_version', None) or self.model}"
                 ),
@@ -404,6 +451,8 @@ class GeminiDirectEngine:
 
     async def close(self) -> None:
         if not self._owned_client:
+            return
+        if self._client is None:
             return
         aio = getattr(self._client, "aio", None)
         if aio is not None and hasattr(aio, "aclose"):

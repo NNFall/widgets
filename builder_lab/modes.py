@@ -19,6 +19,7 @@ class BuildModePolicy:
     visual_repair_limit: int
     critic_roles: tuple[str, ...]
     model_roles: Mapping[str, str]
+    judge_role: str | None = "visual_judge"
     requires_browser_chat_gate: bool = True
     requires_visual_gate: bool = True
 
@@ -26,6 +27,7 @@ class BuildModePolicy:
         name = self.name.strip().lower()
         stages = tuple(stage.strip().lower() for stage in self.stage_sequence)
         critics = tuple(role.strip() for role in self.critic_roles)
+        judge_role = self.judge_role.strip() if self.judge_role else None
         roles = dict(self.model_roles)
         if not name or not stages or any(not stage for stage in stages):
             raise ModePolicyError("mode policy name and stages are required")
@@ -42,9 +44,12 @@ class BuildModePolicy:
                 raise ModePolicyError("express mode requires the final visual gate")
             if not critics:
                 raise ModePolicyError("express mode requires visual critics")
+            if judge_role != "visual_judge":
+                raise ModePolicyError("express mode requires an independent visual judge")
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "stage_sequence", stages)
         object.__setattr__(self, "critic_roles", critics)
+        object.__setattr__(self, "judge_role", judge_role)
         object.__setattr__(self, "model_roles", MappingProxyType(roles))
 
     def apply_to_request(self, request: BuilderRequest) -> BuilderRequest:
@@ -83,7 +88,7 @@ DIRECT_MODE_POLICY = BuildModePolicy(
     stage_sequence=_DIRECT_STAGES,
     max_repairs=3,
     visual_repair_limit=8,
-    critic_roles=("visual_critic", "visual_judge"),
+    critic_roles=("conversation_ux", "brand_motion", "adversarial_customer"),
     model_roles=_DIRECT_ROLES,
 )
 EXPRESS_MODE_POLICY = BuildModePolicy(
@@ -91,7 +96,7 @@ EXPRESS_MODE_POLICY = BuildModePolicy(
     stage_sequence=_DIRECT_STAGES,
     max_repairs=2,
     visual_repair_limit=4,
-    critic_roles=("visual_critic_primary", "visual_critic_independent", "visual_judge"),
+    critic_roles=("conversation_ux", "brand_motion", "adversarial_customer"),
     model_roles=_DIRECT_ROLES,
 )
 ANTIGRAVITY_MODE_POLICY = BuildModePolicy(
@@ -100,6 +105,7 @@ ANTIGRAVITY_MODE_POLICY = BuildModePolicy(
     max_repairs=3,
     visual_repair_limit=0,
     critic_roles=(),
+    judge_role=None,
     model_roles={
         "reference_analysis": "reference_analyst",
         "agent_build": "agent_builder",

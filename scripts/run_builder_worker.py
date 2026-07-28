@@ -17,9 +17,19 @@ if __package__ in {None, ""}:
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.models.providers.gemini import GeminiModelProvider
+from app.models.router import (
+    ModelPolicy,
+    ModelRouter,
+    ProviderTarget,
+    SqlModelCallAudit,
+)
+
 from builder_lab.config import BuilderLabConfig
 from builder_lab.browser_audit import BrowserAudit
 from builder_lab.reference_pipeline import GeminiReferencePipeline
+from builder_lab.engines.gemini_direct import GeminiDirectEngine
+from builder_lab.modes import get_mode_policy
 from builder_lab.visual_gate import VisualRepairGate
 from builder_lab.visual_review import GeminiRepairVerifier
 from builder_lab.worker import (
@@ -121,6 +131,66 @@ def _positive_float(name: str, default: str) -> float:
     return value
 
 
+def _nonnegative_int(name: str, default: str = "0") -> int:
+    try:
+        value = int(os.getenv(name, default))
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer") from exc
+    if value < 0:
+        raise RuntimeError(f"{name} must not be negative")
+    return value
+
+
+def make_runtime_model_router(config, factory) -> ModelRouter:
+    if not config.gemini_api_key:
+        raise RuntimeError("GEMINI_API_KEY is required for routed builder stages")
+    input_rate = _nonnegative_int(
+        "GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION"
+    )
+    output_rate = _nonnegative_int(
+        "GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION"
+    )
+    policies = {}
+    for mode in ("direct", "express"):
+        policy = get_mode_policy(mode)
+        for role in set(policy.model_roles.values()):
+            policies[(role, policy.name)] = ModelPolicy(
+                prompt_version="builder-v1",
+                targets=(
+                    ProviderTarget(
+                        "gemini",
+                        config.direct_model,
+                        input_rate,
+                        output_rate,
+                    ),
+                ),
+            )
+        for role in (*policy.critic_roles, policy.judge_role):
+            if role is None:
+                continue
+            policies[(role, policy.name)] = ModelPolicy(
+                prompt_version="visual-v1",
+                targets=(
+                    ProviderTarget(
+                        "gemini",
+                        config.visual_critic_model,
+                        input_rate,
+                        output_rate,
+                    ),
+                ),
+            )
+    return ModelRouter(
+        providers={
+            "gemini": GeminiModelProvider(
+                api_key=config.gemini_api_key,
+                base_url=config.gemini_base_url,
+            )
+        },
+        policies=policies,
+        audit=SqlModelCallAudit(factory),
+    )
+
+
 async def run() -> None:
     engine = create_async_engine(_database_url(), future=True, echo=False)
     factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
@@ -144,6 +214,7 @@ async def run() -> None:
     default_handler = None
     if configured_handler == BUILTIN_STAGE_HANDLER:
         config = BuilderLabConfig.from_env()
+        model_router = make_runtime_model_router(config, factory)
         engine_factories = make_engine_factories(config)
         if not engine_factories:
             await engine.dispose()
@@ -155,6 +226,14 @@ async def run() -> None:
             queue=queue,
             engine_factories=engine_factories,
             reference_analyzer=reference_pipeline.analyze,
+            routed_engine_factory=lambda claim, role: GeminiDirectEngine(
+                model_router=model_router,
+                routing_role=role,
+                routing_mode=get_mode_policy(claim.mode).name,
+                run_id=claim.run_id,
+                model=config.direct_model,
+                thinking_level=config.builder_thinking_level,
+            ),
             visual_gate_factory=lambda claim: VisualRepairGate(
                 store=DurableVisualStore(queue, claim),
                 audit_factory=lambda: BrowserAudit(
@@ -163,7 +242,12 @@ async def run() -> None:
                         config.browser_audit_total_timeout_seconds
                     ),
                 ),
-                critic_factory=make_visual_critic_factory(config),
+                critic_factory=make_visual_critic_factory(
+                    config,
+                    policy=get_mode_policy(claim.mode),
+                    model_router=model_router,
+                    run_id=claim.run_id,
+                ),
                 verifier_factory=lambda: GeminiRepairVerifier(
                     api_key=config.gemini_api_key,
                     model=config.visual_critic_model,

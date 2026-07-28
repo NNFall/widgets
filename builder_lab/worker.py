@@ -285,11 +285,13 @@ class OrchestratorStageHandler:
         engine_factories: dict[EngineName, Callable[[], BuilderEngine]],
         reference_analyzer: Callable[[str], Awaitable[ReferenceAnalysisResult]],
         visual_gate_factory: Callable[[RunClaim], Any] | None = None,
+        routed_engine_factory: Callable[[RunClaim, str], BuilderEngine] | None = None,
     ) -> None:
         self._queue = queue
         self._factories = dict(engine_factories)
         self._reference_analyzer = reference_analyzer
         self._visual_gate_factory = visual_gate_factory
+        self._routed_engine_factory = routed_engine_factory
 
     async def __call__(self, claim: RunClaim) -> StageResult:
         stage_input = await self._queue.stage_input(claim)
@@ -306,12 +308,17 @@ class OrchestratorStageHandler:
                 diagnostic=claim.next_stage,
             ) from exc
         factory = self._factories.get(request.engine)
-        if factory is None:
+        if factory is None and self._routed_engine_factory is None:
             raise BuilderEngineError(
                 "provider_unavailable",
                 "Выбранный режим генерации сейчас недоступен",
             )
-        engine = factory()
+        role = policy.model_role_for(claim.next_stage)
+        engine = (
+            self._routed_engine_factory(claim, role)
+            if self._routed_engine_factory is not None and request.engine is EngineName.DIRECT
+            else factory()  # type: ignore[misc]
+        )
         try:
             return await self._generate_stage(
                 request=request,
@@ -369,10 +376,7 @@ class OrchestratorStageHandler:
     ) -> StageResult:
         usage = TokenUsage()
         selected_direction: DirectionProposal | None = None
-        next_context = {
-            **context,
-            "model_role": get_mode_policy(claim.mode).model_role_for(claim.next_stage),
-        }
+        next_context = dict(context)
         if request.engine is EngineName.DIRECT:
             if stage is Stage.ART_DIRECTION:
                 board = await run_direction_board(
