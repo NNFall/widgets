@@ -685,14 +685,27 @@ async def test_preview_document_can_render_an_exact_restorable_draft(tmp_path) -
             )
             database.add(run)
             await database.flush()
-            database.add(GenerationEvent(
-                id=501,
-                run_id=run.id,
-                sequence=1,
-                event_type="artifact.draft_staged",
-                public_message="Restorable draft",
-                payload={"artifact": _artifact_payload(4)},
-            ))
+            database.add_all([
+                GenerationEvent(
+                    id=501,
+                    run_id=run.id,
+                    sequence=1,
+                    event_type="artifact.draft_staged",
+                    public_message="Restorable exact draft",
+                    payload={"artifact": _artifact_payload(4)},
+                ),
+                *[
+                    GenerationEvent(
+                        id=501 + sequence,
+                        run_id=run.id,
+                        sequence=sequence,
+                        event_type="artifact.draft_staged",
+                        public_message="Newer unrelated draft",
+                        payload={"artifact": _artifact_payload(4 + sequence)},
+                    )
+                    for sequence in range(2, 53)
+                ],
+            ])
             run_id = run.id
 
         await client.post("/test/login/10")

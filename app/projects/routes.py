@@ -226,9 +226,13 @@ async def _preview_candidate(
         GenerationEvent.run_id == run_id,
         GenerationEvent.event_type == "artifact.draft_staged",
     )
-    drafts = (await database.execute(
-        draft_statement.order_by(GenerationEvent.sequence.desc()).limit(50)
-    )).scalars().all()
+    draft_statement = draft_statement.order_by(GenerationEvent.sequence.desc())
+    if revision is None:
+        # The summary endpoint only needs a recent restorable candidate. Exact
+        # runtime reads must not hide an older requested revision behind an
+        # arbitrary window of newer draft events.
+        draft_statement = draft_statement.limit(50)
+    drafts = (await database.execute(draft_statement)).scalars().all()
     for payload in drafts:
         candidate_payload = payload.get("artifact") if isinstance(payload, dict) else None
         if not isinstance(candidate_payload, dict):
