@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import secrets
 from uuid import UUID
 
@@ -11,13 +12,22 @@ from sqlalchemy import select
 
 from app.billing.service import TrialService, TrialUnavailable, UnverifiedTrialUser
 from app.db.session import get_session_factory
+from app.chat import (
+    CHAT_SERVICE_KEY,
+    ChatContext,
+    ChatServiceError,
+)
 from app.projects.serializers import serialize_artifact, serialize_event, serialize_project, serialize_run
 from app.saas.models import GenerationArtifact, GenerationEvent, GenerationRun, Project, UserIdentity
 from builder_lab.models import BuilderRequest, EngineName, WidgetArtifact
+from builder_lab.preview import PREVIEW_CSP, build_preview_document
 from builder_lab.validation import validate_artifact
 
 TERMINAL_STATES = frozenset({"completed", "failed", "cancelled"})
 SSE_PAGE_SIZE = 100
+PREVIEW_CHANNEL_PATTERN = re.compile(r"^[A-Za-z0-9_-]{22,96}$")
+CHAT_REQUEST_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{7,95}$")
+PROJECT_CHAT_SESSION_KEY = "project_chat_session_id"
 
 
 async def _scope(request: web.Request, *, verified: bool = False) -> tuple[int, int]:
@@ -177,14 +187,22 @@ async def create_run(request: web.Request) -> web.Response:
     return web.json_response(serialize_run(run), status=202)
 
 
-async def _preview(database, run_id: UUID) -> dict | None:
-    accepted = (await database.execute(
-        select(GenerationArtifact)
-        .where(
-            GenerationArtifact.run_id == run_id,
-            GenerationArtifact.quality_status.in_(("accepted", "verified")),
+async def _preview_candidate(
+    database,
+    run_id: UUID,
+    *,
+    revision: int | None = None,
+) -> tuple[WidgetArtifact, dict] | None:
+    accepted_statement = select(GenerationArtifact).where(
+        GenerationArtifact.run_id == run_id,
+        GenerationArtifact.quality_status.in_(("accepted", "verified")),
+    )
+    if revision is not None:
+        accepted_statement = accepted_statement.where(
+            GenerationArtifact.revision == revision
         )
-        .order_by(GenerationArtifact.revision.desc()).limit(50)
+    accepted = (await database.execute(
+        accepted_statement.order_by(GenerationArtifact.revision.desc()).limit(50)
     )).scalars().all()
     for artifact in accepted:
         candidate_payload = artifact.config.get("artifact") if isinstance(artifact.config, dict) else None
@@ -192,31 +210,50 @@ async def _preview(database, run_id: UUID) -> dict | None:
             continue
         try:
             candidate = WidgetArtifact.from_dict(candidate_payload)
-            valid = not validate_artifact(candidate, previous_revision=max(0, candidate.revision - 1))
+            valid = (
+                candidate.revision == artifact.revision
+                and (revision is None or candidate.revision == revision)
+                and not validate_artifact(
+                    candidate,
+                    previous_revision=max(0, candidate.revision - 1),
+                )
+            )
         except (KeyError, TypeError, ValueError):
             valid = False
         if valid:
-            return serialize_artifact(artifact, source="accepted_artifact")
+            return candidate, serialize_artifact(artifact, source="accepted_artifact")
+    draft_statement = select(GenerationEvent.payload).where(
+        GenerationEvent.run_id == run_id,
+        GenerationEvent.event_type == "artifact.draft_staged",
+    )
     drafts = (await database.execute(
-        select(GenerationEvent.payload)
-        .where(
-            GenerationEvent.run_id == run_id,
-            GenerationEvent.event_type == "artifact.draft_staged",
-        )
-        .order_by(GenerationEvent.sequence.desc()).limit(50)
+        draft_statement.order_by(GenerationEvent.sequence.desc()).limit(50)
     )).scalars().all()
     for payload in drafts:
         candidate_payload = payload.get("artifact") if isinstance(payload, dict) else None
         if not isinstance(candidate_payload, dict):
             continue
+        if revision is not None and candidate_payload.get("revision") != revision:
+            continue
         try:
             candidate = WidgetArtifact.from_dict(candidate_payload)
-            valid = not validate_artifact(candidate, previous_revision=max(0, candidate.revision - 1))
+            valid = (
+                (revision is None or candidate.revision == revision)
+                and not validate_artifact(
+                    candidate,
+                    previous_revision=max(0, candidate.revision - 1),
+                )
+            )
         except (KeyError, TypeError, ValueError):
             valid = False
         if valid:
-            return serialize_artifact(candidate_payload, source="restorable_draft")
+            return candidate, serialize_artifact(candidate_payload, source="restorable_draft")
     return None
+
+
+async def _preview(database, run_id: UUID) -> dict | None:
+    selected = await _preview_candidate(database, run_id)
+    return selected[1] if selected is not None else None
 
 
 async def get_run(request: web.Request) -> web.Response:
@@ -240,6 +277,199 @@ async def get_preview(request: web.Request) -> web.Response:
     if preview is None:
         raise web.HTTPNotFound(text=_error("preview_not_found"), content_type="application/json")
     return web.json_response({"artifact": preview})
+
+
+async def get_preview_document(request: web.Request) -> web.Response:
+    user_id, tenant_id = await _scope(request)
+    factory = get_session_factory(request.app)
+    async with factory() as database:
+        run, _ = await _owned_run(
+            database,
+            _uuid(request.match_info["run_id"]),
+            user_id,
+            tenant_id,
+        )
+        if (
+            len(request.query) != 2
+            or set(request.query) != {"revision", "channel"}
+            or len(request.query.getall("revision", [])) != 1
+            or len(request.query.getall("channel", [])) != 1
+        ):
+            raise web.HTTPBadRequest(
+                text=_error("invalid_preview_query"),
+                content_type="application/json",
+            )
+        raw_revision = request.query.get("revision", "")
+        channel = request.query.get("channel", "")
+        try:
+            revision = int(raw_revision)
+        except (TypeError, ValueError) as error:
+            raise web.HTTPBadRequest(
+                text=_error("invalid_revision"), content_type="application/json"
+            ) from error
+        if revision < 1:
+            raise web.HTTPBadRequest(
+                text=_error("invalid_revision"), content_type="application/json"
+            )
+        if PREVIEW_CHANNEL_PATTERN.fullmatch(channel) is None:
+            raise web.HTTPBadRequest(
+                text=_error("invalid_channel"), content_type="application/json"
+            )
+        selected = await _preview_candidate(database, run.id, revision=revision)
+    if selected is None:
+        raise web.HTTPConflict(
+            text=_error("preview_not_ready"), content_type="application/json"
+        )
+    candidate, _ = selected
+    # Revalidate at the rendering boundary so malformed durable data never reaches
+    # the trusted fixed runtime.
+    if validate_artifact(
+        candidate,
+        previous_revision=max(0, candidate.revision - 1),
+    ):
+        raise web.HTTPConflict(
+            text=_error("preview_not_ready"), content_type="application/json"
+        )
+    return web.Response(
+        text=build_preview_document(candidate, channel_id=channel),
+        content_type="text/html",
+        charset="utf-8",
+        headers={
+            "Content-Security-Policy": PREVIEW_CSP,
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+def _chat_error(
+    code: str,
+    message: str,
+    *,
+    status: int,
+    request_id: str | None = None,
+    retryable: bool = False,
+) -> web.Response:
+    return web.json_response(
+        {
+            "error": {
+                "code": code,
+                "message": message,
+                "retryable": retryable,
+                "request_id": request_id,
+            }
+        },
+        status=status,
+    )
+
+
+async def _chat_payload(request: web.Request) -> tuple[str, str, int]:
+    try:
+        body = await request.json()
+    except Exception as error:  # noqa: BLE001
+        raise ChatServiceError(
+            "invalid_chat_request", "Параметры чата некорректны", status=400
+        ) from error
+    if not isinstance(body, dict) or set(body) != {"request_id", "message", "revision"}:
+        raise ChatServiceError(
+            "invalid_chat_request", "Параметры чата некорректны", status=400
+        )
+    request_id = body.get("request_id")
+    message = body.get("message")
+    revision = body.get("revision")
+    if (
+        not isinstance(request_id, str)
+        or CHAT_REQUEST_PATTERN.fullmatch(request_id) is None
+        or not isinstance(message, str)
+        or not message.strip()
+        or len(message) > 1_000
+        or "\x00" in message
+        or isinstance(revision, bool)
+        or not isinstance(revision, int)
+        or revision < 1
+    ):
+        raise ChatServiceError(
+            "invalid_chat_request", "Параметры чата некорректны", status=400
+        )
+    return request_id, message.strip(), revision
+
+
+async def run_chat(request: web.Request) -> web.Response:
+    user_id, tenant_id = await _scope(request)
+    await _require_csrf(request)
+    try:
+        request_id, message, revision = await _chat_payload(request)
+    except ChatServiceError as error:
+        return _chat_error(
+            error.code,
+            error.public_message,
+            status=error.status,
+            retryable=error.retryable,
+        )
+    factory = get_session_factory(request.app)
+    async with factory() as database:
+        run, project = await _owned_run(
+            database,
+            _uuid(request.match_info["run_id"]),
+            user_id,
+            tenant_id,
+        )
+        selected = await _preview_candidate(database, run.id, revision=revision)
+    if selected is None:
+        return _chat_error(
+            "chat_not_ready",
+            "Эта ревизия ещё не готова для чата",
+            status=409,
+            request_id=request_id,
+        )
+    candidate, _ = selected
+    if validate_artifact(
+        candidate,
+        previous_revision=max(0, candidate.revision - 1),
+    ):
+        return _chat_error(
+            "chat_not_ready",
+            "Эта ревизия ещё не готова для чата",
+            status=409,
+            request_id=request_id,
+        )
+    service = request.app.get(CHAT_SERVICE_KEY)
+    if service is None:
+        return _chat_error(
+            "chat_not_configured",
+            "Чат временно не настроен",
+            status=503,
+            request_id=request_id,
+            retryable=True,
+        )
+    session = await get_session(request)
+    session_id = session.get(PROJECT_CHAT_SESSION_KEY)
+    if not isinstance(session_id, str):
+        session_id = secrets.token_urlsafe(24)
+        session[PROJECT_CHAT_SESSION_KEY] = session_id
+    try:
+        reply = await service.reply(
+            scope=f"tenant:{tenant_id}:user:{user_id}:run:{run.id}:revision:{revision}",
+            session_id=session_id,
+            client_id=f"tenant:{tenant_id}:user:{user_id}",
+            request_id=request_id,
+            text=message,
+            context=ChatContext(
+                source_url=project.source_url,
+                brief=project.brief or "",
+                art_direction=candidate.art_direction,
+            ),
+            run_id=run.id,
+        )
+    except ChatServiceError as error:
+        return _chat_error(
+            error.code,
+            error.public_message,
+            status=error.status,
+            request_id=request_id,
+            retryable=error.retryable,
+        )
+    return web.json_response({"request_id": reply.request_id, "reply": reply.text})
 
 
 async def get_artifact(request: web.Request) -> web.Response:
@@ -317,6 +547,8 @@ def setup_project_routes(app: web.Application) -> None:
     app.router.add_post("/api/projects/{project_id}/runs", create_run)
     app.router.add_get("/api/runs/{run_id}", get_run)
     app.router.add_get("/api/runs/{run_id}/preview", get_preview)
+    app.router.add_get("/api/runs/{run_id}/preview/document", get_preview_document)
+    app.router.add_post("/api/runs/{run_id}/chat", run_chat)
     app.router.add_get("/api/runs/{run_id}/events", stream_events)
     app.router.add_get("/api/artifacts/{artifact_id}", get_artifact)
 

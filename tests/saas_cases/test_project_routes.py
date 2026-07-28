@@ -13,22 +13,27 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.db.base import Base
 from app.db.models import Tenant, User
 from app.db.session import SESSION_FACTORY_KEY
+from app.models.contracts import ModelRequest, ModelResponse, ModelUsage, ProviderCapabilities
+from app.models.router import ModelPolicy, ModelRouter, ProviderTarget, SqlModelCallAudit
+from app.chat import CHAT_SERVICE_KEY, RoutedChatService
 from app.projects.routes import setup_project_routes
 from app.saas.models import (
     GenerationArtifact,
     GenerationEvent,
     GenerationRun,
+    ModelCall,
     Project,
     TrialEntitlement,
     UsageLedger,
     UserIdentity,
 )
+from builder_lab.preview import PREVIEW_CSP
 from tests.builder_lab_cases.test_validation import artifact
 
 POSTGRES_URL = os.getenv("KAIGO_TEST_POSTGRES_URL")
 
 
-async def _project_app(tmp_path):
+async def _project_app(tmp_path, *, configure_app=None):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'routes.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -93,6 +98,8 @@ async def _project_app(tmp_path):
 
     app.router.add_post("/test/login/{user_id}", login)
     setup_project_routes(app)
+    if configure_app is not None:
+        configure_app(app, factory)
     client = TestClient(TestServer(app))
     await client.start_server()
     return engine, factory, client, owner_id, foreign_id
@@ -529,6 +536,405 @@ async def test_preview_skips_malformed_verified_artifacts_and_uses_valid_draft(
         assert restored_payload["source"] == "restorable_draft"
         assert missing.status == 404
         assert (await missing.json()) == {"error": {"code": "preview_not_found"}}
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_preview_document_serves_fixed_runtime_for_exact_durable_artifact(
+    tmp_path,
+) -> None:
+    engine, factory, client, project_id, _ = await _project_app(tmp_path)
+    channel = "channel-1234567890abcdef"
+    try:
+        async with factory() as database, database.begin():
+            run = GenerationRun(
+                project_id=project_id,
+                mode="express",
+                state="completed",
+                progress=100,
+                idempotency_key="document-runtime",
+            )
+            database.add(run)
+            await database.flush()
+            candidate = artifact(revision=3)
+            database.add(GenerationArtifact(
+                run_id=run.id,
+                revision=3,
+                stage=candidate.stage.value,
+                html=candidate.body_html,
+                css=candidate.css,
+                javascript=candidate.javascript,
+                config={"artifact": candidate.to_dict()},
+                quality_status="accepted",
+            ))
+            run_id = run.id
+
+        unauthenticated = await client.get(
+            f"/api/runs/{run_id}/preview/document?revision=3&channel={channel}"
+        )
+        assert unauthenticated.status == 401
+
+        await client.post("/test/login/10")
+        response = await client.get(
+            f"/api/runs/{run_id}/preview/document?revision=3&channel={channel}"
+        )
+
+        assert response.status == 200
+        document = await response.text()
+        assert 'data-region="launcher"' in document
+        assert "type: 'chat.request'" in document
+        assert "kaigo-builder-preview" in document
+        assert response.headers["Content-Security-Policy"] == PREVIEW_CSP
+        assert response.headers["Cache-Control"] == "no-store"
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_preview_document_hides_foreign_runs_and_rejects_invalid_or_missing_revision(
+    tmp_path,
+) -> None:
+    engine, factory, client, project_id, foreign_id = await _project_app(tmp_path)
+    channel = "channel-1234567890abcdef"
+    try:
+        async with factory() as database, database.begin():
+            owned = GenerationRun(
+                project_id=project_id,
+                mode="express",
+                state="failed",
+                idempotency_key="owned-document",
+            )
+            foreign = GenerationRun(
+                project_id=foreign_id,
+                mode="express",
+                state="completed",
+                idempotency_key="foreign-document",
+            )
+            database.add_all([owned, foreign])
+            await database.flush()
+            candidate = artifact(revision=1)
+            mismatched = artifact(revision=2)
+            database.add_all([GenerationArtifact(
+                run_id=owned.id,
+                revision=1,
+                stage=mismatched.stage.value,
+                html=mismatched.body_html,
+                css=mismatched.css,
+                javascript=mismatched.javascript,
+                config={"artifact": mismatched.to_dict()},
+                quality_status="accepted",
+            ), GenerationArtifact(
+                run_id=foreign.id,
+                revision=1,
+                stage=candidate.stage.value,
+                html=candidate.body_html,
+                css=candidate.css,
+                javascript=candidate.javascript,
+                config={"artifact": candidate.to_dict()},
+                quality_status="verified",
+            )])
+            owned_id, foreign_run_id = owned.id, foreign.id
+
+        await client.post("/test/login/10")
+        foreign_response = await client.get(
+            f"/api/runs/{foreign_run_id}/preview/document?revision=1&channel={channel}"
+        )
+        invalid_revision = await client.get(
+            f"/api/runs/{owned_id}/preview/document?revision=zero&channel={channel}"
+        )
+        invalid_channel = await client.get(
+            f"/api/runs/{owned_id}/preview/document?revision=1&channel=bad"
+        )
+        duplicate_query = await client.get(
+            f"/api/runs/{owned_id}/preview/document?revision=1&revision=2&channel={channel}"
+        )
+        extra_query = await client.get(
+            f"/api/runs/{owned_id}/preview/document?revision=1&channel={channel}&extra=1"
+        )
+        not_ready = await client.get(
+            f"/api/runs/{owned_id}/preview/document?revision=1&channel={channel}"
+        )
+
+        assert foreign_response.status == 404
+        assert invalid_revision.status == 400
+        assert invalid_channel.status == 400
+        assert duplicate_query.status == 400
+        assert extra_query.status == 400
+        assert not_ready.status == 409
+        assert (await not_ready.json()) == {"error": {"code": "preview_not_ready"}}
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_preview_document_can_render_an_exact_restorable_draft(tmp_path) -> None:
+    engine, factory, client, project_id, _ = await _project_app(tmp_path)
+    channel = "channel-1234567890abcdef"
+    try:
+        async with factory() as database, database.begin():
+            run = GenerationRun(
+                project_id=project_id,
+                mode="express",
+                state="failed",
+                idempotency_key="draft-document",
+            )
+            database.add(run)
+            await database.flush()
+            database.add(GenerationEvent(
+                id=501,
+                run_id=run.id,
+                sequence=1,
+                event_type="artifact.draft_staged",
+                public_message="Restorable draft",
+                payload={"artifact": _artifact_payload(4)},
+            ))
+            run_id = run.id
+
+        await client.post("/test/login/10")
+        response = await client.get(
+            f"/api/runs/{run_id}/preview/document?revision=4&channel={channel}"
+        )
+
+        assert response.status == 200
+        assert 'data-region="launcher"' in await response.text()
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(tmp_path) -> None:
+    class FakeProvider:
+        capabilities = ProviderCapabilities()
+
+        def __init__(self) -> None:
+            self.requests: list[ModelRequest] = []
+
+        async def generate(self, request: ModelRequest, *, model: str) -> ModelResponse:
+            assert model == "fake-chat-model"
+            self.requests.append(request)
+            return ModelResponse(
+                text="Ответ из routed chat",
+                usage=ModelUsage(input_tokens=9, output_tokens=6, thinking_tokens=1),
+                request_id="provider-chat-1",
+            )
+
+        async def aclose(self) -> None:
+            return None
+
+    provider = FakeProvider()
+    service = None
+
+    def configure_chat(app, factory) -> None:
+        nonlocal service
+        router = ModelRouter(
+            providers={"fake": provider},
+            policies={
+                ("chat_visitor", "express"): ModelPolicy(
+                    prompt_version="chat-visitor-v1",
+                    targets=(ProviderTarget("fake", "fake-chat-model", 1_000_000, 2_000_000),),
+                )
+            },
+            audit=SqlModelCallAudit(factory),
+        )
+        service = RoutedChatService(router=router)
+        app[CHAT_SERVICE_KEY] = service
+
+    engine, factory, client, project_id, foreign_id = await _project_app(
+        tmp_path,
+        configure_app=configure_chat,
+    )
+    assert service is not None
+    try:
+        async with factory() as database, database.begin():
+            run = GenerationRun(
+                project_id=project_id,
+                mode="express",
+                state="completed",
+                progress=100,
+                idempotency_key="chat-route",
+            )
+            foreign = GenerationRun(
+                project_id=foreign_id,
+                mode="express",
+                state="completed",
+                progress=100,
+                idempotency_key="foreign-chat-route",
+            )
+            database.add_all([run, foreign])
+            await database.flush()
+            candidate = artifact(revision=2, art_direction="Trusted identity marker")
+            database.add_all([
+                GenerationArtifact(
+                    run_id=run.id,
+                    revision=2,
+                    stage=candidate.stage.value,
+                    html=candidate.body_html,
+                    css=candidate.css,
+                    javascript=candidate.javascript,
+                    config={"artifact": candidate.to_dict()},
+                    quality_status="accepted",
+                ),
+                GenerationArtifact(
+                    run_id=foreign.id,
+                    revision=2,
+                    stage=candidate.stage.value,
+                    html=candidate.body_html,
+                    css=candidate.css,
+                    javascript=candidate.javascript,
+                    config={"artifact": candidate.to_dict()},
+                    quality_status="verified",
+                ),
+            ])
+            run_id, foreign_run_id = run.id, foreign.id
+
+        payload = {
+            "request_id": "request-route-123",
+            "message": "Что доступно?",
+            "revision": 2,
+        }
+        unauthenticated = await client.post(
+            f"/api/runs/{run_id}/chat",
+            json=payload,
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        assert unauthenticated.status == 401
+
+        await client.post("/test/login/10")
+        without_csrf = await client.post(f"/api/runs/{run_id}/chat", json=payload)
+        assert without_csrf.status == 403
+
+        first = await client.post(
+            f"/api/runs/{run_id}/chat",
+            json=payload,
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        duplicate = await client.post(
+            f"/api/runs/{run_id}/chat",
+            json=payload,
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        assert first.status == duplicate.status == 200
+        assert await first.json() == await duplicate.json() == {
+            "request_id": "request-route-123",
+            "reply": "Ответ из routed chat",
+        }
+        assert len(provider.requests) == 1
+        assert "Build a sales assistant" in provider.requests[0].prompt
+        assert "Trusted identity marker" in provider.requests[0].prompt
+        async with factory() as database:
+            call = (await database.execute(select(ModelCall))).scalar_one()
+        assert call.role == "chat_visitor"
+        assert call.run_id == run_id
+        assert (call.input_tokens, call.output_tokens, call.thinking_tokens) == (9, 6, 1)
+        assert call.cost_microusd == 21
+
+        await client.post("/test/login/11")
+        foreign_to_owner = await client.post(
+            f"/api/runs/{run_id}/chat",
+            json=payload,
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        assert foreign_to_owner.status == 404
+        owner_to_foreign = await client.post(
+            f"/api/runs/{foreign_run_id}/chat",
+            json=payload,
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        assert owner_to_foreign.status == 200
+    finally:
+        await service.close()
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_run_chat_validates_payload_artifact_and_service_availability(tmp_path) -> None:
+    engine, factory, client, project_id, _ = await _project_app(tmp_path)
+    try:
+        async with factory() as database, database.begin():
+            run = GenerationRun(
+                project_id=project_id,
+                mode="express",
+                state="completed",
+                idempotency_key="chat-not-ready",
+            )
+            database.add(run)
+            await database.flush()
+            run_id = run.id
+        await client.post("/test/login/10")
+        invalid = await client.post(
+            f"/api/runs/{run_id}/chat",
+            json={"request_id": "bad", "message": "", "revision": 0},
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        extra_field = await client.post(
+            f"/api/runs/{run_id}/chat",
+            json={
+                "request_id": "request-route-123",
+                "message": "Question",
+                "revision": 1,
+                "extra": True,
+            },
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        oversized_raw_message = await client.post(
+            f"/api/runs/{run_id}/chat",
+            json={
+                "request_id": "request-route-124",
+                "message": "x" + (" " * 1_000),
+                "revision": 1,
+            },
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        not_ready = await client.post(
+            f"/api/runs/{run_id}/chat",
+            json={
+                "request_id": "request-route-123",
+                "message": "Вопрос",
+                "revision": 1,
+            },
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        assert invalid.status == 400
+        assert extra_field.status == 400
+        assert oversized_raw_message.status == 400
+        assert not_ready.status == 409
+        assert (await not_ready.json())["error"]["code"] == "chat_not_ready"
+
+        candidate = artifact(revision=1)
+        async with factory() as database, database.begin():
+            database.add(GenerationArtifact(
+                run_id=run_id,
+                revision=1,
+                stage=candidate.stage.value,
+                html=candidate.body_html,
+                css=candidate.css,
+                javascript=candidate.javascript,
+                config={"artifact": candidate.to_dict()},
+                quality_status="accepted",
+            ))
+        unavailable = await client.post(
+            f"/api/runs/{run_id}/chat",
+            json={
+                "request_id": "request-route-123",
+                "message": "Вопрос",
+                "revision": 1,
+            },
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        assert unavailable.status == 503
+        assert (await unavailable.json())["error"] == {
+            "code": "chat_not_configured",
+            "message": "Чат временно не настроен",
+            "retryable": True,
+            "request_id": "request-route-123",
+        }
     finally:
         await client.close()
         await engine.dispose()

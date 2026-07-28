@@ -197,13 +197,79 @@ describe('durable SaaS Studio flow', () => {
 
     const frame = await screen.findByTitle('Предпросмотр AI-сотрудника Kaigo');
     const previewUrl = new URL(frame.getAttribute('src')!);
-    expect(previewUrl.pathname).toBe(`/builder/api/runs/${RUN_ID}/preview`);
+    expect(previewUrl.pathname).toBe(`/api/runs/${RUN_ID}/preview/document`);
     expect(previewUrl.searchParams.get('revision')).toBe('2');
     expect(previewUrl.searchParams.get('channel')).toMatch(/^[a-f0-9]{36}$/);
     expect(frame).not.toHaveAttribute('srcdoc');
     expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
     expect(screen.getByRole('button', { name: 'Доработать и опубликовать' })).toBeVisible();
     expect(screen.getByText(/тариф/i)).toBeVisible();
+  });
+
+  it('sends SaaS preview chat through the owner endpoint with session CSRF', async () => {
+    const preview = {
+      revision: 2,
+      body_html: '<main>Runtime result</main>',
+      css: '',
+      javascript: '',
+      quality_status: 'accepted',
+      source: 'accepted_artifact',
+    };
+    const completed = run({
+      status: 'completed',
+      state: 'completed',
+      progress: 100,
+      preview,
+    });
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(completed));
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(completed);
+      if (url === `/api/runs/${RUN_ID}/chat`) {
+        return jsonResponse({ request_id: 'request-saas-123', reply: 'Ответ сервера' });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+
+    render(<StudioPage />);
+    const frame = await screen.findByTitle('Предпросмотр AI-сотрудника Kaigo') as HTMLIFrameElement;
+    const channel = new URL(frame.getAttribute('src')!).searchParams.get('channel');
+    const postMessage = vi.spyOn(frame.contentWindow!, 'postMessage');
+
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent('message', {
+        source: frame.contentWindow,
+        data: {
+          source: 'kaigo-builder-preview',
+          version: 2,
+          channel_id: channel,
+          type: 'chat.request',
+          request_id: 'request-saas-123',
+          revision: 2,
+          text: 'Расскажите подробнее',
+        },
+      }));
+    });
+
+    await waitFor(() => expect(requests.some(({ url }) => url === `/api/runs/${RUN_ID}/chat`)).toBe(true));
+    const chat = requests.find(({ url }) => url === `/api/runs/${RUN_ID}/chat`)!;
+    const headers = new Headers(chat.init?.headers);
+    expect(chat.init?.method).toBe('POST');
+    expect(chat.init?.credentials).toBe('include');
+    expect(headers.get('X-CSRF-Token')).toBe('csrf-for-studio');
+    expect(JSON.parse(String(chat.init?.body))).toEqual({
+      request_id: 'request-saas-123',
+      message: 'Расскажите подробнее',
+      revision: 2,
+    });
+    await waitFor(() => expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'chat.response',
+      request_id: 'request-saas-123',
+      text: 'Ответ сервера',
+    }), '*'));
   });
 
   it('ignores duplicate and out-of-order SSE sequences', async () => {

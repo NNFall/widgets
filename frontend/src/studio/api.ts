@@ -205,3 +205,29 @@ export function sendPreviewChat(
     },
   );
 }
+
+export function saasPreviewUrl(runId: string, revision: number, channel: string) {
+  const params = new URLSearchParams({
+    revision: String(revision),
+    channel,
+  });
+  return new URL(
+    `/api/runs/${encodeURIComponent(runId)}/preview/document?${params.toString()}`,
+    window.location.origin,
+  ).toString();
+}
+
+export function sendSaasPreviewChat(
+  runId: string,
+  csrfToken: string,
+  payload: { request_id: string; message: string; revision: number },
+) {
+  return saasRequestJson<{ request_id: string; reply: string }>(
+    `/api/runs/${encodeURIComponent(runId)}/chat`,
+    {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify(payload),
+    },
+  );
+}

@@ -11,6 +11,7 @@ from app.api.routes import setup_api_routes
 from app.config import AppConfig, load_config
 from app.auth.session_storage import DatabaseSessionStorage
 from app.auth.routes import OAUTH_PROVIDERS_KEY, build_oauth_providers, setup_auth_routes
+from app.chat import setup_chat_runtime
 from app.db import models
 from app.db import init_db_signals
 from app.db.session import session_scope
@@ -348,7 +349,11 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
-async def create_app(config: AppConfig | None = None) -> web.Application:
+async def create_app(
+    config: AppConfig | None = None,
+    *,
+    chat_service_factory=None,
+) -> web.Application:
     cfg = config or load_config()
     app = web.Application()
     app['config'] = cfg
@@ -367,6 +372,12 @@ async def create_app(config: AppConfig | None = None) -> web.Application:
     app.on_startup.append(_init_history_db)
 
     init_db_signals(app)
+    # Registered after the database context because routed chat auditing needs
+    # the live async session factory during startup.
+    if chat_service_factory is None:
+        setup_chat_runtime(app)
+    else:
+        setup_chat_runtime(app, service_factory=chat_service_factory)
     app.router.add_get('/', _home)
     setup_admin_routes(app)
     setup_api_routes(app)

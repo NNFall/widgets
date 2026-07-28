@@ -359,6 +359,8 @@ export function StudioPage() {
           <StudioPreview
             runId={controller.runId}
             revision={artifact?.revision ?? null}
+            projectMode={controller.projectMode}
+            csrfToken={controller.csrfToken}
             artDirection={artifact?.art_direction ?? ''}
             qualityStatus={controller.snapshot?.quality_status ?? 'pending'}
             viewport={viewport}

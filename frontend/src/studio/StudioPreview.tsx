@@ -1,7 +1,13 @@
 import { Desktop, DeviceMobile, Eye, Sparkle } from '@phosphor-icons/react';
 import { useEffect, useMemo, useRef } from 'react';
 
-import { BuilderApiError, builderUrl, sendPreviewChat } from './api';
+import {
+  BuilderApiError,
+  builderUrl,
+  saasPreviewUrl,
+  sendPreviewChat,
+  sendSaasPreviewChat,
+} from './api';
 import type { PreviewViewport } from './types';
 
 const REQUEST_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{7,95}$/;
@@ -19,6 +25,8 @@ interface StudioPreviewProps {
   qualityStatus: string;
   viewport: PreviewViewport;
   onViewportChange: (viewport: PreviewViewport) => void;
+  projectMode?: boolean;
+  csrfToken?: string | null;
 }
 
 export function StudioPreview({
@@ -28,12 +36,16 @@ export function StudioPreview({
   qualityStatus,
   viewport,
   onViewportChange,
+  projectMode = false,
+  csrfToken = null,
 }: StudioPreviewProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const requestsRef = useRef(new Set<string>());
   const channel = useMemo(() => createPreviewChannel(), [runId, revision]);
   const previewUrl = runId && revision
-    ? builderUrl(`api/runs/${encodeURIComponent(runId)}/preview?revision=${revision}&channel=${encodeURIComponent(channel)}`)
+    ? projectMode
+      ? saasPreviewUrl(runId, revision, channel)
+      : builderUrl(`api/runs/${encodeURIComponent(runId)}/preview?revision=${revision}&channel=${encodeURIComponent(channel)}`)
     : '';
 
   useEffect(() => {
@@ -76,11 +88,21 @@ export function StudioPreview({
         }, '*');
       };
       try {
-        const response = await sendPreviewChat(runId, {
+        if (projectMode && !csrfToken) {
+          throw new BuilderApiError('authentication_required', {
+            status: 401,
+            code: 'authentication_required',
+            raw: 'authentication_required',
+          });
+        }
+        const payload = {
           request_id: requestId,
           message: data.text.trim(),
           revision,
-        });
+        };
+        const response = projectMode
+          ? await sendSaasPreviewChat(runId, csrfToken!, payload)
+          : await sendPreviewChat(runId, payload);
         if (response.request_id !== requestId || !response.reply || response.reply.length > 4_000) {
           throw new Error('Некорректный ответ chat bridge');
         }
@@ -99,7 +121,7 @@ export function StudioPreview({
     };
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [channel, revision, runId]);
+  }, [channel, csrfToken, projectMode, revision, runId]);
 
   const qualityLabel = qualityStatus === 'accepted'
     ? 'Готово'

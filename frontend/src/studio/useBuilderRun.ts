@@ -116,6 +116,7 @@ function terminalError(code: string | null, raw: string): StudioError {
 export interface BuilderRunController {
   project: SaasProject | null;
   projectMode: boolean;
+  csrfToken: string | null;
   runId: string | null;
   snapshot: BuilderRunSnapshot | null;
   events: BuilderEvent[];
@@ -438,6 +439,7 @@ function useLegacyBuilderRun(enabled: boolean): BuilderRunController {
   return {
     project: null,
     projectMode: false,
+    csrfToken: null,
     runId,
     snapshot,
     events,
@@ -616,6 +618,7 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
   const [connection, setConnection] = useState<'idle' | 'streaming' | 'polling'>('idle');
   const [isHydrating, setIsHydrating] = useState(Boolean(projectId));
   const [mutationPending, setMutationPending] = useState(false);
+  const [csrfToken, setCsrfToken] = useState<string | null>(null);
   const csrfRef = useRef<string | null>(null);
   const projectRef = useRef<SaasProject | null>(null);
   const runRef = useRef<SaasRunSnapshot | null>(null);
@@ -659,6 +662,8 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
   useEffect(() => {
     if (!projectId) return;
     const abort = new AbortController();
+    csrfRef.current = null;
+    setCsrfToken(null);
     setIsHydrating(true);
     const hydrate = async () => {
       try {
@@ -671,6 +676,7 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
           });
         }
         csrfRef.current = session.csrf_token;
+        setCsrfToken(session.csrf_token);
         const nextProject = await getProject(projectId);
         if (abort.signal.aborted) return;
         projectRef.current = nextProject;
@@ -824,6 +830,7 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
   return {
     project,
     projectMode: Boolean(projectId),
+    csrfToken,
     runId,
     snapshot,
     events,
