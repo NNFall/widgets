@@ -129,6 +129,21 @@ def _env_int(name: str, default: int) -> int:
         raise RuntimeError(f'{name} must be an integer') from error
 
 
+def _env_int_with_fallback(primary: str, fallback: str, default: int) -> int:
+    if os.getenv(primary) is not None:
+        return _env_int(primary, default)
+    return _env_int(fallback, default)
+
+
+def _chat_price(name: str, *, required: bool) -> int:
+    raw = os.getenv(name)
+    if required and (raw is None or not raw.strip()):
+        raise RuntimeError(
+            f'{name} is required when the production chat provider is enabled'
+        )
+    return _env_int(name, 0)
+
+
 def _first_nonblank(*names: str) -> str | None:
     for name in names:
         value = os.getenv(name, '').strip()
@@ -156,12 +171,20 @@ def load_config() -> AppConfig:
         raise RuntimeError('DATABASE_URL environment variable is required')
     host = os.getenv('APP_HOST', '0.0.0.0')
     port = int(os.getenv('APP_PORT', '8080'))
+    environment = os.getenv('KAIGO_ENVIRONMENT', 'development')
+    chat_provider_api_key = _first_nonblank(
+        'GEMINI_API_KEY', 'GOOGLE_AI_API_KEY', 'GOOGLE_API_KEY'
+    )
+    chat_prices_required = (
+        environment.strip().lower() == 'production'
+        and chat_provider_api_key is not None
+    )
     public_auth_enabled = _env_flag('KAIGO_PUBLIC_AUTH_ENABLED')
     return AppConfig(
         database_url=database_url,
         host=host,
         port=port,
-        environment=os.getenv('KAIGO_ENVIRONMENT', 'development'),
+        environment=environment,
         public_auth_enabled=public_auth_enabled,
         public_base_url=_public_base_url(public_auth_enabled),
         session_cookie_name=os.getenv('KAIGO_SESSION_COOKIE_NAME', 'kaigo_session'),
@@ -192,9 +215,7 @@ def load_config() -> AppConfig:
             ).split(',')
             if part.strip()
         ),
-        chat_provider_api_key=_first_nonblank(
-            'GEMINI_API_KEY', 'GOOGLE_AI_API_KEY', 'GOOGLE_API_KEY'
-        ),
+        chat_provider_api_key=chat_provider_api_key,
         chat_provider_base_url=os.getenv(
             'GOOGLE_AI_NATIVE_BASE_URL',
             'https://generativelanguage.googleapis.com',
@@ -204,14 +225,20 @@ def load_config() -> AppConfig:
         chat_session_ttl_seconds=_env_int('KAIGO_CHAT_SESSION_TTL_SECONDS', 3_600),
         chat_max_sessions=_env_int('KAIGO_CHAT_MAX_SESSIONS', 500),
         chat_rate_limit_requests=_env_int('KAIGO_CHAT_RATE_LIMIT_REQUESTS', 12),
-        chat_user_rate_limit_requests=_env_int('KAIGO_CHAT_IP_RATE_LIMIT_REQUESTS', 60),
+        chat_user_rate_limit_requests=_env_int_with_fallback(
+            'KAIGO_CHAT_USER_RATE_LIMIT_REQUESTS',
+            'KAIGO_CHAT_IP_RATE_LIMIT_REQUESTS',
+            60,
+        ),
         chat_rate_limit_window_seconds=_env_int('KAIGO_CHAT_RATE_LIMIT_WINDOW_SECONDS', 60),
         chat_max_requests_per_session=_env_int('KAIGO_CHAT_MAX_REQUESTS_PER_SESSION', 40),
         chat_global_concurrency=_env_int('KAIGO_CHAT_GLOBAL_CONCURRENCY', 4),
-        chat_input_price_microusd_per_million=_env_int(
-            'GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION', 0
+        chat_input_price_microusd_per_million=_chat_price(
+            'GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION',
+            required=chat_prices_required,
         ),
-        chat_output_price_microusd_per_million=_env_int(
-            'GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION', 0
+        chat_output_price_microusd_per_million=_chat_price(
+            'GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION',
+            required=chat_prices_required,
         ),
     )
