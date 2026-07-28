@@ -158,6 +158,7 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
     authenticated["user_id"] = user.id
     authenticated["tenant_id"] = user.tenant_id
     authenticated["email"] = user.email
+    authenticated["csrf_token"] = secrets.token_urlsafe(32)
     location = f"/studio?project={project.id}" if project else "/studio"
     raise web.HTTPFound(location)
 
@@ -165,12 +166,17 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
 async def auth_session(request: web.Request) -> web.Response:
     session = await get_session(request)
     user_id = session.get("user_id")
+    csrf_token = session.get("csrf_token")
+    if isinstance(user_id, int) and not isinstance(csrf_token, str):
+        csrf_token = secrets.token_urlsafe(32)
+        session["csrf_token"] = csrf_token
     return web.json_response(
         {
             "enabled": bool(request.app.get("public_auth_enabled", False)),
             "authenticated": isinstance(user_id, int),
             "user_id": user_id if isinstance(user_id, int) else None,
             "email": session.get("email") if isinstance(user_id, int) else None,
+            "csrf_token": csrf_token if isinstance(user_id, int) else None,
             "pending_draft_id": session.get("pending_draft_id"),
             "providers": sorted(request.app[OAUTH_PROVIDERS_KEY]),
         }

@@ -26,6 +26,7 @@ from app.models.router import (
     SqlModelCallAudit,
 )
 from app.models.structured_generation import RoutedStructuredGenerationBackend
+from app.billing.service import TrialSettlementReconciler
 
 from builder_lab.config import BuilderLabConfig
 from builder_lab.browser_audit import BrowserAudit
@@ -261,6 +262,7 @@ async def run() -> None:
             f"{socket.gethostname()}-{os.getpid()}"
         )
         queue = PostgresWorkerQueue(factory, lease_seconds=lease_seconds)
+        trial_settlements = TrialSettlementReconciler(factory)
         configured_handler = (
             os.getenv("KAIGO_BUILDER_STAGE_HANDLER", "").strip()
             or BUILTIN_STAGE_HANDLER
@@ -334,6 +336,8 @@ async def run() -> None:
             stage_handler=handler,
             heartbeat_interval=heartbeat_interval,
             idle_poll_interval=_positive_float("KAIGO_BUILDER_POLL_SECONDS", "0.5"),
+            terminal_hook=trial_settlements.settle_run,
+            terminal_reconciler=trial_settlements.reconcile,
         )
         logging.getLogger(__name__).info("starting durable builder worker %s", worker_id)
         install_signal_handlers(worker)

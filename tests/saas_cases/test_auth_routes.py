@@ -89,6 +89,8 @@ async def test_draft_survives_oauth_round_trip_and_cookie_rotates() -> None:
     payload = await session_response.json()
     assert payload["authenticated"] is True
     assert payload["email"] == "owner@example.com"
+    assert isinstance(payload["csrf_token"], str)
+    assert len(payload["csrf_token"]) >= 32
 
     async with factory() as database:
         project = (await database.execute(select(Project))).scalar_one()

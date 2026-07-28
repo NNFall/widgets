@@ -54,3 +54,9 @@ def test_oauth_only_users_may_have_no_password() -> None:
 def test_trial_cycles_and_model_call_mode_are_persisted() -> None:
     assert "reservation_epoch" in Base.metadata.tables["trial_entitlements"].c
     assert "mode" in Base.metadata.tables["model_calls"].c
+
+
+def test_terminal_trial_settlement_fields_and_recovery_index_are_persisted() -> None:
+    runs = Base.metadata.tables["generation_runs"]
+    assert {"failure_category", "trial_settlement", "trial_settled_at"} <= set(runs.c.keys())
+    assert "ix_generation_runs_unsettled_terminal" in {index.name for index in runs.indexes}

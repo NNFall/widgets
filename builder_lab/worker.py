@@ -16,6 +16,7 @@ from weakref import WeakValueDictionary
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.billing.service import TrialFailureKind
 from app.saas.models import (
     GenerationArtifact,
     GenerationEvent,
@@ -67,6 +68,55 @@ MAX_STAGE_CONTEXT_BYTES = 131_072
 MAX_STAGE_OUTPUT_REFS = 32
 MAX_STAGE_EVENTS = 64
 ALLOWED_STAGE_RESULT_EVENTS = frozenset({"repair.completed"})
+
+_PROVIDER_FAILURE_CODES = frozenset({
+    "provider_unavailable",
+    "model_unavailable",
+    "agent_unavailable",
+    "quota_exceeded",
+    "model_not_found",
+})
+_INFRASTRUCTURE_FAILURE_CODES = frozenset({
+    "generation_timeout",
+    "reference_capture_failed",
+    "reference_capture_incomplete",
+    "reference_analysis_failed",
+    "snapshot_download_failed",
+})
+_MODEL_OUTPUT_FAILURE_CODES = frozenset({
+    "invalid_artifact",
+    "invalid_structured_output",
+    "reference_analysis_invalid",
+    "visual_quality_failed",
+    "visual_review_inconclusive",
+    "visual_review_invalid",
+})
+_CONTENT_FAILURE_CODES = frozenset({
+    "content_blocked",
+    "content_safety",
+    "reference_analysis_too_large",
+})
+_VALIDATION_FAILURE_CODES = frozenset({
+    "reference_url_unsafe",
+    "snapshot_rejected",
+})
+
+
+def failure_category_for_error(error: BuilderEngineError) -> TrialFailureKind:
+    """Classify a technical error without inspecting its public wording."""
+
+    code = error.error_code
+    if code in _PROVIDER_FAILURE_CODES:
+        return TrialFailureKind.PROVIDER
+    if code in _INFRASTRUCTURE_FAILURE_CODES:
+        return TrialFailureKind.INFRASTRUCTURE
+    if code in _MODEL_OUTPUT_FAILURE_CODES:
+        return TrialFailureKind.MODEL_INVALID_OUTPUT
+    if code in _CONTENT_FAILURE_CODES:
+        return TrialFailureKind.CONTENT
+    if code in _VALIDATION_FAILURE_CODES:
+        return TrialFailureKind.VALIDATION
+    return TrialFailureKind.PLATFORM
 
 
 def _strict_json_clone(value: Any, *, field_name: str) -> Any:
@@ -921,6 +971,7 @@ class PostgresWorkerQueue:
         run.retry_not_before = None
         run.error_code = error.error_code
         run.error_message = error.public_message[:2_000]
+        run.failure_category = failure_category_for_error(error).value
         run.lease_owner = None
         run.lease_expires_at = None
         self._append_event(
@@ -1527,6 +1578,8 @@ class BuilderWorker:
         stage_handler: Callable[[RunClaim], Awaitable[StageResult]],
         heartbeat_interval: float = 15.0,
         idle_poll_interval: float = 0.5,
+        terminal_hook: Callable[[UUID], Awaitable[object]] | None = None,
+        terminal_reconciler: Callable[[], Awaitable[object]] | None = None,
     ) -> None:
         self.queue = queue
         self.worker_id = queue._validate_worker_id(worker_id)
@@ -1535,6 +1588,8 @@ class BuilderWorker:
         self.stage_handler = stage_handler
         self.heartbeat_interval = float(heartbeat_interval)
         self.idle_poll_interval = float(idle_poll_interval)
+        self.terminal_hook = terminal_hook
+        self.terminal_reconciler = terminal_reconciler
         self._stop = asyncio.Event()
         self._active_claim: RunClaim | None = None
         self._active_stage_task: asyncio.Task[StageResult] | None = None
@@ -1620,6 +1675,8 @@ class BuilderWorker:
     async def run_once(self) -> bool:
         if self._stop.is_set():
             return False
+        if self.terminal_reconciler is not None:
+            await self.terminal_reconciler()
         claim = await self.queue.claim(self.worker_id)
         if claim is None:
             return False
@@ -1631,6 +1688,8 @@ class BuilderWorker:
                 self._active_claim = claim
                 next_stage = await self._run_claim(claim)
                 if next_stage is None or self._stop.is_set():
+                    if next_stage is None and self.terminal_hook is not None:
+                        await self.terminal_hook(claim.run_id)
                     break
                 claim = await self.queue.continue_claim(
                     claim.run_id, worker_id=self.worker_id
@@ -1699,4 +1758,5 @@ __all__ = [
     "RunClaim",
     "StageInput",
     "StageResult",
+    "failure_category_for_error",
 ]

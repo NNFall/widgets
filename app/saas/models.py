@@ -126,6 +126,9 @@ class GenerationRun(Base):
     retry_not_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_code: Mapped[str | None] = mapped_column(String(128))
     error_message: Mapped[str | None] = mapped_column(Text)
+    failure_category: Mapped[str | None] = mapped_column(String(64))
+    trial_settlement: Mapped[str | None] = mapped_column(String(32))
+    trial_settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -144,6 +147,15 @@ class GenerationEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+Index(
+    "ix_generation_runs_unsettled_terminal",
+    GenerationRun.state,
+    GenerationRun.trial_settled_at,
+    GenerationRun.created_at,
+    postgresql_where=text(
+        "state IN ('completed', 'failed', 'cancelled') AND trial_settled_at IS NULL"
+    ),
+)
 Index(
     "ix_generation_runs_worker_claim",
     GenerationRun.state,

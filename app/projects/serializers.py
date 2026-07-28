@@ -1,0 +1,111 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+from app.saas.models import GenerationArtifact, GenerationEvent, GenerationRun, Project
+
+_PUBLIC_EVENT_PAYLOAD_FIELDS = frozenset({
+    "status",
+    "stage",
+    "revision",
+    "next_stage",
+    "usage",
+    "issues",
+    "changes",
+    "error_code",
+    "output_refs",
+    "attempt",
+    "max_executions",
+    "not_before",
+    "supersedes_sequence",
+})
+
+
+def _timestamp(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def serialize_event(event: GenerationEvent) -> dict[str, Any]:
+    raw_payload = event.payload if isinstance(event.payload, dict) else {}
+    return {
+        "sequence": event.sequence,
+        "type": event.event_type,
+        "message": event.public_message,
+        "payload": {
+            key: raw_payload[key]
+            for key in _PUBLIC_EVENT_PAYLOAD_FIELDS
+            if key in raw_payload
+        },
+        "created_at": _timestamp(event.created_at),
+    }
+
+
+def serialize_artifact(
+    artifact: GenerationArtifact | dict[str, Any] | None,
+    *,
+    source: str,
+) -> dict[str, Any] | None:
+    if artifact is None:
+        return None
+    if isinstance(artifact, dict):
+        payload = dict(artifact)
+    else:
+        configured = artifact.config.get("artifact") if artifact.config else None
+        payload = dict(configured) if isinstance(configured, dict) else {
+            "revision": artifact.revision,
+            "stage": artifact.stage,
+            "body_html": artifact.html,
+            "css": artifact.css,
+            "javascript": artifact.javascript,
+        }
+        payload["id"] = str(artifact.id)
+        payload["quality_status"] = artifact.quality_status
+    payload["source"] = source
+    return payload
+
+
+def serialize_run(
+    run: GenerationRun,
+    *,
+    events: list[GenerationEvent] | None = None,
+    preview: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "id": str(run.id),
+        "project_id": str(run.project_id),
+        "mode": run.mode,
+        "state": run.state,
+        "progress": run.progress,
+        "current_stage": run.current_stage,
+        "last_completed_stage": run.last_completed_stage,
+        "error_code": run.error_code,
+        "error_message": run.error_message,
+        "created_at": _timestamp(run.created_at),
+        "started_at": _timestamp(run.started_at),
+        "finished_at": _timestamp(run.finished_at),
+        "latest_sequence": max(0, run.next_event_sequence - 1),
+    }
+    if events is not None:
+        payload["events"] = [serialize_event(event) for event in events]
+    if preview is not None:
+        payload["preview"] = preview
+    return payload
+
+
+def serialize_project(project: Project, *, active_run: GenerationRun | None = None) -> dict[str, Any]:
+    return {
+        "id": str(project.id),
+        "tenant_id": project.tenant_id,
+        "owner_user_id": project.owner_user_id,
+        "source_url": project.source_url,
+        "brief": project.brief,
+        "status": project.status,
+        "active_revision": project.active_revision,
+        "active_run": serialize_run(active_run) if active_run is not None else None,
+        "created_at": _timestamp(project.created_at),
+        "updated_at": _timestamp(project.updated_at),
+    }
+
+
+__all__ = ["serialize_artifact", "serialize_event", "serialize_project", "serialize_run"]
