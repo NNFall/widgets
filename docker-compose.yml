@@ -18,6 +18,24 @@ services:
       - 1.1.1.1
       - 8.8.8.8
 
+  builder-worker:
+    build: .
+    container_name: ai_project_builder_worker
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://widget_admin:change-me@db:5432/widget_platform}
+      KAIGO_BUILDER_STAGE_HANDLER: ${KAIGO_BUILDER_STAGE_HANDLER:-}
+      KAIGO_BUILDER_LEASE_SECONDS: ${KAIGO_BUILDER_LEASE_SECONDS:-90}
+      KAIGO_BUILDER_HEARTBEAT_SECONDS: ${KAIGO_BUILDER_HEARTBEAT_SECONDS:-20}
+      KAIGO_BUILDER_POLL_SECONDS: ${KAIGO_BUILDER_POLL_SECONDS:-0.5}
+    command: ["python", "scripts/run_builder_worker.py"]
+    depends_on:
+      db:
+        condition: service_healthy
+
   builder-lab:
     profiles:
       - builder-lab
