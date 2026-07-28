@@ -13,6 +13,6 @@
     },
     "additionalProperties": false
   },
-  "incompatible_with": [],
-  "implementation_sha256": "fc57b2d97659428a3e58778b89c8c560ea225118797c33c9ee6c1d8bf8a9fe85"
+  "incompatible_with": ["floating-card"],
+  "implementation_sha256": "037939e62fbc23fc326745b29762f821b0a16d505e6141055c979945a45121e3"
 }

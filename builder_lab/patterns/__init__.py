@@ -13,6 +13,11 @@ from .registry import (
     PatternStatus,
     load_builtin_registry,
 )
+from .resolver import (
+    PatternResolutionError,
+    ResolvedComposition,
+    resolve_composition,
+)
 
 __all__ = [
     "CompositionPlan",
@@ -21,7 +26,10 @@ __all__ = [
     "PatternDefinition",
     "PatternRegistry",
     "PatternRegistryError",
+    "PatternResolutionError",
     "PatternSelection",
     "PatternStatus",
+    "ResolvedComposition",
     "load_builtin_registry",
+    "resolve_composition",
 ]
