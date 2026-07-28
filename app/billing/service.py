@@ -14,6 +14,7 @@ from weakref import WeakValueDictionary
 from sqlalchemy import exists, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import NoResultFound
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.saas.models import (
@@ -43,6 +44,10 @@ class UnverifiedTrialUser(RuntimeError):
 
 class TrialCompensationDenied(RuntimeError):
     """The reservation outcome is not eligible for a trial compensation."""
+
+
+class TrialSettlementInconsistency(RuntimeError):
+    """Persisted trial data cannot be reconciled deterministically."""
 
 
 class TrialFailureKind(str, Enum):
@@ -696,7 +701,9 @@ class TrialSettlementReconciler:
         user_id, payload = row
         transition_key = payload.get("transition_key") if isinstance(payload, dict) else None
         if not isinstance(transition_key, str) or not transition_key.endswith(":reserve"):
-            raise RuntimeError(f"run {run_id} has an invalid trial reservation ledger")
+            raise TrialSettlementInconsistency(
+                f"run {run_id} has an invalid trial reservation ledger"
+            )
         return TrialReservation(
             user_id=user_id,
             run_id=run_id,
@@ -720,7 +727,12 @@ class TrialSettlementReconciler:
                 or call.cost_microusd > 0
             ):
                 spent = True
-            await self._trials.record_model_call_usage(user_id, call.id)
+            try:
+                await self._trials.record_model_call_usage(user_id, call.id)
+            except ValueError as error:
+                raise TrialSettlementInconsistency(
+                    f"run {run_id} model call ownership is inconsistent"
+                ) from error
         return spent
 
     async def settle_run(self, run_id: UUID) -> str | None:
@@ -734,38 +746,50 @@ class TrialSettlementReconciler:
             failure_category = run.failure_category
         try:
             reservation = await self._reservation(run_id)
-        except RuntimeError:
+        except TrialSettlementInconsistency:
             logger.exception("quarantining invalid trial reservation for run %s", run_id)
             return await self._mark_settlement(run_id, "quarantined")
         if reservation is None:
             return await self._mark_settlement(run_id, "not_applicable")
-        model_spent = await self._record_model_usage(run_id, reservation.user_id)
-        if state == "completed":
-            await self._trials.consume_trial(reservation, reason="completed")
-            outcome = "consumed"
-        elif state == "cancelled" and model_spent:
-            await self._trials.consume_trial(
-                reservation,
-                reason="cancelled_after_model_spend",
+        try:
+            model_spent = await self._record_model_usage(run_id, reservation.user_id)
+            if state == "completed":
+                await self._trials.consume_trial(reservation, reason="completed")
+                outcome = "consumed"
+            elif state == "cancelled" and model_spent:
+                await self._trials.consume_trial(
+                    reservation,
+                    reason="cancelled_after_model_spend",
+                )
+                outcome = "consumed"
+            elif state == "cancelled":
+                await self._trials.compensate_if_eligible(
+                    reservation,
+                    failure_kind=TrialFailureKind.PLATFORM,
+                )
+                outcome = "compensated"
+            else:
+                try:
+                    failure_kind = TrialFailureKind(failure_category)
+                except (TypeError, ValueError):
+                    # Missing structured metadata is itself a platform failure. Never
+                    # infer billing from a mutable public error string.
+                    failure_kind = TrialFailureKind.PLATFORM
+                outcome = await self._trials.settle_failure(
+                    reservation,
+                    failure_kind=failure_kind,
+                )
+        except (
+            NoResultFound,
+            TrialCompensationDenied,
+            TrialSettlementInconsistency,
+            TrialUnavailable,
+        ):
+            logger.exception(
+                "quarantining inconsistent trial settlement for run %s",
+                run_id,
             )
-            outcome = "consumed"
-        elif state == "cancelled":
-            await self._trials.compensate_if_eligible(
-                reservation,
-                failure_kind=TrialFailureKind.PLATFORM,
-            )
-            outcome = "compensated"
-        else:
-            try:
-                failure_kind = TrialFailureKind(failure_category)
-            except (TypeError, ValueError):
-                # Missing structured metadata is itself a platform failure. Never
-                # infer billing from a mutable public error string.
-                failure_kind = TrialFailureKind.PLATFORM
-            outcome = await self._trials.settle_failure(
-                reservation,
-                failure_kind=failure_kind,
-            )
+            return await self._mark_settlement(run_id, "quarantined")
         return await self._mark_settlement(run_id, outcome)
 
     async def _mark_settlement(self, run_id: UUID, outcome: str) -> str:

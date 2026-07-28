@@ -426,6 +426,158 @@ async def test_more_than_one_page_of_non_trial_terminal_runs_cannot_starve_trial
 
 
 @pytest.mark.asyncio
+async def test_mismatched_trial_reservations_are_quarantined_without_starvation(
+    tmp_path,
+) -> None:
+    engine, factory, run_ids = await _settlement_database(tmp_path)
+    try:
+        await _reserve(factory, run_ids[1])
+        async with factory() as database, database.begin():
+            valid = await database.get(GenerationRun, run_ids[1])
+            valid.state = "failed"
+            valid.failure_category = TrialFailureKind.PROVIDER.value
+            valid.created_at = datetime.now(UTC)
+            poison_runs = [
+                GenerationRun(
+                    project_id=valid.project_id,
+                    mode="express",
+                    state="completed",
+                    idempotency_key=f"mismatched-trial-{index}",
+                    created_at=datetime.now(UTC) - timedelta(days=1, seconds=index),
+                )
+                for index in range(105)
+            ]
+            database.add_all(poison_runs)
+            await database.flush()
+            poison_ids = [run.id for run in poison_runs]
+            database.add_all([
+                UsageLedger(
+                    user_id=10,
+                    run_id=run.id,
+                    bucket="trial_available",
+                    entry_type="trial.reserve",
+                    amount=-1,
+                    idempotency_key=f"mismatched-reservation-{index}",
+                    payload={
+                        "transition_key": (
+                            f"trial:10:{run.id.hex}:mismatch:{index}:reserve"
+                        )
+                    },
+                )
+                for index, run in enumerate(poison_runs)
+            ])
+
+        reconciler = TrialSettlementReconciler(factory)
+        first_page = await reconciler.reconcile(limit=100)
+        second_page = await reconciler.reconcile(limit=100)
+
+        assert len(first_page) == 100
+        assert set(first_page.values()) == {"quarantined"}
+        assert second_page[run_ids[1]] == "compensated"
+        assert list(second_page.values()).count("quarantined") == 5
+        async with factory() as database:
+            quarantined = await database.scalar(
+                select(func.count()).select_from(GenerationRun).where(
+                    GenerationRun.id.in_(poison_ids),
+                    GenerationRun.trial_settlement == "quarantined",
+                    GenerationRun.trial_settled_at.is_not(None),
+                )
+            )
+            valid = await database.get(GenerationRun, run_ids[1])
+            assert quarantined == 105
+            assert valid.trial_settlement == "compensated"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_transient_settlement_failure_remains_unsettled_for_retry(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    engine, factory, run_ids = await _settlement_database(tmp_path)
+    try:
+        await _reserve(factory, run_ids[0])
+        async with factory() as database, database.begin():
+            run = await database.get(GenerationRun, run_ids[0])
+            run.state = "completed"
+
+        reconciler = TrialSettlementReconciler(factory)
+
+        async def unavailable_database(*_args, **_kwargs):
+            raise ConnectionError("temporary database outage")
+
+        monkeypatch.setattr(
+            reconciler._trials,
+            "consume_trial",
+            unavailable_database,
+        )
+
+        assert await reconciler.reconcile() == {}
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_ids[0])
+            assert run.trial_settlement is None
+            assert run.trial_settled_at is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_missing_entitlement_and_failed_reservation_mismatch_are_quarantined(
+    tmp_path,
+) -> None:
+    engine, factory, run_ids = await _settlement_database(tmp_path)
+    try:
+        await _reserve(factory, run_ids[1])
+        async with factory() as database, database.begin():
+            database.add(User(
+                id=11,
+                tenant_id=1,
+                email="missing-entitlement@example.com",
+            ))
+            failed = await database.get(GenerationRun, run_ids[0])
+            failed.state = "failed"
+            failed.failure_category = TrialFailureKind.PROVIDER.value
+            missing = await database.get(GenerationRun, run_ids[2])
+            missing.state = "completed"
+            database.add_all([
+                UsageLedger(
+                    user_id=10,
+                    run_id=failed.id,
+                    bucket="trial_available",
+                    entry_type="trial.reserve",
+                    amount=-1,
+                    idempotency_key="failed-mismatch-reservation",
+                    payload={
+                        "transition_key": (
+                            f"trial:10:{failed.id.hex}:mismatch:reserve"
+                        )
+                    },
+                ),
+                UsageLedger(
+                    user_id=11,
+                    run_id=missing.id,
+                    bucket="trial_available",
+                    entry_type="trial.reserve",
+                    amount=-1,
+                    idempotency_key="missing-entitlement-reservation",
+                    payload={
+                        "transition_key": (
+                            f"trial:11:{missing.id.hex}:missing:reserve"
+                        )
+                    },
+                ),
+            ])
+
+        reconciler = TrialSettlementReconciler(factory)
+
+        assert await reconciler.settle_run(run_ids[0]) == "quarantined"
+        assert await reconciler.settle_run(run_ids[2]) == "quarantined"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.postgres
 @pytest.mark.skipif(not POSTGRES_URL, reason="KAIGO_TEST_POSTGRES_URL is not configured")
 async def test_postgres_terminal_settlement_is_atomic_and_recovers_missing_marker() -> None:

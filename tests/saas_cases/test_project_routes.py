@@ -270,13 +270,25 @@ async def test_sse_resumes_without_duplicates_heartbeats_and_closes_on_terminal(
             run_id = run.id
 
         await client.post("/test/login/10")
-        response_task = asyncio.create_task(
+        response = await asyncio.wait_for(
             client.get(
                 f"/api/runs/{run_id}/events",
                 headers={"Last-Event-ID": "1"},
-            )
+            ),
+            timeout=2,
         )
-        await asyncio.sleep(0.04)
+        event_two = await asyncio.wait_for(
+            response.content.readuntil(b"\n\n"),
+            timeout=2,
+        )
+        heartbeat = await asyncio.wait_for(
+            response.content.readuntil(b"\n\n"),
+            timeout=2,
+        )
+        assert b"id: 1\n" not in event_two
+        assert event_two.count(b"id: 2\n") == 1
+        assert heartbeat == b": heartbeat\n\n"
+
         async with factory() as database, database.begin():
             run = await database.get(GenerationRun, run_id)
             run.state = "completed"
@@ -293,16 +305,19 @@ async def test_sse_resumes_without_duplicates_heartbeats_and_closes_on_terminal(
                 )
             )
 
-        response = await asyncio.wait_for(response_task, timeout=2)
-        body = await response.text()
+        while True:
+            terminal_frame = await asyncio.wait_for(
+                response.content.readuntil(b"\n\n"),
+                timeout=2,
+            )
+            if b"id: 3\n" in terminal_frame:
+                break
+            assert terminal_frame == b": heartbeat\n\n"
+        assert await asyncio.wait_for(response.content.read(), timeout=2) == b""
         assert response.status == 200
         assert response.headers["Cache-Control"] == "no-cache"
         assert response.headers["X-Accel-Buffering"] == "no"
-        assert "id: 1\n" not in body
-        assert body.count("id: 2\n") == 1
-        assert body.count("id: 3\n") == 1
-        assert ": heartbeat\n\n" in body
-        assert not body.split("id: 3\n", 1)[1].endswith(": heartbeat\n\n")
+        assert terminal_frame.count(b"id: 3\n") == 1
     finally:
         await client.close()
         await engine.dispose()
