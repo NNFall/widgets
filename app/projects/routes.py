@@ -17,6 +17,7 @@ from builder_lab.models import BuilderRequest, EngineName, WidgetArtifact
 from builder_lab.validation import validate_artifact
 
 TERMINAL_STATES = frozenset({"completed", "failed", "cancelled"})
+SSE_PAGE_SIZE = 100
 
 
 async def _scope(request: web.Request, *, verified: bool = False) -> tuple[int, int]:
@@ -275,7 +276,7 @@ async def stream_events(request: web.Request) -> web.StreamResponse:
             events = list((await database.execute(
                 select(GenerationEvent)
                 .where(GenerationEvent.run_id == run.id, GenerationEvent.sequence > cursor)
-                .order_by(GenerationEvent.sequence).limit(100)
+                .order_by(GenerationEvent.sequence).limit(SSE_PAGE_SIZE)
             )).scalars())
             terminal = run.state in TERMINAL_STATES
         if events:
@@ -285,11 +286,13 @@ async def stream_events(request: web.Request) -> web.StreamResponse:
                     f"id: {event.sequence}\nevent: {event.event_type}\ndata: {data}\n\n".encode()
                 )
                 cursor = event.sequence
-            if terminal:
+            if terminal and len(events) < SSE_PAGE_SIZE:
                 break
-        else:
+            if len(events) == SSE_PAGE_SIZE:
+                continue
+        elif not terminal:
             await response.write(b": heartbeat\n\n")
-        if terminal and not events:
+        if terminal:
             break
         if not terminal:
             await asyncio.sleep(poll_seconds)

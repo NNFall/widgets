@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    false,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -215,6 +216,12 @@ class ModelCall(Base):
     prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
     request_id: Mapped[str | None] = mapped_column(String(255))
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    provider_dispatched: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=false(),
+    )
     input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     thinking_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)

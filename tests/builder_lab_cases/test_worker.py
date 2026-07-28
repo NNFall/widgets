@@ -1303,6 +1303,50 @@ async def test_shutdown_cancels_handler_cleanup_and_releases_lease_immediately(
 
 
 @pytest.mark.asyncio
+async def test_shutdown_during_terminal_reconcile_never_claims_new_work(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    await _queued_run(factory, project_id)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    claim_calls = 0
+    original_claim = queue.claim
+
+    async def blocked_reconcile():
+        entered.set()
+        await release.wait()
+
+    async def counted_claim(worker_id):
+        nonlocal claim_calls
+        claim_calls += 1
+        return await original_claim(worker_id)
+
+    monkeypatch.setattr(queue, "claim", counted_claim)
+    worker = BuilderWorker(
+        queue=queue,
+        worker_id="shutdown-before-claim",
+        stage_handler=lambda _claim: asyncio.sleep(0),
+        terminal_reconciler=blocked_reconcile,
+    )
+    run_task = asyncio.create_task(worker.run_once())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        await asyncio.wait_for(worker.shutdown(), timeout=2)
+        release.set()
+        await asyncio.gather(run_task, return_exceptions=True)
+
+        assert claim_calls == 0
+    finally:
+        release.set()
+        if not run_task.done():
+            run_task.cancel()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_cli_sigterm_handler_shuts_down_long_stage(tmp_path) -> None:
     engine, factory, project_id = await _database(tmp_path)
     queue = PostgresWorkerQueue(factory, lease_seconds=30)

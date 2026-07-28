@@ -431,15 +431,29 @@ class TrialService:
         database: AsyncSession,
         run_id: UUID,
     ) -> bool:
-        accepted = await database.scalar(
-            select(
-                exists().where(
+        accepted_artifacts = (
+            await database.execute(
+                select(GenerationArtifact)
+                .where(
                     GenerationArtifact.run_id == run_id,
+                    GenerationArtifact.quality_status.in_(("accepted", "verified")),
                 )
+                .order_by(GenerationArtifact.revision.desc())
             )
-        )
-        if accepted:
-            return True
+        ).scalars().all()
+        for record in accepted_artifacts:
+            payload = record.config.get("artifact") if isinstance(record.config, dict) else None
+            if not isinstance(payload, dict):
+                continue
+            try:
+                candidate = WidgetArtifact.from_dict(payload)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not validate_artifact(
+                candidate,
+                previous_revision=max(0, candidate.revision - 1),
+            ):
+                return True
         draft_payloads = (
             await database.execute(
                 select(GenerationEvent.payload)
@@ -701,7 +715,8 @@ class TrialSettlementReconciler:
         spent = False
         for call in calls:
             if (
-                call.input_tokens + call.output_tokens + call.thinking_tokens > 0
+                call.provider_dispatched
+                or call.input_tokens + call.output_tokens + call.thinking_tokens > 0
                 or call.cost_microusd > 0
             ):
                 spent = True
@@ -717,9 +732,13 @@ class TrialSettlementReconciler:
                 return run.trial_settlement
             state = run.state
             failure_category = run.failure_category
-        reservation = await self._reservation(run_id)
+        try:
+            reservation = await self._reservation(run_id)
+        except RuntimeError:
+            logger.exception("quarantining invalid trial reservation for run %s", run_id)
+            return await self._mark_settlement(run_id, "quarantined")
         if reservation is None:
-            return None
+            return await self._mark_settlement(run_id, "not_applicable")
         model_spent = await self._record_model_usage(run_id, reservation.user_id)
         if state == "completed":
             await self._trials.consume_trial(reservation, reason="completed")
@@ -747,6 +766,9 @@ class TrialSettlementReconciler:
                 reservation,
                 failure_kind=failure_kind,
             )
+        return await self._mark_settlement(run_id, outcome)
+
+    async def _mark_settlement(self, run_id: UUID, outcome: str) -> str:
         async with self._sessions() as database, database.begin():
             run = (
                 await database.execute(
@@ -771,6 +793,10 @@ class TrialSettlementReconciler:
                         .where(
                             GenerationRun.state.in_(("completed", "failed", "cancelled")),
                             GenerationRun.trial_settled_at.is_(None),
+                            exists().where(
+                                UsageLedger.run_id == GenerationRun.id,
+                                UsageLedger.entry_type == "trial.reserve",
+                            ),
                         )
                         .order_by(GenerationRun.created_at, GenerationRun.id)
                         .limit(limit)

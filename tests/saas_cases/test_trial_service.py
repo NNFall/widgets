@@ -448,23 +448,82 @@ async def test_accepted_artifact_blocks_compensation(tmp_path) -> None:
     try:
         reservation = await service.reserve_trial(10, run_ids[0])
         async with factory() as database, database.begin():
-            database.add(
-                GenerationArtifact(
-                    run_id=run_ids[0],
-                    revision=1,
-                    stage="foundation",
-                    html="<main></main>",
-                    css="body{}",
-                    javascript="",
-                    quality_status="accepted",
-                )
-            )
+            accepted = artifact(revision=1, stage=Stage.FOUNDATION)
+            database.add(GenerationArtifact(
+                run_id=run_ids[0],
+                revision=1,
+                stage="foundation",
+                html=accepted.body_html,
+                css=accepted.css,
+                javascript=accepted.javascript,
+                config={"artifact": accepted.to_dict()},
+                quality_status="accepted",
+            ))
 
         with pytest.raises(TrialCompensationDenied, match="полезный результат"):
             await service.compensate_if_eligible(
                 reservation,
                 failure_kind=TrialFailureKind.PROVIDER,
             )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quality_status", ["needs_repair", "rejected"])
+async def test_unaccepted_artifact_does_not_block_compensation(
+    tmp_path,
+    quality_status: str,
+) -> None:
+    engine, factory, _, run_ids = await _database(tmp_path)
+    service = TrialService(factory)
+    try:
+        reservation = await service.reserve_trial(10, run_ids[0])
+        candidate = artifact(revision=1, stage=Stage.FOUNDATION)
+        async with factory() as database, database.begin():
+            database.add(GenerationArtifact(
+                run_id=run_ids[0],
+                revision=1,
+                stage="foundation",
+                html=candidate.body_html,
+                css=candidate.css,
+                javascript=candidate.javascript,
+                config={"artifact": candidate.to_dict()},
+                quality_status=quality_status,
+            ))
+
+        assert await service.compensate_if_eligible(
+            reservation,
+            failure_kind=TrialFailureKind.MODEL_INVALID_OUTPUT,
+        )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_structurally_invalid_accepted_artifact_does_not_block_compensation(
+    tmp_path,
+) -> None:
+    engine, factory, _, run_ids = await _database(tmp_path)
+    service = TrialService(factory)
+    try:
+        reservation = await service.reserve_trial(10, run_ids[0])
+        async with factory() as database, database.begin():
+            database.add(GenerationArtifact(
+                run_id=run_ids[0],
+                revision=1,
+                stage="foundation",
+                html="<main>corrupt</main>",
+                css="",
+                javascript="",
+                config={"artifact": {"invalid": True}},
+                quality_status="accepted",
+            ))
+
+        assert await service.compensate_if_eligible(
+            reservation,
+            failure_kind=TrialFailureKind.MODEL_INVALID_OUTPUT,
+        )
     finally:
         await engine.dispose()
 

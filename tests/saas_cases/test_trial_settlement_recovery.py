@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -11,6 +12,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.billing.service import TrialFailureKind, TrialService, TrialSettlementReconciler
 from app.db.base import Base
 from app.db.models import Tenant, User
+from app.models.contracts import ModelRequest, ProviderCapabilities
+from app.models.router import ModelPolicy, ModelRouter, ProviderTarget, SqlModelCallAudit
 from app.saas.models import (
     GenerationEvent,
     GenerationRun,
@@ -26,6 +29,7 @@ from builder_lab.worker import (
     BuilderWorker,
     PostgresWorkerQueue,
     failure_category_for_error,
+    StageResult,
 )
 
 POSTGRES_URL = os.getenv("KAIGO_TEST_POSTGRES_URL")
@@ -196,6 +200,95 @@ async def test_user_cancellation_after_model_spend_consumes_trial(tmp_path) -> N
 
 
 @pytest.mark.asyncio
+async def test_provider_dispatch_survives_worker_cancellation_and_consumes_trial(
+    tmp_path,
+) -> None:
+    engine, factory, run_ids = await _settlement_database(tmp_path)
+    dispatched = asyncio.Event()
+
+    class BlockingProvider:
+        capabilities = ProviderCapabilities(structured_output=True)
+
+        async def generate(self, request: ModelRequest, *, model: str):
+            assert request.prompt == "dispatch before blocking"
+            assert model == "blocking-model"
+            dispatched.set()
+            await asyncio.Future()
+            raise AssertionError("unreachable")
+
+    try:
+        await _reserve(factory, run_ids[2])
+        async with factory() as database, database.begin():
+            (await database.get(GenerationRun, run_ids[0])).state = "completed"
+            (await database.get(GenerationRun, run_ids[1])).state = "completed"
+            run = await database.get(GenerationRun, run_ids[2])
+            database.add(GenerationEvent(
+                id=701,
+                run_id=run.id,
+                sequence=1,
+                event_type="run.created",
+                public_message="Queued",
+                payload={"request": {"engine": "direct", "brief": "Build"}},
+            ))
+            run.next_event_sequence = 2
+
+        router = ModelRouter(
+            providers={"blocking": BlockingProvider()},
+            policies={
+                ("widget_generator", "express"): ModelPolicy(
+                    prompt_version="cancel-v1",
+                    targets=(ProviderTarget("blocking", "blocking-model", 1, 1),),
+                )
+            },
+            audit=SqlModelCallAudit(factory),
+        )
+
+        async def handle(claim):
+            await router.generate(
+                role="widget_generator",
+                mode="express",
+                request=ModelRequest(prompt="dispatch before blocking"),
+                run_id=claim.run_id,
+            )
+            return StageResult(public_message="unreachable")
+
+        reconciler = TrialSettlementReconciler(factory)
+        queue = PostgresWorkerQueue(factory, lease_seconds=30)
+        worker = BuilderWorker(
+            queue=queue,
+            worker_id="cancel-accounting-worker",
+            stage_handler=handle,
+            heartbeat_interval=0.01,
+            terminal_hook=reconciler.settle_run,
+        )
+        worker_task = asyncio.create_task(worker.run_once())
+        await asyncio.wait_for(dispatched.wait(), timeout=2)
+        assert await queue.request_cancel(run_ids[2])
+        assert await asyncio.wait_for(worker_task, timeout=2)
+        assert await reconciler.settle_run(run_ids[2]) == "consumed"
+
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_ids[2])
+            calls = list((await database.execute(
+                select(ModelCall).where(ModelCall.run_id == run_ids[2])
+            )).scalars())
+            trial_debits = await database.scalar(
+                select(func.count()).select_from(UsageLedger).where(
+                    UsageLedger.run_id == run_ids[2],
+                    UsageLedger.entry_type == "trial.debit",
+                )
+            )
+            assert run.state == "cancelled"
+            assert run.trial_settlement == "consumed"
+            assert len(calls) == 1
+            assert calls[0].provider_dispatched is True
+            assert calls[0].status == "cancelled"
+            assert trial_debits == 2
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_worker_terminal_hook_uses_structured_failure_and_recovers_settlement(tmp_path) -> None:
     engine, factory, run_ids = await _settlement_database(tmp_path)
     try:
@@ -294,6 +387,40 @@ async def test_corrupt_terminal_settlement_does_not_block_later_recovery_or_clai
         async with factory() as database:
             good = await database.get(GenerationRun, run_ids[1])
             assert good.trial_settlement == "compensated"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_more_than_one_page_of_non_trial_terminal_runs_cannot_starve_trial(
+    tmp_path,
+) -> None:
+    engine, factory, run_ids = await _settlement_database(tmp_path)
+    try:
+        await _reserve(factory, run_ids[1])
+        async with factory() as database, database.begin():
+            valid = await database.get(GenerationRun, run_ids[1])
+            valid.state = "failed"
+            valid.failure_category = TrialFailureKind.PROVIDER.value
+            valid.created_at = datetime.now(UTC)
+            project_id = valid.project_id
+            database.add_all([
+                GenerationRun(
+                    project_id=project_id,
+                    mode="express",
+                    state="completed",
+                    idempotency_key=f"historical-non-trial-{index}",
+                    created_at=datetime.now(UTC) - timedelta(days=1, seconds=index),
+                )
+                for index in range(105)
+            ])
+
+        outcomes = await TrialSettlementReconciler(factory).reconcile(limit=100)
+
+        assert outcomes == {run_ids[1]: "compensated"}
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_ids[1])
+            assert run.trial_settlement == "compensated"
     finally:
         await engine.dispose()
 

@@ -1675,33 +1675,36 @@ class BuilderWorker:
     async def run_once(self) -> bool:
         if self._stop.is_set():
             return False
-        if self.terminal_reconciler is not None:
-            await self.terminal_reconciler()
-        claim = await self.queue.claim(self.worker_id)
-        if claim is None:
-            return False
         self._active_done.clear()
         self._active_execution_task = asyncio.current_task()
-        self._active_claim = claim
         try:
-            while True:
-                self._active_claim = claim
-                next_stage = await self._run_claim(claim)
-                if next_stage is None or self._stop.is_set():
-                    if next_stage is None and self.terminal_hook is not None:
-                        await self.terminal_hook(claim.run_id)
-                    break
-                claim = await self.queue.continue_claim(
-                    claim.run_id, worker_id=self.worker_id
-                )
-            return True
-        except asyncio.CancelledError:
-            if self._stop.is_set() and self._active_claim is not None:
-                try:
-                    await asyncio.shield(self.queue.release_claim(self._active_claim))
-                except LeaseLostError:
-                    pass
-            raise
+            if self.terminal_reconciler is not None:
+                await self.terminal_reconciler()
+            if self._stop.is_set():
+                return False
+            claim = await self.queue.claim(self.worker_id)
+            if claim is None:
+                return False
+            self._active_claim = claim
+            try:
+                while True:
+                    self._active_claim = claim
+                    next_stage = await self._run_claim(claim)
+                    if next_stage is None or self._stop.is_set():
+                        if next_stage is None and self.terminal_hook is not None:
+                            await self.terminal_hook(claim.run_id)
+                        break
+                    claim = await self.queue.continue_claim(
+                        claim.run_id, worker_id=self.worker_id
+                    )
+                return True
+            except asyncio.CancelledError:
+                if self._stop.is_set() and self._active_claim is not None:
+                    try:
+                        await asyncio.shield(self.queue.release_claim(self._active_claim))
+                    except LeaseLostError:
+                        pass
+                raise
         finally:
             self._active_claim = None
             self._active_execution_task = None
@@ -1741,6 +1744,7 @@ class BuilderWorker:
                 and execution_task is not asyncio.current_task()
                 and not execution_task.done()
             ):
+                execution_task.cancel()
                 try:
                     await execution_task
                 except asyncio.CancelledError:

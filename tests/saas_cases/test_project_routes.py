@@ -308,6 +308,51 @@ async def test_sse_resumes_without_duplicates_heartbeats_and_closes_on_terminal(
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_terminal_sse_drains_more_than_one_page_without_duplicates(tmp_path) -> None:
+    engine, factory, client, project_id, _ = await _project_app(tmp_path)
+    try:
+        async with factory() as database, database.begin():
+            run = GenerationRun(
+                project_id=project_id,
+                mode="express",
+                state="completed",
+                progress=100,
+                next_event_sequence=106,
+                idempotency_key="terminal-sse-backlog",
+            )
+            database.add(run)
+            await database.flush()
+            database.add_all([
+                GenerationEvent(
+                    id=10_000 + sequence,
+                    run_id=run.id,
+                    sequence=sequence,
+                    event_type="run.progress",
+                    public_message=f"Event {sequence}",
+                    payload={"status": "completed"},
+                )
+                for sequence in range(1, 106)
+            ])
+            run_id = run.id
+
+        await client.post("/test/login/10")
+        response = await client.get(f"/api/runs/{run_id}/events")
+        body = await response.text()
+        event_ids = [
+            int(line.removeprefix("id: "))
+            for line in body.splitlines()
+            if line.startswith("id: ")
+        ]
+
+        assert response.status == 200
+        assert event_ids == list(range(1, 106))
+        assert len(event_ids) == len(set(event_ids))
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
 def _artifact_payload(revision: int) -> dict:
     return artifact(revision=revision).to_dict()
 

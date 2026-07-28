@@ -6,7 +6,7 @@ import math
 import time
 from dataclasses import dataclass, replace
 from typing import Mapping, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -46,6 +46,7 @@ class ModelPolicy:
 
 @dataclass(frozen=True, slots=True)
 class ModelCallAuditRecord:
+    call_id: UUID
     run_id: UUID | None
     provider: str
     model: str
@@ -53,6 +54,7 @@ class ModelCallAuditRecord:
     mode: str
     prompt_version: str
     attempt: int
+    provider_dispatched: bool
     status: str
     input_tokens: int
     output_tokens: int
@@ -74,6 +76,10 @@ class InMemoryModelCallAudit:
         self.calls: list[ModelCallAuditRecord] = []
 
     async def record(self, call: ModelCallAuditRecord) -> None:
+        for index, existing in enumerate(self.calls):
+            if existing.call_id == call.call_id:
+                self.calls[index] = call
+                return
         self.calls.append(call)
 
 
@@ -85,27 +91,32 @@ class SqlModelCallAudit:
 
     async def record(self, call: ModelCallAuditRecord) -> None:
         async with self._sessions() as database, database.begin():
-            database.add(
-                ModelCall(
-                    run_id=call.run_id,
-                    provider=call.provider,
-                    model=call.model,
-                    role=call.role,
-                    mode=call.mode,
-                    prompt_version=call.prompt_version,
-                    request_id=call.request_id,
-                    attempt=call.attempt,
-                    input_tokens=call.input_tokens,
-                    output_tokens=call.output_tokens,
-                    thinking_tokens=call.thinking_tokens,
-                    latency_ms=call.latency_ms,
-                    status=call.status,
-                    error_code=call.error_code,
-                    error_message=call.error_message,
-                    cost_microusd=call.cost_microusd,
-                    pricing_snapshot=dict(call.pricing_snapshot or {}),
-                )
-            )
+            persisted = await database.get(ModelCall, call.call_id)
+            values = {
+                "run_id": call.run_id,
+                "provider": call.provider,
+                "model": call.model,
+                "role": call.role,
+                "mode": call.mode,
+                "prompt_version": call.prompt_version,
+                "request_id": call.request_id,
+                "attempt": call.attempt,
+                "provider_dispatched": call.provider_dispatched,
+                "input_tokens": call.input_tokens,
+                "output_tokens": call.output_tokens,
+                "thinking_tokens": call.thinking_tokens,
+                "latency_ms": call.latency_ms,
+                "status": call.status,
+                "error_code": call.error_code,
+                "error_message": call.error_message,
+                "cost_microusd": call.cost_microusd,
+                "pricing_snapshot": dict(call.pricing_snapshot or {}),
+            }
+            if persisted is None:
+                database.add(ModelCall(id=call.call_id, **values))
+            else:
+                for field, value in values.items():
+                    setattr(persisted, field, value)
 
 
 class ModelRouter:
@@ -144,6 +155,8 @@ class ModelRouter:
 
         last_error: ModelProviderError | None = None
         for attempt, target in enumerate(policy.targets, start=1):
+            call_id = uuid4()
+            provider_dispatched = False
             try:
                 provider = self._providers[target.provider]
             except KeyError as error:
@@ -151,6 +164,21 @@ class ModelRouter:
             started = time.perf_counter()
             try:
                 _ensure_supported(provider, target, request)
+                await self._audit.record(
+                    _audit_record(
+                        call_id=call_id,
+                        run_id=run_id,
+                        target=target,
+                        role=role,
+                        mode=mode,
+                        prompt_version=policy.prompt_version,
+                        attempt=attempt,
+                        provider_dispatched=True,
+                        status="dispatched",
+                        started=started,
+                    )
+                )
+                provider_dispatched = True
                 if timeout_seconds is None:
                     response = await provider.generate(request, model=target.model)
                 else:
@@ -164,6 +192,25 @@ class ModelRouter:
                         raise ProviderTimeout(
                             f"provider attempt exceeded {timeout_seconds:g} seconds"
                         ) from error
+            except asyncio.CancelledError:
+                await _record_finalization_safe(
+                    self._audit,
+                    _audit_record(
+                        call_id=call_id,
+                        run_id=run_id,
+                        target=target,
+                        role=role,
+                        mode=mode,
+                        prompt_version=policy.prompt_version,
+                        attempt=attempt,
+                        provider_dispatched=provider_dispatched,
+                        status="cancelled",
+                        started=started,
+                        error_code="cancelled",
+                        error_message="provider call cancelled",
+                    ),
+                )
+                raise
             except ModelProviderError as error:
                 last_error = error
                 usage = (
@@ -171,8 +218,10 @@ class ModelRouter:
                     if isinstance(error, BilledModelProviderError)
                     else ModelUsage()
                 )
-                await self._audit.record(
+                await _record_finalization_safe(
+                    self._audit,
                     ModelCallAuditRecord(
+                        call_id=call_id,
                         run_id=run_id,
                         provider=target.provider,
                         model=target.model,
@@ -180,6 +229,7 @@ class ModelRouter:
                         mode=mode,
                         prompt_version=policy.prompt_version,
                         attempt=attempt,
+                        provider_dispatched=provider_dispatched,
                         status="failed",
                         input_tokens=usage.input_tokens,
                         output_tokens=usage.output_tokens,
@@ -198,14 +248,16 @@ class ModelRouter:
                         error_code=error.error_code,
                         error_message=str(error)[:1000],
                         pricing_snapshot=_pricing_snapshot(target),
-                    )
+                    ),
                 )
                 continue
 
             usage = response.usage
             cost = _cost_microusd(target, usage.input_tokens, usage.output_tokens)
-            await self._audit.record(
+            await _record_finalization_safe(
+                self._audit,
                 ModelCallAuditRecord(
+                    call_id=call_id,
                     run_id=run_id,
                     provider=target.provider,
                     model=target.model,
@@ -213,6 +265,7 @@ class ModelRouter:
                     mode=mode,
                     prompt_version=policy.prompt_version,
                     attempt=attempt,
+                    provider_dispatched=True,
                     status="completed",
                     input_tokens=usage.input_tokens,
                     output_tokens=usage.output_tokens,
@@ -221,7 +274,7 @@ class ModelRouter:
                     cost_microusd=cost,
                     request_id=response.request_id,
                     pricing_snapshot=_pricing_snapshot(target),
-                )
+                ),
             )
             return replace(
                 response,
@@ -304,3 +357,54 @@ def _pricing_snapshot(target: ProviderTarget) -> dict[str, int | str]:
             target.output_price_microusd_per_million
         ),
     }
+
+
+def _audit_record(
+    *,
+    call_id: UUID,
+    run_id: UUID | None,
+    target: ProviderTarget,
+    role: str,
+    mode: str,
+    prompt_version: str,
+    attempt: int,
+    provider_dispatched: bool,
+    status: str,
+    started: float,
+    error_code: str | None = None,
+    error_message: str | None = None,
+) -> ModelCallAuditRecord:
+    return ModelCallAuditRecord(
+        call_id=call_id,
+        run_id=run_id,
+        provider=target.provider,
+        model=target.model,
+        role=role,
+        mode=mode,
+        prompt_version=prompt_version,
+        attempt=attempt,
+        provider_dispatched=provider_dispatched,
+        status=status,
+        input_tokens=0,
+        output_tokens=0,
+        thinking_tokens=0,
+        latency_ms=_elapsed_ms(started),
+        cost_microusd=0,
+        error_code=error_code,
+        error_message=error_message,
+        pricing_snapshot=_pricing_snapshot(target),
+    )
+
+
+async def _record_finalization_safe(
+    audit: ModelCallAudit,
+    record: ModelCallAuditRecord,
+) -> None:
+    finalization = asyncio.create_task(audit.record(record))
+    try:
+        await asyncio.shield(finalization)
+    except asyncio.CancelledError:
+        try:
+            await finalization
+        finally:
+            raise
