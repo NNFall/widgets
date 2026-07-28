@@ -134,3 +134,39 @@ def test_chat_user_rate_limit_prefers_user_name_and_supports_legacy_fallback(
     monkeypatch.setenv("KAIGO_CHAT_USER_RATE_LIMIT_REQUESTS", "47")
 
     assert load_config().chat_user_rate_limit_requests == 47
+
+
+def test_yookassa_configuration_hides_secret_and_uses_fixed_provider_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _database(monkeypatch)
+    monkeypatch.setenv("KAIGO_PUBLIC_BASE_URL", "https://kaigo.space")
+    monkeypatch.setenv("YOOKASSA_SHOP_ID", "shop-123")
+    monkeypatch.setenv("YOOKASSA_SECRET_KEY", "super-secret")
+    monkeypatch.setenv("YOOKASSA_TEST_MODE", "true")
+    monkeypatch.setenv("YOOKASSA_TIMEOUT_SECONDS", "17")
+    monkeypatch.setenv("YOOKASSA_API_BASE_URL", "https://evil.example")
+
+    config = load_config()
+
+    assert config.yookassa_shop_id == "shop-123"
+    assert config.yookassa_secret_key == "super-secret"
+    assert config.yookassa_test_mode is True
+    assert config.yookassa_timeout_seconds == 17
+    assert "super-secret" not in repr(config)
+    assert not hasattr(config, "yookassa_api_base_url")
+
+
+def test_yookassa_requires_complete_credentials_and_public_base(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _database(monkeypatch)
+    monkeypatch.setenv("YOOKASSA_SHOP_ID", "shop-123")
+    monkeypatch.delenv("YOOKASSA_SECRET_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="YOOKASSA"):
+        load_config()
+
+    monkeypatch.setenv("YOOKASSA_SECRET_KEY", "secret")
+    monkeypatch.delenv("KAIGO_PUBLIC_BASE_URL", raising=False)
+    with pytest.raises(RuntimeError, match="KAIGO_PUBLIC_BASE_URL"):
+        load_config()

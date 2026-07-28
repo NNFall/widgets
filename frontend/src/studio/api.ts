@@ -1,5 +1,9 @@
 import type {
   AuthSessionSnapshot,
+  BillingCheckout,
+  BillingPayment,
+  PendingBillingCheckout,
+  BillingSubscription,
   BuilderRunInput,
   BuilderRunSnapshot,
   SaasEvent,
@@ -86,6 +90,52 @@ async function saasRequestJson<T>(path: string, init: RequestInit = {}): Promise
 
 export function getAuthSession() {
   return saasRequestJson<AuthSessionSnapshot>('/api/auth/session');
+}
+
+export function createBillingCheckout(
+  planCode: string,
+  csrfToken: string,
+  idempotencyKey: string,
+) {
+  return saasRequestJson<BillingCheckout>('/api/billing/checkout', {
+    method: 'POST',
+    headers: {
+      'Idempotency-Key': idempotencyKey,
+      'X-CSRF-Token': csrfToken,
+    },
+    body: JSON.stringify({ plan_code: planCode }),
+  });
+}
+
+export function getBillingPayment(paymentId: string, signal?: AbortSignal) {
+  return saasRequestJson<{ payment: BillingPayment }>(
+    `/api/billing/payments/${encodeURIComponent(paymentId)}`,
+    { signal },
+  );
+}
+
+export function getPendingBillingPayment(signal?: AbortSignal) {
+  return saasRequestJson<PendingBillingCheckout>(
+    '/api/billing/payments/pending',
+    { signal },
+  );
+}
+
+export function resumeBillingPayment(paymentId: string, csrfToken: string) {
+  return saasRequestJson<BillingCheckout>(
+    `/api/billing/payments/${encodeURIComponent(paymentId)}/resume`,
+    {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': csrfToken },
+    },
+  );
+}
+
+export function getBillingSubscription(signal?: AbortSignal) {
+  return saasRequestJson<{ subscription: BillingSubscription | null }>(
+    '/api/billing/subscription',
+    { signal },
+  );
 }
 
 export function getProject(projectId: string) {

@@ -108,6 +108,18 @@ class MarketingSitePackageTests(unittest.TestCase):
         self.assertIn("proxy_request_buffering off;", builder)
         self.assertIn("proxy_read_timeout 1800s;", builder)
 
+    def test_yookassa_webhook_has_exact_unauthenticated_application_route(self):
+        config = NGINX_CONFIG.read_text(encoding="utf-8")
+        block = config.split(
+            "location = /api/billing/webhooks/yookassa {", 1
+        )[1].split("}", 1)[0]
+
+        self.assertIn("proxy_pass http://127.0.0.1:8080;", block)
+        self.assertIn("proxy_set_header Host $host;", block)
+        self.assertIn("proxy_request_buffering on;", block)
+        self.assertIn("client_max_body_size 64k;", block)
+        self.assertNotIn("auth_basic", block)
+
     def test_static_html_has_a_restrictive_same_origin_csp(self):
         config = NGINX_CONFIG.read_text(encoding="utf-8")
         csp_lines = [

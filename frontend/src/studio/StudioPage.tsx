@@ -366,7 +366,7 @@ export function StudioPage() {
             viewport={viewport}
             onViewportChange={setViewport}
           />
-          {controller.projectMode && artifact && <UpgradeGate />}
+          {controller.projectMode && artifact && <UpgradeGate csrfToken={controller.csrfToken} />}
           <div className="studio-workspace__footer">
             <Code aria-hidden size={18} />
             <span>Preview использует изолированный runtime сборщика: launcher, composer и chat bridge работают внутри sandbox.</span>

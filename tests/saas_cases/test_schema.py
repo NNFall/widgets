@@ -98,3 +98,31 @@ def test_publication_release_constraints_are_artifact_idempotent_and_referential
     )
     assert composite.deferrable is True
     assert composite.initially == "DEFERRED"
+
+
+def test_billing_constraints_and_payment_links_are_registered() -> None:
+    assert "uq_payment_attempt_user_idempotency" in _constraint_names(
+        "payment_attempts", UniqueConstraint
+    )
+    assert "uq_payment_attempt_provider_payment" in _constraint_names(
+        "payment_attempts", UniqueConstraint
+    )
+    assert "ck_payment_attempt_positive_amount" in _constraint_names(
+        "payment_attempts", CheckConstraint
+    )
+    assert "ck_subscription_finite_period" in _constraint_names(
+        "subscriptions", CheckConstraint
+    )
+    assert "uq_subscriptions_one_active_user" in {
+        index.name for index in Base.metadata.tables["subscriptions"].indexes
+    }
+    assert Base.metadata.tables["usage_ledger"].c.payment_attempt_id.foreign_keys
+    assert Base.metadata.tables["payment_webhook_events"].c.payment_attempt_id.foreign_keys
+    subscription_check = next(
+        constraint
+        for constraint in Base.metadata.tables["subscriptions"].constraints
+        if isinstance(constraint, CheckConstraint)
+        and constraint.name == "ck_subscription_finite_period"
+    )
+    assert "status <> 'active'" in str(subscription_check.sqltext)
+    assert "current_period_start IS NOT NULL" in str(subscription_check.sqltext)

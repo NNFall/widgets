@@ -190,6 +190,10 @@ describe('durable SaaS Studio flow', () => {
       if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(failed));
       if (url === `/api/runs/${RUN_ID}`) return jsonResponse(failed);
       if (url === `/api/runs/${RUN_ID}/events`) return emptyEventStream();
+      if (url === '/api/billing/subscription') return jsonResponse({ subscription: null });
+      if (url === '/api/billing/payments/pending') {
+        return jsonResponse({ payment: null, checkout_url: null });
+      }
       throw new Error(`unexpected request: ${url}`);
     }));
 
@@ -202,7 +206,7 @@ describe('durable SaaS Studio flow', () => {
     expect(previewUrl.searchParams.get('channel')).toMatch(/^[a-f0-9]{36}$/);
     expect(frame).not.toHaveAttribute('srcdoc');
     expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
-    expect(screen.getByRole('button', { name: 'Доработать и опубликовать' })).toBeVisible();
+    expect(await screen.findByRole('button', { name: 'Доработать и опубликовать' })).toBeVisible();
     expect(screen.getByText(/тариф/i)).toBeVisible();
   });
 

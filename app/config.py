@@ -24,6 +24,10 @@ class AppConfig:
     google_oauth_client_secret: str | None = field(default=None, repr=False)
     yandex_oauth_client_id: str | None = None
     yandex_oauth_client_secret: str | None = field(default=None, repr=False)
+    yookassa_shop_id: str | None = None
+    yookassa_secret_key: str | None = field(default=None, repr=False)
+    yookassa_test_mode: bool = True
+    yookassa_timeout_seconds: float = 20
     publication_allow_insecure_origins: bool = False
     publication_chat_signing_secret: str | None = field(default=None, repr=False)
     publication_chat_capability_ttl_seconds: int = 300
@@ -77,6 +81,11 @@ class AppConfig:
             or not 1 <= self.chat_timeout_seconds <= 180
         ):
             raise ValueError('chat_timeout_seconds must be between 1 and 180')
+        if (
+            isinstance(self.yookassa_timeout_seconds, bool)
+            or not 1 <= self.yookassa_timeout_seconds <= 60
+        ):
+            raise ValueError('yookassa_timeout_seconds must be between 1 and 60')
         bounds = (
             ('chat_session_ttl_seconds', self.chat_session_ttl_seconds, 30, 86_400),
             ('chat_max_sessions', self.chat_max_sessions, 1, 10_000),
@@ -180,19 +189,30 @@ def load_config() -> AppConfig:
         and chat_provider_api_key is not None
     )
     public_auth_enabled = _env_flag('KAIGO_PUBLIC_AUTH_ENABLED')
+    yookassa_shop_id = _first_nonblank('YOOKASSA_SHOP_ID')
+    yookassa_secret_key = _first_nonblank('YOOKASSA_SECRET_KEY')
+    if bool(yookassa_shop_id) != bool(yookassa_secret_key):
+        raise RuntimeError(
+            'YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY must be configured together'
+        )
+    billing_enabled = bool(yookassa_shop_id and yookassa_secret_key)
     return AppConfig(
         database_url=database_url,
         host=host,
         port=port,
         environment=environment,
         public_auth_enabled=public_auth_enabled,
-        public_base_url=_public_base_url(public_auth_enabled),
+        public_base_url=_public_base_url(public_auth_enabled or billing_enabled),
         session_cookie_name=os.getenv('KAIGO_SESSION_COOKIE_NAME', 'kaigo_session'),
         session_ttl_seconds=int(os.getenv('KAIGO_SESSION_TTL_SECONDS', str(14 * 24 * 60 * 60))),
         google_oauth_client_id=os.getenv('GOOGLE_OAUTH_CLIENT_ID'),
         google_oauth_client_secret=os.getenv('GOOGLE_OAUTH_CLIENT_SECRET'),
         yandex_oauth_client_id=os.getenv('YANDEX_OAUTH_CLIENT_ID'),
         yandex_oauth_client_secret=os.getenv('YANDEX_OAUTH_CLIENT_SECRET'),
+        yookassa_shop_id=yookassa_shop_id,
+        yookassa_secret_key=yookassa_secret_key,
+        yookassa_test_mode=_env_flag('YOOKASSA_TEST_MODE', True),
+        yookassa_timeout_seconds=_env_int('YOOKASSA_TIMEOUT_SECONDS', 20),
         publication_allow_insecure_origins=_env_flag(
             'KAIGO_PUBLICATION_ALLOW_INSECURE_ORIGINS'
         ),

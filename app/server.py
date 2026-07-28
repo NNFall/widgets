@@ -12,6 +12,8 @@ from app.config import AppConfig, load_config
 from app.auth.session_storage import DatabaseSessionStorage
 from app.auth.routes import OAUTH_PROVIDERS_KEY, build_oauth_providers, setup_auth_routes
 from app.chat import setup_chat_runtime
+from app.billing.routes import setup_billing_routes
+from app.billing.runtime import setup_billing_runtime
 from app.db import models
 from app.db import init_db_signals
 from app.db.session import session_scope
@@ -372,6 +374,7 @@ async def create_app(
     app.on_startup.append(_init_history_db)
 
     init_db_signals(app)
+    setup_billing_runtime(app)
     # Registered after the database context because routed chat auditing needs
     # the live async session factory during startup.
     if chat_service_factory is None:
@@ -390,6 +393,7 @@ async def create_app(
     )
     setup_project_routes(app)
     setup_publication_routes(app)
+    setup_billing_routes(app)
     return app
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -237,6 +238,8 @@ async def test_postgres_publication_migration_and_concurrent_first_publish(monke
                     provider="test",
                     plan_code="pro",
                     status="active",
+                    current_period_start=datetime.now(UTC),
+                    current_period_end=datetime.now(UTC) + timedelta(days=30),
                 ),
             ])
             await database.flush()
@@ -331,7 +334,7 @@ async def test_postgres_publication_migration_and_concurrent_first_publish(monke
                 "SELECT count(*) FROM pg_constraint "
                 "WHERE conname = 'fk_publications_active_release_membership'"
             ))
-        assert revision == "0008_publication_releases"
+        assert revision == "0009_billing_foundation"
         assert fk == 1
         assert membership_fk == 1
 

@@ -130,6 +130,7 @@ async def _seed(factory):
                 provider="test",
                 plan_code="pro",
                 status="active",
+                current_period_start=datetime.now(UTC),
                 current_period_end=datetime.now(UTC) + timedelta(days=1),
             ),
             Subscription(
@@ -137,6 +138,7 @@ async def _seed(factory):
                 provider="test",
                 plan_code="pro",
                 status="active",
+                current_period_start=datetime.now(UTC),
                 current_period_end=datetime.now(UTC) + timedelta(days=1),
             ),
         ])

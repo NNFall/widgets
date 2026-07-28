@@ -3561,6 +3561,14 @@ a {
 .studio-upgrade h2 { margin: 0 0 4px; font-size: 18px; }
 .studio-upgrade p { margin: 0; color: #52636e; line-height: 1.5; }
 .studio-upgrade button { min-height: 44px; display: flex; gap: 8px; align-items: center; padding: 0 16px; border: 0; border-radius: 12px; color: #66727a; background: #e5e8e6; font-weight: 800; }
+.studio-upgrade button:not(:disabled) { color: #fff; background: var(--ink); cursor: pointer; }
+.studio-upgrade__status,
+.studio-upgrade__error { margin-top: 8px !important; font-size: 13px; }
+.studio-upgrade__error { color: #9d332d !important; }
+.studio-upgrade__checkout,
+.studio-upgrade__active { display: inline-flex; gap: 7px; align-items: center; margin-top: 10px; font-size: 14px; font-weight: 800; }
+.studio-upgrade__checkout { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+.studio-upgrade__active { color: #26735c !important; }
 
 @media (max-width: 760px) {
   .studio-upgrade { grid-template-columns: auto minmax(0, 1fr); }

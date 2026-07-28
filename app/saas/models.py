@@ -247,6 +247,9 @@ class UsageLedger(Base):
     project_id: Mapped[UUID | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"))
     run_id: Mapped[UUID | None] = mapped_column(ForeignKey("generation_runs.id", ondelete="SET NULL"))
     model_call_id: Mapped[UUID | None] = mapped_column(ForeignKey("model_calls.id", ondelete="SET NULL"))
+    payment_attempt_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("payment_attempts.id", ondelete="SET NULL"), index=True
+    )
     bucket: Mapped[str] = mapped_column(String(32), nullable=False)
     entry_type: Mapped[str] = mapped_column(String(32), nullable=False)
     amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -271,32 +274,70 @@ class TrialEntitlement(Base):
 
 class Subscription(Base):
     __tablename__ = "subscriptions"
+    __table_args__ = (
+        CheckConstraint(
+            "status <> 'active' OR (current_period_start IS NOT NULL AND "
+            "current_period_end IS NOT NULL AND current_period_end > current_period_start)",
+            name="ck_subscription_finite_period",
+        ),
+        Index(
+            "uq_subscriptions_one_active_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+            sqlite_where=text("status = 'active'"),
+        ),
+    )
 
     id: Mapped[UUID] = _uuid_pk()
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     provider_customer_id: Mapped[str | None] = mapped_column(String(255))
     provider_subscription_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    payment_attempt_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("payment_attempts.id", ondelete="SET NULL")
+    )
     plan_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    plan_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    plan_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    current_period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class PaymentAttempt(Base):
     __tablename__ = "payment_attempts"
+    __table_args__ = (
+        CheckConstraint("amount_minor > 0", name="ck_payment_attempt_positive_amount"),
+        UniqueConstraint(
+            "user_id", "idempotency_key", name="uq_payment_attempt_user_idempotency"
+        ),
+        UniqueConstraint(
+            "provider", "provider_payment_id", name="uq_payment_attempt_provider_payment"
+        ),
+    )
 
     id: Mapped[UUID] = _uuid_pk()
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
-    provider_payment_id: Mapped[str | None] = mapped_column(String(255), unique=True)
-    idempotency_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    provider_payment_id: Mapped[str | None] = mapped_column(String(255))
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    plan_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    plan_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    plan_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="RUB")
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     checkout_url: Mapped[str | None] = mapped_column(String(2048))
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class PaymentWebhookEvent(Base):
@@ -306,6 +347,9 @@ class PaymentWebhookEvent(Base):
     id: Mapped[UUID] = _uuid_pk()
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     provider_event_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    payment_attempt_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("payment_attempts.id", ondelete="SET NULL"), index=True
+    )
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_message: Mapped[str | None] = mapped_column(Text)

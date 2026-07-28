@@ -1,0 +1,387 @@
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import * as api from './api';
+import { UpgradeGate } from './UpgradeGate';
+
+vi.mock('./api', async (importOriginal) => {
+  const original = await importOriginal<typeof import('./api')>();
+  return {
+    ...original,
+    createBillingCheckout: vi.fn(),
+    getBillingPayment: vi.fn(),
+    getPendingBillingPayment: vi.fn(),
+    getBillingSubscription: vi.fn(),
+    resumeBillingPayment: vi.fn(),
+  };
+});
+
+const payment = {
+  id: 'payment-123',
+  plan_code: 'starter_monthly',
+  status: 'pending' as const,
+  amount_minor: 199_000,
+  currency: 'RUB',
+  created_at: '2026-07-28T12:00:00Z',
+};
+
+describe('UpgradeGate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.stubGlobal('crypto', { randomUUID: vi.fn(() => 'checkout-request-123') });
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: null });
+    vi.mocked(api.getPendingBillingPayment).mockResolvedValue({
+      payment: null,
+      checkout_url: null,
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('opens checkout safely and reuses one idempotency key for the attempt', async () => {
+    const replace = vi.fn();
+    const close = vi.fn();
+    const paymentWindow = {
+      location: { replace },
+      close,
+      closed: false,
+      opener: window,
+    } as unknown as Window;
+    const open = vi.spyOn(window, 'open').mockReturnValue(paymentWindow);
+    vi.mocked(api.createBillingCheckout).mockResolvedValue({
+      payment,
+      checkout_url: 'https://yoomoney.ru/checkout/payment-123',
+      created: true,
+    });
+
+    render(<UpgradeGate csrfToken="csrf-billing" />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /доработать и опубликовать/i }));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(api.createBillingCheckout).toHaveBeenCalledWith(
+      'starter_monthly',
+      'csrf-billing',
+      'checkout-request-123',
+    );
+    expect(open).toHaveBeenCalledWith('about:blank', '_blank');
+    expect(paymentWindow.opener).toBeNull();
+    expect(replace).toHaveBeenCalledWith('https://yoomoney.ru/checkout/payment-123');
+    expect(close).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent(/ожидаем подтверждение оплаты/i);
+  });
+
+  it('polls single-flight and stops after the subscription becomes active', async () => {
+    vi.spyOn(window, 'open').mockReturnValue(null);
+    vi.mocked(api.createBillingCheckout).mockResolvedValue({
+      payment,
+      checkout_url: 'https://yoomoney.ru/checkout/payment-123',
+      created: true,
+    });
+    let resolvePayment: ((value: Awaited<ReturnType<typeof api.getBillingPayment>>) => void) | null = null;
+    vi.mocked(api.getBillingPayment).mockImplementation(() => new Promise((resolve) => {
+      resolvePayment = resolve;
+    }));
+    vi.mocked(api.getBillingSubscription)
+      .mockResolvedValueOnce({ subscription: null })
+      .mockResolvedValueOnce({
+        subscription: {
+          id: 'subscription-123',
+          plan_code: 'starter_monthly',
+          status: 'active',
+          current_period_start: '2026-07-28T12:00:00Z',
+          current_period_end: '2026-08-28T12:00:00Z',
+        },
+      });
+
+    render(<UpgradeGate csrfToken="csrf-billing" pollIntervalMs={100} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /доработать и опубликовать/i }));
+    await act(async () => Promise.resolve());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(api.getBillingPayment).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(api.getBillingPayment).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      resolvePayment?.({
+        payment: { ...payment, status: 'succeeded' },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(api.getBillingSubscription).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/тариф активирован/i)).toBeVisible();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(api.getBillingPayment).toHaveBeenCalledOnce();
+  });
+
+  it('aborts polling and never updates after unmount', async () => {
+    vi.spyOn(window, 'open').mockReturnValue(null);
+    vi.mocked(api.createBillingCheckout).mockResolvedValue({
+      payment,
+      checkout_url: 'https://yoomoney.ru/checkout/payment-123',
+      created: true,
+    });
+    let capturedSignal: AbortSignal | undefined;
+    vi.mocked(api.getBillingPayment).mockImplementation((_paymentId, signal) => {
+      capturedSignal = signal;
+      return new Promise(() => undefined);
+    });
+
+    const view = render(<UpgradeGate csrfToken="csrf-billing" pollIntervalMs={100} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /доработать и опубликовать/i }));
+    await act(async () => Promise.resolve());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(capturedSignal?.aborted).toBe(false);
+
+    view.unmount();
+
+    expect(capturedSignal?.aborted).toBe(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(api.getBillingPayment).toHaveBeenCalledOnce();
+  });
+
+  it('starts a new idempotent attempt after a terminal cancellation', async () => {
+    vi.mocked(crypto.randomUUID)
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000001')
+      .mockReturnValueOnce('00000000-0000-4000-8000-000000000002');
+    vi.spyOn(window, 'open').mockReturnValue(null);
+    vi.mocked(api.createBillingCheckout).mockResolvedValue({
+      payment,
+      checkout_url: 'https://yoomoney.ru/checkout/payment-123',
+      created: true,
+    });
+    vi.mocked(api.getBillingPayment).mockResolvedValue({
+      payment: { ...payment, status: 'cancelled' },
+    });
+
+    render(<UpgradeGate csrfToken="csrf-billing" pollIntervalMs={100} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /доработать и опубликовать/i }));
+    await act(async () => Promise.resolve());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent(/оплата не завершена/i);
+
+    fireEvent.click(screen.getByRole('button', { name: /доработать и опубликовать/i }));
+    await act(async () => Promise.resolve());
+
+    expect(api.createBillingCheckout).toHaveBeenNthCalledWith(
+      1,
+      'starter_monthly',
+      'csrf-billing',
+      '00000000-0000-4000-8000-000000000001',
+    );
+    expect(api.createBillingCheckout).toHaveBeenNthCalledWith(
+      2,
+      'starter_monthly',
+      'csrf-billing',
+      '00000000-0000-4000-8000-000000000002',
+    );
+  });
+
+  it('restores an already active subscription without offering another checkout', async () => {
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({
+      subscription: {
+        id: 'subscription-123',
+        plan_code: 'starter_monthly',
+        status: 'active',
+        current_period_start: '2026-07-28T12:00:00Z',
+        current_period_end: '2026-08-28T12:00:00Z',
+      },
+    });
+
+    render(<UpgradeGate csrfToken="csrf-billing" />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText('Тариф активирован')).toBeVisible();
+    expect(screen.queryByRole('button', { name: /доработать и опубликовать/i })).not.toBeInTheDocument();
+    expect(api.createBillingCheckout).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when initial billing recovery fails and retries the check explicitly', async () => {
+    vi.mocked(api.getBillingSubscription)
+      .mockRejectedValueOnce(new api.BuilderApiError('Unavailable', {
+        status: 503,
+        code: 'billing_unavailable',
+        raw: 'Unavailable',
+        retryable: true,
+      }))
+      .mockResolvedValueOnce({ subscription: null });
+
+    render(<UpgradeGate csrfToken="csrf-billing" />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByRole('button', { name: /доработать и опубликовать/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/не удалось проверить тариф/i);
+    fireEvent.click(screen.getByRole('button', { name: /повторить проверку/i }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(api.getBillingSubscription).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('button', { name: /доработать и опубликовать/i })).toBeEnabled();
+    expect(api.createBillingCheckout).not.toHaveBeenCalled();
+  });
+
+  it('restores a pending checkout after reload and resumes polling without creating another one', async () => {
+    vi.mocked(api.getPendingBillingPayment).mockResolvedValue({
+      payment: { ...payment, status: 'creating' },
+      checkout_url: 'https://checkout.yookassa.ru/payment-123',
+    });
+    vi.mocked(api.getBillingPayment).mockImplementation(() => new Promise(() => undefined));
+
+    render(<UpgradeGate csrfToken="csrf-billing" pollIntervalMs={100} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole('link', { name: /перейти к оплате/i })).toHaveAttribute(
+      'href',
+      'https://checkout.yookassa.ru/payment-123',
+    );
+    expect(api.createBillingCheckout).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(api.getBillingPayment).toHaveBeenCalledWith(
+      'payment-123',
+      expect.any(AbortSignal),
+    );
+  });
+
+  it('fails closed when pending payment recovery fails', async () => {
+    vi.mocked(api.getPendingBillingPayment).mockRejectedValue(new Error('network down'));
+
+    render(<UpgradeGate csrfToken="csrf-billing" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/не удалось проверить тариф/i);
+    expect(screen.queryByRole('button', { name: /доработать и опубликовать/i })).not.toBeInTheDocument();
+    expect(api.createBillingCheckout).not.toHaveBeenCalled();
+  });
+
+  it('rejects an HTTPS checkout URL outside YooKassa and YooMoney', async () => {
+    const replace = vi.fn();
+    const close = vi.fn();
+    vi.spyOn(window, 'open').mockReturnValue({
+      location: { replace },
+      close,
+      closed: false,
+      opener: window,
+    } as unknown as Window);
+    vi.mocked(api.createBillingCheckout).mockResolvedValue({
+      payment,
+      checkout_url: 'https://evil.example/checkout/payment-123',
+      created: true,
+    });
+
+    render(<UpgradeGate csrfToken="csrf-billing" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /доработать и опубликовать/i }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(replace).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+    expect(screen.getByRole('alert')).toHaveTextContent(/не удалось открыть оплату/i);
+  });
+
+  it.each(['creating', 'failed'] as const)(
+    'reconciles a stored %s attempt after a crash without creating a new checkout',
+    async (recoverableStatus) => {
+    vi.mocked(api.getPendingBillingPayment).mockResolvedValue({
+      payment: { ...payment, status: recoverableStatus },
+      checkout_url: null,
+    });
+    vi.mocked(api.resumeBillingPayment).mockResolvedValue({
+      payment: { ...payment, status: 'pending' },
+      checkout_url: 'https://checkout.yookassa.ru/payment-123',
+      created: false,
+    });
+    vi.mocked(api.getBillingPayment).mockImplementation(() => new Promise(() => undefined));
+
+    render(<UpgradeGate csrfToken="csrf-billing" pollIntervalMs={100} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(api.resumeBillingPayment).toHaveBeenCalledWith('payment-123', 'csrf-billing');
+    expect(api.createBillingCheckout).not.toHaveBeenCalled();
+    expect(screen.getByRole('link', { name: /перейти к оплате/i })).toHaveAttribute(
+      'href',
+      'https://checkout.yookassa.ru/payment-123',
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(api.getBillingPayment).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('fails closed with Retry when resuming a creating attempt fails', async () => {
+    vi.mocked(api.getPendingBillingPayment).mockResolvedValue({
+      payment: { ...payment, status: 'creating' },
+      checkout_url: null,
+    });
+    vi.mocked(api.resumeBillingPayment).mockRejectedValue(new Error('resume unavailable'));
+
+    render(<UpgradeGate csrfToken="csrf-billing" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/не удалось проверить тариф/i);
+    expect(screen.getByRole('button', { name: /повторить проверку/i })).toBeEnabled();
+    expect(api.createBillingCheckout).not.toHaveBeenCalled();
+  });
+});

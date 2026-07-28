@@ -90,6 +90,42 @@ export interface AuthSessionSnapshot {
   csrf_token: string | null;
 }
 
+export type BillingPaymentStatus =
+  | 'creating'
+  | 'pending'
+  | 'waiting_for_capture'
+  | 'succeeded'
+  | 'cancelled'
+  | 'failed';
+
+export interface BillingPayment {
+  id: string;
+  plan_code: string;
+  status: BillingPaymentStatus;
+  amount_minor: number;
+  currency: string;
+  created_at: string;
+}
+
+export interface BillingCheckout {
+  payment: BillingPayment;
+  checkout_url: string;
+  created: boolean;
+}
+
+export interface PendingBillingCheckout {
+  payment: BillingPayment | null;
+  checkout_url: string | null;
+}
+
+export interface BillingSubscription {
+  id: string;
+  plan_code: string;
+  status: 'pending' | 'active' | 'past_due' | 'cancelled' | 'expired';
+  current_period_start: string;
+  current_period_end: string;
+}
+
 export interface SaasProject {
   id: string;
   tenant_id: number;

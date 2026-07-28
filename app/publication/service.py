@@ -11,7 +11,7 @@ from typing import Any, Sequence
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.saas.models import (
@@ -244,10 +244,7 @@ class PublicationService:
             select(Subscription).where(
                 Subscription.user_id == user_id,
                 Subscription.status == "active",
-                or_(
-                    Subscription.current_period_end.is_(None),
-                    Subscription.current_period_end > datetime.now(UTC),
-                ),
+                Subscription.current_period_end > datetime.now(UTC),
             ).limit(1).with_for_update()
         )
         if active is None:
