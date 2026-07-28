@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "pattern_id": "orb-pulse",
+  "version": 1,
+  "category": "launcher",
+  "status": "active",
+  "description": "Круглая кнопка запуска с мягким пульсом внимания.",
+  "parameter_schema": {
+    "type": "object",
+    "properties": {
+      "size_px": {"type": "integer", "minimum": 48, "maximum": 76},
+      "attention_delay_ms": {"type": "integer", "minimum": 5000, "maximum": 30000}
+    },
+    "additionalProperties": false
+  },
+  "incompatible_with": [],
+  "implementation_sha256": "d3873d7f63c8f54be631d4c84f19b16acc88c5d20b3d9b1648b754c2f20559dc"
+}

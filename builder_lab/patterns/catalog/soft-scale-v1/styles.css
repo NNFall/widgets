@@ -1,0 +1,6 @@
+.kaigo-motion--soft { transform-origin: right bottom; }
+.kaigo-motion--soft[data-state="opening"] { animation: kaigo-soft-open var(--kaigo-motion-duration, 420ms) cubic-bezier(.2,.75,.25,1) both; }
+.kaigo-motion--soft[data-state="closing"] { animation: kaigo-soft-close 180ms ease-in both; }
+@keyframes kaigo-soft-open { from { opacity: 0; transform: translateY(8px) scale(var(--kaigo-motion-start-scale, .96)); filter: blur(3px); } to { opacity: 1; transform: none; filter: none; } }
+@keyframes kaigo-soft-close { to { opacity: 0; transform: translateY(6px) scale(.97); } }
+@media (prefers-reduced-motion: reduce) { .kaigo-motion--soft { animation-duration: 1ms !important; } }

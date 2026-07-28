@@ -1,0 +1,5 @@
+.kaigo-composer--pill { min-height: var(--kaigo-composer-height, 50px); display: grid; grid-template-columns: minmax(0, 1fr) 38px; align-items: center; gap: 8px; padding: 5px 6px 5px 16px; border: 1px solid rgb(16 33 51 / 14%); border-radius: 999px; background: var(--kaigo-surface, #fff); }
+.kaigo-composer--pill input { min-width: 0; border: 0; outline: 0; background: transparent; color: var(--kaigo-ink, #102133); font: 450 14px/1.2 var(--kaigo-font, system-ui); }
+.kaigo-composer--pill button { width: 38px; height: 38px; border: 0; border-radius: 50%; color: var(--kaigo-on-accent, #fff); background: var(--kaigo-accent, #ff6038); font: 700 19px/1 system-ui; cursor: pointer; transition: transform .18s ease; }
+.kaigo-composer--pill button:hover { transform: translateY(-2px); }
+.kaigo-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

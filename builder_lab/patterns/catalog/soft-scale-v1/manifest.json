@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "pattern_id": "soft-scale",
+  "version": 1,
+  "category": "motion",
+  "status": "active",
+  "description": "Спокойное масштабирование и проявление для сдержанных брендов.",
+  "parameter_schema": {
+    "type": "object",
+    "properties": {
+      "duration_ms": {"type": "integer", "minimum": 220, "maximum": 700},
+      "start_scale": {"type": "number", "minimum": 0.9, "maximum": 0.99}
+    },
+    "additionalProperties": false
+  },
+  "incompatible_with": [],
+  "implementation_sha256": "e287e2b5b4af227acfe98e743983c5b928f34fe1882d789181fd8da113056812"
+}

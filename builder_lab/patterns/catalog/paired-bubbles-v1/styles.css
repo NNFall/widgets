@@ -1,0 +1,6 @@
+.kaigo-messages--paired { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.kaigo-message { max-width: 84%; padding: 11px 14px; border-radius: var(--kaigo-bubble-radius, 18px); font: 450 14px/1.45 var(--kaigo-font, system-ui); }
+.kaigo-message p { margin: 3px 0 0; }
+.kaigo-message__name { display: block; font-size: 11px; font-weight: 700; opacity: .64; }
+.kaigo-message--assistant { justify-self: start; background: var(--kaigo-muted-surface, #f2f5f4); color: var(--kaigo-ink, #102133); border-bottom-left-radius: 6px; }
+.kaigo-message--user { justify-self: end; background: var(--kaigo-accent, #ff6038); color: var(--kaigo-on-accent, #fff); border-bottom-right-radius: 6px; }

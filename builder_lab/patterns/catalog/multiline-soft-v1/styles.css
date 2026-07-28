@@ -1,0 +1,4 @@
+.kaigo-composer--soft { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; padding: 10px; border-radius: 18px; background: var(--kaigo-muted-surface, #f2f5f4); }
+.kaigo-composer--soft textarea { min-width: 0; max-height: 112px; resize: none; border: 0; outline: 0; background: transparent; color: var(--kaigo-ink, #102133); font: 450 14px/1.4 var(--kaigo-font, system-ui); scrollbar-width: thin; }
+.kaigo-composer--soft button { min-height: 38px; border: 0; border-radius: 12px; padding: 0 13px; color: var(--kaigo-on-accent, #fff); background: var(--kaigo-accent, #ff6038); font: 650 13px/1 var(--kaigo-font, system-ui); cursor: pointer; }
+.kaigo-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

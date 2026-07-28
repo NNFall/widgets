@@ -1,0 +1,6 @@
+.kaigo-motion--spring { transform-origin: right bottom; }
+.kaigo-motion--spring[data-state="opening"] { animation: kaigo-spring-reveal var(--kaigo-motion-duration, 620ms) cubic-bezier(.18,1.35,.3,1) both; }
+.kaigo-motion--spring[data-state="closing"] { animation: kaigo-spring-hide 220ms ease-in both; }
+@keyframes kaigo-spring-reveal { from { opacity: 0; transform: translateY(var(--kaigo-motion-travel, 24px)) scale(.88); } 68% { opacity: 1; transform: translateY(-4px) scale(1.02); } to { opacity: 1; transform: none; } }
+@keyframes kaigo-spring-hide { to { opacity: 0; transform: translateY(12px) scale(.96); } }
+@media (prefers-reduced-motion: reduce) { .kaigo-motion--spring { animation-duration: 1ms !important; } }

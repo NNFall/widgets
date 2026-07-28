@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "pattern_id": "paired-bubbles",
+  "version": 1,
+  "category": "messages",
+  "status": "active",
+  "description": "Классический читаемый диалог с разнесением реплик AI и клиента.",
+  "parameter_schema": {
+    "type": "object",
+    "properties": {
+      "bubble_radius_px": {"type": "integer", "minimum": 12, "maximum": 24},
+      "show_names": {"type": "boolean"}
+    },
+    "additionalProperties": false
+  },
+  "incompatible_with": [],
+  "implementation_sha256": "6bbfe62d6b42a2d7894e750aadd3c8ae56c30ce62c40510e8eb9eadccb8d8be8"
+}

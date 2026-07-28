@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "pattern_id": "advisor-cards",
+  "version": 1,
+  "category": "messages",
+  "status": "active",
+  "description": "Реплики AI как спокойные экспертные карточки с заметными действиями.",
+  "parameter_schema": {
+    "type": "object",
+    "properties": {
+      "card_radius_px": {"type": "integer", "minimum": 14, "maximum": 28},
+      "accent_edge_px": {"type": "integer", "minimum": 2, "maximum": 6}
+    },
+    "additionalProperties": false
+  },
+  "incompatible_with": [],
+  "implementation_sha256": "646c454e187b5fdfff5c5946744bef08b5f469e254d23678ccc8f352b27cdd88"
+}

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "pattern_id": "multiline-soft",
+  "version": 1,
+  "category": "composer",
+  "status": "active",
+  "description": "Мягкая многострочная форма для подробных вопросов без системного скролла.",
+  "parameter_schema": {
+    "type": "object",
+    "properties": {
+      "placeholder": {"type": "string", "maxLength": 64},
+      "max_rows": {"type": "integer", "minimum": 2, "maximum": 5}
+    },
+    "additionalProperties": false
+  },
+  "incompatible_with": [],
+  "implementation_sha256": "42b5ac35c7eb08849f823aebc7283d658aeeb2f3edd3143c979301cb6e357669"
+}

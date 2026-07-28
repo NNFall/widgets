@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "pattern_id": "single-line-pill",
+  "version": 1,
+  "category": "composer",
+  "status": "active",
+  "description": "Компактная однострочная форма сообщения с круглой кнопкой отправки.",
+  "parameter_schema": {
+    "type": "object",
+    "properties": {
+      "placeholder": {"type": "string", "maxLength": 64},
+      "height_px": {"type": "integer", "minimum": 44, "maximum": 60}
+    },
+    "additionalProperties": false
+  },
+  "incompatible_with": [],
+  "implementation_sha256": "99e89973360480d4fba022a0cb3daf36f4b1e8fec0aaad79bc16db1f83cf5f98"
+}

@@ -1,0 +1,19 @@
+.kaigo-launcher--peek {
+  min-height: 48px;
+  border: 1px solid color-mix(in srgb, var(--kaigo-accent, #ff6038) 32%, transparent);
+  border-radius: 18px 0 0 18px;
+  padding: 0 18px 0 14px;
+  color: var(--kaigo-ink, #102133);
+  background: color-mix(in srgb, var(--kaigo-surface, #fff) 92%, transparent);
+  box-shadow: 0 12px 30px rgb(16 33 51 / 14%);
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font: 650 14px/1 var(--kaigo-font, system-ui);
+  cursor: pointer;
+  backdrop-filter: blur(16px);
+}
+.kaigo-launcher__dot { width: 9px; height: 9px; border-radius: 50%; background: var(--kaigo-accent, #ff6038); }
+.kaigo-launcher--peek[data-attention="true"] { animation: kaigo-peek 1.1s cubic-bezier(.2,.8,.2,1) 2; }
+@keyframes kaigo-peek { 50% { transform: translateX(-12px); } }
+@media (prefers-reduced-motion: reduce) { .kaigo-launcher--peek { animation: none !important; } }

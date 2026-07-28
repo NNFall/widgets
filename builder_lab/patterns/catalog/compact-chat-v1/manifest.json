@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "pattern_id": "compact-chat",
+  "version": 1,
+  "category": "shell",
+  "status": "active",
+  "description": "Компактная чат-панель для консультации без захвата основной части экрана.",
+  "parameter_schema": {
+    "type": "object",
+    "properties": {
+      "width_px": {"type": "integer", "minimum": 320, "maximum": 440},
+      "height_px": {"type": "integer", "minimum": 420, "maximum": 680},
+      "radius_px": {"type": "integer", "minimum": 16, "maximum": 32}
+    },
+    "additionalProperties": false
+  },
+  "incompatible_with": [],
+  "implementation_sha256": "b94406315369b9a8d490a5b5132661291ebf6c2a3d866c6dc2b1fca8bd594340"
+}

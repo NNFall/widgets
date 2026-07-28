@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "pattern_id": "spring-reveal",
+  "version": 1,
+  "category": "motion",
+  "status": "active",
+  "description": "Выразительное раскрытие с контролируемой пружинной динамикой.",
+  "parameter_schema": {
+    "type": "object",
+    "properties": {
+      "duration_ms": {"type": "integer", "minimum": 360, "maximum": 900},
+      "travel_px": {"type": "integer", "minimum": 10, "maximum": 36}
+    },
+    "additionalProperties": false
+  },
+  "incompatible_with": [],
+  "implementation_sha256": "b65d72dd3bc17b1ff2f7e591c9b8d5b369fac42b0e13ff16ac65aa27964fd95e"
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "pattern_id": "floating-card",
+  "version": 1,
+  "category": "shell",
+  "status": "active",
+  "description": "Воздушная карточка с выразительным заголовком и мягкой глубиной.",
+  "parameter_schema": {
+    "type": "object",
+    "properties": {
+      "width_px": {"type": "integer", "minimum": 340, "maximum": 480},
+      "height_px": {"type": "integer", "minimum": 460, "maximum": 720},
+      "glass_opacity": {"type": "number", "minimum": 0.82, "maximum": 1}
+    },
+    "additionalProperties": false
+  },
+  "incompatible_with": [],
+  "implementation_sha256": "27e2c771a834ecfb3be0f8c03319540171ff25a514d3bd4b26949d9db723d0fb"
+}

@@ -1,0 +1,18 @@
+.kaigo-launcher--orb {
+  width: var(--kaigo-launcher-size, 60px);
+  height: var(--kaigo-launcher-size, 60px);
+  border: 0;
+  border-radius: 999px;
+  color: var(--kaigo-on-accent, #fff);
+  background: var(--kaigo-accent, #ff6038);
+  box-shadow: 0 14px 34px color-mix(in srgb, var(--kaigo-accent, #ff6038) 30%, transparent);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  position: relative;
+}
+.kaigo-launcher__spark { position: absolute; inset: 8px auto auto 10px; opacity: .75; }
+.kaigo-launcher__label { font: 700 15px/1 var(--kaigo-font, system-ui); }
+.kaigo-launcher--orb[data-attention="true"] { animation: kaigo-orb-pulse 1.8s ease-in-out 2; }
+@keyframes kaigo-orb-pulse { 50% { transform: translateY(-5px) scale(1.06); } }
+@media (prefers-reduced-motion: reduce) { .kaigo-launcher--orb { animation: none !important; } }

@@ -1,0 +1,18 @@
+.kaigo-shell--compact {
+  width: min(var(--kaigo-shell-width, 390px), calc(100vw - 24px));
+  height: min(var(--kaigo-shell-height, 560px), calc(100dvh - 24px));
+  border: 1px solid color-mix(in srgb, var(--kaigo-ink, #102133) 12%, transparent);
+  border-radius: var(--kaigo-shell-radius, 24px);
+  background: var(--kaigo-surface, #fff);
+  color: var(--kaigo-ink, #102133);
+  box-shadow: 0 24px 80px rgb(16 33 51 / 20%);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: clip;
+}
+.kaigo-shell__header, .kaigo-shell__footer { padding: 16px; }
+.kaigo-shell__header { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgb(16 33 51 / 8%); }
+.kaigo-shell__body { min-height: 0; overflow-y: auto; padding: 16px; scrollbar-width: thin; }
+.kaigo-shell__footer { border-top: 1px solid rgb(16 33 51 / 8%); }
+.kaigo-shell__close { border: 0; background: transparent; color: inherit; font: 24px/1 system-ui; cursor: pointer; }
+@media (max-width: 520px) { .kaigo-shell--compact { width: calc(100vw - 20px); height: min(72dvh, 620px); } }
