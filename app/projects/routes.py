@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import secrets
@@ -25,6 +26,7 @@ from builder_lab.validation import validate_artifact
 
 TERMINAL_STATES = frozenset({"completed", "failed", "cancelled"})
 SSE_PAGE_SIZE = 100
+PREVIEW_DRAFT_CANDIDATE_LIMIT = 50
 PREVIEW_CHANNEL_PATTERN = re.compile(r"^[A-Za-z0-9_-]{22,96}$")
 CHAT_REQUEST_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{7,95}$")
 PROJECT_CHAT_SESSION_KEY = "project_chat_session_id"
@@ -54,6 +56,15 @@ async def _require_csrf(request: web.Request) -> None:
     expected, supplied = session.get("csrf_token"), request.headers.get("X-CSRF-Token")
     if not isinstance(expected, str) or not supplied or not secrets.compare_digest(expected, supplied):
         raise web.HTTPForbidden(text=_error("csrf_failed"), content_type="application/json")
+
+
+def _chat_service_session_id(session, *, user_id: int, tenant_id: int) -> str:
+    identity = session.identity
+    if isinstance(identity, str) and identity:
+        material = b"authenticated-session\0" + identity.encode("utf-8")
+    else:
+        material = f"owner-fallback\0{tenant_id}:{user_id}".encode("ascii")
+    return hashlib.sha256(material).hexdigest()
 
 
 def _uuid(value: str) -> UUID:
@@ -226,12 +237,14 @@ async def _preview_candidate(
         GenerationEvent.run_id == run_id,
         GenerationEvent.event_type == "artifact.draft_staged",
     )
-    draft_statement = draft_statement.order_by(GenerationEvent.sequence.desc())
-    if revision is None:
-        # The summary endpoint only needs a recent restorable candidate. Exact
-        # runtime reads must not hide an older requested revision behind an
-        # arbitrary window of newer draft events.
-        draft_statement = draft_statement.limit(50)
+    if revision is not None:
+        draft_statement = draft_statement.where(
+            GenerationEvent.payload["artifact"]["revision"].as_integer()
+            == revision
+        )
+    draft_statement = draft_statement.order_by(
+        GenerationEvent.sequence.desc()
+    ).limit(PREVIEW_DRAFT_CANDIDATE_LIMIT)
     drafts = (await database.execute(draft_statement)).scalars().all()
     for payload in drafts:
         candidate_payload = payload.get("artifact") if isinstance(payload, dict) else None
@@ -447,9 +460,12 @@ async def run_chat(request: web.Request) -> web.Response:
             retryable=True,
         )
     session = await get_session(request)
-    session_id = session.get(PROJECT_CHAT_SESSION_KEY)
-    if not isinstance(session_id, str):
-        session_id = secrets.token_urlsafe(24)
+    session_id = _chat_service_session_id(
+        session,
+        user_id=user_id,
+        tenant_id=tenant_id,
+    )
+    if session.get(PROJECT_CHAT_SESSION_KEY) != session_id:
         session[PROJECT_CHAT_SESSION_KEY] = session_id
     try:
         reply = await service.reply(

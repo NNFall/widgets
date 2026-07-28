@@ -33,6 +33,11 @@ from tests.builder_lab_cases.test_validation import artifact
 POSTGRES_URL = os.getenv("KAIGO_TEST_POSTGRES_URL")
 
 
+async def _wait_until(predicate) -> None:
+    while not predicate():
+        await asyncio.sleep(0.01)
+
+
 async def _project_app(tmp_path, *, configure_app=None):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'routes.db'}")
     async with engine.begin() as connection:
@@ -720,9 +725,14 @@ async def test_preview_document_can_render_an_exact_restorable_draft(tmp_path) -
         response = await client.get(
             f"/api/runs/{run_id}/preview/document?revision=4&channel={channel}"
         )
+        missing = await client.get(
+            f"/api/runs/{run_id}/preview/document?revision=9999&channel={channel}"
+        )
 
         assert response.status == 200
         assert 'data-region="launcher"' in await response.text()
+        assert missing.status == 409
+        assert (await missing.json()) == {"error": {"code": "preview_not_ready"}}
     finally:
         await client.close()
         await engine.dispose()
@@ -735,10 +745,12 @@ async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(tmp_pa
 
         def __init__(self) -> None:
             self.requests: list[ModelRequest] = []
+            self.release = asyncio.Event()
 
         async def generate(self, request: ModelRequest, *, model: str) -> ModelResponse:
             assert model == "fake-chat-model"
             self.requests.append(request)
+            await self.release.wait()
             return ModelResponse(
                 text="Ответ из routed chat",
                 usage=ModelUsage(input_tokens=9, output_tokens=6, thinking_tokens=1),
@@ -830,16 +842,23 @@ async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(tmp_pa
         without_csrf = await client.post(f"/api/runs/{run_id}/chat", json=payload)
         assert without_csrf.status == 403
 
-        first = await client.post(
+        first_request = asyncio.create_task(client.post(
             f"/api/runs/{run_id}/chat",
             json=payload,
             headers={"X-CSRF-Token": "test-csrf"},
-        )
-        duplicate = await client.post(
+        ))
+        duplicate_request = asyncio.create_task(client.post(
             f"/api/runs/{run_id}/chat",
             json=payload,
             headers={"X-CSRF-Token": "test-csrf"},
+        ))
+        await asyncio.wait_for(
+            _wait_until(lambda: len(provider.requests) >= 1),
+            timeout=2,
         )
+        await asyncio.sleep(0.05)
+        provider.release.set()
+        first, duplicate = await asyncio.gather(first_request, duplicate_request)
         assert first.status == duplicate.status == 200
         assert await first.json() == await duplicate.json() == {
             "request_id": "request-route-123",
