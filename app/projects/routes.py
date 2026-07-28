@@ -20,7 +20,7 @@ from app.chat import (
 from app.projects.serializers import serialize_artifact, serialize_event, serialize_project, serialize_run
 from app.saas.models import GenerationArtifact, GenerationEvent, GenerationRun, Project, UserIdentity
 from builder_lab.models import BuilderRequest, EngineName, WidgetArtifact
-from builder_lab.preview import PREVIEW_CSP, build_preview_document
+from builder_lab.preview import PREVIEW_CSP, build_trusted_runtime_document
 from builder_lab.validation import validate_artifact
 
 TERMINAL_STATES = frozenset({"completed", "failed", "cancelled"})
@@ -335,7 +335,7 @@ async def get_preview_document(request: web.Request) -> web.Response:
             text=_error("preview_not_ready"), content_type="application/json"
         )
     return web.Response(
-        text=build_preview_document(candidate, channel_id=channel),
+        text=build_trusted_runtime_document(candidate, channel_id=channel),
         content_type="text/html",
         charset="utf-8",
         headers={

@@ -558,7 +558,13 @@ async def test_preview_document_serves_fixed_runtime_for_exact_durable_artifact(
             )
             database.add(run)
             await database.flush()
-            candidate = artifact(revision=3)
+            candidate = artifact(
+                revision=3,
+                javascript=(
+                    "window.__owner_preview_payload='must-not-run';"
+                    "document.body.replaceChildren();"
+                ),
+            )
             database.add(GenerationArtifact(
                 run_id=run.id,
                 revision=3,
@@ -586,6 +592,8 @@ async def test_preview_document_serves_fixed_runtime_for_exact_durable_artifact(
         assert 'data-region="launcher"' in document
         assert "type: 'chat.request'" in document
         assert "kaigo-builder-preview" in document
+        assert "window.__owner_preview_payload" not in document
+        assert "data-kaigo-generated" not in document
         assert response.headers["Content-Security-Policy"] == PREVIEW_CSP
         assert response.headers["Cache-Control"] == "no-store"
         assert response.headers["X-Content-Type-Options"] == "nosniff"

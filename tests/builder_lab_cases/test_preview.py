@@ -1,6 +1,11 @@
 import unittest
 
-from builder_lab.preview import PREVIEW_CSP, build_preview_document, preview_iframe_attributes
+from builder_lab.preview import (
+    PREVIEW_CSP,
+    build_preview_document,
+    build_trusted_runtime_document,
+    preview_iframe_attributes,
+)
 from tests.builder_lab_cases.test_validation import artifact
 
 
@@ -56,6 +61,31 @@ class PreviewDocumentTests(unittest.TestCase):
             document.index("data-kaigo-generated"),
             document.index("type: 'rendered'"),
         )
+
+    def test_trusted_runtime_never_embeds_or_executes_generated_javascript(self):
+        marker = "trusted-runtime-malicious-payload"
+        candidate = artifact(
+            revision=9,
+            javascript=(
+                f"window.__payload='{marker}';"
+                "document.body.replaceChildren(document.createTextNode('owned'));"
+            ),
+        )
+
+        trusted = build_trusted_runtime_document(
+            candidate,
+            channel_id="channel-1234567890abcdef",
+        )
+        legacy = build_preview_document(
+            candidate,
+            channel_id="channel-1234567890abcdef",
+        )
+
+        self.assertNotIn(marker, trusted)
+        self.assertNotIn("data-kaigo-generated", trusted)
+        self.assertIn("type: 'chat.request'", trusted)
+        self.assertIn(marker, legacy)
+        self.assertIn("data-kaigo-generated", legacy)
 
     def test_generated_script_terminator_is_escaped_case_insensitively(self):
         document = build_preview_document(

@@ -2,7 +2,7 @@ import unittest
 
 from playwright.async_api import async_playwright
 
-from builder_lab.preview import build_preview_document
+from builder_lab.preview import build_preview_document, build_trusted_runtime_document
 from tests.builder_lab_cases.test_validation import artifact
 
 
@@ -19,8 +19,9 @@ class PreviewRuntimeBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.browser.close()
         await self.playwright.stop()
 
-    async def mount_runtime(self, candidate=None):
-        document = build_preview_document(
+    async def mount_runtime(self, candidate=None, *, trusted=False):
+        builder = build_trusted_runtime_document if trusted else build_preview_document
+        document = builder(
             candidate or artifact(revision=9), channel_id=CHANNEL
         )
         await self.page.set_content("<main><iframe id='preview' sandbox='allow-scripts'></iframe></main>")
@@ -76,6 +77,45 @@ class PreviewRuntimeBrowserTests(unittest.IsolatedAsyncioTestCase):
             ),
             "yes",
         )
+
+    async def test_trusted_runtime_survives_generated_dom_takeover_payload(self):
+        marker = "trusted-runtime-dom-takeover"
+        base = artifact(revision=9)
+        candidate = artifact(
+            revision=9,
+            body_html=base.body_html.replace(
+                '<header class="kaigo-widget__header" data-region="header">',
+                '<header class="kaigo-widget__header" data-region="header">'
+                '<button type="button" data-action="close">Close</button>',
+            ),
+            javascript=(
+                f"window.__payload='{marker}';"
+                "document.body.replaceChildren(document.createTextNode('owned'));"
+            ),
+        )
+        document = build_trusted_runtime_document(candidate, channel_id=CHANNEL)
+
+        self.assertNotIn(marker, document)
+        self.assertNotIn("data-kaigo-generated", document)
+        frame = await self.mount_runtime(candidate, trusted=True)
+        root = frame.locator('[data-region="root"]')
+        launcher = frame.locator('[data-region="launcher"]')
+
+        self.assertEqual(await root.count(), 1)
+        await launcher.click()
+        self.assertEqual(await root.get_attribute("data-state"), "open")
+        input_box = frame.locator('[data-kaigo-runtime-input="true"]')
+        await input_box.fill("Trusted question")
+        await input_box.press("Enter")
+        await self.page.wait_for_function(
+            "window.bridgeEvents.some(event => "
+            "event.type === 'chat.request' && event.text === 'Trusted question')"
+        )
+        await self.page.evaluate("window.releaseBridgeResponse()")
+        await frame.locator('[data-kaigo-runtime-message="assistant"]').wait_for()
+        await frame.locator('[data-action="close"]').click()
+        self.assertEqual(await root.get_attribute("data-state"), "closed")
+        self.assertTrue(await launcher.is_visible())
 
     async def test_runtime_hidden_suggestions_cannot_be_reshown_by_generated_css(self):
         base = artifact(revision=9)

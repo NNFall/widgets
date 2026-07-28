@@ -43,18 +43,19 @@ def _safe_script(javascript: str) -> str:
     )
 
 
-def build_preview_document(
-    artifact: WidgetArtifact, *, channel_id: str = DEFAULT_VISUAL_CHANNEL
+def _build_runtime_document(
+    artifact: WidgetArtifact,
+    *,
+    channel_id: str,
+    include_generated_javascript: bool,
 ) -> str:
-    """Combine a validated artifact with the fixed, network-free preview runtime."""
-
     if not _CHANNEL_ID.fullmatch(channel_id):
         raise ValueError("preview channel_id is invalid")
     csp = escape(PREVIEW_CSP, quote=True)
     css = _safe_style(artifact.css)
     generated_javascript = _safe_script(artifact.javascript)
     generated_script = ""
-    if generated_javascript.strip():
+    if include_generated_javascript and generated_javascript.strip():
         generated_script = f"""
 <script data-kaigo-generated>
 try {{
@@ -379,3 +380,27 @@ try {{
 {generated_script}
 </body>
 </html>"""
+
+
+def build_preview_document(
+    artifact: WidgetArtifact, *, channel_id: str = DEFAULT_VISUAL_CHANNEL
+) -> str:
+    """Build the legacy Builder Lab preview, including generated JavaScript."""
+
+    return _build_runtime_document(
+        artifact,
+        channel_id=channel_id,
+        include_generated_javascript=True,
+    )
+
+
+def build_trusted_runtime_document(
+    artifact: WidgetArtifact, *, channel_id: str = DEFAULT_VISUAL_CHANNEL
+) -> str:
+    """Build a trusted runtime that never embeds or executes artifact JavaScript."""
+
+    return _build_runtime_document(
+        artifact,
+        channel_id=channel_id,
+        include_generated_javascript=False,
+    )
