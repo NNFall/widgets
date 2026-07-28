@@ -2,6 +2,7 @@
 
 import os
 from dataclasses import dataclass, field
+from ipaddress import ip_network
 from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
@@ -24,6 +25,11 @@ class AppConfig:
     yandex_oauth_client_id: str | None = None
     yandex_oauth_client_secret: str | None = field(default=None, repr=False)
     publication_allow_insecure_origins: bool = False
+    publication_chat_signing_secret: str | None = field(default=None, repr=False)
+    publication_chat_capability_ttl_seconds: int = 300
+    publication_chat_key_rate_limit_requests: int = 120
+    publication_chat_ip_rate_limit_requests: int = 60
+    publication_chat_trusted_proxy_cidrs: tuple[str, ...] = ()
     chat_provider_api_key: str | None = field(default=None, repr=False)
     chat_provider_base_url: str = 'https://generativelanguage.googleapis.com'
     chat_model: str = 'gemini-3.5-flash-lite'
@@ -43,6 +49,26 @@ class AppConfig:
         self.chat_provider_base_url = self.chat_provider_base_url.strip().rstrip('/')
         if not self.chat_model:
             raise ValueError('chat_model must not be blank')
+        if (
+            self.environment.strip().lower() == 'production'
+            and self.chat_provider_api_key
+            and (
+                not self.publication_chat_signing_secret
+                or len(self.publication_chat_signing_secret.strip().encode('utf-8')) < 32
+            )
+        ):
+            raise ValueError(
+                'publication_chat_signing_secret must be at least 32 bytes in production'
+            )
+        trusted_proxy_cidrs: list[str] = []
+        for raw_cidr in self.publication_chat_trusted_proxy_cidrs:
+            try:
+                trusted_proxy_cidrs.append(str(ip_network(raw_cidr, strict=False)))
+            except ValueError as error:
+                raise ValueError(
+                    f'publication trusted proxy CIDR is invalid: {raw_cidr}'
+                ) from error
+        self.publication_chat_trusted_proxy_cidrs = tuple(trusted_proxy_cidrs)
         parsed = urlsplit(self.chat_provider_base_url)
         if parsed.scheme != 'https' or not parsed.netloc:
             raise ValueError('chat_provider_base_url must be an absolute https URL')
@@ -59,6 +85,24 @@ class AppConfig:
             ('chat_rate_limit_window_seconds', self.chat_rate_limit_window_seconds, 1, 3_600),
             ('chat_max_requests_per_session', self.chat_max_requests_per_session, 1, 1_000),
             ('chat_global_concurrency', self.chat_global_concurrency, 1, 32),
+            (
+                'publication_chat_capability_ttl_seconds',
+                self.publication_chat_capability_ttl_seconds,
+                30,
+                3_600,
+            ),
+            (
+                'publication_chat_key_rate_limit_requests',
+                self.publication_chat_key_rate_limit_requests,
+                1,
+                10_000,
+            ),
+            (
+                'publication_chat_ip_rate_limit_requests',
+                self.publication_chat_ip_rate_limit_requests,
+                1,
+                1_000,
+            ),
         )
         for name, value, minimum, maximum in bounds:
             if isinstance(value, bool) or not minimum <= value <= maximum:
@@ -128,6 +172,25 @@ def load_config() -> AppConfig:
         yandex_oauth_client_secret=os.getenv('YANDEX_OAUTH_CLIENT_SECRET'),
         publication_allow_insecure_origins=_env_flag(
             'KAIGO_PUBLICATION_ALLOW_INSECURE_ORIGINS'
+        ),
+        publication_chat_signing_secret=_first_nonblank(
+            'KAIGO_PUBLICATION_CHAT_SIGNING_SECRET'
+        ),
+        publication_chat_capability_ttl_seconds=_env_int(
+            'KAIGO_PUBLICATION_CHAT_CAPABILITY_TTL_SECONDS', 300
+        ),
+        publication_chat_key_rate_limit_requests=_env_int(
+            'KAIGO_PUBLICATION_CHAT_KEY_RATE_LIMIT_REQUESTS', 120
+        ),
+        publication_chat_ip_rate_limit_requests=_env_int(
+            'KAIGO_PUBLICATION_CHAT_IP_RATE_LIMIT_REQUESTS', 60
+        ),
+        publication_chat_trusted_proxy_cidrs=tuple(
+            part.strip()
+            for part in os.getenv(
+                'KAIGO_PUBLICATION_CHAT_TRUSTED_PROXY_CIDRS', ''
+            ).split(',')
+            if part.strip()
         ),
         chat_provider_api_key=_first_nonblank(
             'GEMINI_API_KEY', 'GOOGLE_AI_API_KEY', 'GOOGLE_API_KEY'

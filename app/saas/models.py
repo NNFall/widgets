@@ -10,6 +10,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     Index,
     JSON,
@@ -313,6 +314,16 @@ class PaymentWebhookEvent(Base):
 
 class Publication(Base):
     __tablename__ = "publications"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["id", "active_release_id"],
+            ["publication_releases.publication_id", "publication_releases.id"],
+            name="fk_publications_active_release_membership",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+    )
 
     id: Mapped[UUID] = _uuid_pk()
     project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), unique=True, nullable=False)
@@ -339,6 +350,11 @@ class PublicationRelease(Base):
             "publication_id",
             "artifact_id",
             name="uq_publication_release_artifact",
+        ),
+        UniqueConstraint(
+            "publication_id",
+            "id",
+            name="uq_publication_release_membership",
         ),
     )
 

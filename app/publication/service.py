@@ -68,6 +68,7 @@ class PublishedRelease:
     allowed_domains: tuple[str, ...]
     manifest: dict[str, Any]
     checksum: str
+    created: bool = False
 
 
 class PublicationService:
@@ -153,7 +154,7 @@ class PublicationService:
                 self._verify_release(existing)
                 publication.active_release_id = existing.id
                 publication.state = "published"
-                return self._snapshot(publication, existing)
+                return self._snapshot(publication, existing, created=False)
 
             manifest = {
                 "version": 1,
@@ -184,7 +185,7 @@ class PublicationService:
             await database.flush()
             publication.active_release_id = release.id
             publication.state = "published"
-            return self._snapshot(publication, release)
+            return self._snapshot(publication, release, created=True)
 
     async def rollback(
         self,
@@ -227,7 +228,7 @@ class PublicationService:
             self._verify_release(release)
             publication.active_release_id = release.id
             publication.state = "published"
-            return self._snapshot(publication, release)
+            return self._snapshot(publication, release, created=False)
 
     @staticmethod
     async def _require_entitlement(database: AsyncSession, user_id: int) -> None:
@@ -273,7 +274,7 @@ class PublicationService:
             if release.publication_id != publication.id:
                 raise ReleaseCorrupt("active release belongs to another publication")
             self._verify_release(release)
-            return self._snapshot(publication, release)
+            return self._snapshot(publication, release, created=False)
 
     async def _select_artifact(
         self,
@@ -373,6 +374,9 @@ class PublicationService:
         except ValueError as error:
             raise InvalidAllowedDomain("invalid origin port") from error
         host = parsed.hostname.rstrip(".").lower()
+        browser_address = _parse_browser_ipv4(host)
+        if browser_address is not None and host != str(browser_address):
+            raise InvalidAllowedDomain("legacy numeric IPv4 origins are disabled")
         try:
             address = ipaddress.ip_address(host)
         except ValueError:
@@ -394,6 +398,10 @@ class PublicationService:
         default_port = 443 if scheme == "https" else 80
         suffix = f":{port}" if port is not None and port != default_port else ""
         return f"{scheme}://{host}{suffix}"
+
+    def normalize_origin(self, value: str) -> str:
+        """Normalize an embed origin with the service's production policy."""
+        return self._normalize_origin(value)
 
     def _verify_release(self, release: PublicationRelease) -> None:
         if self.manifest_checksum(release.asset_manifest) != release.checksum:
@@ -417,6 +425,8 @@ class PublicationService:
         self,
         publication: Publication,
         release: PublicationRelease,
+        *,
+        created: bool,
     ) -> PublishedRelease:
         try:
             domains = tuple(
@@ -433,7 +443,43 @@ class PublicationService:
             allowed_domains=domains,
             manifest=dict(release.asset_manifest),
             checksum=release.checksum,
+            created=created,
         )
+
+
+def _parse_browser_ipv4(host: str) -> ipaddress.IPv4Address | None:
+    """Parse WHATWG-style numeric IPv4 hosts without performing DNS."""
+    if not host or any(char not in "0123456789abcdefxABCDEF." for char in host):
+        return None
+    raw_parts = host.split(".")
+    if not 1 <= len(raw_parts) <= 4 or any(not part for part in raw_parts):
+        return None
+    numbers: list[int] = []
+    for part in raw_parts:
+        base = 10
+        digits = part
+        if part.lower().startswith("0x"):
+            base, digits = 16, part[2:]
+        elif len(part) > 1 and part.startswith("0"):
+            base, digits = 8, part[1:]
+        if not digits:
+            return None
+        try:
+            numbers.append(int(digits, base))
+        except ValueError:
+            return None
+    if any(value > 255 for value in numbers[:-1]):
+        return None
+    final_limit = (256 ** (5 - len(numbers))) - 1
+    if numbers[-1] > final_limit:
+        return None
+    numeric = numbers[-1]
+    for index, value in enumerate(numbers[:-1]):
+        numeric += value * (256 ** (3 - index))
+    try:
+        return ipaddress.IPv4Address(numeric)
+    except ipaddress.AddressValueError:
+        return None
 
 
 __all__ = [

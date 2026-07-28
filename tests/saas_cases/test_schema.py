@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import CheckConstraint, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKeyConstraint, UniqueConstraint
 
 from app.db.base import Base
 from app.saas import models as saas_models  # noqa: F401
@@ -69,12 +69,32 @@ def test_publication_release_constraints_are_artifact_idempotent_and_referential
     assert "uq_publication_release_revision" not in _constraint_names(
         "publication_releases", UniqueConstraint
     )
+    assert "uq_publication_release_membership" in _constraint_names(
+        "publication_releases", UniqueConstraint
+    )
     active_release = next(
         foreign_key
         for foreign_key in Base.metadata.tables["publications"].foreign_keys
         if foreign_key.parent.name == "active_release_id"
+        and foreign_key.constraint.name == "fk_publications_active_release_id"
     )
     assert active_release.target_fullname == "publication_releases.id"
     assert active_release.ondelete == "SET NULL"
     assert active_release.deferrable is True
     assert active_release.initially == "DEFERRED"
+    composite = next(
+        constraint
+        for constraint in Base.metadata.tables["publications"].constraints
+        if isinstance(constraint, ForeignKeyConstraint)
+        and constraint.name == "fk_publications_active_release_membership"
+    )
+    assert tuple(element.parent.name for element in composite.elements) == (
+        "id",
+        "active_release_id",
+    )
+    assert tuple(element.target_fullname for element in composite.elements) == (
+        "publication_releases.publication_id",
+        "publication_releases.id",
+    )
+    assert composite.deferrable is True
+    assert composite.initially == "DEFERRED"

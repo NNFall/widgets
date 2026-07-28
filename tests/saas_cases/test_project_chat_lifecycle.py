@@ -67,6 +67,9 @@ def _config(**changes) -> AppConfig:
         ("chat_global_concurrency", 0),
         ("chat_input_price_microusd_per_million", -1),
         ("chat_output_price_microusd_per_million", -1),
+        ("publication_chat_capability_ttl_seconds", 29),
+        ("publication_chat_key_rate_limit_requests", 0),
+        ("publication_chat_ip_rate_limit_requests", 0),
     ],
 )
 def test_chat_config_is_strictly_bounded(field: str, value: object) -> None:
@@ -75,9 +78,44 @@ def test_chat_config_is_strictly_bounded(field: str, value: object) -> None:
 
 
 def test_chat_provider_secret_is_redacted_from_config_repr() -> None:
-    rendered = repr(_config(chat_provider_api_key="never-print-this-secret"))
+    rendered = repr(
+        _config(
+            chat_provider_api_key="never-print-this-secret",
+            publication_chat_signing_secret="never-print-publication-secret",
+        )
+    )
     assert "never-print-this-secret" not in rendered
     assert "chat_provider_api_key" not in rendered
+    assert "never-print-publication-secret" not in rendered
+    assert "publication_chat_signing_secret" not in rendered
+
+
+def test_production_chat_requires_a_stable_publication_signing_secret() -> None:
+    with pytest.raises(ValueError, match="publication_chat_signing_secret"):
+        _config(environment="production", publication_chat_signing_secret=None)
+    with pytest.raises(ValueError, match="publication_chat_signing_secret"):
+        _config(environment="production", publication_chat_signing_secret="too-short")
+    with pytest.raises(ValueError, match="publication_chat_signing_secret"):
+        _config(environment="production", publication_chat_signing_secret=" " * 32)
+
+    config = _config(
+        environment="production",
+        publication_chat_signing_secret="p" * 32,
+    )
+    assert "p" * 32 not in repr(config)
+
+
+def test_publication_trusted_proxy_cidrs_are_validated() -> None:
+    with pytest.raises(ValueError, match="trusted proxy CIDR"):
+        _config(publication_chat_trusted_proxy_cidrs=("not-a-network",))
+
+    config = _config(
+        publication_chat_trusted_proxy_cidrs=("127.0.0.1/8", "2001:db8::1/48")
+    )
+    assert config.publication_chat_trusted_proxy_cidrs == (
+        "127.0.0.0/8",
+        "2001:db8::/48",
+    )
 
 
 @pytest.mark.asyncio

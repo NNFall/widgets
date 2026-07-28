@@ -36,6 +36,14 @@ def test_public_auth_configuration_is_loaded_without_leaking_secrets(
     monkeypatch.setenv("YANDEX_OAUTH_CLIENT_SECRET", "yandex-secret")
     monkeypatch.setenv("KAIGO_SESSION_COOKIE_NAME", "custom_session")
     monkeypatch.setenv("KAIGO_SESSION_TTL_SECONDS", "7200")
+    monkeypatch.setenv("KAIGO_PUBLICATION_CHAT_SIGNING_SECRET", "publication-secret")
+    monkeypatch.setenv("KAIGO_PUBLICATION_CHAT_CAPABILITY_TTL_SECONDS", "180")
+    monkeypatch.setenv("KAIGO_PUBLICATION_CHAT_KEY_RATE_LIMIT_REQUESTS", "90")
+    monkeypatch.setenv("KAIGO_PUBLICATION_CHAT_IP_RATE_LIMIT_REQUESTS", "30")
+    monkeypatch.setenv(
+        "KAIGO_PUBLICATION_CHAT_TRUSTED_PROXY_CIDRS",
+        "127.0.0.0/8, 10.0.0.0/8",
+    )
 
     config = load_config()
 
@@ -45,8 +53,16 @@ def test_public_auth_configuration_is_loaded_without_leaking_secrets(
     assert config.session_ttl_seconds == 7200
     assert config.google_oauth_client_id == "google-client"
     assert config.yandex_oauth_client_id == "yandex-client"
+    assert config.publication_chat_capability_ttl_seconds == 180
+    assert config.publication_chat_key_rate_limit_requests == 90
+    assert config.publication_chat_ip_rate_limit_requests == 30
+    assert config.publication_chat_trusted_proxy_cidrs == (
+        "127.0.0.0/8",
+        "10.0.0.0/8",
+    )
     assert "google-secret" not in repr(config)
     assert "yandex-secret" not in repr(config)
+    assert "publication-secret" not in repr(config)
 
 
 def test_public_auth_can_stay_disabled_for_legacy_deployments(
