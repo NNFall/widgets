@@ -66,6 +66,33 @@ def test_worker_module_exposes_durable_queue_contract() -> None:
     assert worker.LeaseLostError
 
 
+@pytest.mark.asyncio
+async def test_routed_reference_analyzer_awaits_pipeline_result() -> None:
+    expected = {"source_url": "https://example.com/"}
+
+    class FakeReferencePipeline:
+        def __init__(self) -> None:
+            self.backend = None
+
+        async def analyze(self, source_url, *, structured_backend):
+            self.backend = structured_backend
+            assert source_url == expected["source_url"]
+            return expected
+
+    pipeline = FakeReferencePipeline()
+    claim = SimpleNamespace(mode="direct", run_id=uuid4())
+    config = SimpleNamespace(reference_timeout_seconds=60)
+
+    analyzer = run_builder_worker.make_routed_reference_analyzer(
+        reference_pipeline=pipeline,
+        model_router=object(),
+        config=config,
+    )
+
+    assert await analyzer(claim, expected["source_url"]) == expected
+    assert pipeline.backend is not None
+
+
 def test_worker_cli_uses_configured_builtin_handler_by_default(
     monkeypatch,
 ) -> None:
