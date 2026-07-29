@@ -316,6 +316,23 @@ def test_preflight_has_exact_fingerprint_for_every_migration_revision() -> None:
     assert set(preflight.EXPECTED_VERSIONED_SCHEMA_FINGERPRINTS) == revisions
 
 
+def test_preflight_treats_column_order_as_non_semantic() -> None:
+    from scripts import preflight_saas_schema as preflight
+
+    legacy = preflight.known_legacy_snapshot()
+    reordered_columns = dict(legacy.columns)
+    reordered_columns["widgets"] = tuple(reversed(reordered_columns["widgets"]))
+    reordered = legacy.replace(columns=reordered_columns)
+
+    assert preflight._schema_fingerprint(reordered) == preflight._schema_fingerprint(
+        legacy
+    )
+    assert preflight.classify_schema(reordered) == preflight.MigrationPlan(
+        stamp_revision=preflight.LEGACY_REVISION,
+        upgrade_revision="head",
+    )
+
+
 def test_preflight_index_signature_captures_partial_predicate_and_identity() -> None:
     from scripts import preflight_saas_schema as preflight
 
