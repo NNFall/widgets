@@ -1,6 +1,6 @@
 # Public Agent Kernel Model Comparison
 
-**Status:** approved direction, awaiting written-spec review  
+**Status:** approved for implementation  
 **Date:** 2026-07-29
 
 ## Purpose
