@@ -8,6 +8,8 @@ import pytest
 from scripts.build_agent_kernel_public_comparison import (
     ComparisonInputs,
     build_public_comparison,
+    main,
+    verify_public_comparison,
 )
 
 
@@ -85,9 +87,7 @@ def _report(models: tuple[str, ...] = MODELS) -> dict[str, object]:
     }
 
 
-def _inputs(
-    tmp_path: Path, *, models: tuple[str, ...] = MODELS
-) -> ComparisonInputs:
+def _inputs(tmp_path: Path, *, models: tuple[str, ...] = MODELS) -> ComparisonInputs:
     report_path = tmp_path / "report.json"
     report_path.write_text(
         json.dumps(_report(models), ensure_ascii=False), encoding="utf-8"
@@ -106,9 +106,7 @@ def _inputs(
         )
         (model_root / "unrelated.db").write_bytes(b"private database")
         for screenshot in SCREENSHOTS:
-            (screenshot_root / screenshot).write_bytes(
-                f"{model}:{screenshot}".encode()
-            )
+            (screenshot_root / screenshot).write_bytes(f"{model}:{screenshot}".encode())
     return ComparisonInputs(report=report_path, private_root=private_root)
 
 
@@ -139,9 +137,11 @@ def test_build_copies_only_public_allowlist_and_omits_request_ids(
     assert "private-gpt-request" not in page
     assert "must-not-leak" not in page
     assert str(inputs.private_root) not in page
-    assert (output / "glm-5.2" / "index.html").read_text(
-        encoding="utf-8"
-    ).endswith("<button>Открыть</button>")
+    assert (
+        (output / "glm-5.2" / "index.html")
+        .read_text(encoding="utf-8")
+        .endswith("<button>Открыть</button>")
+    )
 
 
 def test_build_rejects_unexpected_models(tmp_path: Path) -> None:
@@ -185,3 +185,39 @@ def test_page_has_mobile_and_evidence_controls(tmp_path: Path) -> None:
     for model in MODELS:
         for screenshot in SCREENSHOTS:
             assert f"assets/{model}/{screenshot}" in page
+
+
+def test_verify_detects_an_unexpected_public_file(tmp_path: Path) -> None:
+    output = build_public_comparison(_inputs(tmp_path), tmp_path / "out")
+
+    assert verify_public_comparison(output) is True
+
+    (output / "technical.json").write_text("{}", encoding="utf-8")
+    assert verify_public_comparison(output) is False
+
+
+def test_cli_builds_and_verifies_real_package_contract(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    inputs = _inputs(tmp_path)
+    output = tmp_path / "public"
+
+    assert (
+        main(
+            [
+                "--report",
+                str(inputs.report),
+                "--private-root",
+                str(inputs.private_root),
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    built = json.loads(capsys.readouterr().out)
+    assert built == {"file_count": 15, "output": str(output), "verified": True}
+
+    assert main(["--verify", str(output)]) == 0
+    verified = json.loads(capsys.readouterr().out)
+    assert verified == {"file_count": 15, "verified": True}

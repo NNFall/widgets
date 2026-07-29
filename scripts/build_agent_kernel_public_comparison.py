@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import html
 import os
@@ -77,23 +78,23 @@ def _render_metric_cards(report: dict[str, Any]) -> str:
         model = html.escape(str(run["model"]))
         cards.append(
             f"""
-            <article class="metric-card metric-card--{model.replace('.', '-')}">
+            <article class="metric-card metric-card--{model.replace(".", "-")}">
               <div class="metric-card__heading">
                 <div><span class="eyebrow">Модель</span><h3>{model}</h3></div>
                 <span class="reject-pill">Не опубликован</span>
               </div>
               <div class="metric-grid">
-                <div><span>Время</span><strong>{_fmt_decimal(float(run['elapsed_seconds']), 1)} с</strong></div>
-                <div><span>Стоимость</span><strong>{_fmt_decimal(float(run['cost_rub']))} ₽</strong></div>
+                <div><span>Время</span><strong>{_fmt_decimal(float(run["elapsed_seconds"]), 1)} с</strong></div>
+                <div><span>Стоимость</span><strong>{_fmt_decimal(float(run["cost_rub"]))} ₽</strong></div>
                 <div><span>Все токены</span><strong>{_fmt_int(total_tokens)}</strong></div>
-                <div><span>Visual score</span><strong>{_fmt_decimal(float(run['visual_score']), 3)}</strong></div>
-                <div><span>Retry</span><strong>{int(run['retry_count'])}</strong></div>
-                <div><span>Repair</span><strong>{int(run['repair_count'])} + {int(run['browser_repair_count'])} browser</strong></div>
+                <div><span>Visual score</span><strong>{_fmt_decimal(float(run["visual_score"]), 3)}</strong></div>
+                <div><span>Retry</span><strong>{int(run["retry_count"])}</strong></div>
+                <div><span>Repair</span><strong>{int(run["repair_count"])} + {int(run["browser_repair_count"])} browser</strong></div>
               </div>
               <dl class="token-breakdown">
-                <div><dt>Вход</dt><dd>{_fmt_int(int(usage['input_tokens']))}</dd></div>
-                <div><dt>Выход</dt><dd>{_fmt_int(int(usage['output_tokens']))}</dd></div>
-                <div><dt>Thinking</dt><dd>{_fmt_int(int(usage['thinking_tokens']))}</dd></div>
+                <div><dt>Вход</dt><dd>{_fmt_int(int(usage["input_tokens"]))}</dd></div>
+                <div><dt>Выход</dt><dd>{_fmt_int(int(usage["output_tokens"]))}</dd></div>
+                <div><dt>Thinking</dt><dd>{_fmt_int(int(usage["thinking_tokens"]))}</dd></div>
               </dl>
               <div class="gate-row">
                 <span class="pass">Validator: пройден</span>
@@ -181,12 +182,11 @@ PAGE_TEMPLATE = """<!doctype html>
 
 
 def _render_page(report: dict[str, Any]) -> str:
-    return (
-        PAGE_TEMPLATE.replace("__METRIC_CARDS__", _render_metric_cards(report))
-        .replace(
-            "__EVIDENCE_MAP__",
-            json.dumps(_evidence_map(), ensure_ascii=False, separators=(",", ":")),
-        )
+    return PAGE_TEMPLATE.replace(
+        "__METRIC_CARDS__", _render_metric_cards(report)
+    ).replace(
+        "__EVIDENCE_MAP__",
+        json.dumps(_evidence_map(), ensure_ascii=False, separators=(",", ":")),
     )
 
 
@@ -212,4 +212,104 @@ def build_public_comparison(inputs: ComparisonInputs, output: Path) -> Path:
     return destination
 
 
-__all__ = ["ComparisonInputs", "build_public_comparison"]
+def _expected_public_paths() -> set[str]:
+    expected = {"index.html"}
+    for model in MODELS:
+        expected.add(f"{model}/index.html")
+        expected.update(f"assets/{model}/{name}" for name in SCREENSHOTS)
+    return expected
+
+
+def verify_public_comparison(output: Path) -> bool:
+    try:
+        root = output.resolve(strict=True)
+        if not root.is_dir() or root.is_symlink():
+            return False
+        paths = {
+            path.relative_to(root).as_posix()
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+        if paths != _expected_public_paths():
+            return False
+        for relative in paths:
+            path = root / relative
+            if path.is_symlink() or path.stat().st_size == 0:
+                return False
+        page = (root / "index.html").read_text(encoding="utf-8")
+        if page.count('sandbox="allow-scripts"') != 2:
+            return False
+        forbidden = (
+            "allow-same-origin",
+            "allow-forms",
+            "request_ids",
+            "authorization:",
+            "api_key",
+            "data/benchmarks/private",
+            "\\Users\\",
+        )
+        return not any(value.casefold() in page.casefold() for value in forbidden)
+    except (OSError, UnicodeError):
+        return False
+
+
+def _file_count(output: Path) -> int:
+    return sum(1 for path in output.rglob("*") if path.is_file())
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Build or verify the public Agent Kernel model comparison."
+    )
+    parser.add_argument("--report", type=Path)
+    parser.add_argument("--private-root", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--verify", type=Path)
+    args = parser.parse_args(argv)
+
+    if args.verify is not None:
+        if any(
+            value is not None for value in (args.report, args.private_root, args.output)
+        ):
+            parser.error("--verify cannot be combined with build arguments")
+        verified = verify_public_comparison(args.verify)
+        print(
+            json.dumps(
+                {"file_count": _file_count(args.verify), "verified": verified},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return 0 if verified else 1
+
+    if args.report is None or args.private_root is None or args.output is None:
+        parser.error("--report, --private-root and --output are required for build")
+    built = build_public_comparison(
+        ComparisonInputs(report=args.report, private_root=args.private_root),
+        args.output,
+    )
+    verified = verify_public_comparison(built)
+    print(
+        json.dumps(
+            {
+                "file_count": _file_count(built),
+                "output": str(args.output),
+                "verified": verified,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    return 0 if verified else 1
+
+
+__all__ = [
+    "ComparisonInputs",
+    "build_public_comparison",
+    "main",
+    "verify_public_comparison",
+]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
