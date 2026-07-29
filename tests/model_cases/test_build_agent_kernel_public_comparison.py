@@ -149,3 +149,39 @@ def test_build_rejects_unexpected_models(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="exactly glm-5.2 and gpt-5.5"):
         build_public_comparison(inputs, tmp_path / "out")
+
+
+def test_page_contains_live_frames_metrics_and_honest_verdict(
+    tmp_path: Path,
+) -> None:
+    output = build_public_comparison(_inputs(tmp_path), tmp_path / "out")
+    page = (output / "index.html").read_text(encoding="utf-8")
+
+    assert page.count('sandbox="allow-scripts"') == 2
+    assert 'src="glm-5.2/"' in page
+    assert 'src="gpt-5.5/"' in page
+    assert "allow-same-origin" not in page
+    assert "allow-forms" not in page
+    assert "162,38 ₽" in page
+    assert "101,10 ₽" in page
+    assert "270 628" in page
+    assert "144 428" in page
+    assert "Оба результата не прошли browser gate" in page
+    assert "horizontal overflow" in page
+    assert "ни один пока нельзя публиковать" in page
+
+
+def test_page_has_mobile_and_evidence_controls(tmp_path: Path) -> None:
+    output = build_public_comparison(_inputs(tmp_path), tmp_path / "out")
+    page = (output / "index.html").read_text(encoding="utf-8")
+
+    assert 'data-viewport="desktop"' in page
+    assert 'data-viewport="mobile"' in page
+    assert 'data-state="closed"' in page
+    assert 'data-state="open_initial"' in page
+    assert 'data-state="after_turn_2"' in page
+    assert 'aria-pressed="false"' in page
+    assert 'aria-controls="live-comparison"' in page
+    for model in MODELS:
+        for screenshot in SCREENSHOTS:
+            assert f"assets/{model}/{screenshot}" in page
