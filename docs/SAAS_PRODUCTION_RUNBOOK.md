@@ -106,9 +106,24 @@ is performed by this repository task.
    before opening a database session. Rotate `KAIGO_BUILDER_WORKER_BOOT_ID`
    for every rollout and keep the release, immutable worker-image, and boot
    identities identical in the app and worker environments.
-4. Install `deploy/systemd/kaigo-builder-worker.service`, adjusting only the
-   immutable checkout path if production uses a different path. Docker restart
-   remains disabled for `builder-worker`; systemd is the sole restart owner.
+4. Enable bridge netfilter before installing the worker unit. The unit fails
+   closed when `/proc/sys/net/bridge/bridge-nf-call-iptables` is absent or not
+   set to `1`, because its database and egress containment rules would
+   otherwise be bypassed:
+
+   ```bash
+   printf 'br_netfilter\n' > /etc/modules-load.d/kaigo-builder.conf
+   modprobe br_netfilter
+   printf 'net.bridge.bridge-nf-call-iptables = 1\n' \
+     > /etc/sysctl.d/99-kaigo-builder.conf
+   sysctl --system
+   test "$(cat /proc/sys/net/bridge/bridge-nf-call-iptables)" = 1
+   ```
+
+   Then install `deploy/systemd/kaigo-builder-worker.service`, adjusting only
+   the immutable checkout path if production uses a different path. Docker
+   restart remains disabled for `builder-worker`; systemd is the sole restart
+   owner.
 
 5. Before any runtime switch, atomically capture the complete prior release
    identity. The rollback tuple contains the images actually running now, the

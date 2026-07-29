@@ -710,6 +710,22 @@ def test_production_entrypoints_pin_exact_environment() -> None:
     assert "KAIGO_ENVIRONMENT=production" in runbook
 
 
+def test_production_runbook_enables_bridge_netfilter_before_worker_start() -> None:
+    runbook = (ROOT / "docs" / "SAAS_PRODUCTION_RUNBOOK.md").read_text(
+        encoding="utf-8"
+    )
+
+    module_load = runbook.index("/etc/modules-load.d/kaigo-builder.conf")
+    module_activate = runbook.index("modprobe br_netfilter")
+    sysctl_config = runbook.index("net.bridge.bridge-nf-call-iptables = 1")
+    sysctl_verify = runbook.index(
+        'test "$(cat /proc/sys/net/bridge/bridge-nf-call-iptables)" = 1'
+    )
+    worker_start = runbook.index("systemctl restart kaigo-builder-worker")
+
+    assert module_load < module_activate < sysctl_config < sysctl_verify < worker_start
+
+
 def test_every_production_compose_command_uses_the_kaigo_project() -> None:
     runbook = (ROOT / "docs" / "SAAS_PRODUCTION_RUNBOOK.md").read_text(
         encoding="utf-8"
