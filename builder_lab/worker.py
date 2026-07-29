@@ -80,7 +80,9 @@ MAX_STAGE_RESULT_BYTES = 1_048_576
 MAX_STAGE_CONTEXT_BYTES = 131_072
 MAX_STAGE_OUTPUT_REFS = 32
 MAX_STAGE_EVENTS = 64
-ALLOWED_STAGE_RESULT_EVENTS = frozenset({"repair.completed"})
+ALLOWED_STAGE_RESULT_EVENTS = frozenset(
+    {"reference.completed", "repair.completed"}
+)
 
 _PROVIDER_FAILURE_CODES = frozenset({
     "provider_unavailable",
