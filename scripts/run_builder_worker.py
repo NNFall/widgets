@@ -88,6 +88,30 @@ def _database_url() -> str:
     return database_url
 
 
+def make_routed_reference_analyzer(
+    *,
+    reference_pipeline: GeminiReferencePipeline,
+    model_router: ModelRouter,
+    config: BuilderLabConfig,
+):
+    async def analyze(claim: RunClaim, source_url: str):
+        return await reference_pipeline.analyze(
+            source_url,
+            structured_backend=RoutedStructuredGenerationBackend(
+                router=model_router,
+                role="reference_analyst",
+                mode=get_mode_policy(claim.mode).name,
+                run_id=claim.run_id,
+                timeout_seconds=min(
+                    180,
+                    config.reference_timeout_seconds,
+                ),
+            ),
+        )
+
+    return analyze
+
+
 def _is_async_callable(handler: object) -> bool:
     return inspect.iscoroutinefunction(handler) or inspect.iscoroutinefunction(
         getattr(handler, "__call__", None)
@@ -384,20 +408,10 @@ async def run() -> None:
                 queue=queue,
                 engine_factories=engine_factories,
                 reference_analyzer=reference_pipeline.analyze,
-                routed_reference_analyzer=lambda claim, source_url: (
-                    reference_pipeline.analyze(
-                        source_url,
-                        structured_backend=RoutedStructuredGenerationBackend(
-                            router=model_router,
-                            role="reference_analyst",
-                            mode=get_mode_policy(claim.mode).name,
-                            run_id=claim.run_id,
-                            timeout_seconds=min(
-                                180,
-                                config.reference_timeout_seconds,
-                            ),
-                        ),
-                    ),
+                routed_reference_analyzer=make_routed_reference_analyzer(
+                    reference_pipeline=reference_pipeline,
+                    model_router=model_router,
+                    config=config,
                 ),
                 routed_engine_factory=lambda claim, role: GeminiDirectEngine(
                     model_router=model_router,
