@@ -40,11 +40,6 @@ from builder_lab.patterns.models import CompositionPlan
 from builder_lab.patterns.planner import CompositionPlanningError, plan_composition
 from builder_lab.patterns.registry import load_builtin_registry
 from builder_lab.patterns.resolver import ResolvedComposition, resolve_composition
-from builder_lab.orchestrator import BuilderOrchestrator
-from builder_lab.reference_pipeline import (
-    ReferenceAnalysisResult,
-    ReferencePipelineError,
-)
 from builder_lab.visual_models import VisualCritique, VisualSeverity
 from builder_lab.validation import (
     issue_fingerprint,
@@ -451,6 +446,14 @@ class OrchestratorStageHandler:
         request: BuilderRequest,
         claim: RunClaim,
     ) -> StageResult:
+        # Browser crawling belongs to the isolated builder image.  Keep the
+        # import on the execution path so the production API can enqueue and
+        # cancel runs without installing Pillow, Crawlee, or Chromium.
+        from builder_lab.reference_pipeline import (
+            ReferenceAnalysisResult,
+            ReferencePipelineError,
+        )
+
         if not request.source_url or request.reference_context:
             return StageResult(
                 public_message="Анализ исходного сайта завершён",
@@ -498,6 +501,11 @@ class OrchestratorStageHandler:
         context: dict,
         claim: RunClaim,
     ) -> StageResult:
+        # The orchestrator imports the visual/browser audit stack.  Only a
+        # worker executes it; importing PostgresWorkerQueue in the API process
+        # must stay browser-dependency-free.
+        from builder_lab.orchestrator import BuilderOrchestrator
+
         usage = TokenUsage()
         selected_direction: DirectionProposal | None = None
         composition: ResolvedComposition | None = None
