@@ -33,6 +33,39 @@ def _direction() -> DirectionProposal:
     )
 
 
+def _composition_payload() -> dict[str, object]:
+    pattern_ids = {
+        "launcher": "orb-pulse",
+        "shell": "compact-chat",
+        "messages": "paired-bubbles",
+        "composer": "single-line-pill",
+        "motion": "spring-reveal",
+    }
+    return {
+        "schema_version": 1,
+        "direction_id": "candidate-1",
+        "selections": [
+            {
+                "slot": slot,
+                "pattern_id": pattern_id,
+                "version": 1,
+                "parameters": {},
+                "reason": f"Use the verified {slot} pattern.",
+            }
+            for slot, pattern_id in pattern_ids.items()
+        ],
+        "custom_escape": None,
+        "summary": "Verified compact chat composition.",
+    }
+
+
+def _direct_context(direction: DirectionProposal) -> dict[str, object]:
+    return {
+        "selected_direction": direction.to_dict(),
+        "composition_plan": _composition_payload(),
+    }
+
+
 def _claim(run_id, *, stage: str) -> RunClaim:
     return RunClaim(
         run_id=run_id,
@@ -113,7 +146,7 @@ async def test_deterministic_artifact_repair_uses_repair_role_and_exact_run_audi
         router=router,
         stage_input=StageInput(
             request=BuilderRequest(engine=EngineName.DIRECT, brief="Repair invalid HTML"),
-            context={"selected_direction": direction.to_dict()},
+            context=_direct_context(direction),
         ),
     )
     try:
@@ -173,7 +206,7 @@ async def test_visual_finding_artifact_generation_uses_repair_role(tmp_path) -> 
         stage_input=StageInput(
             request=BuilderRequest(engine=EngineName.DIRECT, brief="Repair visual issue"),
             previous_artifact=artifact(revision=4, stage=Stage.CONVERSATION),
-            context={"selected_direction": direction.to_dict()},
+            context=_direct_context(direction),
         ),
         visual_gate_factory=lambda _claim: RepairingGate(),
     )

@@ -24,7 +24,7 @@ const processCards = [
     number: '3',
     direction: 'lower-left',
     title: 'AI-консультант',
-    copy: 'Готов к проверке и доработке',
+    copy: 'Готов к предпросмотру и проверке',
     Icon: ChatsCircle,
   },
 ] as const;

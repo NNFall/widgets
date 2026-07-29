@@ -15,12 +15,15 @@ import { motion } from 'motion/react';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { KaigoLogo } from '../shared/KaigoLogo';
+import { campaignFromSearch } from '../shared/campaign';
+import { canonicalWebsiteUrl } from '../shared/UrlComposer';
 import { StudioPreview } from './StudioPreview';
 import { StudioTimeline } from './StudioTimeline';
 import { StudioComposer } from './StudioComposer';
 import { UpgradeGate } from './UpgradeGate';
 import type { BuilderEngine, BuilderRunSnapshot, PreviewViewport, StudioError } from './types';
 import { useBuilderRun } from './useBuilderRun';
+import { createProject, getAuthSession } from './api';
 
 const DEFAULT_BRIEF = 'Создай компактного AI-сотрудника, который консультирует посетителей по подтверждённым данным этого сайта.';
 const numberFormatter = new Intl.NumberFormat('ru-RU');
@@ -36,19 +39,7 @@ function queryProjectId() {
 
 function validateSourceUrl(value: string) {
   if (!value.trim()) return 'Вставьте HTTPS-ссылку на сайт.';
-  try {
-    const url = new URL(value);
-    if (
-      url.protocol !== 'https:'
-      || url.username
-      || url.password
-      || url.port
-      || url.search
-      || url.hash
-    ) return 'Нужна публичная HTTPS-ссылка без параметров и авторизации.';
-  } catch {
-    return 'Ссылка на сайт некорректна.';
-  }
+  if (!canonicalWebsiteUrl(value)) return 'Нужна публичная HTTPS-ссылка без параметров и авторизации.';
   return null;
 }
 
@@ -68,6 +59,14 @@ function readyQuality(status: string | undefined) {
   return status === 'verified' || status === 'accepted';
 }
 
+function readyFreeResult(snapshot: BuilderRunSnapshot | null) {
+  const artifact = snapshot?.artifact;
+  return snapshot?.status === 'completed'
+    && readyQuality(snapshot.quality_status)
+    && artifact?.source === 'accepted_artifact'
+    && Boolean(artifact.id);
+}
+
 function ErrorNotice({ error }: { error: StudioError }) {
   return (
     <div className="studio-error" role="alert">
@@ -85,8 +84,9 @@ function ErrorNotice({ error }: { error: StudioError }) {
 }
 
 export function StudioPage() {
-  const [projectId] = useState(queryProjectId);
-  const controller = useBuilderRun(projectId);
+  const [projectId, setProjectId] = useState(queryProjectId);
+  const legacyBuilder = (window.location.pathname.replace(/\/+$/, '') || '/') === '/builder';
+  const controller = useBuilderRun(projectId, legacyBuilder);
   const [sourceUrl, setSourceUrl] = useState(querySourceUrl);
   const [brief, setBrief] = useState('');
   const [engine, setEngine] = useState<BuilderEngine>('direct');
@@ -94,9 +94,11 @@ export function StudioPage() {
   const [refinement, setRefinement] = useState('');
   const [viewport, setViewport] = useState<PreviewViewport>('desktop');
   const [formError, setFormError] = useState<string | null>(null);
+  const [projectPending, setProjectPending] = useState(false);
   const hydratedRun = useRef<string | null>(null);
   const previewAnchorRef = useRef<HTMLElement>(null);
   const artifact = selectedArtifact(controller.snapshot);
+  const freeResultReady = readyFreeResult(controller.snapshot);
   const status = controller.snapshot?.status ?? null;
   const running = status === 'created' || status === 'queued' || status === 'running';
   const controlsLocked = running || controller.mutationPending;
@@ -136,14 +138,51 @@ export function StudioPage() {
     }
     setFormError(null);
     controller.clearError();
+    const canonicalUrl = canonicalWebsiteUrl(sourceUrl);
+    if (!canonicalUrl) return;
     await controller.createRun({
-      source_url: sourceUrl.trim(),
+      source_url: canonicalUrl,
       brief: brief.trim() || DEFAULT_BRIEF,
       engine,
       creativity,
       locale: 'ru',
       max_repairs: 3,
     });
+  };
+
+  const submitProject = async (submitEvent: FormEvent) => {
+    submitEvent.preventDefault();
+    const validationMessage = validateSourceUrl(sourceUrl);
+    if (validationMessage) {
+      setFormError(validationMessage);
+      return;
+    }
+    setFormError(null);
+    setProjectPending(true);
+    try {
+      const canonicalUrl = canonicalWebsiteUrl(sourceUrl);
+      if (!canonicalUrl) return;
+      const session = await getAuthSession();
+      if (!session.authenticated || !session.csrf_token) {
+        setFormError('Войдите снова, чтобы создать проект.');
+        return;
+      }
+      const project = await createProject(
+        canonicalUrl,
+        brief.trim(),
+        session.csrf_token,
+        campaignFromSearch(),
+      );
+      const params = new URLSearchParams(window.location.search);
+      params.delete('url');
+      params.set('project', project.id);
+      window.history.replaceState({}, '', `/studio?${params.toString()}`);
+      setProjectId(project.id);
+    } catch {
+      setFormError('Не удалось создать проект. Попробуйте ещё раз.');
+    } finally {
+      setProjectPending(false);
+    }
   };
 
   const submitRefinement = async (submitEvent: FormEvent) => {
@@ -157,6 +196,52 @@ export function StudioPage() {
   const scrollToPreview = () => {
     previewAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
+
+  if (!projectId && !legacyBuilder) {
+    return (
+      <div className="studio-app studio-app--composer">
+        <header className="studio-header">
+          <a className="studio-header__logo" href="/" aria-label="Kaigo — на главную">
+            <KaigoLogo />
+          </a>
+          <div className="studio-header__session">
+            <span>Kaigo Studio</span>
+            <strong>Новый проект</strong>
+          </div>
+        </header>
+        <main className="studio-shell studio-shell--composer">
+          <section className="studio-composer" aria-labelledby="new-project-title">
+            <div className="studio-composer__card">
+              <p className="studio-kicker">Бесплатная экспресс-версия</p>
+              <h1 id="new-project-title">Новый проект в Kaigo Studio</h1>
+              <p>Добавьте сайт и пожелание. Проект сохранится в вашем аккаунте до запуска.</p>
+              <form onSubmit={submitProject}>
+                <label htmlFor="new-project-url">Ссылка на сайт</label>
+                <input
+                  id="new-project-url"
+                  type="url"
+                  value={sourceUrl}
+                  onChange={(event) => setSourceUrl(event.target.value)}
+                />
+                <label htmlFor="new-project-brief">Пожелание к AI-виджету</label>
+                <textarea
+                  id="new-project-brief"
+                  maxLength={4_000}
+                  value={brief}
+                  onChange={(event) => setBrief(event.target.value)}
+                />
+                {formError && <p className="studio-form__error" role="alert">{formError}</p>}
+                <button type="submit" className="studio-create" disabled={projectPending}>
+                  {projectPending ? <Clock aria-hidden size={20} /> : <PaperPlaneTilt aria-hidden size={20} weight="fill" />}
+                  Создать проект
+                </button>
+              </form>
+            </div>
+          </section>
+        </main>
+      </div>
+    );
+  }
 
   if (controller.projectMode && !controller.runId) {
     return (
@@ -180,9 +265,10 @@ export function StudioPage() {
             <StudioComposer
               sourceUrl={sourceUrl}
               brief={brief}
-              sourceLocked
               pending={controller.mutationPending}
               error={formError}
+              onSourceUrlChange={setSourceUrl}
+              onBriefChange={setBrief}
               onSubmit={submitRun}
             />
           )}
@@ -207,8 +293,19 @@ export function StudioPage() {
           <button type="button" className="studio-header__preview" onClick={scrollToPreview}>
             <Eye aria-hidden size={19} /> Предпросмотр
           </button>
-          <button type="button" className="studio-header__publish" disabled aria-label="Опубликовать — Скоро">
-            <CloudArrowUp aria-hidden size={19} /> Опубликовать <span>Скоро</span>
+          <button
+            type="button"
+            className="studio-header__publish"
+            disabled={!freeResultReady}
+            aria-label={freeResultReady ? 'Перейти к публикации' : 'Публикация станет доступна после проверенного результата'}
+            style={freeResultReady ? { color: 'var(--ink)' } : undefined}
+            onClick={() => document.getElementById('studio-publication')?.scrollIntoView({
+              behavior: 'smooth',
+              block: 'center',
+            })}
+          >
+            <CloudArrowUp aria-hidden size={19} /> Опубликовать
+            {!freeResultReady && <span>После проверки</span>}
           </button>
         </div>
       </header>
@@ -226,7 +323,11 @@ export function StudioPage() {
           <div className="studio-intro">
             <p className="studio-kicker">Kaigo Studio</p>
             <h1>Студия Kaigo</h1>
-            <p>Задайте направление, следите за проверками и дорабатывайте каждую принятую версию.</p>
+            <p>
+              {controller.projectMode
+                ? 'Проверяйте готовую версию, тестируйте ответы в предпросмотре и публикуйте принятый виджет.'
+                : 'Задайте направление, следите за проверками и дорабатывайте каждую принятую версию.'}
+            </p>
           </div>
 
           <form className="studio-form" onSubmit={submitRun}>
@@ -251,7 +352,7 @@ export function StudioPage() {
             <textarea
               id="studio-brief"
               placeholder="Например: уверенный консультант, который говорит простым языком"
-              maxLength={12_000}
+              maxLength={4_000}
               value={brief}
               onChange={(event) => setBrief(event.target.value)}
               readOnly={controller.projectMode}
@@ -297,10 +398,10 @@ export function StudioPage() {
           )}
 
           <div className="studio-run-actions">
-            <button type="button" onClick={() => void controller.cancelRun()} disabled={controller.projectMode || !running || controller.mutationPending}>
+            <button type="button" onClick={() => void controller.cancelRun()} disabled={!running || controller.mutationPending}>
               <StopCircle aria-hidden size={18} /> Отменить генерацию
             </button>
-            <button type="button" onClick={() => void controller.retryRun()} disabled={controller.projectMode || controller.mutationPending || (status !== 'failed' && status !== 'cancelled')}>
+            <button type="button" onClick={() => void controller.retryRun()} disabled={controller.mutationPending || (status !== 'failed' && status !== 'cancelled')}>
               <ArrowsClockwise aria-hidden size={18} /> Повторить запуск
             </button>
           </div>
@@ -309,35 +410,42 @@ export function StudioPage() {
 
           <StudioTimeline events={controller.events} running={running} />
 
-          <form className="studio-refine" onSubmit={submitRefinement}>
-            <label htmlFor="studio-refinement">Что изменить в виджете?</label>
-            <div>
-              <textarea
-                id="studio-refinement"
-                maxLength={2_000}
-                placeholder="Например: сделай приветствие короче"
-                value={refinement}
-                onChange={(event) => setRefinement(event.target.value)}
-                onKeyDown={(event) => {
-                  if (
-                    event.key === 'Enter'
-                    && (event.ctrlKey || event.metaKey)
-                    && refinable
-                    && !controller.mutationPending
-                    && refinement.trim()
-                  ) {
-                    event.preventDefault();
-                    event.currentTarget.form?.requestSubmit();
-                  }
-                }}
-                disabled={!refinable || controller.mutationPending}
-              />
-              <button type="submit" disabled={!refinable || controller.mutationPending || !refinement.trim()} aria-label="Применить изменение">
-                <PaperPlaneTilt aria-hidden size={19} weight="fill" />
-              </button>
+          {controller.projectMode ? (
+            <div className="studio-refine">
+              <strong>Проверка диалога</strong>
+              <p>Чат в предпросмотре проверяет ответы виджета, но не изменяет его.</p>
             </div>
-            <p>{refinable ? 'Ctrl + Enter тоже отправляет пожелание' : 'Доработка откроется после проверенной версии'}</p>
-          </form>
+          ) : (
+            <form className="studio-refine" onSubmit={submitRefinement}>
+              <label htmlFor="studio-refinement">Что изменить в виджете?</label>
+              <div>
+                <textarea
+                  id="studio-refinement"
+                  maxLength={2_000}
+                  placeholder="Например: сделай приветствие короче"
+                  value={refinement}
+                  onChange={(event) => setRefinement(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (
+                      event.key === 'Enter'
+                      && (event.ctrlKey || event.metaKey)
+                      && refinable
+                      && !controller.mutationPending
+                      && refinement.trim()
+                    ) {
+                      event.preventDefault();
+                      event.currentTarget.form?.requestSubmit();
+                    }
+                  }}
+                  disabled={!refinable || controller.mutationPending}
+                />
+                <button type="submit" disabled={!refinable || controller.mutationPending || !refinement.trim()} aria-label="Применить изменение">
+                  <PaperPlaneTilt aria-hidden size={19} weight="fill" />
+                </button>
+              </div>
+              <p>{refinable ? 'Ctrl + Enter тоже отправляет пожелание' : 'Доработка откроется после проверенной версии'}</p>
+            </form>
+          )}
         </motion.aside>
 
         <motion.section
@@ -366,7 +474,14 @@ export function StudioPage() {
             viewport={viewport}
             onViewportChange={setViewport}
           />
-          {controller.projectMode && artifact && <UpgradeGate csrfToken={controller.csrfToken} />}
+          {controller.projectMode && projectId && artifact?.id && freeResultReady && (
+            <UpgradeGate
+              csrfToken={controller.csrfToken}
+              projectId={projectId}
+              artifactId={artifact.id}
+              revision={artifact.revision}
+            />
+          )}
           <div className="studio-workspace__footer">
             <Code aria-hidden size={18} />
             <span>Preview использует изолированный runtime сборщика: launcher, composer и chat bridge работают внутри sandbox.</span>

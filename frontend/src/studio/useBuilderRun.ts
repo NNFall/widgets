@@ -4,6 +4,7 @@ import {
   BuilderApiError,
   builderUrl,
   cancelBuilderRun,
+  cancelProjectRun,
   createProjectRun,
   createBuilderRun,
   getAuthSession,
@@ -12,7 +13,9 @@ import {
   getProjectRun,
   refineBuilderRun,
   retryBuilderRun,
+  retryProjectRun,
   streamProjectRunEvents,
+  updateProjectDraft,
 } from './api';
 import { russianErrorMessage, russianRequestErrorMessage, safeEventMessage } from './errors';
 import type {
@@ -504,6 +507,9 @@ function aggregateSaasUsage(events: SaasEvent[]): TokenUsage {
 function adaptPreview(preview: SaasRunSnapshot['preview']): WidgetArtifact | null {
   if (!preview) return null;
   return {
+    id: preview.id,
+    quality_status: preview.quality_status,
+    source: preview.source,
     schema_version: preview.schema_version ?? '1',
     revision: preview.revision,
     stage: preview.stage ?? 'validation',
@@ -558,7 +564,15 @@ function adaptSaasRun(project: SaasProject, run: SaasRunSnapshot): BuilderRunSna
 
 function saasError(error: unknown, fallback: string): StudioError {
   if (error instanceof BuilderApiError) {
-    const message = error.status === 401
+    const message = error.code === 'trial_consumed'
+      ? 'Бесплатная генерация уже использована. Сохранённый результат остаётся доступен.'
+      : error.code === 'trial_retry_unavailable'
+        ? 'Повтор пока недоступен: проверяем итог предыдущего запуска.'
+        : error.code === 'run_is_not_active'
+          ? 'У проекта уже есть другой активный запуск. Обновите страницу.'
+          : error.code === 'run_not_retryable'
+            ? 'Повтор доступен только после ошибки или отмены.'
+            : error.status === 401
       ? 'Войдите в аккаунт, чтобы открыть проект.'
       : error.status === 403
         ? 'Нет доступа к этому действию. Обновите страницу и войдите снова.'
@@ -600,6 +614,19 @@ function idempotencyKey(projectId: string) {
   return projectKey;
 }
 
+function retryIdempotencyKey(runId: string) {
+  const storageKey = `kaigo.saas.run.${runId}.retry-idempotency-key`;
+  const runKey = `studio-retry-${runId}`;
+  try {
+    const saved = localStorage.getItem(storageKey);
+    if (saved) return saved;
+    localStorage.setItem(storageKey, runKey);
+  } catch {
+    // The deterministic server key remains safe when browser storage is unavailable.
+  }
+  return runKey;
+}
+
 function activityFor(status: BuilderRunStatus) {
   if (status === 'queued' || status === 'created') return 'Запуск в очереди';
   if (status === 'running') return 'Генерация выполняется';
@@ -623,6 +650,7 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
   const projectRef = useRef<SaasProject | null>(null);
   const runRef = useRef<SaasRunSnapshot | null>(null);
   const lastSequenceRef = useRef(0);
+  const mutationPendingRef = useRef(false);
 
   const applyRun = useCallback((owner: SaasProject, run: SaasRunSnapshot) => {
     if (run.project_id !== owner.id) return;
@@ -798,16 +826,25 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     };
   }, [applyRun, projectId, runId, snapshot?.status]);
 
-  const createRun: BuilderRunController['createRun'] = useCallback(async () => {
+  const createRun: BuilderRunController['createRun'] = useCallback(async (input) => {
     const owner = projectRef.current;
     const csrf = csrfRef.current;
-    if (!projectId || !owner || !csrf || mutationPending) return;
+    if (!projectId || !owner || !csrf || mutationPendingRef.current) return;
+    mutationPendingRef.current = true;
     setMutationPending(true);
     setError(null);
     setActivityMessage('Создаём запуск');
     try {
+      const saved = await updateProjectDraft(
+        projectId,
+        input.source_url,
+        input.brief,
+        csrf,
+      );
+      projectRef.current = saved;
+      setProject(saved);
       const run = await createProjectRun(projectId, csrf, idempotencyKey(projectId));
-      const updated = { ...owner, status: run.status, active_run: run };
+      const updated = { ...saved, status: run.status, active_run: run };
       projectRef.current = updated;
       setProject(updated);
       applyRun(updated, run);
@@ -815,9 +852,73 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
       setError(saasError(caught, 'Не удалось создать запуск.'));
       setActivityMessage('Запуск не создан');
     } finally {
+      mutationPendingRef.current = false;
       setMutationPending(false);
     }
-  }, [applyRun, mutationPending, projectId]);
+  }, [applyRun, projectId]);
+
+  const cancelRun: BuilderRunController['cancelRun'] = useCallback(async () => {
+    const target = runRef.current;
+    const csrf = csrfRef.current;
+    if (
+      !target
+      || !csrf
+      || !['queued', 'running'].includes(saasStatus(target))
+      || mutationPendingRef.current
+    ) return;
+    mutationPendingRef.current = true;
+    setMutationPending(true);
+    setError(null);
+    setActivityMessage('Запрашиваем безопасную отмену');
+    try {
+      await cancelProjectRun(target.id, csrf);
+      setActivityMessage('Отмена запрошена — генерация остановится безопасно');
+    } catch (caught) {
+      setError(saasError(caught, 'Не удалось отменить генерацию.'));
+      setActivityMessage('Отмена не выполнена');
+    } finally {
+      mutationPendingRef.current = false;
+      setMutationPending(false);
+    }
+  }, []);
+
+  const retryRun: BuilderRunController['retryRun'] = useCallback(async () => {
+    const owner = projectRef.current;
+    const source = runRef.current;
+    const csrf = csrfRef.current;
+    if (
+      !owner
+      || !source
+      || !csrf
+      || !['failed', 'cancelled'].includes(saasStatus(source))
+      || mutationPendingRef.current
+    ) return;
+    mutationPendingRef.current = true;
+    setMutationPending(true);
+    setError(null);
+    setActivityMessage('Проверяем возможность безопасного повтора');
+    try {
+      const replacement = await retryProjectRun(
+        source.id,
+        csrf,
+        retryIdempotencyKey(source.id),
+      );
+      const updated = {
+        ...owner,
+        status: replacement.status,
+        active_run: replacement,
+      };
+      projectRef.current = updated;
+      setProject(updated);
+      applyRun(updated, replacement);
+    } catch (caught) {
+      setError(saasError(caught, 'Не удалось повторить генерацию.'));
+      setActivityMessage('Повтор не запущен');
+    } finally {
+      mutationPendingRef.current = false;
+      setMutationPending(false);
+    }
+  }, [applyRun]);
 
   const unavailable = useCallback(async () => {
     setError({
@@ -840,15 +941,18 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     isHydrating,
     mutationPending,
     createRun,
-    cancelRun: unavailable,
-    retryRun: unavailable,
+    cancelRun,
+    retryRun,
     refineRun: unavailable,
     clearError: () => setError(null),
   };
 }
 
-export function useBuilderRun(projectId: string | null = null): BuilderRunController {
-  const legacy = useLegacyBuilderRun(!projectId);
+export function useBuilderRun(
+  projectId: string | null = null,
+  allowLegacyBuilder = true,
+): BuilderRunController {
+  const legacy = useLegacyBuilderRun(allowLegacyBuilder && !projectId);
   const saas = useSaasProjectRun(projectId);
-  return projectId ? saas : legacy;
+  return projectId || !allowLegacyBuilder ? saas : legacy;
 }

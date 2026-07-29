@@ -7,10 +7,11 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 from weakref import WeakValueDictionary
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.analytics.service import record_funnel_event
 from app.billing.catalog import PLAN_CATALOG, BillingPlan
 from app.billing.contracts import CheckoutCommand, Money, PaymentProvider, PaymentStatus
 from app.db.models import User
@@ -38,6 +39,10 @@ class PaymentNotFound(BillingError):
     pass
 
 
+class MerchantAccountMismatch(BillingError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class CheckoutResult:
     payment_id: UUID
@@ -58,6 +63,8 @@ class FulfillmentResult:
 
 
 _IDEMPOTENCY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
+_MERCHANT_ACCOUNT_FINGERPRINT_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_LEGACY_UNKNOWN_MERCHANT_ACCOUNT = "!" * 64
 _CHECKOUT_CREATION_LEASE = timedelta(seconds=30)
 
 
@@ -69,6 +76,12 @@ class BillingService:
     ) -> None:
         self._sessions = session_factory
         self._provider = provider
+        merchant_account_fingerprint = provider.merchant_account_fingerprint
+        if not _MERCHANT_ACCOUNT_FINGERPRINT_PATTERN.fullmatch(
+            merchant_account_fingerprint
+        ):
+            raise ValueError("provider merchant account fingerprint is invalid")
+        self._merchant_account_fingerprint = merchant_account_fingerprint
         self._checkout_locks: WeakValueDictionary[tuple[int, str], asyncio.Lock] = (
             WeakValueDictionary()
         )
@@ -103,6 +116,29 @@ class BillingService:
         # public key from sharing one provider payment. It also stays below
         # YooKassa's 64-character limit and is stable for crash recovery.
         return f"kaigo:{attempt_id}"
+
+    def _assert_merchant_account(self, attempt: PaymentAttempt) -> None:
+        if not self.is_current_merchant_account(attempt):
+            raise MerchantAccountMismatch(
+                "payment attempt merchant account does not match configured provider"
+            )
+
+    def is_current_merchant_account(self, attempt: PaymentAttempt) -> bool:
+        return (
+            attempt.provider == self._provider.name
+            and attempt.merchant_account_fingerprint
+            == self._merchant_account_fingerprint
+        )
+
+    def _assert_verifiable_merchant_account(
+        self,
+        attempt: PaymentAttempt,
+    ) -> None:
+        if (
+            attempt.merchant_account_fingerprint
+            != _LEGACY_UNKNOWN_MERCHANT_ACCOUNT
+        ):
+            self._assert_merchant_account(attempt)
 
     @staticmethod
     def _stored_plan(attempt: PaymentAttempt) -> BillingPlan:
@@ -152,6 +188,7 @@ class BillingService:
                 )
                 if row is None:
                     continue
+                self._assert_merchant_account(row)
                 if row.plan_fingerprint != plan_fingerprint:
                     raise CheckoutIdempotencyConflict(
                         "idempotency key is already used for another plan"
@@ -186,9 +223,40 @@ class BillingService:
             lease_token: str | None = None
             try:
                 async with self._sessions() as database, database.begin():
-                    user = await database.get(User, user_id)
+                    # Locking the user serializes checkout decisions across
+                    # idempotency keys. This makes merchant cutover a drain:
+                    # no process may create a payment under the new account
+                    # while an old account still has an ambiguous attempt.
+                    user = await database.scalar(
+                        select(User).where(User.id == user_id).with_for_update()
+                    )
                     if user is None:
                         raise PaymentNotFound("user not found")
+                    cutover_blocker = await database.scalar(
+                        select(PaymentAttempt)
+                        .where(
+                            PaymentAttempt.user_id == user_id,
+                            PaymentAttempt.status.in_(
+                                ("creating", "pending", "failed")
+                            ),
+                            or_(
+                                PaymentAttempt.provider != self._provider.name,
+                                PaymentAttempt.merchant_account_fingerprint
+                                != self._merchant_account_fingerprint,
+                            ),
+                        )
+                        .order_by(
+                            PaymentAttempt.updated_at.desc(),
+                            PaymentAttempt.created_at.desc(),
+                        )
+                        .with_for_update()
+                        .limit(1)
+                    )
+                    if cutover_blocker is not None:
+                        raise MerchantAccountMismatch(
+                            "payment attempt merchant account does not match "
+                            "configured provider"
+                        )
                     attempt = await database.scalar(
                         select(PaymentAttempt)
                         .where(
@@ -198,11 +266,21 @@ class BillingService:
                         .with_for_update()
                     )
                     if attempt is not None:
+                        self._assert_merchant_account(attempt)
                         if attempt.plan_fingerprint != plan.fingerprint():
                             raise CheckoutIdempotencyConflict(
                                 "idempotency key is already used for another plan"
                             )
                         if attempt.checkout_url:
+                            await record_funnel_event(
+                                database,
+                                event_type="upgrade_started",
+                                event_key=(
+                                    f"upgrade_started:payment_attempt:{attempt.id}"
+                                ),
+                                user_id=attempt.user_id,
+                                payment_attempt_id=attempt.id,
+                            )
                             return self._checkout_result(attempt, created=False)
                         updated_at = attempt.updated_at
                         if updated_at is not None and updated_at.tzinfo is None:
@@ -231,6 +309,9 @@ class BillingService:
                         attempt = PaymentAttempt(
                             user_id=user_id,
                             provider=self._provider.name,
+                            merchant_account_fingerprint=(
+                                self._merchant_account_fingerprint
+                            ),
                             idempotency_key=idempotency_key,
                             plan_code=plan.code,
                             plan_snapshot=plan.snapshot(),
@@ -246,6 +327,13 @@ class BillingService:
                         attempt.payload = {"checkout_lease_token": lease_token}
                         created = True
                         dispatch = True
+                    await record_funnel_event(
+                        database,
+                        event_type="upgrade_started",
+                        event_key=f"upgrade_started:payment_attempt:{attempt.id}",
+                        user_id=attempt.user_id,
+                        payment_attempt_id=attempt.id,
+                    )
                     attempt_id = attempt.id
                     metadata = self._metadata(attempt)
             except IntegrityError:
@@ -261,6 +349,7 @@ class BillingService:
                     )
                     if attempt is None:
                         raise
+                    self._assert_merchant_account(attempt)
                     if attempt.plan_fingerprint != plan.fingerprint():
                         raise CheckoutIdempotencyConflict(
                             "idempotency key is already used for another plan"
@@ -353,6 +442,7 @@ class BillingService:
             )
             if attempt is None:
                 raise PaymentNotFound("payment attempt not found")
+            self._assert_merchant_account(attempt)
             if attempt.status not in {"creating", "pending", "failed"}:
                 raise BillingError("payment attempt cannot be resumed")
             plan = self._stored_plan(attempt)
@@ -370,6 +460,7 @@ class BillingService:
             )
             if attempt is None:
                 raise PaymentNotFound("payment attempt not found")
+            self._assert_verifiable_merchant_account(attempt)
             expected_amount = Money(attempt.amount_minor, attempt.currency)
             expected_metadata = self._metadata(attempt)
             user_id = attempt.user_id
@@ -530,6 +621,13 @@ class BillingService:
             )
             database.add(webhook)
             await database.flush()
+            await record_funnel_event(
+                database,
+                event_type="payment_completed",
+                event_key=f"payment_completed:payment_attempt:{attempt.id}",
+                user_id=user_id,
+                payment_attempt_id=attempt.id,
+            )
             database.add(
                 UsageLedger(
                     user_id=user_id,

@@ -5,6 +5,9 @@ import {
   getBillingPayment,
   getPendingBillingPayment,
   getBillingSubscription,
+  getProjectPublication,
+  publishProject,
+  rollbackPublication,
   resumeBillingPayment,
   sendPreviewChat,
 } from './api';
@@ -184,4 +187,100 @@ it('resumes the exact stored payment attempt with CSRF and no replacement payloa
   expect(init.method).toBe('POST');
   expect(new Headers(init.headers).get('X-CSRF-Token')).toBe('csrf-billing');
   expect(init.body).toBeUndefined();
+});
+
+it('publishes the selected artifact with allowed domains and rolls back an owned publication', async () => {
+  const published = {
+    publication_id: 'publication/123',
+    release_id: 'release/456',
+    artifact_id: 'artifact/789',
+    stable_key: 'stable-widget-key',
+    revision: 4,
+    allowed_domains: ['https://example.com', 'https://shop.example.com'],
+    checksum: 'sha256',
+    embed_url: 'https://widgets.kaigo.space/embed/stable-widget-key.js',
+    runtime_url: 'https://widgets.kaigo.space/runtime/stable-widget-key',
+  };
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify(published), {
+      status: 201,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({
+      ...published,
+      release_id: 'release/old',
+      revision: 3,
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+  vi.stubGlobal('fetch', fetchMock);
+
+  await expect(publishProject(
+    'project/123',
+    {
+      artifact_id: 'artifact/789',
+      revision: 4,
+      allowed_domains: ['https://example.com', 'https://shop.example.com'],
+    },
+    'csrf-publication',
+  )).resolves.toEqual(published);
+  await expect(rollbackPublication(
+    'publication/123',
+    'release/old',
+    'csrf-publication',
+  )).resolves.toMatchObject({ release_id: 'release/old', revision: 3 });
+
+  const [publishUrl, publishInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+  expect(publishUrl).toBe('/api/projects/project%2F123/publish');
+  expect(publishInit.credentials).toBe('include');
+  expect(publishInit.method).toBe('POST');
+  expect(new Headers(publishInit.headers).get('X-CSRF-Token')).toBe('csrf-publication');
+  expect(JSON.parse(String(publishInit.body))).toEqual({
+    artifact_id: 'artifact/789',
+    revision: 4,
+    allowed_domains: ['https://example.com', 'https://shop.example.com'],
+  });
+
+  const [rollbackUrl, rollbackInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+  expect(rollbackUrl).toBe('/api/publications/publication%2F123/rollback');
+  expect(rollbackInit.credentials).toBe('include');
+  expect(rollbackInit.method).toBe('POST');
+  expect(new Headers(rollbackInit.headers).get('X-CSRF-Token')).toBe('csrf-publication');
+  expect(JSON.parse(String(rollbackInit.body))).toEqual({
+    target_release_id: 'release/old',
+  });
+});
+
+it('hydrates owner publication history through an authenticated read without CSRF', async () => {
+  const publication = {
+    publication_id: 'publication-123',
+    stable_key: 'stable-widget',
+    state: 'published',
+    allowed_domains: ['https://example.com'],
+    embed_url: 'https://widgets.kaigo.space/embed/stable-widget.js',
+    runtime_url: 'https://widgets.kaigo.space/runtime/stable-widget',
+    active_release: {
+      release_id: 'release-2',
+      artifact_id: 'artifact-2',
+      previous_release_id: 'release-1',
+      revision: 2,
+      checksum: 'checksum-2',
+      created_at: '2026-07-28T13:00:00Z',
+    },
+    releases: [],
+  };
+  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ publication }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  }));
+  vi.stubGlobal('fetch', fetchMock);
+
+  await expect(getProjectPublication('project/123')).resolves.toEqual({ publication });
+
+  const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+  expect(url).toBe('/api/projects/project%2F123/publication');
+  expect(init.credentials).toBe('include');
+  expect(init.method).toBeUndefined();
+  expect(new Headers(init.headers).has('X-CSRF-Token')).toBe(false);
 });

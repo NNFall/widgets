@@ -11,6 +11,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Float,
     Integer,
     Index,
     JSON,
@@ -22,6 +23,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 
 from app.db import models as legacy_models  # noqa: F401
@@ -30,6 +32,10 @@ from app.db.base import Base
 
 def _uuid_pk() -> Mapped[UUID]:
     return mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+
+
+def _json_document():
+    return JSON().with_variant(JSONB(), "postgresql")
 
 
 class UserIdentity(Base):
@@ -66,6 +72,7 @@ class OAuthState(Base):
 
     id: Mapped[UUID] = _uuid_pk()
     state_digest: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    session_binding_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     pkce_verifier: Mapped[str] = mapped_column(String(255), nullable=False)
     nonce: Mapped[str | None] = mapped_column(String(255))
@@ -81,6 +88,7 @@ class AnonymousDraft(Base):
     id: Mapped[UUID] = _uuid_pk()
     source_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     brief: Mapped[str | None] = mapped_column(Text)
+    campaign: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
     claim_token_digest: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     claimed_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
@@ -134,6 +142,20 @@ class GenerationRun(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class WorkerServiceLease(Base):
+    """Singleton liveness record for the currently expected builder process."""
+
+    __tablename__ = "worker_service_leases"
+
+    service_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    worker_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    boot_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    deployment_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    image_identity: Mapped[str] = mapped_column(String(512), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class GenerationEvent(Base):
@@ -235,6 +257,180 @@ class ModelCall(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class WidgetPatternVersion(Base):
+    __tablename__ = "widget_pattern_versions"
+    __table_args__ = (
+        UniqueConstraint("pattern_id", "version", name="uq_pattern_version"),
+        CheckConstraint("version > 0", name="ck_pattern_version_positive"),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    pattern_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    manifest_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        _json_document(), nullable=False
+    )
+    implementation_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class CompositionPlanRecord(Base):
+    __tablename__ = "composition_plans"
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_composition_plan_run"),
+        CheckConstraint(
+            "schema_version > 0",
+            name="ck_composition_plan_schema_version_positive",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    run_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "generation_runs.id",
+            name="fk_composition_plans_run_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+    direction_artifact_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "generation_artifacts.id",
+            name="fk_composition_plans_direction_artifact_id",
+            ondelete="SET NULL",
+        )
+    )
+    planner_model_call_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "model_calls.id",
+            name="fk_composition_plans_planner_model_call_id",
+            ondelete="SET NULL",
+        )
+    )
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    direction_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    custom_escape: Mapped[dict[str, Any] | None] = mapped_column(_json_document())
+    registry_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class CompositionPlanItem(Base):
+    __tablename__ = "composition_plan_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "composition_plan_id",
+            "slot",
+            name="uq_composition_slot",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    composition_plan_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "composition_plans.id",
+            name="fk_composition_plan_items_plan_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+    pattern_version_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "widget_pattern_versions.id",
+            name="fk_composition_plan_items_pattern_version_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+    )
+    slot: Mapped[str] = mapped_column(String(32), nullable=False)
+    parameters: Mapped[dict[str, Any]] = mapped_column(
+        _json_document(), nullable=False, default=dict
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class PatternOutcome(Base):
+    __tablename__ = "pattern_outcomes"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_pattern_outcome_idempotency"),
+        CheckConstraint(
+            "repair_count >= 0",
+            name="ck_pattern_outcome_repairs_nonnegative",
+        ),
+        CheckConstraint(
+            "visual_score IS NULL OR (visual_score >= 0 AND visual_score <= 1)",
+            name="ck_pattern_outcome_visual_score_range",
+        ),
+        CheckConstraint(
+            "cost_microusd >= 0",
+            name="ck_pattern_outcome_cost_nonnegative",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    composition_plan_item_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "composition_plan_items.id",
+            name="fk_pattern_outcomes_plan_item_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+    run_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "generation_runs.id",
+            name="fk_pattern_outcomes_run_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+    final_artifact_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "generation_artifacts.id",
+            name="fk_pattern_outcomes_final_artifact_id",
+            ondelete="SET NULL",
+        )
+    )
+    model_call_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "model_calls.id",
+            name="fk_pattern_outcomes_model_call_id",
+            ondelete="SET NULL",
+        )
+    )
+    technical_pass: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    visual_score: Mapped[float | None] = mapped_column(Float)
+    repair_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    thinking_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    latency_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    cost_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    published: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    adopted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        _json_document(), nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class UsageLedger(Base):
     __tablename__ = "usage_ledger"
     __table_args__ = (
@@ -324,6 +520,9 @@ class PaymentAttempt(Base):
     id: Mapped[UUID] = _uuid_pk()
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    merchant_account_fingerprint: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )
     provider_payment_id: Mapped[str | None] = mapped_column(String(255))
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     plan_code: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -354,6 +553,49 @@ class PaymentWebhookEvent(Base):
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FunnelEvent(Base):
+    __tablename__ = "funnel_events"
+    __table_args__ = (
+        UniqueConstraint("event_key", name="uq_funnel_events_event_key"),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    event_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    anonymous_draft_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("anonymous_drafts.id", ondelete="SET NULL")
+    )
+    oauth_state_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("oauth_states.id", ondelete="SET NULL")
+    )
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    project_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), index=True
+    )
+    run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("generation_runs.id", ondelete="SET NULL"), index=True
+    )
+    artifact_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("generation_artifacts.id", ondelete="SET NULL")
+    )
+    payment_attempt_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("payment_attempts.id", ondelete="SET NULL")
+    )
+    publication_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("publications.id", ondelete="SET NULL")
+    )
+    campaign_source: Mapped[str | None] = mapped_column(String(255))
+    campaign_medium: Mapped[str | None] = mapped_column(String(255))
+    campaign_name: Mapped[str | None] = mapped_column(String(255))
+    campaign_term: Mapped[str | None] = mapped_column(String(255))
+    campaign_content: Mapped[str | None] = mapped_column(String(255))
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class Publication(Base):

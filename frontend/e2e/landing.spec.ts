@@ -1,7 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 
-const EXACT_HERO = 'Через 10 минут вы сможете сказать: наш бизнес использует AI';
+const EXACT_HERO = 'Обычно за 10–20 минут вы получите первую версию AI-виджета';
 
 async function expectNoHorizontalOverflow(page: Page) {
   const overflow = await page.evaluate(() =>
@@ -186,7 +186,7 @@ test('landing compact desktop fits the first screen and exposes the brand @compa
   }));
   await expectCompactFirstScreen(page);
 
-  await expect.soft(page).toHaveTitle('Kaigo — AI в вашем бизнесе за 10 минут');
+  await expect.soft(page).toHaveTitle('Kaigo — бесплатная AI-версия обычно за 10–20 минут');
   await expect.soft(page.locator('link[rel="icon"]')).toHaveAttribute('href', '/favicon.svg');
 });
 
@@ -255,6 +255,31 @@ test('scanner travels continuously across card reveals @desktop', async ({ page 
 });
 
 test('landing navigation, composer, case toggle and FAQ are functional @desktop', async ({ page }) => {
+  await page.route('**/api/drafts', async (route) => {
+    expect(route.request().method()).toBe('POST');
+    expect(route.request().postDataJSON()).toEqual({
+      url: 'https://example.com/',
+      brief: 'Отвечай кратко',
+    });
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'draft-playwright-opaque' }),
+    });
+  });
+  await page.route('**/api/auth/session', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        enabled: true,
+        authenticated: false,
+        csrf_token: null,
+        pending_draft_id: 'draft-playwright-opaque',
+        providers: ['google'],
+      }),
+    });
+  });
   await page.goto('/');
 
   await page.getByRole('navigation', { name: 'Основная навигация' })
@@ -271,9 +296,12 @@ test('landing navigation, composer, case toggle and FAQ are functional @desktop'
   await expect(page.getByText(/Первую версию AI-виджета/)).toBeVisible();
 
   await page.getByLabel('Ссылка на действующий сайт').first().fill('https://example.com');
-  await page.getByRole('button', { name: 'Создать AI-виджет' }).first().click();
-  await expect(page).toHaveURL(/\/studio\?url=https%3A%2F%2Fexample\.com$/);
-  await expect(page.getByRole('heading', { name: 'Студия Kaigo' })).toBeVisible();
+  await page.getByRole('textbox', { name: 'Пожелание к AI-виджету' }).first().fill('Отвечай кратко');
+  await page.getByRole('button', { name: 'Получить бесплатную версию' }).first().click();
+  await expect(page).toHaveURL(/\/studio\?draft=draft-playwright-opaque$/);
+  expect(page.url()).not.toContain('example.com');
+  expect(page.url()).not.toContain(encodeURIComponent('Отвечай кратко'));
+  await expect(page.getByRole('heading', { name: 'Сначала сохраните результат' })).toBeVisible();
 });
 
 test('landing mobile preserves content order, menu, controls and comparison @mobile', async ({ page }, testInfo) => {
@@ -298,7 +326,7 @@ test('landing mobile preserves content order, menu, controls and comparison @mob
   await expect(page).toHaveURL(/#product$/);
   await expect(page.getByRole('button', { name: 'Открыть меню' })).toBeFocused();
 
-  await expectMinimumTarget(page.getByRole('button', { name: 'Создать AI-виджет' }).first());
+  await expectMinimumTarget(page.getByRole('button', { name: 'Получить бесплатную версию' }).first());
 
   const caseSection = page.locator('#case-study');
   await caseSection.scrollIntoViewIfNeeded();

@@ -26,6 +26,8 @@ credentials.json
 
 # Локальные runtime-файлы
 data/
+# Полные ответы и артефакты модельных сравнений содержат приватный контекст.
+data/benchmarks/private/
 logs/
 *.log
 *.session

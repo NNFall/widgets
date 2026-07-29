@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-29T01:03:52.125218+00:00",
+  "input_identity": {
+    "evidence_sha256": "eb77405b50e20578c1c7f49ae3d33854533d2a409f5857eb43b70cc8ae116c50",
+    "composition_sha256": "eaaea9b9a5edf84c9526719ad0f0a94f7bad3b476264c7310a5fc5b7c750443c",
+    "visual_review_sha256": "3f38eacc2d90b80ea351667e97cf7cf019bd1a51683f1c262250aedd2160f788"
+  },
+  "usd_to_rub": 100.0,
+  "runs": [
+    {
+      "provider": "agentrouter",
+      "model": "glm-5.2",
+      "elapsed_seconds": 786.888,
+      "usage": {
+        "input_tokens": 220294,
+        "output_tokens": 50334,
+        "thinking_tokens": 0
+      },
+      "cost_usd": 1.623768,
+      "cost_rub": 162.38,
+      "retry_count": 4,
+      "repair_count": 4,
+      "browser_repair_count": 3,
+      "visual_score": 0.616,
+      "validator_passed": true,
+      "browser_passed": false,
+      "publishable": false,
+      "failure_code": "invalid_response",
+      "request_ids": [
+        "b4385c1f-2c57-4c49-957d-c0394c8cbc8f",
+        "39de3bd7-6291-49c4-9d88-b15d319a38f5",
+        "c5e6d90f-3d41-480b-895f-1fd48af7b63b",
+        "31a6db05-3705-4824-ae6d-0740fcb0ea74",
+        "c5d8200b-892f-4c61-ac5e-d858dae05b98",
+        "abae3855-4665-4a82-8c8f-2854761afc46"
+      ],
+      "pricing": {
+        "input_usd_per_million": 6.0,
+        "output_usd_per_million": 6.0
+      }
+    },
+    {
+      "provider": "agentrouter",
+      "model": "gpt-5.5",
+      "elapsed_seconds": 1482.472,
+      "usage": {
+        "input_tokens": 109645,
+        "output_tokens": 34783,
+        "thinking_tokens": 1654
+      },
+      "cost_usd": 1.010996,
+      "cost_rub": 101.1,
+      "retry_count": 1,
+      "repair_count": 4,
+      "browser_repair_count": 3,
+      "visual_score": 0.772,
+      "validator_passed": true,
+      "browser_passed": false,
+      "publishable": false,
+      "failure_code": "provider_unavailable",
+      "request_ids": [
+        "111154b4-7a1d-4ce3-9dfe-ff1829c6848b",
+        "60afdf0d-3fd5-4dac-824e-f4d3e6a78a01",
+        "ac1459e6-a9e5-4fa1-9abc-5ce56a82a0c1",
+        "aa65fc3f-5aef-4da5-8eb6-3565dde1be4b"
+      ],
+      "pricing": {
+        "input_usd_per_million": 7.0,
+        "output_usd_per_million": 7.0
+      }
+    }
+  ],
+  "visual_evaluation": {
+    "source": "codex_independent_visual_review",
+    "rubric": "kaigo-strict-visual-v1"
+  }
+}

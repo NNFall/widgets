@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.analytics.service import record_funnel_event
 from app.saas.models import (
     GenerationArtifact,
     GenerationRun,
@@ -69,6 +70,26 @@ class PublishedRelease:
     manifest: dict[str, Any]
     checksum: str
     created: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class PublicationReleaseState:
+    release_id: UUID
+    artifact_id: UUID
+    previous_release_id: UUID | None
+    revision: int
+    checksum: str
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectPublicationState:
+    publication_id: UUID
+    stable_key: str
+    state: str
+    allowed_domains: tuple[str, ...]
+    active_release: PublicationReleaseState
+    releases: tuple[PublicationReleaseState, ...]
 
 
 class PublicationService:
@@ -154,6 +175,16 @@ class PublicationService:
                 self._verify_release(existing)
                 publication.active_release_id = existing.id
                 publication.state = "published"
+                await record_funnel_event(
+                    database,
+                    event_type="published",
+                    event_key=f"published:publication:{publication.id}",
+                    user_id=actor_user_id,
+                    project_id=project.id,
+                    run_id=artifact.run_id,
+                    artifact_id=artifact.id,
+                    publication_id=publication.id,
+                )
                 return self._snapshot(publication, existing, created=False)
 
             manifest = {
@@ -185,7 +216,91 @@ class PublicationService:
             await database.flush()
             publication.active_release_id = release.id
             publication.state = "published"
+            await record_funnel_event(
+                database,
+                event_type="published",
+                event_key=f"published:publication:{publication.id}",
+                user_id=actor_user_id,
+                project_id=project.id,
+                run_id=artifact.run_id,
+                artifact_id=artifact.id,
+                publication_id=publication.id,
+            )
             return self._snapshot(publication, release, created=True)
+
+    async def get_project_state(
+        self,
+        project_id: UUID,
+        *,
+        actor_user_id: int,
+        tenant_id: int,
+    ) -> ProjectPublicationState | None:
+        async with self._session_factory() as database:
+            project = await database.scalar(
+                select(Project).where(
+                    Project.id == project_id,
+                    Project.owner_user_id == actor_user_id,
+                    Project.tenant_id == tenant_id,
+                )
+            )
+            if project is None:
+                raise PublicationNotFound("project not found")
+            publication = await database.scalar(
+                select(Publication).where(Publication.project_id == project.id)
+            )
+            if publication is None:
+                return None
+            stored_releases = tuple(
+                (
+                    await database.scalars(
+                        select(PublicationRelease)
+                        .where(PublicationRelease.publication_id == publication.id)
+                    )
+                ).all()
+            )
+            for release in stored_releases:
+                self._verify_release(release)
+            by_id = {release.id: release for release in stored_releases}
+            active_chain: list[PublicationRelease] = []
+            cursor = publication.active_release_id
+            visited: set[UUID] = set()
+            while cursor is not None:
+                if cursor in visited or cursor not in by_id:
+                    raise ReleaseCorrupt("publication release history is invalid")
+                visited.add(cursor)
+                release = by_id[cursor]
+                active_chain.append(release)
+                cursor = release.previous_release_id
+            active_chain.reverse()
+            active_ids = {release.id for release in active_chain}
+            detached = sorted(
+                (release for release in stored_releases if release.id not in active_ids),
+                key=lambda release: (release.created_at, str(release.id)),
+            )
+            releases = tuple(active_chain + detached)
+            active = by_id.get(publication.active_release_id)
+            if publication.state != "published" or active is None:
+                raise ReleaseCorrupt("publication active release is invalid")
+
+            def release_state(release: PublicationRelease) -> PublicationReleaseState:
+                return PublicationReleaseState(
+                    release_id=release.id,
+                    artifact_id=release.artifact_id,
+                    previous_release_id=release.previous_release_id,
+                    revision=release.revision,
+                    checksum=release.checksum,
+                    created_at=release.created_at,
+                )
+
+            snapshots = tuple(release_state(release) for release in releases)
+            return ProjectPublicationState(
+                publication_id=publication.id,
+                stable_key=publication.stable_key,
+                state=publication.state,
+                allowed_domains=tuple(publication.allowed_domains),
+                active_release=release_state(active),
+                releases=snapshots,
+            )
 
     async def rollback(
         self,
@@ -484,8 +599,10 @@ __all__ = [
     "InvalidPublicationArtifact",
     "PublicationNotFound",
     "PublicationIdentityUnverified",
+    "PublicationReleaseState",
     "PublicationService",
     "PublicationUpgradeRequired",
+    "ProjectPublicationState",
     "PublishedRelease",
     "ReleaseCorrupt",
 ]

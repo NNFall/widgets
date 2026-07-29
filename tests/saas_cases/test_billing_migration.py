@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 POSTGRES_URL = os.getenv("KAIGO_TEST_POSTGRES_URL")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+LEGACY_UNKNOWN_MERCHANT = "!" * 64
 
 
 def test_billing_migration_is_after_publication_and_enforces_core_invariants() -> None:
@@ -52,6 +53,99 @@ def test_billing_migration_downgrade_removes_new_constraints_before_columns() ->
     assert downgrade.index("fk_usage_ledger_payment_attempt") < downgrade.index(
         'drop_column("usage_ledger", "payment_attempt_id")'
     )
+
+
+def test_merchant_account_migration_is_next_and_fail_closed_for_legacy_rows() -> None:
+    migration = importlib.import_module(
+        "migrations.versions.0011_payment_merchant_account"
+    )
+
+    assert migration.down_revision == "0010_funnel_events"
+    source = open(migration.__file__, encoding="utf-8").read()
+    assert "merchant_account_fingerprint" in source
+    assert LEGACY_UNKNOWN_MERCHANT in source
+    assert "nullable=False" in source
+    assert "server_default" not in source
+
+
+@pytest.mark.asyncio
+async def test_sqlite_merchant_account_migration_backfills_and_downgrades(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    database_path = tmp_path / "merchant-migration.db"
+    database_url = f"sqlite+aiosqlite:///{database_path}"
+    engine = create_async_engine(database_url)
+    payment_id = str(uuid4())
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "CREATE TABLE payment_attempts ("
+                    "id VARCHAR(36) PRIMARY KEY, provider VARCHAR(32) NOT NULL)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO payment_attempts (id, provider) "
+                    "VALUES (:id, 'yookassa')"
+                ),
+                {"id": payment_id},
+            )
+            await connection.execute(
+                text(
+                    "CREATE TABLE alembic_version ("
+                    "version_num VARCHAR(64) NOT NULL PRIMARY KEY)"
+                )
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO alembic_version (version_num) "
+                    "VALUES ('0010_funnel_events')"
+                )
+            )
+    finally:
+        await engine.dispose()
+
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    config = Config(str(PROJECT_ROOT / "alembic.ini"))
+    await asyncio.to_thread(
+        command.upgrade,
+        config,
+        "0011_payment_merchant_account",
+    )
+
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.connect() as connection:
+            value = await connection.scalar(
+                text(
+                    "SELECT merchant_account_fingerprint "
+                    "FROM payment_attempts WHERE id=:id"
+                ),
+                {"id": payment_id},
+            )
+            revision = await connection.run_sync(
+                lambda sync: MigrationContext.configure(sync).get_current_revision()
+            )
+        assert value == LEGACY_UNKNOWN_MERCHANT
+        assert revision == "0011_payment_merchant_account"
+    finally:
+        await engine.dispose()
+
+    await asyncio.to_thread(command.downgrade, config, "0010_funnel_events")
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.connect() as connection:
+            columns = {
+                row[1]
+                for row in (
+                    await connection.execute(text("PRAGMA table_info(payment_attempts)"))
+                )
+            }
+        assert "merchant_account_fingerprint" not in columns
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -117,6 +211,10 @@ async def test_postgres_billing_migration_and_concurrent_fulfillment(monkeypatch
             assert legacy.currency == "RUB"
             assert legacy.plan_fingerprint == legacy_plan.fingerprint()
             assert legacy_plan.generation_tokens == 1_000_000
+            assert (
+                legacy.merchant_account_fingerprint
+                == LEGACY_UNKNOWN_MERCHANT
+            )
         legacy_result = await BillingService(factory, provider).handle_notification(
             {"payment_id": "legacy-pay-1"}
         )
@@ -137,6 +235,7 @@ async def test_postgres_billing_migration_and_concurrent_fulfillment(monkeypatch
         winner = PaymentAttempt(
             user_id=1,
             provider=provider.name,
+            merchant_account_fingerprint=provider.merchant_account_fingerprint,
             idempotency_key="postgres-insert-race",
             plan_code=plan.code,
             plan_snapshot=plan.snapshot(),
@@ -174,6 +273,12 @@ async def test_postgres_billing_migration_and_concurrent_fulfillment(monkeypatch
         checkout = await checkout_service.create_checkout(
             1, "starter_monthly", "postgres-checkout"
         )
+        async with factory() as database:
+            stored_checkout = await database.get(PaymentAttempt, checkout.payment_id)
+            assert (
+                stored_checkout.merchant_account_fingerprint
+                == provider.merchant_account_fingerprint
+            )
         payload = {"payment_id": f"pay-{checkout.payment_id}"}
         first_service = BillingService(factory, provider)
         second_service = BillingService(factory, provider)
@@ -206,7 +311,7 @@ async def test_postgres_billing_migration_and_concurrent_fulfillment(monkeypatch
             revision = await connection.run_sync(
                 lambda sync: MigrationContext.configure(sync).get_current_revision()
             )
-        assert revision == "0009_billing_foundation"
+        assert revision == "0013_pattern_registry"
 
         await asyncio.to_thread(command.downgrade, config, "0008_publication_releases")
         async with target_engine.connect() as connection:

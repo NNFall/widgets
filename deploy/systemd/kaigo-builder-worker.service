@@ -1,0 +1,76 @@
+[Unit]
+Description=Kaigo durable SaaS generation worker
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/kaigo/current
+Environment=COMPOSE_PROJECT_NAME=kaigo
+EnvironmentFile=/etc/kaigo/builder-worker-image.env
+Environment=KAIGO_ENVIRONMENT=production
+Environment=KAIGO_WORKER_BUILD_BRIDGE=br-kaigo-build
+Environment=KAIGO_WORKER_DATABASE_BRIDGE=br-kaigo-wdb
+Environment=KAIGO_WORKER_DATABASE_SUBNET=172.30.242.0/28
+Environment=KAIGO_WORKER_DATABASE_GATEWAY=172.30.242.1
+Environment=KAIGO_WORKER_DATABASE_ADDRESS=172.30.242.2
+Environment=KAIGO_WORKER_DATABASE_CLIENT_ADDRESS=172.30.242.3
+Environment=KAIGO_WORKER_DATABASE_PORT=5432
+ExecStartPre=/bin/bash -ceu '[[ "$KAIGO_BUILDER_WORKER_IMAGE" =~ ^(.+@sha256:|sha256:)[0-9a-fA-F]{64}$ ]]; docker image inspect "$KAIGO_BUILDER_WORKER_IMAGE" >/dev/null'
+ExecStartPre=+/bin/bash -ceu '\
+command -v docker >/dev/null; \
+[[ "$$(cat /proc/sys/net/bridge/bridge-nf-call-iptables)" == 1 ]] || { echo "bridge netfilter must be enabled for worker DB containment" >&2; exit 1; }; \
+docker info >/dev/null; \
+worker_id="$$(docker container ls -aq --filter name=ai_project_builder_worker)"; \
+worker_running=false; \
+if [[ -n "$$worker_id" ]]; then worker_running="$$(docker container inspect --format "{{.State.Running}}" "$$worker_id")"; fi; \
+[[ "$$worker_running" == false ]] || { echo "refusing to mutate worker firewall while the container is running" >&2; exit 1; }'
+ExecStartPre=+/bin/bash /opt/kaigo/current/scripts/apply_builder_egress_guard.sh
+# Docker embedded DNS (127.0.0.11) stays container-local; resolved public
+# connections use the build network, the worker's only default-gateway network.
+ExecStartPre=+/bin/bash -ceu '\
+command -v docker >/dev/null; \
+command -v iptables >/dev/null; \
+docker info >/dev/null; \
+worker_id="$$(docker container ls -aq --filter name=ai_project_builder_worker)"; \
+worker_running=false; \
+if [[ -n "$$worker_id" ]]; then worker_running="$$(docker container inspect --format "{{.State.Running}}" "$$worker_id")"; fi; \
+[[ "$$worker_running" == false ]] || { echo "refusing to mutate worker firewall while the container is running" >&2; exit 1; }; \
+for interface in "$${KAIGO_WORKER_BUILD_BRIDGE}" "$${KAIGO_WORKER_DATABASE_BRIDGE}"; do while iptables -w 10 -C DOCKER-USER -i "$$interface" -j KAIGO-WDB-FWD-G1 2>/dev/null; do iptables -w 10 -D DOCKER-USER -i "$$interface" -j KAIGO-WDB-FWD-G1; done; done; \
+for interface in "$${KAIGO_WORKER_BUILD_BRIDGE}" "$${KAIGO_WORKER_DATABASE_BRIDGE}"; do while iptables -w 10 -C INPUT -i "$$interface" -j KAIGO-WDB-HOST-G1 2>/dev/null; do iptables -w 10 -D INPUT -i "$$interface" -j KAIGO-WDB-HOST-G1; done; done; \
+iptables -w 10 -nL KAIGO-WDB-FWD-G1 >/dev/null 2>&1 || iptables -w 10 -N KAIGO-WDB-FWD-G1; \
+iptables -w 10 -nL KAIGO-WDB-HOST-G1 >/dev/null 2>&1 || iptables -w 10 -N KAIGO-WDB-HOST-G1; \
+iptables -w 10 -F KAIGO-WDB-FWD-G1; \
+iptables -w 10 -A KAIGO-WDB-FWD-G1 -i "$${KAIGO_WORKER_DATABASE_BRIDGE}" -s "$${KAIGO_WORKER_DATABASE_CLIENT_ADDRESS}/32" -d "$${KAIGO_WORKER_DATABASE_ADDRESS}/32" -p tcp -m tcp --dport "$${KAIGO_WORKER_DATABASE_PORT}" -m conntrack --ctstate NEW -j ACCEPT; \
+for destination in 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.0.2.0/24 192.88.99.0/24 192.168.0.0/16 198.18.0.0/15 198.51.100.0/24 203.0.113.0/24 224.0.0.0/4 240.0.0.0/4; do iptables -w 10 -A KAIGO-WDB-FWD-G1 -d "$$destination" -m conntrack --ctstate NEW -j REJECT --reject-with icmp-port-unreachable; done; \
+iptables -w 10 -A KAIGO-WDB-FWD-G1 -i "$${KAIGO_WORKER_DATABASE_BRIDGE}" -m conntrack --ctstate NEW -j REJECT --reject-with icmp-port-unreachable; \
+iptables -w 10 -A KAIGO-WDB-FWD-G1 -j RETURN; \
+iptables -w 10 -F KAIGO-WDB-HOST-G1; \
+iptables -w 10 -A KAIGO-WDB-HOST-G1 -m conntrack --ctstate NEW -j REJECT --reject-with icmp-port-unreachable; \
+iptables -w 10 -A KAIGO-WDB-HOST-G1 -j RETURN; \
+iptables -w 10 -I DOCKER-USER 2 -i "$${KAIGO_WORKER_BUILD_BRIDGE}" -j KAIGO-WDB-FWD-G1; \
+iptables -w 10 -I DOCKER-USER 3 -i "$${KAIGO_WORKER_DATABASE_BRIDGE}" -j KAIGO-WDB-FWD-G1; \
+iptables -w 10 -I INPUT 2 -i "$${KAIGO_WORKER_BUILD_BRIDGE}" -j KAIGO-WDB-HOST-G1; \
+iptables -w 10 -I INPUT 3 -i "$${KAIGO_WORKER_DATABASE_BRIDGE}" -j KAIGO-WDB-HOST-G1'
+ExecStart=/usr/bin/docker compose --profile saas-worker up --no-build --no-deps --abort-on-container-exit --exit-code-from builder-worker builder-worker
+ExecStop=/usr/bin/docker compose --profile saas-worker stop -t 45 builder-worker
+ExecStopPost=+/bin/bash -ceu '\
+command -v docker >/dev/null; \
+command -v iptables >/dev/null; \
+docker info >/dev/null; \
+worker_id="$$(docker container ls -aq --filter name=ai_project_builder_worker)"; \
+worker_running=false; \
+if [[ -n "$$worker_id" ]]; then worker_running="$$(docker container inspect --format "{{.State.Running}}" "$$worker_id")"; fi; \
+[[ "$$worker_running" == false ]] || { echo "refusing to remove worker firewall while the container is running" >&2; exit 1; }; \
+for interface in "$${KAIGO_WORKER_BUILD_BRIDGE}" "$${KAIGO_WORKER_DATABASE_BRIDGE}"; do while iptables -w 10 -C DOCKER-USER -i "$$interface" -j KAIGO-WDB-FWD-G1 2>/dev/null; do iptables -w 10 -D DOCKER-USER -i "$$interface" -j KAIGO-WDB-FWD-G1; done; done; \
+for interface in "$${KAIGO_WORKER_BUILD_BRIDGE}" "$${KAIGO_WORKER_DATABASE_BRIDGE}"; do while iptables -w 10 -C INPUT -i "$$interface" -j KAIGO-WDB-HOST-G1 2>/dev/null; do iptables -w 10 -D INPUT -i "$$interface" -j KAIGO-WDB-HOST-G1; done; done; \
+if iptables -w 10 -nL KAIGO-WDB-FWD-G1 >/dev/null 2>&1; then iptables -w 10 -F KAIGO-WDB-FWD-G1; iptables -w 10 -X KAIGO-WDB-FWD-G1; fi; \
+if iptables -w 10 -nL KAIGO-WDB-HOST-G1 >/dev/null 2>&1; then iptables -w 10 -F KAIGO-WDB-HOST-G1; iptables -w 10 -X KAIGO-WDB-HOST-G1; fi'
+Restart=always
+RestartSec=5
+TimeoutStartSec=180
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

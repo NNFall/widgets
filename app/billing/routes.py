@@ -11,6 +11,7 @@ from app.billing.payments import (
     BillingError,
     BillingService,
     CheckoutIdempotencyConflict,
+    MerchantAccountMismatch,
     PaymentNotFound,
     UnknownPlan,
 )
@@ -20,6 +21,10 @@ from app.projects.routes import _require_csrf, _scope
 from app.saas.models import PaymentAttempt, Subscription
 
 BILLING_SERVICE_KEY = "billing_service"
+_MERCHANT_CUTOVER_MESSAGE = (
+    "Оплата начата в другом аккаунте магазина. "
+    "Верните прежнюю платёжную конфигурацию для завершения."
+)
 
 
 def _error(
@@ -54,6 +59,25 @@ def _subscription(row: Subscription) -> dict[str, object]:
         "status": row.status,
         "current_period_start": _time(row.current_period_start),
         "current_period_end": _time(row.current_period_end),
+    }
+
+
+def _merchant_recovery(
+    service: BillingService,
+    attempt: PaymentAttempt,
+) -> dict[str, object]:
+    if service.is_current_merchant_account(attempt):
+        return {
+            "status": "ready",
+            "recoverable": True,
+            "action": "continue_checkout",
+            "message": "Платёж можно безопасно продолжить.",
+        }
+    return {
+        "status": "merchant_cutover_required",
+        "recoverable": True,
+        "action": "restore_previous_merchant",
+        "message": _MERCHANT_CUTOVER_MESSAGE,
     }
 
 
@@ -94,6 +118,14 @@ async def create_checkout(request: web.Request) -> web.Response:
     except CheckoutIdempotencyConflict:
         return web.json_response(
             _error("idempotency_conflict", "Этот ключ уже использован для другого тарифа"),
+            status=409,
+        )
+    except MerchantAccountMismatch:
+        return web.json_response(
+            _error(
+                "merchant_cutover_required",
+                _MERCHANT_CUTOVER_MESSAGE,
+            ),
             status=409,
         )
     except YooKassaVerificationError:
@@ -140,6 +172,14 @@ async def resume_checkout(request: web.Request) -> web.Response:
         result = await _service(request).resume_checkout(user_id, payment_id)
     except PaymentNotFound:
         raise web.HTTPNotFound() from None
+    except MerchantAccountMismatch:
+        return web.json_response(
+            _error(
+                "merchant_cutover_required",
+                _MERCHANT_CUTOVER_MESSAGE,
+            ),
+            status=409,
+        )
     except YooKassaVerificationError:
         return web.json_response(
             _error("provider_response_invalid", "Платёжная система вернула неверный ответ"),
@@ -196,21 +236,49 @@ async def payment_status(request: web.Request) -> web.Response:
 
 async def pending_payment(request: web.Request) -> web.Response:
     user_id, _tenant_id = await _scope(request)
+    service = _service(request)
     factory = get_session_factory(request.app)
     async with factory() as database:
-        attempt = await database.scalar(
-            select(PaymentAttempt)
-            .where(
-                PaymentAttempt.user_id == user_id,
-                PaymentAttempt.status.in_(("creating", "pending", "failed")),
+        attempts = list(
+            await database.scalars(
+                select(PaymentAttempt)
+                .where(
+                    PaymentAttempt.user_id == user_id,
+                    PaymentAttempt.status.in_(("creating", "pending", "failed")),
+                )
+                .order_by(
+                    PaymentAttempt.updated_at.desc(),
+                    PaymentAttempt.created_at.desc(),
+                )
             )
-            .order_by(PaymentAttempt.updated_at.desc(), PaymentAttempt.created_at.desc())
-            .limit(1)
+        )
+        if not attempts:
+            return web.json_response(
+                {"payment": None, "checkout_url": None, "recovery": None}
+            )
+        # A stale attempt from another merchant account takes precedence over a
+        # newer current-account attempt.  That historical state can exist after
+        # an older deployment; exposing either checkout while the account is in
+        # cutover would make payment fulfillment ambiguous.
+        attempt = next(
+            (
+                row
+                for row in attempts
+                if not service.is_current_merchant_account(row)
+            ),
+            attempts[0],
+        )
+        recovery = _merchant_recovery(service, attempt)
+        checkout_url = (
+            attempt.checkout_url
+            if recovery["status"] == "ready"
+            else None
         )
         return web.json_response(
             {
-                "payment": _payment(attempt) if attempt is not None else None,
-                "checkout_url": attempt.checkout_url if attempt is not None else None,
+                "payment": _payment(attempt),
+                "checkout_url": checkout_url,
+                "recovery": recovery,
             }
         )
 
@@ -250,6 +318,19 @@ async def yookassa_webhook(request: web.Request) -> web.Response:
             status=503,
         )
         response.headers["Retry-After"] = "30"
+        return response
+    except MerchantAccountMismatch:
+        response = web.json_response(
+            _error(
+                "merchant_cutover_required",
+                _MERCHANT_CUTOVER_MESSAGE,
+                retryable=True,
+            ),
+            status=503,
+        )
+        # YooKassa retries non-2xx notifications.  Keep the event recoverable
+        # while an operator restores the merchant account that created it.
+        response.headers["Retry-After"] = "300"
         return response
     except BillingError:
         return web.json_response(

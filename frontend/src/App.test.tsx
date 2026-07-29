@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -21,14 +21,14 @@ describe('App', () => {
   it('renders the selected Kaigo hero and full navigation', () => {
     render(<App />);
 
-    expect(screen.getByRole('heading', { name: /Через 10 минут.*использует AI/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Обычно за 10–20 минут.*первую версию.*AI-виджета/i })).toBeInTheDocument();
     expect(
       Array.from(document.querySelectorAll('.hero-title-line'), (line) => line.textContent),
     ).toEqual([
-      'Через 10 минут',
-      'вы сможете сказать:',
-      'наш бизнес',
-      'использует AI',
+      'Обычно за 10–20 минут',
+      'вы получите',
+      'первую версию',
+      'AI-виджета',
     ]);
     const navigation = within(screen.getByRole('navigation', { name: 'Основная навигация' }));
     expect(navigation.getByRole('link', { name: 'Продукт' })).toHaveAttribute('href', '#product');
@@ -43,28 +43,91 @@ describe('App', () => {
       'href',
       '/studio',
     );
-    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(8);
+    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(9);
   });
 
-  it('routes a valid website URL to Studio with an encoded query', async () => {
+  it('preserves only allowlisted campaign parameters on every Studio navigation link', () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/?utm_source=telegram&utm_campaign=launch&email=private%40example.com&utm_unknown=discard',
+    );
+
+    render(<App />);
+
+    const studioLinks = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href^="/studio"]'));
+    expect(studioLinks.length).toBeGreaterThan(1);
+    for (const link of studioLinks) {
+      expect(link.getAttribute('href')).toBe('/studio?utm_source=telegram&utm_campaign=launch');
+    }
+  });
+
+  it('stores URL and brief server-side and navigates with only an opaque draft id', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/?utm_source=telegram&utm_medium=social&utm_campaign=launch&utm_term=ai&utm_content=hero&email=private%40example.com&utm_unknown=discard',
+    );
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/drafts') {
+        return new Response(JSON.stringify({ id: 'draft-opaque-1' }), { status: 201 });
+      }
+      if (String(input) === '/api/auth/session') {
+        return new Response(JSON.stringify({ enabled: false, authenticated: false }));
+      }
+      throw new Error(`unexpected request: ${String(input)}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
     const user = userEvent.setup();
     render(<App />);
 
-    await user.type(screen.getByLabelText('Ссылка на действующий сайт'), 'https://пример.рф/услуги');
-    await user.click(screen.getByRole('button', { name: 'Создать AI-виджет' }));
+    await user.type(screen.getByLabelText('Ссылка на действующий сайт'), 'https://FAẞ.DE:443/услуги');
+    await user.type(
+      screen.getAllByRole('textbox', { name: 'Пожелание к AI-виджету' })[0],
+      'Отвечай кратко',
+    );
+    await user.click(screen.getAllByRole('button', { name: 'Получить бесплатную версию' })[0]);
 
-    expect(window.location.pathname).toBe('/studio');
-    expect(new URLSearchParams(window.location.search).get('url')).toBe('https://пример.рф/услуги');
+    await waitFor(() => expect(window.location.pathname).toBe('/studio'));
+    const destination = new URLSearchParams(window.location.search);
+    expect(Object.fromEntries(destination)).toEqual({ draft: 'draft-opaque-1' });
+    expect(window.location.href).not.toContain('fass.de');
+    expect(window.location.href).not.toContain(encodeURIComponent('Отвечай кратко'));
+    expect(fetchMock).toHaveBeenCalledWith('/api/drafts', expect.objectContaining({
+      method: 'POST',
+      credentials: 'include',
+      body: JSON.stringify({
+        url: 'https://fass.de/%D1%83%D1%81%D0%BB%D1%83%D0%B3%D0%B8',
+        brief: 'Отвечай кратко',
+        campaign: {
+          utm_source: 'telegram',
+          utm_medium: 'social',
+          utm_campaign: 'launch',
+          utm_term: 'ai',
+          utm_content: 'hero',
+        },
+      }),
+    }));
   });
 
-  it('shows a Russian inline error for an invalid website URL', async () => {
+  it.each([
+    'example.com',
+    'http://example.com',
+    'https://user:secret@example.com',
+    'https://example.com:8443',
+    'https://example.com/?token=secret',
+    'https://example.com/#section',
+    'https://127.0.0.1/private',
+    'https://localhost/private',
+    'https://example.com\\private',
+  ])('shows a Russian inline error for an incompatible website URL: %s', async (value) => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.type(screen.getByLabelText('Ссылка на действующий сайт'), 'example.com');
-    await user.click(screen.getByRole('button', { name: 'Создать AI-виджет' }));
+    await user.type(screen.getByLabelText('Ссылка на действующий сайт'), value);
+    await user.click(screen.getAllByRole('button', { name: 'Получить бесплатную версию' })[0]);
 
-    expect(screen.getByRole('alert')).toHaveTextContent('Введите полный адрес сайта с http:// или https://');
+    expect(screen.getByRole('alert')).toHaveTextContent('Введите публичный HTTPS-адрес без параметров и авторизации');
     expect(window.location.pathname).toBe('/');
   });
 
@@ -125,7 +188,7 @@ describe('App', () => {
 
     render(<App />);
 
-    expect(await screen.findByRole('heading', { name: 'Студия Kaigo' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Новый проект в Kaigo Studio' })).toBeInTheDocument();
     expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(0);
   });
 
@@ -134,7 +197,7 @@ describe('App', () => {
 
     render(<App />);
 
-    expect(screen.getByRole('heading', { name: /Через 10 минут.*использует AI/i })).toBeInTheDocument();
-    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(8);
+    expect(screen.getByRole('heading', { name: /Обычно за 10–20 минут.*первую версию.*AI-виджета/i })).toBeInTheDocument();
+    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(9);
   });
 });

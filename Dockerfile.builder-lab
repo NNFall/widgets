@@ -8,11 +8,13 @@ COPY requirements.txt requirements.builder-lab.txt ./
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN pip install --no-cache-dir -r requirements.txt -r requirements.builder-lab.txt \
     && playwright install --with-deps chromium \
-    && groupadd --system kaigo \
-    && useradd --system --gid kaigo --home-dir /app --shell /usr/sbin/nologin kaigo \
+    && groupadd --gid 10001 kaigo \
+    && useradd --uid 10001 --gid kaigo --home-dir /app --no-create-home --no-log-init --shell /usr/sbin/nologin kaigo \
     && chown -R kaigo:kaigo /app /ms-playwright \
     && rm -rf /var/lib/apt/lists/*
 
+# The context copy includes scripts/capture_reference_site.py,
+# scripts/analyze_reference_site.py and scripts/smoke_builder_lab.py.
 COPY --chown=kaigo:kaigo . .
 
 ENV PYTHONPATH=/app

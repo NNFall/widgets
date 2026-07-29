@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "direction_id": "candidate-2",
+  "selections": [
+    {
+      "slot": "launcher",
+      "pattern_id": "orb-pulse",
+      "version": 1,
+      "parameters": {
+        "size_px": 64,
+        "attention_delay_ms": 12000
+      },
+      "reason": "Выразительный круглый launcher можно стилизовать под бутон и мягко оживить после паузы."
+    },
+    {
+      "slot": "shell",
+      "pattern_id": "compact-chat",
+      "version": 1,
+      "parameters": {
+        "width_px": 388,
+        "height_px": 560,
+        "radius_px": 26
+      },
+      "reason": "Компактная оболочка сохраняет контекст исходного сайта и остается удобной на desktop и mobile."
+    },
+    {
+      "slot": "messages",
+      "pattern_id": "paired-bubbles",
+      "version": 1,
+      "parameters": {
+        "bubble_radius_px": 18,
+        "show_names": true
+      },
+      "reason": "Разнесенные сообщения сразу показывают диалог между посетителем и AI-консультантом."
+    },
+    {
+      "slot": "composer",
+      "pattern_id": "single-line-pill",
+      "version": 1,
+      "parameters": {
+        "placeholder": "Напишите повод или бюджет…",
+        "height_px": 52
+      },
+      "reason": "Однострочный composer делает главное действие очевидным и не перегружает небольшой чат."
+    },
+    {
+      "slot": "motion",
+      "pattern_id": "spring-reveal",
+      "version": 1,
+      "parameters": {
+        "duration_ms": 620,
+        "travel_px": 24
+      },
+      "reason": "Пружинное раскрытие дает заметное брендовое движение без резкого скачка."
+    }
+  ],
+  "custom_escape": null,
+  "summary": "Проверенная компактная чат-композиция для цветочного AI-консультанта Flowwow."
+}

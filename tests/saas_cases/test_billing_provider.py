@@ -275,3 +275,35 @@ async def test_yookassa_wraps_transport_failure_without_leaking_credentials() ->
         await provider.verify_notification(notification)
     assert "secret" not in str(caught.value)
     await provider.aclose()
+
+
+@pytest.mark.asyncio
+async def test_merchant_account_fingerprint_is_stable_and_does_not_include_secret() -> None:
+    first = YooKassaProvider(
+        shop_id="merchant-123",
+        secret_key="secret-a",
+        return_url="https://kaigo.example/billing/success",
+        test_mode=True,
+    )
+    rotated_secret = YooKassaProvider(
+        shop_id="merchant-123",
+        secret_key="secret-b",
+        return_url="https://kaigo.example/billing/success",
+        test_mode=True,
+    )
+    another_merchant = YooKassaProvider(
+        shop_id="merchant-456",
+        secret_key="secret-a",
+        return_url="https://kaigo.example/billing/success",
+        test_mode=True,
+    )
+    try:
+        assert first.merchant_account_fingerprint == rotated_secret.merchant_account_fingerprint
+        assert first.merchant_account_fingerprint != another_merchant.merchant_account_fingerprint
+        assert len(first.merchant_account_fingerprint) == 64
+        assert "merchant-123" not in first.merchant_account_fingerprint
+        assert "secret-a" not in first.merchant_account_fingerprint
+    finally:
+        await first.aclose()
+        await rotated_secret.aclose()
+        await another_merchant.aclose()

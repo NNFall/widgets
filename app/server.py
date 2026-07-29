@@ -390,6 +390,10 @@ async def create_app(
         app,
         public_base_url=cfg.public_base_url or f"http://localhost:{cfg.port}",
         public_auth_enabled=cfg.public_auth_enabled,
+        entry_rate_limit_requests=cfg.entry_rate_limit_requests,
+        entry_rate_limit_window_seconds=cfg.entry_rate_limit_window_seconds,
+        entry_max_body_bytes=cfg.entry_max_body_bytes,
+        trusted_proxy_cidrs=cfg.publication_chat_trusted_proxy_cidrs,
     )
     setup_project_routes(app)
     setup_publication_routes(app)

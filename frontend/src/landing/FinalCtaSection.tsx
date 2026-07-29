@@ -4,6 +4,7 @@ import type { Variants } from 'motion/react';
 
 import { KaigoLogo } from '../shared/KaigoLogo';
 import { UrlComposer } from '../shared/UrlComposer';
+import { studioHref } from '../shared/campaign';
 
 const guarantees = [
   { label: 'Без кода', Icon: Code },
@@ -58,6 +59,7 @@ const finalWidgetHaloVariants = {
 
 export function FinalCtaSection() {
   const reducedMotion = Boolean(useReducedMotion());
+  const campaignStudioHref = studioHref();
 
   return (
     <section className="landing-section final-cta-section" id="final-cta" data-landing-section>
@@ -71,8 +73,8 @@ export function FinalCtaSection() {
       >
         <motion.div className="final-cta-copy" variants={finalCopyVariants}>
           <p className="section-kicker">Можно начать прямо сейчас</p>
-          <h2>Через 10 минут ваш бизнес<br />сможет использовать AI</h2>
-          <p>Вставьте сайт, получите первый вариант и решите, что изменить перед публикацией.</p>
+          <h2>Сначала получите<br />бесплатную экспресс-версию</h2>
+          <p>Обычно это занимает 10–20 минут; сложные сайты требуют больше времени. Затем проверьте предпросмотр и чат.</p>
         </motion.div>
         <motion.div className="final-cta-visual" variants={finalCopyVariants}>
           <motion.div
@@ -91,7 +93,7 @@ export function FinalCtaSection() {
         <motion.div className="final-composer" variants={composerVariants}>
           <UrlComposer
             ariaLabel="Ссылка на сайт — финальная форма"
-            submitAriaLabel="Создать AI-виджет по нижней форме"
+            submitAriaLabel="Получить бесплатную версию"
           />
         </motion.div>
         <motion.div className="guarantee-row" variants={guaranteeRowVariants}>
@@ -104,7 +106,7 @@ export function FinalCtaSection() {
         <div className="landing-shell site-footer__inner">
           <div><KaigoLogo /><p>Персональные AI-виджеты<br />для бизнеса.</p></div>
           <nav aria-label="Навигация в подвале">
-            <a href="#product">Продукт</a><a href="#how-it-works">Как это работает</a><a href="#case-study">Кейсы</a><a href="#faq">Помощь</a><a href="/studio">Студия</a>
+            <a href="#product">Продукт</a><a href="#how-it-works">Как это работает</a><a href="#case-study">Кейсы</a><a href="#faq">Помощь</a><a href={campaignStudioHref}>Студия</a>
           </nav>
           <div className="site-footer__legal"><span>Политика конфиденциальности</span><span>Условия использования</span></div>
         </div>

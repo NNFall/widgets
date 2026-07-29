@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { KaigoLogo } from '../shared/KaigoLogo';
 import { UrlComposer } from '../shared/UrlComposer';
+import { studioHref } from '../shared/campaign';
 import { HeroOrbitScene } from './HeroOrbitScene';
 
 const navItems = [
@@ -13,6 +14,7 @@ const navItems = [
 ] as const;
 
 export function HeroSection() {
+  const campaignStudioHref = studioHref();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuToggleRef = useRef<HTMLButtonElement>(null);
   const focusFrameRef = useRef<number | null>(null);
@@ -44,7 +46,7 @@ export function HeroSection() {
           <nav className="site-header__nav" aria-label="Основная навигация">
             {navItems.map(([label, href]) => <a href={href} key={href}>{label}</a>)}
           </nav>
-          <a className="site-header__cta" href="/studio">Перейти в студию</a>
+          <a className="site-header__cta" href={campaignStudioHref}>Перейти в студию</a>
           <button
             ref={menuToggleRef}
             className="site-header__menu-toggle"
@@ -67,7 +69,7 @@ export function HeroSection() {
           {navItems.map(([label, href]) => (
             <a href={href} key={href} onClick={closeMobileMenu}>{label}</a>
           ))}
-          <a href="/studio" onClick={closeMobileMenu}>Перейти в студию</a>
+          <a href={campaignStudioHref} onClick={closeMobileMenu}>Перейти в студию</a>
         </nav>
       </header>
 
@@ -75,10 +77,10 @@ export function HeroSection() {
         <div className="hero-section__inner">
           <div className="hero-copy">
             <h1>
-              <span className="hero-title-line">Через 10 минут</span>
-              <span className="hero-title-line">вы сможете сказать:</span>
-              <span className="hero-title-line">наш бизнес</span>
-              <span className="hero-title-line">использует AI</span>
+              <span className="hero-title-line">Обычно за 10–20 минут</span>
+              <span className="hero-title-line">вы получите</span>
+              <span className="hero-title-line">первую версию</span>
+              <span className="hero-title-line">AI-виджета</span>
             </h1>
             <p>
               Добавьте ссылку — Kaigo изучит страницы, услуги, стиль и вопросы клиентов,

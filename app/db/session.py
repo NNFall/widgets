@@ -28,8 +28,12 @@ async def init_engine(app: web.Application) -> AsyncIterator[None]:
     app[ENGINE_KEY] = engine
     app[SESSION_FACTORY_KEY] = session_factory
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Alembic owns every production schema transition. Developers and tests may
+    # opt in to metadata creation for disposable databases, but production
+    # config rejects that flag before an engine is created.
+    if config.auto_create_schema:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
 
     try:
         yield

@@ -182,12 +182,15 @@ describe('landing motion contracts', () => {
     );
   });
 
-  it('keeps the landing Studio story decorative, activity-gated, and state-safe', () => {
+  it('keeps the truthful landing Studio preview activity-gated and free of fake interactions', () => {
     expect(studioSectionSource).toContain('useMotionActivity<HTMLElement>()');
     expect(studioSectionSource).toContain("data-motion-active={active ? 'true' : 'false'}");
-    expect(studioSectionSource).toContain('className="studio-demo__ambient-cursor"');
-    expect(studioSectionSource).toContain('className="studio-demo__preview-wipe"');
-    expect(studioSectionSource).toContain('className="studio-demo__version-confirmation"');
+    expect(studioSectionSource).toContain('className="studio-demo__checklist"');
+    expect(studioSectionSource).toContain('motionActive={active}');
+    expect(studioSectionSource).toContain('reducedMotion={reducedMotion}');
+    expect(studioSectionSource).not.toContain('className="studio-demo__ambient-cursor"');
+    expect(studioSectionSource).not.toContain('className="studio-demo__preview-wipe"');
+    expect(studioSectionSource).not.toContain('className="studio-demo__version-confirmation"');
     expect(studioSectionSource).not.toContain('setTimeout');
     expect(studioSectionSource).not.toContain('setInterval');
     expect(studioSectionSource).not.toContain('useEffect');
@@ -199,9 +202,7 @@ describe('landing motion contracts', () => {
       'studio-version-confirmation',
       'studio-preview-refresh',
     ].forEach((name) => {
-      expect(stylesSource).toMatch(
-        new RegExp(`\\[data-motion-active='true'\\][^{}]*\\{[^}]*animation:[^;]*${name}[^;]*infinite`, 's'),
-      );
+      expect(stylesSource).not.toContain(name);
     });
   });
 
@@ -232,26 +233,13 @@ describe('landing motion contracts', () => {
     expect(footerStart).toBeGreaterThan(motionEnd);
   });
 
-  it('uses transform/opacity-only Studio keyframes and a clean reduced-motion final state', () => {
-    [
-      'studio-cursor-cycle',
-      'studio-cursor-click',
-      'studio-apply-press',
-      'studio-version-confirmation',
-      'studio-preview-refresh',
-    ].forEach((name) => {
-      const body = stylesSource.match(new RegExp(`@keyframes ${name}\\s*\\{([\\s\\S]*?)\\n\\}`))?.[1];
-      expect(body, `missing @keyframes ${name}`).toBeDefined();
-      expect(body).toMatch(/(?:transform|opacity):/);
-      expect(body).not.toMatch(/(?:top|right|bottom|left|width|height|filter|box-shadow):/);
-    });
-
+  it('keeps the remaining Studio preview motion reduced-motion safe', () => {
     const reducedMotionStart = stylesSource.indexOf('@media (prefers-reduced-motion: reduce)');
     const nextMediaQuery = stylesSource.indexOf('@media (max-width: 1280px)', reducedMotionStart);
     const reducedMotionRules = stylesSource.slice(reducedMotionStart, nextMediaQuery);
-    expect(reducedMotionRules).toContain('.studio-demo__ambient-cursor');
-    expect(reducedMotionRules).toContain('.studio-demo__preview-wipe');
     expect(reducedMotionRules).toContain('.mini-site__widget-halo');
     expect(reducedMotionRules).toContain('animation: none !important;');
+    expect(reducedMotionRules).not.toContain('.studio-demo__ambient-cursor');
+    expect(reducedMotionRules).not.toContain('.studio-demo__preview-wipe');
   });
 });

@@ -262,6 +262,59 @@ async def test_publish_is_artifact_idempotent_stable_and_immutable(publication_d
 
 
 @pytest.mark.asyncio
+async def test_publication_state_returns_active_release_and_immutable_history(publication_db) -> None:
+    _engine, factory, ids = publication_db
+    service = PublicationService(factory)
+
+    first = await service.publish(
+        ids["project"], actor_user_id=10, tenant_id=1, artifact_id=ids["first"]
+    )
+    second = await service.publish(
+        ids["project"],
+        actor_user_id=10,
+        tenant_id=1,
+        artifact_id=ids["same_revision_other_run"],
+    )
+
+    state = await service.get_project_state(
+        ids["project"], actor_user_id=10, tenant_id=1
+    )
+
+    assert state is not None
+    assert state.publication_id == first.publication_id
+    assert state.active_release.release_id == second.release_id
+    assert state.allowed_domains == ("https://example.com",)
+    assert tuple(release.release_id for release in state.releases) == (
+        first.release_id,
+        second.release_id,
+    )
+    assert state.releases[1].previous_release_id == first.release_id
+    assert all(release.created_at is not None for release in state.releases)
+
+    assert await service.get_project_state(
+        ids["foreign_project"], actor_user_id=11, tenant_id=1
+    ) is None
+    with pytest.raises(PublicationNotFound):
+        await service.get_project_state(
+            ids["project"], actor_user_id=11, tenant_id=1
+        )
+
+    foreign = await service.publish(
+        ids["foreign_project"],
+        actor_user_id=11,
+        tenant_id=1,
+        artifact_id=ids["foreign"],
+    )
+    async with factory() as database, database.begin():
+        active = await database.get(PublicationRelease, second.release_id)
+        active.previous_release_id = foreign.release_id
+    with pytest.raises(ReleaseCorrupt):
+        await service.get_project_state(
+            ids["project"], actor_user_id=10, tenant_id=1
+        )
+
+
+@pytest.mark.asyncio
 async def test_publish_rejects_drafts_foreign_artifacts_and_inconsistent_rows(publication_db) -> None:
     _engine, factory, ids = publication_db
     service = PublicationService(factory)
@@ -612,6 +665,70 @@ async def test_publish_route_requires_auth_csrf_owner_verified_and_subscription(
 
 
 @pytest.mark.asyncio
+async def test_publication_state_route_is_verified_owner_scoped_and_needs_no_csrf(tmp_path) -> None:
+    config = SimpleNamespace(
+        public_auth_enabled=True,
+        public_base_url="https://kaigo.example/",
+        environment="production",
+        publication_allow_insecure_origins=False,
+    )
+    engine, factory, client, ids = await _publication_app(tmp_path, config=config)
+    try:
+        route = f"/api/projects/{ids['project']}/publication"
+        assert (await client.get(route)).status == 401
+
+        await client.post("/test/login/11")
+        assert (await client.get(route)).status == 404
+
+        await client.post("/test/login/10")
+        async with factory() as database, database.begin():
+            identity = await database.scalar(
+                select(UserIdentity).where(UserIdentity.user_id == 10)
+            )
+            identity.email_verified = False
+        assert (await client.get(route)).status == 403
+
+        async with factory() as database, database.begin():
+            identity = await database.scalar(
+                select(UserIdentity).where(UserIdentity.user_id == 10)
+            )
+            identity.email_verified = True
+        empty = await client.get(route)
+        assert empty.status == 200
+        assert await empty.json() == {"publication": None}
+
+        first = await client.post(
+            f"/api/projects/{ids['project']}/publish",
+            json={"artifact_id": str(ids["first"])},
+            headers={"X-CSRF-Token": "csrf"},
+        )
+        second = await client.post(
+            f"/api/projects/{ids['project']}/publish",
+            json={"artifact_id": str(ids["same_revision_other_run"])},
+            headers={"X-CSRF-Token": "csrf"},
+        )
+        first_payload = await first.json()
+        second_payload = await second.json()
+
+        restored = await client.get(route)
+        assert restored.status == 200
+        payload = (await restored.json())["publication"]
+        assert payload["publication_id"] == first_payload["publication_id"]
+        assert payload["active_release"]["release_id"] == second_payload["release_id"]
+        assert [release["release_id"] for release in payload["releases"]] == [
+            first_payload["release_id"],
+            second_payload["release_id"],
+        ]
+        assert payload["embed_url"] == (
+            f"https://kaigo.example/embed/{payload['stable_key']}.js"
+        )
+        assert all("manifest" not in release for release in payload["releases"])
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_public_publish_fails_before_mutation_without_authoritative_base_url(
     tmp_path,
 ) -> None:
@@ -768,8 +885,17 @@ async def test_published_runtime_keeps_fixed_widget_interactions_and_closed_hitb
             browser = await playwright.chromium.launch(headless=True)
             try:
                 page = await browser.new_page(viewport={"width": 1280, "height": 800})
-                page.set_default_timeout(5_000)
-                await page.goto(str(client.make_url(f"/test/host/{key}")), wait_until="load")
+                page.set_default_timeout(15_000)
+                response = await page.goto(
+                    str(client.make_url(f"/test/host/{key}")),
+                    # The product contract is asserted by the explicit widget,
+                    # iframe, geometry, and chat waits below. Waiting for the host
+                    # page DOMContentLoaded would also serialize the nested embed
+                    # bootstrap and becomes flaky after the full browser suite.
+                    wait_until="commit",
+                    timeout=60_000,
+                )
+                assert response is not None and response.ok
                 widget = page.locator(f'iframe[data-kaigo-widget-key="{key}"]')
                 await widget.wait_for()
                 await page.wait_for_function(

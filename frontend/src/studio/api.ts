@@ -1,3 +1,4 @@
+import type { Campaign } from '../shared/campaign';
 import type {
   AuthSessionSnapshot,
   BillingCheckout,
@@ -33,6 +34,44 @@ export class BuilderApiError extends Error {
     this.raw = options.raw;
     this.retryable = options.retryable ?? false;
   }
+}
+
+export interface PublicationRelease {
+  publication_id: string;
+  release_id: string;
+  artifact_id: string;
+  stable_key: string;
+  revision: number;
+  allowed_domains: string[];
+  checksum: string;
+  embed_url: string;
+  runtime_url: string;
+}
+
+export interface PublishProjectInput {
+  artifact_id: string;
+  revision?: number;
+  allowed_domains?: string[];
+}
+
+export interface PublicationHistoryRelease {
+  release_id: string;
+  artifact_id: string;
+  previous_release_id: string | null;
+  revision: number;
+  checksum: string;
+  created_at: string;
+}
+
+export interface ProjectPublicationState {
+  publication_id: string;
+  stable_key: string;
+  state: string;
+  allowed_domains: string[];
+  embed_url: string;
+  runtime_url: string;
+  active_release: PublicationHistoryRelease;
+  releases: PublicationHistoryRelease[];
 }
 
 export function builderUrl(path: string) {
@@ -142,6 +181,73 @@ export function getProject(projectId: string) {
   return saasRequestJson<SaasProject>(`/api/projects/${encodeURIComponent(projectId)}`);
 }
 
+export function getProjectPublication(projectId: string, signal?: AbortSignal) {
+  return saasRequestJson<{ publication: ProjectPublicationState | null }>(
+    `/api/projects/${encodeURIComponent(projectId)}/publication`,
+    { signal },
+  );
+}
+
+export function publishProject(
+  projectId: string,
+  input: PublishProjectInput,
+  csrfToken: string,
+) {
+  return saasRequestJson<PublicationRelease>(
+    `/api/projects/${encodeURIComponent(projectId)}/publish`,
+    {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export function rollbackPublication(
+  publicationId: string,
+  targetReleaseId: string,
+  csrfToken: string,
+) {
+  return saasRequestJson<PublicationRelease>(
+    `/api/publications/${encodeURIComponent(publicationId)}/rollback`,
+    {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify({ target_release_id: targetReleaseId }),
+    },
+  );
+}
+
+export function createProject(
+  sourceUrl: string,
+  brief: string,
+  csrfToken: string,
+  campaign: Campaign = {},
+) {
+  return saasRequestJson<SaasProject>('/api/projects', {
+    method: 'POST',
+    headers: { 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify({
+      url: sourceUrl,
+      brief,
+      ...(Object.keys(campaign).length > 0 ? { campaign } : {}),
+    }),
+  });
+}
+
+export function updateProjectDraft(
+  projectId: string,
+  sourceUrl: string,
+  brief: string,
+  csrfToken: string,
+) {
+  return saasRequestJson<SaasProject>(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: 'PATCH',
+    headers: { 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify({ url: sourceUrl, brief }),
+  });
+}
+
 export function createProjectRun(projectId: string, csrfToken: string, idempotencyKey: string) {
   return saasRequestJson<SaasRunSnapshot>(`/api/projects/${encodeURIComponent(projectId)}/runs`, {
     method: 'POST',
@@ -155,6 +261,32 @@ export function createProjectRun(projectId: string, csrfToken: string, idempoten
 
 export function getProjectRun(runId: string, signal?: AbortSignal) {
   return saasRequestJson<SaasRunSnapshot>(`/api/runs/${encodeURIComponent(runId)}`, { signal });
+}
+
+export function cancelProjectRun(runId: string, csrfToken: string) {
+  return saasRequestJson<{ run_id: string; cancel_requested: boolean; status: string }>(
+    `/api/runs/${encodeURIComponent(runId)}/cancel`,
+    {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': csrfToken },
+      body: '{}',
+    },
+  );
+}
+
+export function retryProjectRun(
+  runId: string,
+  csrfToken: string,
+  idempotencyKey: string,
+) {
+  return saasRequestJson<SaasRunSnapshot>(`/api/runs/${encodeURIComponent(runId)}/retry`, {
+    method: 'POST',
+    headers: {
+      'Idempotency-Key': idempotencyKey,
+      'X-CSRF-Token': csrfToken,
+    },
+    body: '{}',
+  });
 }
 
 export async function streamProjectRunEvents(

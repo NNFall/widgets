@@ -9,6 +9,7 @@ import signal
 import socket
 import sys
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -134,25 +135,44 @@ def _positive_float(name: str, default: str) -> float:
     return value
 
 
-def _nonnegative_int(name: str, default: str = "0") -> int:
+def _required_positive_int(name: str) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        raise RuntimeError(f"{name} is required for the production generation worker")
     try:
-        value = int(os.getenv(name, default))
+        value = int(raw)
     except ValueError as exc:
         raise RuntimeError(f"{name} must be an integer") from exc
-    if value < 0:
-        raise RuntimeError(f"{name} must not be negative")
+    if value <= 0:
+        raise RuntimeError(f"{name} must be positive")
     return value
+
+
+def runtime_model_prices() -> tuple[int, int]:
+    return (
+        _required_positive_int("GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION"),
+        _required_positive_int("GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION"),
+    )
+
+
+def worker_service_identity() -> tuple[str, str, str]:
+    values: list[str] = []
+    for name in (
+        "KAIGO_BUILDER_WORKER_BOOT_ID",
+        "KAIGO_RELEASE_ID",
+        "KAIGO_BUILDER_WORKER_IMAGE_IDENTITY",
+    ):
+        value = os.getenv(name, "").strip()
+        if not value:
+            raise RuntimeError(f"{name} is required for worker readiness")
+        values.append(value)
+    return values[0], values[1], values[2]
 
 
 def make_runtime_model_router(config, factory) -> ModelRouter:
     if not config.gemini_api_key:
         raise RuntimeError("GEMINI_API_KEY is required for routed builder stages")
-    input_rate = _nonnegative_int(
-        "GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION"
-    )
-    output_rate = _nonnegative_int(
-        "GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION"
-    )
+    input_rate, output_rate = runtime_model_prices()
     policies = {}
     for mode in ("direct", "express"):
         policy = get_mode_policy(mode)
@@ -261,6 +281,8 @@ async def run() -> None:
         worker_id = os.getenv("KAIGO_BUILDER_WORKER_ID", "").strip() or (
             f"{socket.gethostname()}-{os.getpid()}"
         )
+        boot_id, deployment_id, image_identity = worker_service_identity()
+        worker_started_at = datetime.now(UTC)
         queue = PostgresWorkerQueue(factory, lease_seconds=lease_seconds)
         trial_settlements = TrialSettlementReconciler(factory)
         configured_handler = (
@@ -338,6 +360,13 @@ async def run() -> None:
             idle_poll_interval=_positive_float("KAIGO_BUILDER_POLL_SECONDS", "0.5"),
             terminal_hook=trial_settlements.settle_run,
             terminal_reconciler=trial_settlements.reconcile,
+            service_heartbeat=lambda: queue.publish_service_heartbeat(
+                worker_id=worker_id,
+                boot_id=boot_id,
+                deployment_id=deployment_id,
+                image_identity=image_identity,
+                started_at=worker_started_at,
+            ),
         )
         logging.getLogger(__name__).info("starting durable builder worker %s", worker_id)
         install_signal_handlers(worker)

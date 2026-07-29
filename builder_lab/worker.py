@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analytics.service import record_funnel_event
 from app.billing.service import TrialFailureKind
+from app.patterns.repository import PatternOutcomeMetrics, PatternRepository
 from app.saas.models import (
     GenerationArtifact,
     GenerationEvent,
@@ -44,6 +45,7 @@ from builder_lab.reference_pipeline import (
     ReferenceAnalysisResult,
     ReferencePipelineError,
 )
+from builder_lab.visual_models import VisualCritique, VisualSeverity
 from builder_lab.validation import (
     issue_fingerprint,
     strip_reserved_runtime_attributes,
@@ -163,6 +165,39 @@ def _strict_json_clone(value: Any, *, field_name: str) -> Any:
     except (TypeError, ValueError) as exc:
         raise ValueError(f"stage result {field_name} is not strict JSON") from exc
     return json.loads(encoded)
+
+
+def _visual_score_from_event(
+    payload: dict[str, Any],
+) -> tuple[float | None, str | None]:
+    explicit = payload.get("visual_score_normalized")
+    if (
+        not isinstance(explicit, bool)
+        and isinstance(explicit, (int, float))
+        and math.isfinite(float(explicit))
+        and 0 <= float(explicit) <= 1
+    ):
+        return float(explicit), "visual_score_normalized"
+    diagnostic = payload.get("diagnostic")
+    if not isinstance(diagnostic, str):
+        return None, None
+    try:
+        raw = json.loads(diagnostic)
+        if not isinstance(raw, dict):
+            return None, None
+        critique = VisualCritique.from_dict(raw)
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None, None
+    weights = {
+        VisualSeverity.BLOCKER: 0.35,
+        VisualSeverity.MAJOR: 0.20,
+        VisualSeverity.MINOR: 0.05,
+    }
+    penalty = sum(
+        weights[finding.severity] * finding.confidence
+        for finding in critique.findings
+    )
+    return round(max(0.0, min(1.0, 1.0 - penalty)), 6), "findings_v1"
 
 
 class LeaseLostError(RuntimeError):
@@ -1769,6 +1804,50 @@ class PostgresWorkerQueue:
             payload = dict(created.payload)
             payload["request"] = result.request.to_dict()
             created.payload = payload
+        if run.current_stage == "composition":
+            raw_plan = result.context.get("composition_plan")
+            if not isinstance(raw_plan, dict):
+                raise ValueError("composition result has no durable plan")
+            plan = CompositionPlan.from_dict(raw_plan)
+            repository = PatternRepository(database)
+            existing = await repository.load_plan(run.id)
+            if existing is not None:
+                if existing.plan != plan:
+                    raise RuntimeError(
+                        "staged composition conflicts with persisted plan"
+                    )
+            else:
+                direction_artifact_id = await database.scalar(
+                    select(GenerationArtifact.id)
+                    .where(
+                        GenerationArtifact.run_id == run.id,
+                        GenerationArtifact.stage == Stage.ART_DIRECTION.value,
+                    )
+                    .order_by(GenerationArtifact.revision.desc())
+                    .limit(1)
+                )
+                planner_query = (
+                    select(ModelCall.id)
+                    .where(
+                        ModelCall.run_id == run.id,
+                        ModelCall.role == "composition_planner",
+                        ModelCall.status == "completed",
+                    )
+                    .order_by(ModelCall.created_at.desc(), ModelCall.id.desc())
+                    .limit(1)
+                )
+                if result.output_refs:
+                    planner_query = planner_query.where(
+                        ModelCall.request_id.in_(result.output_refs)
+                    )
+                planner_model_call_id = await database.scalar(planner_query)
+                await repository.create_plan(
+                    run_id=run.id,
+                    plan=plan,
+                    registry=load_builtin_registry(),
+                    direction_artifact_id=direction_artifact_id,
+                    planner_model_call_id=planner_model_call_id,
+                )
         artifact = result.artifact
         if artifact is not None:
             artifact_record = (
@@ -1873,6 +1952,7 @@ class PostgresWorkerQueue:
             },
         )
         if next_stage is None:
+            await self._record_pattern_outcomes(database, run)
             run.state = "completed"
             run.progress = 100
             run.finished_at = now
@@ -1898,6 +1978,105 @@ class PostgresWorkerQueue:
             .values(status=project_status)
         )
         return next_stage
+
+    @staticmethod
+    async def _record_pattern_outcomes(
+        database: AsyncSession,
+        run: GenerationRun,
+    ) -> None:
+        final_artifact = (
+            await database.execute(
+                select(GenerationArtifact)
+                .where(GenerationArtifact.run_id == run.id)
+                .order_by(GenerationArtifact.revision.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if final_artifact is None:
+            return
+        totals = (
+            await database.execute(
+                select(
+                    func.coalesce(func.sum(ModelCall.input_tokens), 0),
+                    func.coalesce(func.sum(ModelCall.output_tokens), 0),
+                    func.coalesce(func.sum(ModelCall.thinking_tokens), 0),
+                    func.coalesce(func.sum(ModelCall.latency_ms), 0),
+                    func.coalesce(func.sum(ModelCall.cost_microusd), 0),
+                    func.count(ModelCall.id),
+                ).where(
+                    ModelCall.run_id == run.id,
+                    ModelCall.role != "chat_visitor",
+                )
+            )
+        ).one()
+        latest_model_call_id = await database.scalar(
+            select(ModelCall.id)
+            .where(
+                ModelCall.run_id == run.id,
+                ModelCall.role != "chat_visitor",
+                ModelCall.status == "completed",
+            )
+            .order_by(ModelCall.created_at.desc(), ModelCall.id.desc())
+            .limit(1)
+        )
+        repair_payloads = (
+            await database.execute(
+                select(GenerationEvent.payload).where(
+                    GenerationEvent.run_id == run.id,
+                    GenerationEvent.event_type.in_(
+                        ("repair.completed", "visual_repair.completed")
+                    ),
+                )
+            )
+        ).scalars().all()
+        repair_count = sum(
+            1
+            for payload in repair_payloads
+            if payload.get("status") in {None, "completed"}
+        )
+        visual_score: float | None = None
+        visual_score_source: str | None = None
+        visual_payloads = (
+            await database.execute(
+                select(GenerationEvent.payload)
+                .where(
+                    GenerationEvent.run_id == run.id,
+                    GenerationEvent.event_type == "visual_audit.completed",
+                )
+                .order_by(GenerationEvent.sequence.desc())
+                .limit(20)
+            )
+        ).scalars().all()
+        for payload in visual_payloads:
+            if payload.get("status") not in {None, "completed"}:
+                continue
+            visual_score, visual_score_source = _visual_score_from_event(payload)
+            if visual_score is not None:
+                break
+        metrics = PatternOutcomeMetrics(
+            technical_pass=final_artifact.quality_status in {"accepted", "verified"},
+            visual_score=visual_score,
+            repair_count=repair_count,
+            input_tokens=int(totals[0]),
+            output_tokens=int(totals[1]),
+            thinking_tokens=int(totals[2]),
+            latency_ms=int(totals[3]),
+            cost_microusd=int(totals[4]),
+            published=False,
+            adopted=False,
+            payload={
+                "quality_status": final_artifact.quality_status,
+                "final_revision": final_artifact.revision,
+                "model_call_count": int(totals[5]),
+                "visual_score_source": visual_score_source,
+            },
+        )
+        await PatternRepository(database).record_terminal_outcomes(
+            run_id=run.id,
+            final_artifact_id=final_artifact.id,
+            model_call_id=latest_model_call_id,
+            metrics=metrics,
+        )
 
     async def finalize_stage(self, claim: RunClaim) -> str | None:
         async with self._sessions() as database, database.begin():

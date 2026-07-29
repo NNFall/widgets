@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 from aiohttp import web
@@ -161,7 +162,7 @@ async def test_unknown_webhook_and_success_redirect_never_fulfill(tmp_path) -> N
 
 @pytest.mark.asyncio
 async def test_subscription_hides_expired_and_pending_payment_recovers(tmp_path) -> None:
-    engine, factory, _provider, client = await _billing_app(tmp_path)
+    engine, factory, provider, client = await _billing_app(tmp_path)
     try:
         async with factory() as database, database.begin():
             database.add(
@@ -190,12 +191,14 @@ async def test_subscription_hides_expired_and_pending_payment_recovers(tmp_path)
         payload = await pending.json()
         assert payload["payment"]["id"] == created["payment"]["id"]
         assert payload["checkout_url"] == created["checkout_url"]
+        assert payload["recovery"]["status"] == "ready"
 
         plan = PLAN_CATALOG["starter_monthly"]
         async with factory() as database, database.begin():
             stuck = PaymentAttempt(
                 user_id=10,
                 provider="fakepay",
+                merchant_account_fingerprint=provider.merchant_account_fingerprint,
                 idempotency_key="route-stale-recovery",
                 plan_code=plan.code,
                 plan_snapshot=plan.snapshot(),
@@ -218,6 +221,119 @@ async def test_subscription_hides_expired_and_pending_payment_recovers(tmp_path)
         assert recovered["payment"]["id"] == str(stuck_id)
         assert recovered["created"] is False
         assert recovered["checkout_url"].endswith(str(stuck_id))
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_merchant_cutover_hides_old_checkout_and_blocks_new_payment(
+    tmp_path,
+) -> None:
+    engine, factory, merchant_a, client = await _billing_app(tmp_path)
+    try:
+        await client.post("/test/login/10")
+        created_response = await client.post(
+            "/api/billing/checkout",
+            json={"plan_code": "starter_monthly"},
+            headers={
+                "Idempotency-Key": "merchant-a-checkout",
+                "X-CSRF-Token": "csrf",
+            },
+        )
+        assert created_response.status == 201
+        created = await created_response.json()
+        payment_id = created["payment"]["id"]
+        assert created["checkout_url"].startswith("https://pay.example/")
+
+        merchant_b = FakeProvider("b" * 64)
+        client.server.app[BILLING_SERVICE_KEY] = BillingService(factory, merchant_b)
+
+        # Simulate a pre-fix deployment that already created a newer checkout
+        # under merchant B.  The older merchant-A attempt must still force the
+        # whole account into drain mode; neither checkout URL is safe to expose.
+        plan = PLAN_CATALOG["starter_monthly"]
+        async with factory() as database, database.begin():
+            database.add(
+                PaymentAttempt(
+                    user_id=10,
+                    provider="fakepay",
+                    merchant_account_fingerprint=(
+                        merchant_b.merchant_account_fingerprint
+                    ),
+                    idempotency_key="merchant-b-pre-fix-checkout",
+                    provider_payment_id="pay-merchant-b-pre-fix",
+                    plan_code=plan.code,
+                    plan_snapshot=plan.snapshot(),
+                    plan_fingerprint=plan.fingerprint(),
+                    amount_minor=plan.amount.amount_minor,
+                    currency=plan.amount.currency,
+                    status="pending",
+                    checkout_url="https://pay.example/merchant-b-pre-fix",
+                    payload={},
+                    updated_at=datetime.now(UTC) + timedelta(minutes=1),
+                )
+            )
+
+        pending_response = await client.get("/api/billing/payments/pending")
+        assert pending_response.status == 200
+        pending = await pending_response.json()
+        assert pending["payment"]["id"] == payment_id
+        assert pending["checkout_url"] is None
+        assert pending["recovery"] == {
+            "status": "merchant_cutover_required",
+            "recoverable": True,
+            "action": "restore_previous_merchant",
+            "message": (
+                "Оплата начата в другом аккаунте магазина. "
+                "Верните прежнюю платёжную конфигурацию для завершения."
+            ),
+        }
+
+        blocked_checkout = await client.post(
+            "/api/billing/checkout",
+            json={"plan_code": "starter_monthly"},
+            headers={
+                "Idempotency-Key": "merchant-b-new-checkout",
+                "X-CSRF-Token": "csrf",
+            },
+        )
+        assert blocked_checkout.status == 409
+        assert (await blocked_checkout.json())["error"] == {
+            "code": "merchant_cutover_required",
+            "message": (
+                "Оплата начата в другом аккаунте магазина. "
+                "Верните прежнюю платёжную конфигурацию для завершения."
+            ),
+            "retryable": False,
+        }
+
+        webhook = await client.post(
+            "/api/billing/webhooks/yookassa",
+            json={"payment_id": f"pay-{payment_id}"},
+        )
+        assert webhook.status == 503
+        assert webhook.headers["Retry-After"] == "300"
+        assert (await webhook.json())["error"] == {
+            "code": "merchant_cutover_required",
+            "message": (
+                "Оплата начата в другом аккаунте магазина. "
+                "Верните прежнюю платёжную конфигурацию для завершения."
+            ),
+            "retryable": True,
+        }
+        assert merchant_b.checkout_calls == []
+        assert merchant_b.verify_calls == []
+        async with factory() as database:
+            attempt = await database.get(PaymentAttempt, UUID(payment_id))
+            assert attempt.checkout_url == created["checkout_url"]
+            assert attempt.merchant_account_fingerprint == (
+                merchant_a.merchant_account_fingerprint
+            )
+            assert (
+                await database.scalar(select(func.count()).select_from(Subscription))
+                == 0
+            )
     finally:
         await client.close()
         await engine.dispose()

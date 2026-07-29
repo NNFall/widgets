@@ -63,6 +63,7 @@ class ProviderNotification:
 
 class PaymentProvider(Protocol):
     name: str
+    merchant_account_fingerprint: str
 
     async def create_checkout(self, command: CheckoutCommand) -> ProviderCheckout: ...
 

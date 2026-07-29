@@ -83,8 +83,9 @@ curl -k https://kaigo.space/api/health/ai
    `/builder/` соответствующими блоками из фрагмента.
 4. Добавить exact-блоки `/`, `/favicon.svg`, `/studio`, `/studio/` и
    `/assets/`.
-5. Подтвердить, что `/etc/nginx/.htpasswd-kaigo-builder` — тот же файл паролей,
-   который уже используется для `/builder/`. Studio не должна стать публичной.
+5. Подтвердить, что `/etc/nginx/.htpasswd-kaigo-builder` продолжает защищать
+   только legacy `/builder/`. SaaS Studio публично открывает оболочку, а
+   пользовательские данные и действия защищает application session.
 6. Хранить backup вне `sites-enabled`: glob nginx читает любой файл в этой
    директории, включая `.bak`, и такой backup создаёт конфликтующий server.
 7. Выполнить `nginx -t` до reload nginx.
@@ -110,10 +111,8 @@ nginx с прежним релизом. Неудачный релиз остаё
 curl -fsS https://kaigo.space/ >/dev/null
 curl -fsSI https://kaigo.space/favicon.svg
 curl -fsSI https://kaigo.space/assets/ACTUAL_HASHED_ASSET.js
-test "$(curl -sS -o /dev/null -w '%{http_code}' https://kaigo.space/studio)" = 401
+curl -fsS https://kaigo.space/studio >/dev/null
 test "$(curl -sS -o /dev/null -w '%{http_code}' https://kaigo.space/builder/)" = 401
-curl -fsS -u "$KAIGO_BUILDER_USER:$KAIGO_BUILDER_PASSWORD" \
-  https://kaigo.space/studio >/dev/null
 curl -fsS -u "$KAIGO_BUILDER_USER:$KAIGO_BUILDER_PASSWORD" \
   https://kaigo.space/builder/ >/dev/null
 curl -fsS https://kaigo.space/api/health
@@ -127,8 +126,7 @@ curl -fsS https://kaigo.space/w/demka >/dev/null
   сразу после переключения релиза;
 - файлы с Vite-hash в имени получают `immutable`, а stable-name assets —
   `no-cache`, чтобы новый релиз не оставался со старым изображением;
-- `/studio`, `/studio/` и `/builder/` используют одинаковые учётные данные
-  Basic Auth;
+- `/studio` и `/studio/` публичны; `/builder/` сохраняет Basic Auth;
 - существующие `/w/*`, `/client/*`, `/admin/*`, `/api/*` и другие более
   специфичные location сохраняют прежние обработчики.
 

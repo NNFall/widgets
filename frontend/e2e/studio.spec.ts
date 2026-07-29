@@ -2,8 +2,6 @@ import AxeBuilder from '@axe-core/playwright';
 
 import { expect, test } from './fixtures/builder';
 
-const ACTIVE_RUN_STORAGE_KEY = 'kaigo.builder.activeRun.v1';
-
 async function expectNoHorizontalOverflow(page: import('@playwright/test').Page) {
   const overflow = await page.evaluate(() =>
     Math.max(
@@ -14,19 +12,47 @@ async function expectNoHorizontalOverflow(page: import('@playwright/test').Page)
   expect(overflow).toBeLessThanOrEqual(1);
 }
 
-test('Studio creates a run and renders its timeline and sandboxed preview @desktop', async ({ page, builderApi }) => {
+test('Studio creates an owned project and renders the refreshed SaaS run @desktop', async ({ page, builderApi }) => {
   test.setTimeout(60_000);
-  await page.goto('/studio');
-  await page.getByLabel('Ссылка на сайт').fill('https://example.com');
-  await page.getByLabel('Пожелание к AI-сотруднику').fill('Говори простым языком и помогай выбрать услугу.');
-  await page.getByRole('button', { name: 'Создать AI-виджет' }).click();
+  await page.goto('/studio?url=https%3A%2F%2Fexample.com');
+
+  await expect(page.getByRole('heading', { name: 'Новый проект в Kaigo Studio' })).toBeVisible();
+  await expect(page.getByLabel('Ссылка на сайт')).toHaveValue('https://example.com');
+  await page.getByLabel('Пожелание к AI-виджету').fill('Говори простым языком и помогай выбрать услугу.');
+  await page.getByRole('button', { name: 'Создать проект' }).click();
 
   await expect.poll(() => builderApi.requests.filter(({ method, pathname }) =>
-    method === 'POST' && pathname.endsWith('/builder/api/runs'),
+    method === 'POST' && pathname === '/api/projects',
   ).length).toBe(1);
-  await expect(page.locator('.studio-timeline .studio-event__meta strong').filter({
-    hasText: 'Запуск создан',
-  })).toBeVisible();
+  const projectRequest = builderApi.requests.find(({ method, pathname }) =>
+    method === 'POST' && pathname === '/api/projects',
+  );
+  expect(projectRequest?.headers['x-csrf-token']).toBe(builderApi.csrfToken);
+  expect(projectRequest?.body).toEqual({
+    url: 'https://example.com/',
+    brief: 'Говори простым языком и помогай выбрать услугу.',
+  });
+  await expect.poll(() => new URL(page.url()).searchParams.get('project')).toBe(builderApi.projectId);
+
+  await page.getByRole('button', { name: 'Создать AI-виджет' }).click();
+  await expect.poll(() => builderApi.requests.filter(({ method, pathname }) =>
+    method === 'POST' && pathname === `/api/projects/${builderApi.projectId}/runs`,
+  ).length).toBe(1);
+  const runRequest = builderApi.requests.find(({ method, pathname }) =>
+    method === 'POST' && pathname === `/api/projects/${builderApi.projectId}/runs`,
+  );
+  expect(runRequest?.headers['x-csrf-token']).toBe(builderApi.csrfToken);
+  expect(runRequest?.headers['idempotency-key']).toBe(`studio-${builderApi.projectId}`);
+  expect(runRequest?.body).toEqual({ mode: 'express' });
+
+  await expect.poll(() => builderApi.requests.some(({ method, pathname }) =>
+    method === 'GET' && pathname === '/api/runs/run-created/events',
+  )).toBe(true);
+  await expect.poll(() => builderApi.requests.some(({ method, pathname }) =>
+    method === 'GET' && pathname === '/api/runs/run-created',
+  )).toBe(true);
+  expect(builderApi.requests.some(({ pathname }) => pathname.includes('/builder/api/runs'))).toBe(false);
+
   await expect(page.locator('.studio-timeline .studio-event__meta strong').filter({
     hasText: 'Визуальная проверка пройдена',
   })).toBeVisible();
@@ -35,12 +61,12 @@ test('Studio creates a run and renders its timeline and sandboxed preview @deskt
   const frame = page.getByTitle('Предпросмотр AI-сотрудника Kaigo');
   await expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
   await expect(frame).toHaveAttribute('referrerpolicy', 'no-referrer');
-  await expect(frame).toHaveAttribute('src', /\/builder\/api\/runs\/run-created\/preview\?revision=4&channel=/);
+  await expect(frame).toHaveAttribute('src', /\/api\/runs\/run-created\/preview\/document\?revision=4&channel=/);
   await expect(page.frameLocator('iframe[title="Предпросмотр AI-сотрудника Kaigo"]').getByRole('heading', {
     name: 'AI-консультант',
   })).toBeVisible();
-  await expect.poll(() => page.evaluate((key) => localStorage.getItem(key), ACTIVE_RUN_STORAGE_KEY))
-    .toBe('run-created');
+  await expect.poll(() => page.evaluate((key) => localStorage.getItem(key), `kaigo.saas.project.${builderApi.projectId}.idempotency-key`))
+    .toBe(`studio-${builderApi.projectId}`);
   await expectNoHorizontalOverflow(page);
 
   await expect(page).toHaveScreenshot('studio-desktop.png', {
@@ -51,12 +77,9 @@ test('Studio creates a run and renders its timeline and sandboxed preview @deskt
   });
 });
 
-test('Studio resumes a stored run with form values, metrics and preview @desktop', async ({ page, builderApi }) => {
+test('Studio resumes the server-owned project with metrics and preview after reload @desktop', async ({ page, builderApi }) => {
   builderApi.seedRun('run-resume');
-  await page.addInitScript(({ key }) => localStorage.setItem(key, 'run-resume'), {
-    key: ACTIVE_RUN_STORAGE_KEY,
-  });
-  await page.goto('/studio');
+  await page.goto(`/studio?project=${builderApi.projectId}`);
 
   await expect(page.getByLabel('Ссылка на сайт')).toHaveValue('https://example.com');
   await expect(page.getByLabel('Пожелание к AI-сотруднику')).toHaveValue(
@@ -66,21 +89,85 @@ test('Studio resumes a stored run with form values, metrics and preview @desktop
   await expect(page.getByText('24,8 с', { exact: true })).toBeVisible();
   await expect(page.getByTitle('Предпросмотр AI-сотрудника Kaigo')).toHaveAttribute(
     'src',
-    /\/run-resume\/preview\?revision=4&channel=/,
+    /\/api\/runs\/run-resume\/preview\/document\?revision=4&channel=/,
   );
+  expect(await page.evaluate(() => localStorage.getItem('kaigo.builder.activeRun.v1'))).toBeNull();
 
+  const projectReadsBeforeReload = builderApi.requests.filter(({ method, pathname }) =>
+    method === 'GET' && pathname === `/api/projects/${builderApi.projectId}`,
+  ).length;
   await page.reload();
   await expect(page.getByLabel('Ссылка на сайт')).toHaveValue('https://example.com');
   await expect(page.getByTitle('Предпросмотр AI-сотрудника Kaigo')).toBeVisible();
+  await expect.poll(() => builderApi.requests.filter(({ method, pathname }) =>
+    method === 'GET' && pathname === `/api/projects/${builderApi.projectId}`,
+  ).length).toBeGreaterThan(projectReadsBeforeReload);
 });
 
-test('Studio mobile restores a run, switches preview and has no overflow @mobile', async ({ page, builderApi }) => {
+test('Studio owner cancels and safely retries a recoverable project run @desktop', async ({ page, builderApi }) => {
+  const source = builderApi.seedRunningRun('run-recoverable');
+  await page.goto(`/studio?project=${builderApi.projectId}`);
+
+  await page.getByRole('button', { name: 'Отменить генерацию' }).click();
+  await expect(page.getByText('Отмена запрошена — генерация остановится безопасно').first()).toBeVisible();
+  await expect.poll(() => builderApi.requests.some(({ method, pathname }) =>
+    method === 'POST' && pathname === `/api/runs/${source.id}/cancel`,
+  )).toBe(true);
+  const cancel = builderApi.requests.find(({ method, pathname }) =>
+    method === 'POST' && pathname === `/api/runs/${source.id}/cancel`,
+  );
+  expect(cancel?.headers['x-csrf-token']).toBe(builderApi.csrfToken);
+
+  await expect(page.getByRole('button', { name: 'Повторить запуск' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Повторить запуск' }).click();
+  await expect.poll(() => builderApi.requests.some(({ method, pathname }) =>
+    method === 'POST' && pathname === `/api/runs/${source.id}/retry`,
+  )).toBe(true);
+  const retry = builderApi.requests.find(({ method, pathname }) =>
+    method === 'POST' && pathname === `/api/runs/${source.id}/retry`,
+  );
+  expect(retry?.headers['x-csrf-token']).toBe(builderApi.csrfToken);
+  expect(retry?.headers['idempotency-key']).toBe(`studio-retry-${source.id}`);
+  await expect(page.getByText('Визуальная проверка пройдена').first()).toBeVisible();
+});
+
+test('active subscription publishes the current verified artifact with a stable embed snippet @desktop', async ({ page, builderApi }) => {
+  builderApi.seedRun('run-publish');
+  builderApi.activateSubscription();
+  await page.goto(`/studio?project=${builderApi.projectId}`);
+
+  await expect(page.getByRole('heading', { name: 'Тариф активирован' })).toBeVisible();
+  await page.getByLabel('Разрешённые домены').fill(
+    'https://example.com\nhttps://shop.example.com',
+  );
+  await page.getByRole('button', { name: 'Опубликовать виджет' }).click();
+
+  await expect(page.getByText(
+    '<script src="https://widgets.kaigo.space/embed/stable-playwright-widget.js" async></script>',
+  )).toBeVisible();
+  const request = builderApi.requests.find(({ method, pathname }) =>
+    method === 'POST' && pathname === `/api/projects/${builderApi.projectId}/publish`,
+  );
+  expect(request?.headers['x-csrf-token']).toBe(builderApi.csrfToken);
+  expect(request?.body).toEqual({
+    artifact_id: 'artifact-playwright-4',
+    revision: 4,
+    allowed_domains: ['https://example.com', 'https://shop.example.com'],
+  });
+
+  await page.reload();
+  await expect(page.getByText(
+    '<script src="https://widgets.kaigo.space/embed/stable-playwright-widget.js" async></script>',
+  )).toBeVisible();
+  await expect(page.getByLabel('Разрешённые домены')).toHaveValue(
+    'https://example.com\nhttps://shop.example.com',
+  );
+});
+
+test('Studio mobile restores a SaaS project, switches preview and has no overflow @mobile', async ({ page, builderApi }) => {
   test.setTimeout(60_000);
   builderApi.seedRun('run-mobile');
-  await page.addInitScript(({ key }) => localStorage.setItem(key, 'run-mobile'), {
-    key: ACTIVE_RUN_STORAGE_KEY,
-  });
-  await page.goto('/studio');
+  await page.goto(`/studio?project=${builderApi.projectId}`);
 
   await expect(page.getByRole('heading', { name: 'Студия Kaigo' })).toBeVisible();
   await expect(page.getByTestId('studio-preview-canvas')).toHaveAttribute('data-viewport', 'desktop');
@@ -98,13 +185,10 @@ test('Studio mobile restores a run, switches preview and has no overflow @mobile
   });
 });
 
-test('Studio is immediately usable with reduced motion @reduced', async ({ page, builderApi }) => {
+test('Studio SaaS project is immediately usable with reduced motion @reduced', async ({ page, builderApi }) => {
   builderApi.seedRun('run-reduced');
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.addInitScript(({ key }) => localStorage.setItem(key, 'run-reduced'), {
-    key: ACTIVE_RUN_STORAGE_KEY,
-  });
-  await page.goto('/studio');
+  await page.goto(`/studio?project=${builderApi.projectId}`);
 
   await expect(page.getByTitle('Предпросмотр AI-сотрудника Kaigo')).toBeVisible();
   const reducedMotionState = await page.evaluate(() => {
@@ -142,13 +226,11 @@ test('Studio is immediately usable with reduced motion @reduced', async ({ page,
   });
 });
 
-test('Studio has no serious or critical accessibility violations @a11y', async ({ page, builderApi }) => {
+test('Studio SaaS project has no serious or critical accessibility violations @a11y', async ({ page, builderApi }) => {
   builderApi.seedRun('run-a11y');
+  builderApi.activateSubscription();
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.addInitScript(({ key }) => localStorage.setItem(key, 'run-a11y'), {
-    key: ACTIVE_RUN_STORAGE_KEY,
-  });
-  await page.goto('/studio');
+  await page.goto(`/studio?project=${builderApi.projectId}`);
   await expect(page.getByTitle('Предпросмотр AI-сотрудника Kaigo')).toBeVisible();
 
   const results = await new AxeBuilder({ page })

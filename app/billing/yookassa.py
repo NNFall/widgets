@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
+from hashlib import sha256
 import re
 from typing import Mapping
 
@@ -77,6 +78,12 @@ class YooKassaProvider:
     ) -> None:
         if not shop_id.strip() or not secret_key.strip():
             raise ValueError("YooKassa credentials must not be blank")
+        merchant_identity = (
+            f"kaigo-payment-merchant-v1\x00{self.name}\x00{shop_id.strip()}"
+        )
+        self.merchant_account_fingerprint = sha256(
+            merchant_identity.encode("utf-8")
+        ).hexdigest()
         self._return_url = return_url
         self._test_mode = test_mode
         self._client = httpx.AsyncClient(

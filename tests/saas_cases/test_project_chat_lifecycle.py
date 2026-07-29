@@ -7,13 +7,28 @@ from aiohttp_session import get_session
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.chat.runtime import CHAT_SERVICE_KEY, create_routed_chat_service, setup_chat_runtime
+from app.chat.runtime import (
+    CHAT_SERVICE_KEY,
+    create_routed_chat_service,
+    setup_chat_runtime,
+)
 from app.config import AppConfig
 from app.db.base import Base
 from app.db.models import Tenant, User
 from app.db.session import SESSION_FACTORY_KEY, get_session_factory
-from app.models.contracts import ModelRequest, ModelResponse, ModelUsage, ProviderCapabilities
-from app.saas.models import AuthSession, GenerationArtifact, GenerationRun, ModelCall, Project
+from app.models.contracts import (
+    ModelRequest,
+    ModelResponse,
+    ModelUsage,
+    ProviderCapabilities,
+)
+from app.saas.models import (
+    AuthSession,
+    GenerationArtifact,
+    GenerationRun,
+    ModelCall,
+    Project,
+)
 from app.server import create_app
 from tests.builder_lab_cases.test_validation import artifact
 
@@ -49,6 +64,16 @@ def _config(**changes) -> AppConfig:
         "chat_output_price_microusd_per_million": 4_000_000,
     }
     values.update(changes)
+    if values.get("environment") == "production":
+        values.setdefault("public_auth_enabled", True)
+        values.setdefault("public_base_url", "https://kaigo.example")
+        values.setdefault("google_oauth_client_id", "test-google-client")
+        values.setdefault("google_oauth_client_secret", "test-google-secret")
+        values.setdefault("entry_trusted_proxy_cidrs", ("127.0.0.1/32",))
+        values.setdefault("readiness_token", "r" * 32)
+        values.setdefault("expected_worker_deployment_id", "test-release")
+        values.setdefault("expected_worker_image_identity", "sha256:test-image")
+        values.setdefault("expected_worker_boot_id", "test-worker-boot")
     return AppConfig(**values)
 
 
@@ -119,7 +144,9 @@ def test_publication_trusted_proxy_cidrs_are_validated() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runtime_factory_closes_provider_when_service_construction_fails(tmp_path) -> None:
+async def test_runtime_factory_closes_provider_when_service_construction_fails(
+    tmp_path,
+) -> None:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'lifecycle.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -144,7 +171,9 @@ async def test_runtime_factory_closes_provider_when_service_construction_fails(t
 
 
 @pytest.mark.asyncio
-async def test_app_cleanup_context_installs_after_database_and_closes_service(tmp_path) -> None:
+async def test_app_cleanup_context_installs_after_database_and_closes_service(
+    tmp_path,
+) -> None:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'context.db'}")
     factory = async_sessionmaker(engine, expire_on_commit=False)
     events: list[str] = []
@@ -177,7 +206,9 @@ async def test_app_cleanup_context_installs_after_database_and_closes_service(tm
 
 
 @pytest.mark.asyncio
-async def test_runtime_factory_is_explicitly_unavailable_without_provider_key(tmp_path) -> None:
+async def test_runtime_factory_is_explicitly_unavailable_without_provider_key(
+    tmp_path,
+) -> None:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'disabled.db'}")
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
@@ -222,6 +253,7 @@ async def test_create_app_lifecycle_serves_owner_chat_and_closes_router(
     monkeypatch.setattr("app.server.history_db.init_db", skip_legacy_history_db)
     config = _config(
         database_url=f"sqlite+aiosqlite:///{tmp_path / 'production-app.db'}",
+        auto_create_schema=True,
         chat_input_price_microusd_per_million=1_000_000,
         chat_output_price_microusd_per_million=2_000_000,
     )
@@ -229,12 +261,14 @@ async def test_create_app_lifecycle_serves_owner_chat_and_closes_router(
 
     async def login(request: web.Request) -> web.Response:
         session = await get_session(request)
-        session.update({
-            "user_id": 10,
-            "tenant_id": 1,
-            "email": "owner@example.com",
-            "csrf_token": "lifecycle-csrf",
-        })
+        session.update(
+            {
+                "user_id": 10,
+                "tenant_id": 1,
+                "email": "owner@example.com",
+                "csrf_token": "lifecycle-csrf",
+            }
+        )
         return web.json_response({"ok": True})
 
     app.router.add_post("/test/login", login)
@@ -264,16 +298,18 @@ async def test_create_app_lifecycle_serves_owner_chat_and_closes_router(
             database.add(run)
             await database.flush()
             candidate = artifact(revision=1, art_direction="Lifecycle identity")
-            database.add(GenerationArtifact(
-                run_id=run.id,
-                revision=1,
-                stage=candidate.stage.value,
-                html=candidate.body_html,
-                css=candidate.css,
-                javascript=candidate.javascript,
-                config={"artifact": candidate.to_dict()},
-                quality_status="accepted",
-            ))
+            database.add(
+                GenerationArtifact(
+                    run_id=run.id,
+                    revision=1,
+                    stage=candidate.stage.value,
+                    html=candidate.body_html,
+                    css=candidate.css,
+                    javascript=candidate.javascript,
+                    config={"artifact": candidate.to_dict()},
+                    quality_status="accepted",
+                )
+            )
             run_id = run.id
 
         assert app[CHAT_SERVICE_KEY] is not None

@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from uuid import UUID
+
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
@@ -13,14 +15,25 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.db.base import Base
 from app.db.models import Tenant, User
 from app.db.session import SESSION_FACTORY_KEY
-from app.models.contracts import ModelRequest, ModelResponse, ModelUsage, ProviderCapabilities
-from app.models.router import ModelPolicy, ModelRouter, ProviderTarget, SqlModelCallAudit
+from app.models.contracts import (
+    ModelRequest,
+    ModelResponse,
+    ModelUsage,
+    ProviderCapabilities,
+)
+from app.models.router import (
+    ModelPolicy,
+    ModelRouter,
+    ProviderTarget,
+    SqlModelCallAudit,
+)
 from app.chat import CHAT_SERVICE_KEY, RoutedChatService
 from app.projects.routes import setup_project_routes
 from app.saas.models import (
     GenerationArtifact,
     GenerationEvent,
     GenerationRun,
+    FunnelEvent,
     ModelCall,
     Project,
     TrialEntitlement,
@@ -111,12 +124,203 @@ async def _project_app(tmp_path, *, configure_app=None):
 
 
 @pytest.mark.asyncio
-async def test_create_run_is_202_idempotent_and_never_calls_engine_inline(tmp_path) -> None:
+async def test_create_project_requires_owner_session_and_csrf_and_always_creates_a_new_draft(
+    tmp_path,
+) -> None:
+    engine, factory, client, _project_id, _ = await _project_app(tmp_path)
+    payload = {
+        "url": "https://fresh.example.com/services",
+        "campaign": {
+            "utm_source": "telegram",
+            "utm_campaign": "launch",
+            "url": "https://must-not-store.example",
+            "brief": "must not store",
+            "email": "campaign-private@example.com",
+            "ip": "203.0.113.43",
+        },
+        "brief": "Спокойный консультант по услугам",
+    }
+    try:
+        unauthenticated = await client.post(
+            "/api/projects",
+            json=payload,
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        assert unauthenticated.status == 401
+
+        await client.post("/test/login/10")
+        without_csrf = await client.post("/api/projects", json=payload)
+        assert without_csrf.status == 403
+
+        first = await client.post(
+            "/api/projects",
+            json=payload,
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        second = await client.post(
+            "/api/projects",
+            json=payload,
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+
+        assert first.status == second.status == 201
+        first_payload, second_payload = await first.json(), await second.json()
+        assert first_payload["id"] != second_payload["id"]
+        assert first_payload["source_url"] == payload["url"]
+        assert first_payload["brief"] == payload["brief"]
+        assert first_payload["owner_user_id"] == 10
+        assert first_payload["tenant_id"] == 1
+        assert first_payload["status"] == "draft"
+
+        async with factory() as database:
+            created = list(
+                (
+                    await database.execute(
+                        select(Project).where(Project.source_url == payload["url"])
+                    )
+                ).scalars()
+            )
+            funnel_events = list(
+                (
+                    await database.execute(
+                        select(FunnelEvent).order_by(FunnelEvent.occurred_at)
+                    )
+                ).scalars()
+            )
+        assert len(created) == 2
+        assert {(project.owner_user_id, project.tenant_id) for project in created} == {
+            (10, 1)
+        }
+        assert len(funnel_events) == 2
+        assert all(event.campaign_source == "telegram" for event in funnel_events)
+        assert all(event.campaign_name == "launch" for event in funnel_events)
+        assert {
+            (
+                event.event_type,
+                event.event_key,
+                event.user_id,
+                event.project_id,
+            )
+            for event in funnel_events
+        } == {
+            (
+                "composer_submitted",
+                f"composer_submitted:project:{project_id}",
+                10,
+                project_id,
+            )
+            for project_id in {created_project.id for created_project in created}
+        }
+        stored_funnel_data = " ".join(
+            str(value)
+            for event in funnel_events
+            for value in event.__dict__.values()
+            if value is not None
+        )
+        assert "fresh.example.com" not in stored_funnel_data
+        assert payload["brief"] not in stored_funnel_data
+        assert "owner@example.com" not in stored_funnel_data
+        assert "127.0.0.1" not in stored_funnel_data
+        assert "must-not-store.example" not in stored_funnel_data
+        assert "campaign-private@example.com" not in stored_funnel_data
+        assert "203.0.113.43" not in stored_funnel_data
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body", [{}, {"url": "https://example.com"}, {"url": "not-a-url", "brief": ""}]
+)
+async def test_create_project_requires_explicit_valid_url_and_brief(
+    tmp_path, body
+) -> None:
+    engine, _factory, client, _project_id, _ = await _project_app(tmp_path)
+    try:
+        await client.post("/test/login/10")
+        response = await client.post(
+            "/api/projects",
+            json=body,
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        assert response.status == 400
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_owner_can_update_canonical_draft_fields_only_before_first_run(
+    tmp_path,
+) -> None:
+    engine, factory, client, project_id, foreign_id = await _project_app(tmp_path)
+    try:
+        await client.post("/test/login/10")
+        payload = {
+            "url": "https://EXAMPLE.COM:443/services",
+            "brief": "  Новый brief  ",
+        }
+        without_csrf = await client.patch(
+            f"/api/projects/{project_id}", json=payload
+        )
+        assert without_csrf.status == 403
+        foreign = await client.patch(
+            f"/api/projects/{foreign_id}",
+            json=payload,
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        assert foreign.status == 404
+
+        updated = await client.patch(
+            f"/api/projects/{project_id}",
+            json=payload,
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        assert updated.status == 200
+        updated_payload = await updated.json()
+        assert updated_payload["source_url"] == "https://example.com/services"
+        assert updated_payload["brief"] == "Новый brief"
+
+        async with factory() as database, database.begin():
+            database.add(
+                GenerationRun(
+                    project_id=project_id,
+                    mode="express",
+                    state="failed",
+                    progress=0,
+                    next_event_sequence=1,
+                    idempotency_key="historical-run",
+                )
+            )
+
+        locked = await client.patch(
+            f"/api/projects/{project_id}",
+            json={"url": "https://other.example.com/", "brief": "Поздно"},
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        assert locked.status == 409
+        async with factory() as database:
+            stored = await database.get(Project, project_id)
+        assert stored is not None
+        assert stored.source_url == "https://example.com/services"
+        assert stored.brief == "Новый brief"
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_create_run_is_202_idempotent_and_never_calls_engine_inline(
+    tmp_path,
+) -> None:
     engine, factory, client, project_id, _ = await _project_app(tmp_path)
 
     class InlineEngineMustNotRun:
         async def run(self, *_args, **_kwargs):
-            raise AssertionError("HTTP project route must never execute the engine inline")
+            raise AssertionError(
+                "HTTP project route must never execute the engine inline"
+            )
 
     client.server.app["builder_engine"] = InlineEngineMustNotRun()
     try:
@@ -151,7 +355,10 @@ async def test_create_run_is_202_idempotent_and_never_calls_engine_inline(tmp_pa
         assert second_payload["id"] == first_payload["id"]
 
         async with factory() as database:
-            assert await database.scalar(select(func.count()).select_from(GenerationRun)) == 1
+            assert (
+                await database.scalar(select(func.count()).select_from(GenerationRun))
+                == 1
+            )
             run = (await database.execute(select(GenerationRun))).scalar_one()
             event = (await database.execute(select(GenerationEvent))).scalar_one()
             project = await database.get(Project, project_id)
@@ -164,11 +371,307 @@ async def test_create_run_is_202_idempotent_and_never_calls_engine_inline(tmp_pa
             assert event.run_id == run.id
             assert project.active_run_id == run.id
             assert entitlement.state == "reserved"
-            assert await database.scalar(
+            assert (
+                await database.scalar(
+                    select(func.count())
+                    .select_from(UsageLedger)
+                    .where(UsageLedger.entry_type == "trial.reserve")
+                )
+                == 2
+            )
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_owner_can_request_project_run_cancellation_idempotently_with_csrf(
+    tmp_path,
+) -> None:
+    engine, factory, client, project_id, foreign_id = await _project_app(tmp_path)
+    try:
+        await client.post("/test/login/10")
+        created = await client.post(
+            f"/api/projects/{project_id}/runs",
+            json={"mode": "express"},
+            headers={
+                "Idempotency-Key": "cancel-source",
+                "X-CSRF-Token": "test-csrf",
+            },
+        )
+        assert created.status == 202
+        run_id = UUID((await created.json())["id"])
+        async with factory() as database, database.begin():
+            run = await database.get(GenerationRun, run_id)
+            assert run is not None
+            run.state = "running"
+
+            foreign_run = GenerationRun(
+                project_id=foreign_id,
+                mode="express",
+                state="running",
+                next_event_sequence=1,
+                idempotency_key="foreign-cancel",
+            )
+            database.add(foreign_run)
+            await database.flush()
+            foreign = await database.get(Project, foreign_id)
+            assert foreign is not None
+            foreign.active_run_id = foreign_run.id
+            foreign_run_id = foreign_run.id
+
+        without_csrf = await client.post(f"/api/runs/{run_id}/cancel", json={})
+        assert without_csrf.status == 403
+        foreign_response = await client.post(
+            f"/api/runs/{foreign_run_id}/cancel",
+            json={},
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        assert foreign_response.status == 404
+
+        first = await client.post(
+            f"/api/runs/{run_id}/cancel",
+            json={},
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        second = await client.post(
+            f"/api/runs/{run_id}/cancel",
+            json={},
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+
+        assert first.status == second.status == 202
+        assert await first.json() == {
+            "run_id": str(run_id),
+            "cancel_requested": True,
+            "status": "running",
+        }
+        assert await second.json() == await first.json()
+        async with factory() as database:
+            events = list(
+                (
+                    await database.execute(
+                        select(GenerationEvent).where(
+                            GenerationEvent.run_id == run_id,
+                            GenerationEvent.event_type == "run.cancel_requested",
+                        )
+                    )
+                ).scalars()
+            )
+        assert len(events) == 1
+        assert events[0].public_message == "Запрошена отмена генерации"
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_retry_compensated_project_run_is_idempotent_and_reserves_trial_once(
+    tmp_path,
+) -> None:
+    engine, factory, client, project_id, _ = await _project_app(tmp_path)
+    try:
+        await client.post("/test/login/10")
+        created = await client.post(
+            f"/api/projects/{project_id}/runs",
+            json={"mode": "express"},
+            headers={
+                "Idempotency-Key": "retry-source",
+                "X-CSRF-Token": "test-csrf",
+            },
+        )
+        assert created.status == 202
+        source_run_id = UUID((await created.json())["id"])
+        async with factory() as database, database.begin():
+            source = await database.get(GenerationRun, source_run_id)
+            project = await database.get(Project, project_id)
+            assert source is not None and project is not None
+            source.state = "failed"
+            source.failure_category = "provider"
+            source.error_code = "provider_unavailable"
+            project.status = "failed"
+
+        headers = {
+            "Idempotency-Key": "retry-after-compensation",
+            "X-CSRF-Token": "test-csrf",
+        }
+        first = await client.post(
+            f"/api/runs/{source_run_id}/retry", json={}, headers=headers
+        )
+        second = await client.post(
+            f"/api/runs/{source_run_id}/retry", json={}, headers=headers
+        )
+
+        assert first.status == second.status == 202
+        first_payload, second_payload = await first.json(), await second.json()
+        assert first_payload["id"] == second_payload["id"]
+        assert first_payload["status"] == "queued"
+        assert first_payload["id"] != str(source_run_id)
+        async with factory() as database:
+            runs = list(
+                (
+                    await database.execute(
+                        select(GenerationRun).order_by(GenerationRun.created_at)
+                    )
+                ).scalars()
+            )
+            source = await database.get(GenerationRun, source_run_id)
+            project = await database.get(Project, project_id)
+            entitlement = await database.scalar(
+                select(TrialEntitlement).where(TrialEntitlement.user_id == 10)
+            )
+            reserve_entries = await database.scalar(
                 select(func.count())
                 .select_from(UsageLedger)
                 .where(UsageLedger.entry_type == "trial.reserve")
-            ) == 2
+            )
+        assert len(runs) == 2
+        assert source is not None and source.trial_settlement == "compensated"
+        assert project is not None and str(project.active_run_id) == first_payload["id"]
+        assert entitlement is not None and entitlement.state == "reserved"
+        assert reserve_entries == 4
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_retry_rejects_reusing_source_run_idempotency_key(tmp_path) -> None:
+    engine, factory, client, project_id, _ = await _project_app(tmp_path)
+    try:
+        await client.post("/test/login/10")
+        created = await client.post(
+            f"/api/projects/{project_id}/runs",
+            json={"mode": "express"},
+            headers={
+                "Idempotency-Key": "source-key-must-not-be-reused",
+                "X-CSRF-Token": "test-csrf",
+            },
+        )
+        source_run_id = UUID((await created.json())["id"])
+        async with factory() as database, database.begin():
+            source = await database.get(GenerationRun, source_run_id)
+            project = await database.get(Project, project_id)
+            assert source is not None and project is not None
+            source.state = "failed"
+            source.failure_category = "provider"
+            project.status = "failed"
+
+        response = await client.post(
+            f"/api/runs/{source_run_id}/retry",
+            json={},
+            headers={
+                "Idempotency-Key": "source-key-must-not-be-reused",
+                "X-CSRF-Token": "test-csrf",
+            },
+        )
+
+        assert response.status == 409
+        assert (await response.json())["error"]["code"] == "idempotency_key_conflict"
+        async with factory() as database:
+            assert (
+                await database.scalar(select(func.count()).select_from(GenerationRun))
+                == 1
+            )
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_retry_rejects_consumed_trial_and_different_key_after_replacement(
+    tmp_path,
+) -> None:
+    engine, factory, client, project_id, _ = await _project_app(tmp_path)
+    try:
+        await client.post("/test/login/10")
+        created = await client.post(
+            f"/api/projects/{project_id}/runs",
+            json={"mode": "express"},
+            headers={
+                "Idempotency-Key": "consumed-source",
+                "X-CSRF-Token": "test-csrf",
+            },
+        )
+        source_run_id = UUID((await created.json())["id"])
+        async with factory() as database, database.begin():
+            source = await database.get(GenerationRun, source_run_id)
+            project = await database.get(Project, project_id)
+            assert source is not None and project is not None
+            source.state = "failed"
+            source.failure_category = "user"
+            source.error_code = "invalid_request"
+            project.status = "failed"
+
+        consumed = await client.post(
+            f"/api/runs/{source_run_id}/retry",
+            json={},
+            headers={
+                "Idempotency-Key": "retry-consumed",
+                "X-CSRF-Token": "test-csrf",
+            },
+        )
+        assert consumed.status == 409
+        assert (await consumed.json())["error"]["code"] == "trial_consumed"
+        async with factory() as database:
+            assert (
+                await database.scalar(select(func.count()).select_from(GenerationRun))
+                == 1
+            )
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_retry_with_one_key_creates_one_replacement_and_reservation(
+    tmp_path,
+) -> None:
+    engine, factory, client, project_id, _ = await _project_app(tmp_path)
+    try:
+        await client.post("/test/login/10")
+        created = await client.post(
+            f"/api/projects/{project_id}/runs",
+            json={"mode": "express"},
+            headers={
+                "Idempotency-Key": "concurrent-source",
+                "X-CSRF-Token": "test-csrf",
+            },
+        )
+        source_run_id = UUID((await created.json())["id"])
+        async with factory() as database, database.begin():
+            source = await database.get(GenerationRun, source_run_id)
+            project = await database.get(Project, project_id)
+            assert source is not None and project is not None
+            source.state = "failed"
+            source.failure_category = "provider"
+            project.status = "failed"
+
+        headers = {
+            "Idempotency-Key": "one-concurrent-retry",
+            "X-CSRF-Token": "test-csrf",
+        }
+        responses = await asyncio.gather(
+            client.post(f"/api/runs/{source_run_id}/retry", json={}, headers=headers),
+            client.post(f"/api/runs/{source_run_id}/retry", json={}, headers=headers),
+        )
+
+        assert [response.status for response in responses] == [202, 202]
+        payloads = [await response.json() for response in responses]
+        assert payloads[0]["id"] == payloads[1]["id"]
+        async with factory() as database:
+            assert (
+                await database.scalar(select(func.count()).select_from(GenerationRun))
+                == 2
+            )
+            assert (
+                await database.scalar(
+                    select(func.count())
+                    .select_from(UsageLedger)
+                    .where(UsageLedger.entry_type == "trial.reserve")
+                )
+                == 4
+            )
     finally:
         await client.close()
         await engine.dispose()
@@ -196,16 +699,19 @@ async def test_create_run_rejects_non_object_json_with_structured_400(
         assert response.status == 400
         assert (await response.json()) == {"error": {"code": "invalid_body"}}
         async with factory() as database:
-            assert await database.scalar(
-                select(func.count()).select_from(GenerationRun)
-            ) == 0
+            assert (
+                await database.scalar(select(func.count()).select_from(GenerationRun))
+                == 0
+            )
     finally:
         await client.close()
         await engine.dispose()
 
 
 @pytest.mark.asyncio
-async def test_project_run_and_preview_reads_are_owner_scoped_and_restore_state(tmp_path) -> None:
+async def test_project_run_and_preview_reads_are_owner_scoped_and_restore_state(
+    tmp_path,
+) -> None:
     engine, factory, client, project_id, foreign_id = await _project_app(tmp_path)
     try:
         async with factory() as database, database.begin():
@@ -261,7 +767,9 @@ async def test_project_run_and_preview_reads_are_owner_scoped_and_restore_state(
         await client.post("/test/login/10")
         listed = await client.get("/api/projects")
         assert listed.status == 200
-        assert [item["id"] for item in (await listed.json())["projects"]] == [str(project_id)]
+        assert [item["id"] for item in (await listed.json())["projects"]] == [
+            str(project_id)
+        ]
 
         detail = await client.get(f"/api/projects/{project_id}")
         assert detail.status == 200
@@ -292,7 +800,9 @@ async def test_project_run_and_preview_reads_are_owner_scoped_and_restore_state(
 
 
 @pytest.mark.asyncio
-async def test_sse_resumes_without_duplicates_heartbeats_and_closes_on_terminal(tmp_path) -> None:
+async def test_sse_resumes_without_duplicates_heartbeats_and_closes_on_terminal(
+    tmp_path,
+) -> None:
     engine, factory, client, project_id, _ = await _project_app(tmp_path)
     try:
         async with factory() as database, database.begin():
@@ -307,8 +817,12 @@ async def test_sse_resumes_without_duplicates_heartbeats_and_closes_on_terminal(
             await database.flush()
             database.add_all(
                 [
-                    GenerationEvent(id=201, run_id=run.id, sequence=1, event_type="one", payload={}),
-                    GenerationEvent(id=202, run_id=run.id, sequence=2, event_type="two", payload={}),
+                    GenerationEvent(
+                        id=201, run_id=run.id, sequence=1, event_type="one", payload={}
+                    ),
+                    GenerationEvent(
+                        id=202, run_id=run.id, sequence=2, event_type="two", payload={}
+                    ),
                 ]
             )
             run_id = run.id
@@ -368,7 +882,9 @@ async def test_sse_resumes_without_duplicates_heartbeats_and_closes_on_terminal(
 
 
 @pytest.mark.asyncio
-async def test_terminal_sse_drains_more_than_one_page_without_duplicates(tmp_path) -> None:
+async def test_terminal_sse_drains_more_than_one_page_without_duplicates(
+    tmp_path,
+) -> None:
     engine, factory, client, project_id, _ = await _project_app(tmp_path)
     try:
         async with factory() as database, database.begin():
@@ -382,17 +898,19 @@ async def test_terminal_sse_drains_more_than_one_page_without_duplicates(tmp_pat
             )
             database.add(run)
             await database.flush()
-            database.add_all([
-                GenerationEvent(
-                    id=10_000 + sequence,
-                    run_id=run.id,
-                    sequence=sequence,
-                    event_type="run.progress",
-                    public_message=f"Event {sequence}",
-                    payload={"status": "completed"},
-                )
-                for sequence in range(1, 106)
-            ])
+            database.add_all(
+                [
+                    GenerationEvent(
+                        id=10_000 + sequence,
+                        run_id=run.id,
+                        sequence=sequence,
+                        event_type="run.progress",
+                        public_message=f"Event {sequence}",
+                        payload={"status": "completed"},
+                    )
+                    for sequence in range(1, 106)
+                ]
+            )
             run_id = run.id
 
         await client.post("/test/login/10")
@@ -431,28 +949,30 @@ async def test_preview_ignores_newer_unaccepted_artifact(tmp_path) -> None:
             await database.flush()
             accepted = artifact(revision=1)
             rejected = artifact(revision=2)
-            database.add_all([
-                GenerationArtifact(
-                    run_id=run.id,
-                    revision=1,
-                    stage=accepted.stage.value,
-                    html=accepted.body_html,
-                    css=accepted.css,
-                    javascript=accepted.javascript,
-                    config={"artifact": accepted.to_dict()},
-                    quality_status="verified",
-                ),
-                GenerationArtifact(
-                    run_id=run.id,
-                    revision=2,
-                    stage=rejected.stage.value,
-                    html=rejected.body_html,
-                    css=rejected.css,
-                    javascript=rejected.javascript,
-                    config={"artifact": rejected.to_dict()},
-                    quality_status="needs_repair",
-                ),
-            ])
+            database.add_all(
+                [
+                    GenerationArtifact(
+                        run_id=run.id,
+                        revision=1,
+                        stage=accepted.stage.value,
+                        html=accepted.body_html,
+                        css=accepted.css,
+                        javascript=accepted.javascript,
+                        config={"artifact": accepted.to_dict()},
+                        quality_status="verified",
+                    ),
+                    GenerationArtifact(
+                        run_id=run.id,
+                        revision=2,
+                        stage=rejected.stage.value,
+                        html=rejected.body_html,
+                        css=rejected.css,
+                        javascript=rejected.javascript,
+                        config={"artifact": rejected.to_dict()},
+                        quality_status="needs_repair",
+                    ),
+                ]
+            )
             await database.flush()
             run_id = run.id
             accepted_id = (
@@ -498,36 +1018,38 @@ async def test_preview_skips_malformed_verified_artifacts_and_uses_valid_draft(
             )
             database.add_all([with_draft, malformed_only])
             await database.flush()
-            database.add_all([
-                GenerationArtifact(
-                    run_id=with_draft.id,
-                    revision=2,
-                    stage="foundation",
-                    html="<main>malformed</main>",
-                    css="",
-                    javascript="",
-                    config={"artifact": {"invalid": True}},
-                    quality_status="verified",
-                ),
-                GenerationEvent(
-                    id=401,
-                    run_id=with_draft.id,
-                    sequence=1,
-                    event_type="artifact.draft_staged",
-                    public_message="Restorable draft",
-                    payload={"artifact": _artifact_payload(1)},
-                ),
-                GenerationArtifact(
-                    run_id=malformed_only.id,
-                    revision=1,
-                    stage="foundation",
-                    html="<main>malformed</main>",
-                    css="",
-                    javascript="",
-                    config={"artifact": {"invalid": True}},
-                    quality_status="accepted",
-                ),
-            ])
+            database.add_all(
+                [
+                    GenerationArtifact(
+                        run_id=with_draft.id,
+                        revision=2,
+                        stage="foundation",
+                        html="<main>malformed</main>",
+                        css="",
+                        javascript="",
+                        config={"artifact": {"invalid": True}},
+                        quality_status="verified",
+                    ),
+                    GenerationEvent(
+                        id=401,
+                        run_id=with_draft.id,
+                        sequence=1,
+                        event_type="artifact.draft_staged",
+                        public_message="Restorable draft",
+                        payload={"artifact": _artifact_payload(1)},
+                    ),
+                    GenerationArtifact(
+                        run_id=malformed_only.id,
+                        revision=1,
+                        stage="foundation",
+                        html="<main>malformed</main>",
+                        css="",
+                        javascript="",
+                        config={"artifact": {"invalid": True}},
+                        quality_status="accepted",
+                    ),
+                ]
+            )
             with_draft_id = with_draft.id
             malformed_only_id = malformed_only.id
 
@@ -570,16 +1092,18 @@ async def test_preview_document_serves_fixed_runtime_for_exact_durable_artifact(
                     "document.body.replaceChildren();"
                 ),
             )
-            database.add(GenerationArtifact(
-                run_id=run.id,
-                revision=3,
-                stage=candidate.stage.value,
-                html=candidate.body_html,
-                css=candidate.css,
-                javascript=candidate.javascript,
-                config={"artifact": candidate.to_dict()},
-                quality_status="accepted",
-            ))
+            database.add(
+                GenerationArtifact(
+                    run_id=run.id,
+                    revision=3,
+                    stage=candidate.stage.value,
+                    html=candidate.body_html,
+                    css=candidate.css,
+                    javascript=candidate.javascript,
+                    config={"artifact": candidate.to_dict()},
+                    quality_status="accepted",
+                )
+            )
             run_id = run.id
 
         unauthenticated = await client.get(
@@ -631,25 +1155,30 @@ async def test_preview_document_hides_foreign_runs_and_rejects_invalid_or_missin
             await database.flush()
             candidate = artifact(revision=1)
             mismatched = artifact(revision=2)
-            database.add_all([GenerationArtifact(
-                run_id=owned.id,
-                revision=1,
-                stage=mismatched.stage.value,
-                html=mismatched.body_html,
-                css=mismatched.css,
-                javascript=mismatched.javascript,
-                config={"artifact": mismatched.to_dict()},
-                quality_status="accepted",
-            ), GenerationArtifact(
-                run_id=foreign.id,
-                revision=1,
-                stage=candidate.stage.value,
-                html=candidate.body_html,
-                css=candidate.css,
-                javascript=candidate.javascript,
-                config={"artifact": candidate.to_dict()},
-                quality_status="verified",
-            )])
+            database.add_all(
+                [
+                    GenerationArtifact(
+                        run_id=owned.id,
+                        revision=1,
+                        stage=mismatched.stage.value,
+                        html=mismatched.body_html,
+                        css=mismatched.css,
+                        javascript=mismatched.javascript,
+                        config={"artifact": mismatched.to_dict()},
+                        quality_status="accepted",
+                    ),
+                    GenerationArtifact(
+                        run_id=foreign.id,
+                        revision=1,
+                        stage=candidate.stage.value,
+                        html=candidate.body_html,
+                        css=candidate.css,
+                        javascript=candidate.javascript,
+                        config={"artifact": candidate.to_dict()},
+                        quality_status="verified",
+                    ),
+                ]
+            )
             owned_id, foreign_run_id = owned.id, foreign.id
 
         await client.post("/test/login/10")
@@ -698,27 +1227,29 @@ async def test_preview_document_can_render_an_exact_restorable_draft(tmp_path) -
             )
             database.add(run)
             await database.flush()
-            database.add_all([
-                GenerationEvent(
-                    id=501,
-                    run_id=run.id,
-                    sequence=1,
-                    event_type="artifact.draft_staged",
-                    public_message="Restorable exact draft",
-                    payload={"artifact": _artifact_payload(4)},
-                ),
-                *[
+            database.add_all(
+                [
                     GenerationEvent(
-                        id=501 + sequence,
+                        id=501,
                         run_id=run.id,
-                        sequence=sequence,
+                        sequence=1,
                         event_type="artifact.draft_staged",
-                        public_message="Newer unrelated draft",
-                        payload={"artifact": _artifact_payload(4 + sequence)},
-                    )
-                    for sequence in range(2, 53)
-                ],
-            ])
+                        public_message="Restorable exact draft",
+                        payload={"artifact": _artifact_payload(4)},
+                    ),
+                    *[
+                        GenerationEvent(
+                            id=501 + sequence,
+                            run_id=run.id,
+                            sequence=sequence,
+                            event_type="artifact.draft_staged",
+                            public_message="Newer unrelated draft",
+                            payload={"artifact": _artifact_payload(4 + sequence)},
+                        )
+                        for sequence in range(2, 53)
+                    ],
+                ]
+            )
             run_id = run.id
 
         await client.post("/test/login/10")
@@ -739,7 +1270,9 @@ async def test_preview_document_can_render_an_exact_restorable_draft(tmp_path) -
 
 
 @pytest.mark.asyncio
-async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(tmp_path) -> None:
+async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(
+    tmp_path,
+) -> None:
     class FakeProvider:
         capabilities = ProviderCapabilities()
 
@@ -770,7 +1303,9 @@ async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(tmp_pa
             policies={
                 ("chat_visitor", "express"): ModelPolicy(
                     prompt_version="chat-visitor-v1",
-                    targets=(ProviderTarget("fake", "fake-chat-model", 1_000_000, 2_000_000),),
+                    targets=(
+                        ProviderTarget("fake", "fake-chat-model", 1_000_000, 2_000_000),
+                    ),
                 )
             },
             audit=SqlModelCallAudit(factory),
@@ -802,28 +1337,30 @@ async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(tmp_pa
             database.add_all([run, foreign])
             await database.flush()
             candidate = artifact(revision=2, art_direction="Trusted identity marker")
-            database.add_all([
-                GenerationArtifact(
-                    run_id=run.id,
-                    revision=2,
-                    stage=candidate.stage.value,
-                    html=candidate.body_html,
-                    css=candidate.css,
-                    javascript=candidate.javascript,
-                    config={"artifact": candidate.to_dict()},
-                    quality_status="accepted",
-                ),
-                GenerationArtifact(
-                    run_id=foreign.id,
-                    revision=2,
-                    stage=candidate.stage.value,
-                    html=candidate.body_html,
-                    css=candidate.css,
-                    javascript=candidate.javascript,
-                    config={"artifact": candidate.to_dict()},
-                    quality_status="verified",
-                ),
-            ])
+            database.add_all(
+                [
+                    GenerationArtifact(
+                        run_id=run.id,
+                        revision=2,
+                        stage=candidate.stage.value,
+                        html=candidate.body_html,
+                        css=candidate.css,
+                        javascript=candidate.javascript,
+                        config={"artifact": candidate.to_dict()},
+                        quality_status="accepted",
+                    ),
+                    GenerationArtifact(
+                        run_id=foreign.id,
+                        revision=2,
+                        stage=candidate.stage.value,
+                        html=candidate.body_html,
+                        css=candidate.css,
+                        javascript=candidate.javascript,
+                        config={"artifact": candidate.to_dict()},
+                        quality_status="verified",
+                    ),
+                ]
+            )
             run_id, foreign_run_id = run.id, foreign.id
 
         payload = {
@@ -842,16 +1379,20 @@ async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(tmp_pa
         without_csrf = await client.post(f"/api/runs/{run_id}/chat", json=payload)
         assert without_csrf.status == 403
 
-        first_request = asyncio.create_task(client.post(
-            f"/api/runs/{run_id}/chat",
-            json=payload,
-            headers={"X-CSRF-Token": "test-csrf"},
-        ))
-        duplicate_request = asyncio.create_task(client.post(
-            f"/api/runs/{run_id}/chat",
-            json=payload,
-            headers={"X-CSRF-Token": "test-csrf"},
-        ))
+        first_request = asyncio.create_task(
+            client.post(
+                f"/api/runs/{run_id}/chat",
+                json=payload,
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        )
+        duplicate_request = asyncio.create_task(
+            client.post(
+                f"/api/runs/{run_id}/chat",
+                json=payload,
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        )
         await asyncio.wait_for(
             _wait_until(lambda: len(provider.requests) >= 1),
             timeout=2,
@@ -860,10 +1401,14 @@ async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(tmp_pa
         provider.release.set()
         first, duplicate = await asyncio.gather(first_request, duplicate_request)
         assert first.status == duplicate.status == 200
-        assert await first.json() == await duplicate.json() == {
-            "request_id": "request-route-123",
-            "reply": "Ответ из routed chat",
-        }
+        assert (
+            await first.json()
+            == await duplicate.json()
+            == {
+                "request_id": "request-route-123",
+                "reply": "Ответ из routed chat",
+            }
+        )
         assert len(provider.requests) == 1
         assert "Build a sales assistant" in provider.requests[0].prompt
         assert "Trusted identity marker" in provider.requests[0].prompt
@@ -871,7 +1416,11 @@ async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(tmp_pa
             call = (await database.execute(select(ModelCall))).scalar_one()
         assert call.role == "chat_visitor"
         assert call.run_id == run_id
-        assert (call.input_tokens, call.output_tokens, call.thinking_tokens) == (9, 6, 1)
+        assert (call.input_tokens, call.output_tokens, call.thinking_tokens) == (
+            9,
+            6,
+            1,
+        )
         assert call.cost_microusd == 21
 
         await client.post("/test/login/11")
@@ -894,7 +1443,9 @@ async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_run_chat_validates_payload_artifact_and_service_availability(tmp_path) -> None:
+async def test_run_chat_validates_payload_artifact_and_service_availability(
+    tmp_path,
+) -> None:
     engine, factory, client, project_id, _ = await _project_app(tmp_path)
     try:
         async with factory() as database, database.begin():
@@ -949,16 +1500,18 @@ async def test_run_chat_validates_payload_artifact_and_service_availability(tmp_
 
         candidate = artifact(revision=1)
         async with factory() as database, database.begin():
-            database.add(GenerationArtifact(
-                run_id=run_id,
-                revision=1,
-                stage=candidate.stage.value,
-                html=candidate.body_html,
-                css=candidate.css,
-                javascript=candidate.javascript,
-                config={"artifact": candidate.to_dict()},
-                quality_status="accepted",
-            ))
+            database.add(
+                GenerationArtifact(
+                    run_id=run_id,
+                    revision=1,
+                    stage=candidate.stage.value,
+                    html=candidate.body_html,
+                    css=candidate.css,
+                    javascript=candidate.javascript,
+                    config={"artifact": candidate.to_dict()},
+                    quality_status="accepted",
+                )
+            )
         unavailable = await client.post(
             f"/api/runs/{run_id}/chat",
             json={
@@ -982,7 +1535,9 @@ async def test_run_chat_validates_payload_artifact_and_service_availability(tmp_
 
 @pytest.mark.asyncio
 @pytest.mark.postgres
-@pytest.mark.skipif(not POSTGRES_URL, reason="KAIGO_TEST_POSTGRES_URL is not configured")
+@pytest.mark.skipif(
+    not POSTGRES_URL, reason="KAIGO_TEST_POSTGRES_URL is not configured"
+)
 async def test_postgres_concurrent_idempotent_start_creates_one_reserved_run() -> None:
     engine = create_async_engine(POSTGRES_URL)
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -994,13 +1549,15 @@ async def test_postgres_concurrent_idempotent_start_creates_one_reserved_run() -
             database.add(Tenant(id=1, name="Alpha", slug="alpha"))
             database.add(User(id=10, tenant_id=1, email="owner@example.com"))
             await database.flush()
-            database.add(UserIdentity(
-                user_id=10,
-                provider="google",
-                provider_subject="postgres-owner",
-                email="owner@example.com",
-                email_verified=True,
-            ))
+            database.add(
+                UserIdentity(
+                    user_id=10,
+                    provider="google",
+                    provider_subject="postgres-owner",
+                    email="owner@example.com",
+                    email_verified=True,
+                )
+            )
             project = Project(
                 tenant_id=1,
                 owner_user_id=10,
@@ -1026,24 +1583,37 @@ async def test_postgres_concurrent_idempotent_start_creates_one_reserved_run() -
         await client.start_server()
         try:
             await client.post("/test/login")
-            responses = await asyncio.gather(*[
-                client.post(
-                    f"/api/projects/{project_id}/runs",
-                    json={"mode": "express"},
-                    headers={"Idempotency-Key": "same-request", "X-CSRF-Token": "pg-csrf"},
-                )
-                for _ in range(2)
-            ])
+            responses = await asyncio.gather(
+                *[
+                    client.post(
+                        f"/api/projects/{project_id}/runs",
+                        json={"mode": "express"},
+                        headers={
+                            "Idempotency-Key": "same-request",
+                            "X-CSRF-Token": "pg-csrf",
+                        },
+                    )
+                    for _ in range(2)
+                ]
+            )
             payloads = [await response.json() for response in responses]
             assert [response.status for response in responses] == [202, 202]
             assert len({payload["id"] for payload in payloads}) == 1
             async with factory() as database:
-                assert await database.scalar(select(func.count()).select_from(GenerationRun)) == 1
-                assert await database.scalar(
-                    select(func.count()).select_from(UsageLedger).where(
-                        UsageLedger.entry_type == "trial.reserve"
+                assert (
+                    await database.scalar(
+                        select(func.count()).select_from(GenerationRun)
                     )
-                ) == 2
+                    == 1
+                )
+                assert (
+                    await database.scalar(
+                        select(func.count())
+                        .select_from(UsageLedger)
+                        .where(UsageLedger.entry_type == "trial.reserve")
+                    )
+                    == 2
+                )
         finally:
             await client.close()
     finally:

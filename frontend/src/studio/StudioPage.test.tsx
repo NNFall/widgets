@@ -124,7 +124,7 @@ beforeEach(() => {
   localStorage.clear();
   FakeEventSource.instances = [];
   vi.stubGlobal('EventSource', FakeEventSource);
-  window.history.replaceState({}, '', '/studio');
+  window.history.replaceState({}, '', '/builder');
 });
 
 afterEach(() => {
@@ -157,7 +157,7 @@ describe('StudioPage', () => {
       'http://localhost:3000/builder/api/runs',
       expect.objectContaining({
         method: 'POST',
-        body: expect.stringContaining('"source_url":"https://example.com"'),
+        body: expect.stringContaining('"source_url":"https://example.com/"'),
       }),
     );
 
@@ -238,7 +238,7 @@ describe('StudioPage', () => {
     await waitFor(() => expect(localStorage.getItem(ACTIVE_RUN_STORAGE_KEY)).toBe('run-retry'));
   });
 
-  it('submits a refinement and keeps the unimplemented publish action disabled', async () => {
+  it('submits a refinement and keeps publication disabled without a server-verified free result', async () => {
     localStorage.setItem(ACTIVE_RUN_STORAGE_KEY, 'run-123');
     let current = snapshot({ status: 'completed', artifact, quality_status: 'verified' });
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -265,7 +265,9 @@ describe('StudioPage', () => {
     ));
     expect(localStorage.getItem(ACTIVE_RUN_STORAGE_KEY)).toBe('run-refined');
 
-    const publish = screen.getByRole('button', { name: /Опубликовать.*Скоро/i });
+    const publish = screen.getByRole('button', {
+      name: 'Публикация станет доступна после проверенного результата',
+    });
     expect(publish).toBeDisabled();
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('publish'))).toBe(false);
   });

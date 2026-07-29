@@ -3,6 +3,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { useState } from 'react';
 
 import { Reveal } from '../shared/Reveal';
+import { studioHref } from '../shared/campaign';
 
 const questions = [
   {
@@ -11,11 +12,11 @@ const questions = [
   },
   {
     question: 'Сколько времени занимает создание?',
-    answer: 'Первую версию AI-виджета обычно можно получить примерно за 10 минут. После этого вы проверяете и уточняете результат в студии.',
+    answer: 'Первую версию AI-виджета обычно можно получить за 10–20 минут. Сложные сайты требуют больше времени. После этого вы проверяете результат в студии.',
   },
   {
-    question: 'Можно изменить ответы и характер общения?',
-    answer: 'Да. В студии можно попросить сделать ответы короче, изменить тон или добавить важные для бизнеса правила.',
+    question: 'Можно проверить ответы и характер общения?',
+    answer: 'Да. В студии можно открыть предпросмотр и задать виджету посетительские вопросы. Чат помогает проверить ответы, но не изменяет сам виджет.',
   },
   {
     question: 'Что увидит клиент до публикации?',
@@ -28,6 +29,7 @@ const questions = [
 ] as const;
 
 export function FaqSection() {
+  const campaignStudioHref = studioHref();
   const [openIndex, setOpenIndex] = useState(0);
   const reducedMotion = useReducedMotion();
 
@@ -37,11 +39,11 @@ export function FaqSection() {
         <Reveal className="faq-copy">
           <p className="section-kicker">Вопросы и помощь</p>
           <h2>Понятно даже<br />без технического опыта</h2>
-          <p>Kaigo ведёт от ссылки до готового виджета. Каждое действие можно пересмотреть и изменить в студии.</p>
+          <p>Kaigo ведёт от ссылки до готового виджета. Результат можно проверить в предпросмотре и опубликовать после решения.</p>
           <div className="faq-help">
             <Question size={55} weight="regular" aria-hidden="true" />
             <span><strong>Нужна помощь с первым запуском?</strong><small>Откройте студию или посмотрите пошаговую инструкцию.</small></span>
-            <div><a className="primary-button" href="/studio">Перейти в студию</a><a className="secondary-button" href="#how-it-works">Открыть инструкцию</a></div>
+            <div><a className="primary-button" href={campaignStudioHref}>Перейти в студию</a><a className="secondary-button" href="#how-it-works">Открыть инструкцию</a></div>
           </div>
         </Reveal>
 

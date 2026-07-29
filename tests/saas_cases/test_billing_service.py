@@ -18,6 +18,7 @@ from app.billing.contracts import (
 )
 from app.billing.catalog import PLAN_CATALOG, BillingPlan
 from app.billing.payments import (
+    BillingError,
     BillingService,
     CheckoutIdempotencyConflict,
 )
@@ -34,7 +35,11 @@ from app.saas.models import (
 class FakeProvider:
     name = "fakepay"
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        merchant_account_fingerprint: str = "a" * 64,
+    ) -> None:
+        self.merchant_account_fingerprint = merchant_account_fingerprint
         self.checkout_calls: list[CheckoutCommand] = []
         self.verify_calls: list[tuple[ProviderNotification, Money | None, dict | None]] = []
         self._gate = asyncio.Event()
@@ -161,6 +166,7 @@ async def test_stale_creating_checkout_is_recovered_with_same_provider_key(
         stuck = PaymentAttempt(
             user_id=10,
             provider="fakepay",
+            merchant_account_fingerprint="a" * 64,
             idempotency_key="stale-checkout-key",
             plan_code=plan.code,
             plan_snapshot=plan.snapshot(),
@@ -278,6 +284,84 @@ async def test_failed_provider_call_retries_same_attempt_and_provider_key(
     assert len(provider.checkout_calls) == 2
     assert provider.checkout_calls[0].idempotency_key == provider.checkout_calls[1].idempotency_key
     assert provider.checkout_calls[0].metadata == provider.checkout_calls[1].metadata
+
+
+@pytest.mark.asyncio
+async def test_failed_checkout_cannot_retry_under_a_different_merchant_account(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+
+    class LostResponseProvider(FakeProvider):
+        async def create_checkout(self, command: CheckoutCommand) -> ProviderCheckout:
+            self.checkout_calls.append(command)
+            raise RuntimeError("response lost after merchant may have accepted payment")
+
+    merchant_a = LostResponseProvider("a" * 64)
+    with pytest.raises(RuntimeError, match="response lost"):
+        await BillingService(factory, merchant_a).create_checkout(
+            10, "starter_monthly", "merchant-bound-retry"
+        )
+
+    merchant_b = FakeProvider("b" * 64)
+    with pytest.raises(
+        BillingError,
+        match="merchant account does not match",
+    ):
+        await BillingService(factory, merchant_b).create_checkout(
+            10, "starter_monthly", "merchant-bound-retry"
+        )
+
+    assert merchant_b.checkout_calls == []
+    async with factory() as database:
+        attempt = await database.scalar(
+            select(PaymentAttempt).where(
+                PaymentAttempt.idempotency_key == "merchant-bound-retry"
+            )
+        )
+        assert attempt.merchant_account_fingerprint == "a" * 64
+
+
+@pytest.mark.asyncio
+async def test_failed_checkout_retries_under_same_merchant_after_restart(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+
+    class LostResponseProvider(FakeProvider):
+        async def create_checkout(self, command: CheckoutCommand) -> ProviderCheckout:
+            self.checkout_calls.append(command)
+            raise RuntimeError("response lost")
+
+    with pytest.raises(RuntimeError, match="response lost"):
+        await BillingService(factory, LostResponseProvider("a" * 64)).create_checkout(
+            10, "starter_monthly", "same-merchant-retry"
+        )
+
+    replacement = FakeProvider("a" * 64)
+    result = await BillingService(factory, replacement).create_checkout(
+        10, "starter_monthly", "same-merchant-retry"
+    )
+
+    assert result.created is False
+    assert len(replacement.checkout_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_webhook_cannot_cross_a_known_merchant_account(billing_db) -> None:
+    _engine, factory = billing_db
+    merchant_a = FakeProvider("a" * 64)
+    checkout = await BillingService(factory, merchant_a).create_checkout(
+        10, "starter_monthly", "merchant-bound-webhook"
+    )
+
+    merchant_b = FakeProvider("b" * 64)
+    with pytest.raises(BillingError, match="merchant account does not match"):
+        await BillingService(factory, merchant_b).handle_notification(
+            {"payment_id": f"pay-{checkout.payment_id}"}
+        )
+
+    assert merchant_b.verify_calls == []
 
 
 @pytest.mark.asyncio
@@ -442,6 +526,7 @@ async def test_ledger_idempotency_is_namespaced_by_provider(billing_db) -> None:
             attempt = PaymentAttempt(
                 user_id=user_id,
                 provider=provider_name,
+                merchant_account_fingerprint="a" * 64,
                 provider_payment_id="shared-provider-payment-id",
                 idempotency_key=f"provider-key-{user_id}",
                 plan_code=plan.code,

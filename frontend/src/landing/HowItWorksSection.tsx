@@ -2,6 +2,7 @@ import { ArrowRight, CheckCircle, ChatsCircle, LinkSimple, MagnifyingGlass } fro
 
 import { Reveal } from '../shared/Reveal';
 import { useMotionActivity } from '../shared/MotionActivity';
+import { studioHref } from '../shared/campaign';
 
 export const HOW_CARD_STAGGER_SECONDS = 0.18;
 
@@ -40,7 +41,7 @@ const steps = [
   {
     number: '3',
     title: 'Проверьте AI-виджет',
-    copy: 'Посмотрите диалог, уточните поведение и публикуйте только после проверки.',
+    copy: 'Откройте предпросмотр, задайте вопросы в чате и публикуйте только после проверки.',
     Icon: ChatsCircle,
     artifact: (
       <div className="process-artifact process-artifact--chat">
@@ -59,6 +60,7 @@ const steps = [
 ] as const;
 
 export function HowItWorksSection() {
+  const campaignStudioHref = studioHref();
   const { active, ref } = useMotionActivity<HTMLElement>();
 
   return (
@@ -99,7 +101,7 @@ export function HowItWorksSection() {
             </Reveal>
           ))}
         </div>
-        <Reveal className="section-action"><a className="primary-button" href="/studio">Создать первый вариант</a></Reveal>
+        <Reveal className="section-action"><a className="primary-button" href={campaignStudioHref}>Создать первый вариант</a></Reveal>
       </div>
     </section>
   );

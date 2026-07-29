@@ -80,7 +80,7 @@ describe('landing accessibility contracts', () => {
       /\.case-toggle button\s*\{[^}]*min-height:\s*44px/s,
     );
     expect(stylesSource).toMatch(
-      /\.studio-demo__sidebar > button\s*\{[^}]*width:\s*50px;[^}]*height:\s*50px/s,
+      /\.site-header__menu-toggle\s*\{[^}]*width:\s*48px;[^}]*height:\s*48px/s,
     );
   });
 });

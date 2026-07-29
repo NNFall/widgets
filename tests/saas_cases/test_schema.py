@@ -101,6 +101,11 @@ def test_publication_release_constraints_are_artifact_idempotent_and_referential
 
 
 def test_billing_constraints_and_payment_links_are_registered() -> None:
+    assert (
+        Base.metadata.tables["payment_attempts"]
+        .c.merchant_account_fingerprint.nullable
+        is False
+    )
     assert "uq_payment_attempt_user_idempotency" in _constraint_names(
         "payment_attempts", UniqueConstraint
     )

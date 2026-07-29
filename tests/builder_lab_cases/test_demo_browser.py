@@ -96,9 +96,11 @@ class DemoBridgeBrowserTests(unittest.IsolatedAsyncioTestCase):
                 await page.locator("#brief").input_value(),
                 "Спокойный консультант",
             )
+            status_text = await page.locator("#status").inner_text()
             self.assertIn(
-                "running",
-                await page.locator("#status").inner_text(),
+                "Запуск · выполняется",
+                status_text,
+                status_text.encode("unicode_escape").decode("ascii"),
             )
         finally:
             await browser.close()

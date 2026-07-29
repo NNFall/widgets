@@ -1,4 +1,4 @@
-import { ArrowRight, BookOpen, Clock, EnvelopeSimple, SlidersHorizontal, Target, Textbox } from '@phosphor-icons/react';
+import { ArrowRight, BookOpen, Clock, EnvelopeSimple, Eye, Target, Textbox } from '@phosphor-icons/react';
 import { useEffect, useState } from 'react';
 
 import { KaigoLogo } from '../shared/KaigoLogo';
@@ -48,7 +48,7 @@ const capabilities = [
   { title: 'Отвечает 24/7', copy: 'Не заставляет посетителя ждать рабочего дня.', Icon: Clock, revealOrder: 2 },
   { title: 'Помогает выбрать', copy: 'Уточняет задачу и предлагает подходящий следующий шаг.', Icon: Target, revealOrder: 3 },
   { title: 'Собирает обращения', copy: 'Передаёт контакты в Telegram или на почту.', Icon: EnvelopeSimple, revealOrder: 4 },
-  { title: 'Можно дорабатывать', copy: 'Поведение и текст меняются до публикации.', Icon: SlidersHorizontal, revealOrder: 5 },
+  { title: 'Можно проверить', copy: 'Предпросмотр и чат помогают оценить готовый виджет до публикации.', Icon: Eye, revealOrder: 5 },
 ] as const;
 
 export function CapabilitiesSection() {

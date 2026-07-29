@@ -5,13 +5,22 @@ import hashlib
 import json
 import re
 import secrets
+from contextlib import asynccontextmanager
 from uuid import UUID
+from weakref import WeakValueDictionary
 
 from aiohttp import web
 from aiohttp_session import get_session
 from sqlalchemy import select
 
-from app.billing.service import TrialService, TrialUnavailable, UnverifiedTrialUser
+from app.analytics.service import record_funnel_event, sanitize_campaign
+from app.auth.routes import _canonical_public_https_url
+from app.billing.service import (
+    TrialService,
+    TrialSettlementReconciler,
+    TrialUnavailable,
+    UnverifiedTrialUser,
+)
 from app.db.session import get_session_factory
 from app.chat import (
     CHAT_SERVICE_KEY,
@@ -23,6 +32,7 @@ from app.saas.models import GenerationArtifact, GenerationEvent, GenerationRun, 
 from builder_lab.models import BuilderRequest, EngineName, WidgetArtifact
 from builder_lab.preview import PREVIEW_CSP, build_trusted_runtime_document
 from builder_lab.validation import validate_artifact
+from builder_lab.worker import PostgresWorkerQueue
 
 TERMINAL_STATES = frozenset({"completed", "failed", "cancelled"})
 SSE_PAGE_SIZE = 100
@@ -30,6 +40,9 @@ PREVIEW_DRAFT_CANDIDATE_LIMIT = 50
 PREVIEW_CHANNEL_PATTERN = re.compile(r"^[A-Za-z0-9_-]{22,96}$")
 CHAT_REQUEST_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{7,95}$")
 PROJECT_CHAT_SESSION_KEY = "project_chat_session_id"
+_SQLITE_PROJECT_LOCKS: WeakValueDictionary[tuple[int, UUID], asyncio.Lock] = (
+    WeakValueDictionary()
+)
 
 
 async def _scope(request: web.Request, *, verified: bool = False) -> tuple[int, int]:
@@ -86,21 +99,97 @@ async def _owned_project(database, project_id: UUID, user_id: int, tenant_id: in
     return project
 
 
-async def _owned_run(database, run_id: UUID, user_id: int, tenant_id: int):
-    row = (
-        await database.execute(
-            select(GenerationRun, Project)
-            .join(Project, GenerationRun.project_id == Project.id)
-            .where(
-                GenerationRun.id == run_id,
-                Project.owner_user_id == user_id,
-                Project.tenant_id == tenant_id,
-            )
+async def _owned_run(
+    database,
+    run_id: UUID,
+    user_id: int,
+    tenant_id: int,
+    *,
+    lock: bool = False,
+):
+    statement = (
+        select(GenerationRun, Project)
+        .join(Project, GenerationRun.project_id == Project.id)
+        .where(
+            GenerationRun.id == run_id,
+            Project.owner_user_id == user_id,
+            Project.tenant_id == tenant_id,
         )
+    )
+    row = (
+        await database.execute(statement.with_for_update() if lock else statement)
     ).one_or_none()
     if row is None:
         raise web.HTTPNotFound(text=_error("not_found"), content_type="application/json")
     return row
+
+
+@asynccontextmanager
+async def _project_mutation_guard(factory, project_id: UUID):
+    bind = factory.kw.get("bind")
+    if bind is None or bind.dialect.name != "sqlite":
+        yield
+        return
+    key = (id(bind), project_id)
+    lock = _SQLITE_PROJECT_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _SQLITE_PROJECT_LOCKS[key] = lock
+    async with lock:
+        yield
+
+
+def _idempotency_key(request: web.Request) -> str:
+    key = request.headers.get("Idempotency-Key", "").strip()
+    if not key or len(key) > 128 or "\x00" in key:
+        raise web.HTTPBadRequest(
+            text=_error("idempotency_key_required"),
+            content_type="application/json",
+        )
+    return key
+
+
+async def _enqueue_express_run(database, factory, project: Project, user_id: int, key: str):
+    builder_request = BuilderRequest(
+        engine=EngineName.DIRECT,
+        brief=project.brief or "Create a useful website assistant",
+        source_url=project.source_url,
+    )
+    run = GenerationRun(
+        project_id=project.id,
+        mode="express",
+        state="queued",
+        progress=0,
+        next_event_sequence=2,
+        idempotency_key=key,
+    )
+    database.add(run)
+    await database.flush()
+    await TrialService(factory).reserve_trial_in_session(
+        database,
+        user_id,
+        run.id,
+        request_id=key,
+    )
+    event_values = (
+        {"id": secrets.randbits(62)}
+        if database.get_bind().dialect.name == "sqlite"
+        else {}
+    )
+    database.add(
+        GenerationEvent(
+            **event_values,
+            run_id=run.id,
+            sequence=1,
+            event_type="run.created",
+            public_message="Generation queued",
+            payload={"status": "queued", "request": builder_request.to_dict()},
+        )
+    )
+    project.active_run_id = run.id
+    project.active_revision = None
+    project.status = "queued"
+    return run
 
 
 async def list_projects(request: web.Request) -> web.Response:
@@ -113,6 +202,115 @@ async def list_projects(request: web.Request) -> web.Response:
             .order_by(Project.created_at.desc(), Project.id)
         )).scalars())
     return web.json_response({"projects": [serialize_project(project) for project in projects]})
+
+
+async def create_project(request: web.Request) -> web.Response:
+    user_id, tenant_id = await _scope(request)
+    await _require_csrf(request)
+    try:
+        body = await request.json()
+    except Exception as error:  # noqa: BLE001
+        raise web.HTTPBadRequest(
+            text=_error("invalid_json"), content_type="application/json"
+        ) from error
+    if (
+        not isinstance(body, dict)
+        or not isinstance(body.get("url"), str)
+        or not isinstance(body.get("brief"), str)
+    ):
+        raise web.HTTPBadRequest(
+            text=_error("invalid_body"), content_type="application/json"
+        )
+    brief = body["brief"].strip() or None
+    if len(body["url"]) > 2_048 or (
+        brief is not None and len(brief) > 4_000
+    ):
+        raise web.HTTPBadRequest(
+            text=_error("invalid_body"), content_type="application/json"
+        )
+    source_url = _canonical_public_https_url(body["url"])
+    campaign = sanitize_campaign(
+        body.get("campaign") if isinstance(body.get("campaign"), dict) else None
+    )
+    if source_url is None:
+        raise web.HTTPBadRequest(
+            text=_error("invalid_source_url"), content_type="application/json"
+        )
+    async with get_session_factory(request.app)() as database, database.begin():
+        project = Project(
+            tenant_id=tenant_id,
+            owner_user_id=user_id,
+            source_url=source_url,
+            brief=brief,
+            status="draft",
+        )
+        database.add(project)
+        await database.flush()
+        await record_funnel_event(
+            database,
+            event_type="composer_submitted",
+            event_key=f"composer_submitted:project:{project.id}",
+            user_id=user_id,
+            project_id=project.id,
+            campaign=campaign,
+        )
+        payload = serialize_project(project)
+    return web.json_response(payload, status=201)
+
+
+async def update_project_draft(request: web.Request) -> web.Response:
+    user_id, tenant_id = await _scope(request)
+    await _require_csrf(request)
+    try:
+        body = await request.json()
+    except Exception as error:  # noqa: BLE001
+        raise web.HTTPBadRequest(
+            text=_error("invalid_json"), content_type="application/json"
+        ) from error
+    if (
+        not isinstance(body, dict)
+        or not isinstance(body.get("url"), str)
+        or not isinstance(body.get("brief"), str)
+    ):
+        raise web.HTTPBadRequest(
+            text=_error("invalid_body"), content_type="application/json"
+        )
+    brief = body["brief"].strip() or None
+    if len(body["url"]) > 2_048 or (
+        brief is not None and len(brief) > 4_000
+    ):
+        raise web.HTTPBadRequest(
+            text=_error("invalid_body"), content_type="application/json"
+        )
+    source_url = _canonical_public_https_url(body["url"])
+    if source_url is None:
+        raise web.HTTPBadRequest(
+            text=_error("invalid_source_url"), content_type="application/json"
+        )
+    factory = get_session_factory(request.app)
+    async with factory() as database, database.begin():
+        project = await _owned_project(
+            database,
+            _uuid(request.match_info["project_id"]),
+            user_id,
+            tenant_id,
+            lock=True,
+        )
+        previous_run = await database.scalar(
+            select(GenerationRun.id)
+            .where(GenerationRun.project_id == project.id)
+            .limit(1)
+        )
+        if previous_run is not None:
+            raise web.HTTPConflict(
+                text=_error("draft_locked"), content_type="application/json"
+            )
+        project.source_url = source_url
+        project.brief = brief
+        await database.flush()
+        await database.refresh(project)
+        payload = serialize_project(project)
+    return web.json_response(payload)
 
 
 async def get_project(request: web.Request) -> web.Response:
@@ -137,9 +335,7 @@ async def get_project(request: web.Request) -> web.Response:
 async def create_run(request: web.Request) -> web.Response:
     user_id, tenant_id = await _scope(request, verified=True)
     await _require_csrf(request)
-    key = request.headers.get("Idempotency-Key", "").strip()
-    if not key or len(key) > 128 or "\x00" in key:
-        raise web.HTTPBadRequest(text=_error("idempotency_key_required"), content_type="application/json")
+    key = _idempotency_key(request)
     try:
         body = await request.json()
     except Exception as error:  # noqa: BLE001
@@ -159,41 +355,190 @@ async def create_run(request: web.Request) -> web.Response:
                 GenerationRun.idempotency_key == key,
             ))
             if run is None:
-                builder_request = BuilderRequest(
-                    engine=EngineName.DIRECT,
-                    brief=project.brief or "Create a useful website assistant",
-                    source_url=project.source_url,
+                run = await _enqueue_express_run(
+                    database,
+                    factory,
+                    project,
+                    user_id,
+                    key,
                 )
-                run = GenerationRun(
-                    project_id=project.id,
-                    mode="express",
-                    state="queued",
-                    progress=0,
-                    next_event_sequence=2,
-                    idempotency_key=key,
-                )
-                database.add(run)
-                await database.flush()
-                await TrialService(factory).reserve_trial_in_session(
-                    database, user_id, run.id, request_id=key
-                )
-                event_values = {
-                    "id": secrets.randbits(62),
-                } if database.get_bind().dialect.name == "sqlite" else {}
-                database.add(GenerationEvent(
-                    **event_values,
-                    run_id=run.id,
-                    sequence=1,
-                    event_type="run.created",
-                    public_message="Generation queued",
-                    payload={"status": "queued", "request": builder_request.to_dict()},
-                ))
-                project.active_run_id = run.id
-                project.active_revision = None
-                project.status = "queued"
+            await record_funnel_event(
+                database,
+                event_type="run_queued",
+                event_key=f"run_queued:run:{run.id}",
+                user_id=user_id,
+                project_id=project.id,
+                run_id=run.id,
+            )
     except (TrialUnavailable, UnverifiedTrialUser) as error:
         return web.json_response(
             {"error": {"code": "trial_unavailable", "message": str(error)}}, status=409
+        )
+    return web.json_response(serialize_run(run), status=202)
+
+
+async def cancel_run(request: web.Request) -> web.Response:
+    user_id, tenant_id = await _scope(request)
+    await _require_csrf(request)
+    run_id = _uuid(request.match_info["run_id"])
+    factory = get_session_factory(request.app)
+    async with factory() as database:
+        run, project = await _owned_run(database, run_id, user_id, tenant_id)
+        existing_request = await database.scalar(
+            select(GenerationEvent.id).where(
+                GenerationEvent.run_id == run.id,
+                GenerationEvent.event_type == "run.cancel_requested",
+            )
+        )
+        if project.active_run_id != run.id:
+            raise web.HTTPConflict(
+                text=_error("run_is_not_active"), content_type="application/json"
+            )
+        if existing_request is None and run.state not in {"queued", "running"}:
+            raise web.HTTPConflict(
+                text=_error("run_not_cancellable"), content_type="application/json"
+            )
+        current_status = run.state
+    if existing_request is None:
+        await PostgresWorkerQueue(factory).request_cancel(run_id)
+    async with factory() as database:
+        run, _ = await _owned_run(database, run_id, user_id, tenant_id)
+        requested = await database.scalar(
+            select(GenerationEvent.id).where(
+                GenerationEvent.run_id == run.id,
+                GenerationEvent.event_type == "run.cancel_requested",
+            )
+        )
+        current_status = run.state
+    if requested is None:
+        raise web.HTTPConflict(
+            text=_error("run_not_cancellable"), content_type="application/json"
+        )
+    return web.json_response(
+        {
+            "run_id": str(run_id),
+            "cancel_requested": True,
+            "status": current_status,
+        },
+        status=202,
+    )
+
+
+async def retry_run(request: web.Request) -> web.Response:
+    user_id, tenant_id = await _scope(request, verified=True)
+    await _require_csrf(request)
+    key = _idempotency_key(request)
+    source_run_id = _uuid(request.match_info["run_id"])
+    factory = get_session_factory(request.app)
+
+    async with factory() as database:
+        source, project = await _owned_run(
+            database,
+            source_run_id,
+            user_id,
+            tenant_id,
+        )
+        existing = await database.scalar(
+            select(GenerationRun).where(
+                GenerationRun.project_id == project.id,
+                GenerationRun.idempotency_key == key,
+            )
+        )
+        if existing is not None:
+            if existing.id == source.id:
+                raise web.HTTPConflict(
+                    text=_error("idempotency_key_conflict"),
+                    content_type="application/json",
+                )
+            return web.json_response(serialize_run(existing), status=202)
+        if project.active_run_id != source.id:
+            raise web.HTTPConflict(
+                text=_error("run_is_not_active"), content_type="application/json"
+            )
+        if source.state not in {"failed", "cancelled"}:
+            raise web.HTTPConflict(
+                text=_error("run_not_retryable"), content_type="application/json"
+            )
+        project_id = project.id
+
+    outcome = await TrialSettlementReconciler(factory).settle_run(source_run_id)
+    if outcome == "consumed":
+        raise web.HTTPConflict(
+            text=_error("trial_consumed"), content_type="application/json"
+        )
+    if outcome != "compensated":
+        raise web.HTTPConflict(
+            text=_error("trial_retry_unavailable"), content_type="application/json"
+        )
+
+    try:
+        async with _project_mutation_guard(factory, project_id):
+            async with factory() as database, database.begin():
+                project = await _owned_project(
+                    database,
+                    project_id,
+                    user_id,
+                    tenant_id,
+                    lock=True,
+                )
+                existing = await database.scalar(
+                    select(GenerationRun).where(
+                        GenerationRun.project_id == project.id,
+                        GenerationRun.idempotency_key == key,
+                    )
+                )
+                if existing is not None:
+                    run = existing
+                else:
+                    source = await database.scalar(
+                        select(GenerationRun)
+                        .where(
+                            GenerationRun.id == source_run_id,
+                            GenerationRun.project_id == project.id,
+                        )
+                        .with_for_update()
+                    )
+                    if source is None:
+                        raise web.HTTPNotFound(
+                            text=_error("not_found"), content_type="application/json"
+                        )
+                    if project.active_run_id != source.id:
+                        raise web.HTTPConflict(
+                            text=_error("run_is_not_active"),
+                            content_type="application/json",
+                        )
+                    if (
+                        source.state not in {"failed", "cancelled"}
+                        or source.trial_settlement != "compensated"
+                    ):
+                        raise web.HTTPConflict(
+                            text=_error("trial_retry_unavailable"),
+                            content_type="application/json",
+                        )
+                    run = await _enqueue_express_run(
+                        database,
+                        factory,
+                        project,
+                        user_id,
+                        key,
+                    )
+                    await record_funnel_event(
+                        database,
+                        event_type="run_queued",
+                        event_key=f"run_queued:run:{run.id}",
+                        user_id=user_id,
+                        project_id=project.id,
+                        run_id=run.id,
+                    )
+    except (TrialUnavailable, UnverifiedTrialUser) as error:
+        return web.json_response(
+            {
+                "error": {
+                    "code": "trial_retry_unavailable",
+                    "message": str(error),
+                }
+            },
+            status=409,
         )
     return web.json_response(serialize_run(run), status=202)
 
@@ -563,9 +908,13 @@ async def stream_events(request: web.Request) -> web.StreamResponse:
 
 def setup_project_routes(app: web.Application) -> None:
     app.router.add_get("/api/projects", list_projects)
+    app.router.add_post("/api/projects", create_project)
     app.router.add_get("/api/projects/{project_id}", get_project)
+    app.router.add_patch("/api/projects/{project_id}", update_project_draft)
     app.router.add_post("/api/projects/{project_id}/runs", create_run)
     app.router.add_get("/api/runs/{run_id}", get_run)
+    app.router.add_post("/api/runs/{run_id}/cancel", cancel_run)
+    app.router.add_post("/api/runs/{run_id}/retry", retry_run)
     app.router.add_get("/api/runs/{run_id}/preview", get_preview)
     app.router.add_get("/api/runs/{run_id}/preview/document", get_preview_document)
     app.router.add_post("/api/runs/{run_id}/chat", run_chat)

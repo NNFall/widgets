@@ -97,6 +97,54 @@ afterEach(() => {
 });
 
 describe('durable SaaS Studio flow', () => {
+  it('creates a new owned project from an empty Studio without calling legacy Builder', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/studio?url=https%3A%2F%2Ffresh.example.com&utm_source=telegram&utm_medium=social&utm_campaign=launch&utm_term=widgets&utm_content=studio&email=private%40example.com&utm_unknown=discard',
+    );
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === '/api/projects') return jsonResponse(project(), 201);
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project());
+      throw new Error(`unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<StudioPage />);
+
+    expect(await screen.findByRole('heading', { name: 'Новый проект в Kaigo Studio' })).toBeVisible();
+    expect(screen.getByLabelText('Ссылка на сайт')).toHaveValue('https://fresh.example.com');
+    await user.type(
+      screen.getByRole('textbox', { name: 'Пожелание к AI-виджету' }),
+      'Спокойный консультант',
+    );
+    await user.click(screen.getByRole('button', { name: 'Создать проект' }));
+
+    await waitFor(() => expect(requests.some(({ url }) => url === '/api/projects')).toBe(true));
+    const create = requests.find(({ url }) => url === '/api/projects')!;
+    const headers = new Headers(create.init?.headers);
+    expect(create.init?.method).toBe('POST');
+    expect(headers.get('X-CSRF-Token')).toBe('csrf-for-studio');
+    expect(JSON.parse(String(create.init?.body))).toEqual({
+      url: 'https://fresh.example.com/',
+      brief: 'Спокойный консультант',
+      campaign: {
+        utm_source: 'telegram',
+        utm_medium: 'social',
+        utm_campaign: 'launch',
+        utm_term: 'widgets',
+        utm_content: 'studio',
+      },
+    });
+    expect(requests.some(({ url }) => url.includes('/builder'))).toBe(false);
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get('project')).toBe(PROJECT_ID));
+  });
+
   it('restores an authenticated queued run from the project API after reload', async () => {
     const queued = run();
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -161,7 +209,97 @@ describe('durable SaaS Studio flow', () => {
     expect(await screen.findByText('Запуск поставлен в очередь')).toBeVisible();
   });
 
-  it('shows a restorable free result before the upgrade gate, including after failure', async () => {
+  it('lets the project owner request safe cancellation with session CSRF', async () => {
+    const running = run({ status: 'running', state: 'running', progress: 37 });
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(running));
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(running);
+      if (url === `/api/runs/${RUN_ID}/events`) return emptyEventStream();
+      if (url === `/api/runs/${RUN_ID}/cancel`) {
+        return jsonResponse({ run_id: RUN_ID, cancel_requested: true, status: 'running' }, 202);
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    const user = userEvent.setup();
+
+    render(<StudioPage />);
+    await user.click(await screen.findByRole('button', { name: 'Отменить генерацию' }));
+
+    await waitFor(() => expect(requests.some(({ url }) => url === `/api/runs/${RUN_ID}/cancel`)).toBe(true));
+    const cancellation = requests.find(({ url }) => url === `/api/runs/${RUN_ID}/cancel`)!;
+    expect(cancellation.init?.method).toBe('POST');
+    expect(new Headers(cancellation.init?.headers).get('X-CSRF-Token')).toBe('csrf-for-studio');
+    expect((await screen.findAllByText('Отмена запрошена — генерация остановится безопасно'))[0]).toBeVisible();
+  });
+
+  it('adopts one idempotent compensated retry and keeps the replacement durable', async () => {
+    const failed = run({
+      status: 'failed',
+      state: 'failed',
+      error_code: 'provider_unavailable',
+      error_message: 'Provider unavailable',
+    });
+    const replacement = run({
+      id: '2d44e96d-6e52-43b7-ada4-dc88d625a9e7',
+      status: 'queued',
+      state: 'queued',
+      error_code: null,
+      error_message: null,
+    });
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(failed));
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(failed);
+      if (url === `/api/runs/${RUN_ID}/retry`) return jsonResponse(replacement, 202);
+      if (url === `/api/runs/${replacement.id}/events`) return emptyEventStream();
+      if (url === `/api/runs/${replacement.id}`) return jsonResponse(replacement);
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    const user = userEvent.setup();
+
+    render(<StudioPage />);
+    await user.click(await screen.findByRole('button', { name: 'Повторить запуск' }));
+
+    await waitFor(() => expect(requests.some(({ url }) => url === `/api/runs/${RUN_ID}/retry`)).toBe(true));
+    const retry = requests.find(({ url }) => url === `/api/runs/${RUN_ID}/retry`)!;
+    const headers = new Headers(retry.init?.headers);
+    expect(retry.init?.method).toBe('POST');
+    expect(headers.get('X-CSRF-Token')).toBe('csrf-for-studio');
+    expect(headers.get('Idempotency-Key')).toBe(`studio-retry-${RUN_ID}`);
+    expect(localStorage.getItem(`kaigo.saas.run.${RUN_ID}.retry-idempotency-key`)).toBe(
+      `studio-retry-${RUN_ID}`,
+    );
+    expect((await screen.findAllByText('Запуск в очереди'))[0]).toBeVisible();
+  });
+
+  it('explains that a consumed free generation cannot be retried', async () => {
+    const failed = run({ status: 'failed', state: 'failed', error_code: 'invalid_request' });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(failed));
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(failed);
+      if (url === `/api/runs/${RUN_ID}/retry`) {
+        return jsonResponse({ error: { code: 'trial_consumed' } }, 409);
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    const user = userEvent.setup();
+
+    render(<StudioPage />);
+    await user.click(await screen.findByRole('button', { name: 'Повторить запуск' }));
+
+    expect(await screen.findByText('Бесплатная генерация уже использована. Сохранённый результат остаётся доступен.')).toBeVisible();
+  });
+
+  it('previews a restorable failed draft without claiming readiness or offering checkout', async () => {
     const preview = {
       schema_version: '1',
       revision: 2,
@@ -206,8 +344,11 @@ describe('durable SaaS Studio flow', () => {
     expect(previewUrl.searchParams.get('channel')).toMatch(/^[a-f0-9]{36}$/);
     expect(frame).not.toHaveAttribute('srcdoc');
     expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
-    expect(await screen.findByRole('button', { name: 'Доработать и опубликовать' })).toBeVisible();
-    expect(screen.getByText(/тариф/i)).toBeVisible();
+    expect(screen.queryByText('Бесплатный результат готов')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Опубликовать и подключить' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/тариф/i)).not.toBeInTheDocument();
+    expect(fetch).not.toHaveBeenCalledWith('/api/billing/subscription', expect.anything());
+    expect(fetch).not.toHaveBeenCalledWith('/api/billing/payments/pending', expect.anything());
   });
 
   it('sends SaaS preview chat through the owner endpoint with session CSRF', async () => {
@@ -258,7 +399,10 @@ describe('durable SaaS Studio flow', () => {
       }));
     });
 
-    await waitFor(() => expect(requests.some(({ url }) => url === `/api/runs/${RUN_ID}/chat`)).toBe(true));
+    await waitFor(
+      () => expect(requests.some(({ url }) => url === `/api/runs/${RUN_ID}/chat`)).toBe(true),
+      { timeout: 5_000 },
+    );
     const chat = requests.find(({ url }) => url === `/api/runs/${RUN_ID}/chat`)!;
     const headers = new Headers(chat.init?.headers);
     expect(chat.init?.method).toBe('POST');
@@ -498,6 +642,7 @@ describe('durable SaaS Studio flow', () => {
       state: 'completed',
       progress: 100,
       preview: {
+        id: 'artifact-ready-3',
         revision: 3,
         body_html: '<main>Ready</main>',
         css: '',
@@ -511,28 +656,78 @@ describe('durable SaaS Studio flow', () => {
       if (url === '/api/auth/session') return sessionResponse();
       if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(completed));
       if (url === `/api/runs/${RUN_ID}`) return jsonResponse(completed);
+      if (url === '/api/billing/subscription') return jsonResponse({ subscription: null });
+      if (url === '/api/billing/payments/pending') {
+        return jsonResponse({ payment: null, checkout_url: null });
+      }
       throw new Error(`unexpected request: ${url}`);
     }));
 
     render(<StudioPage />);
 
     expect((await screen.findAllByText('Готово')).length).toBeGreaterThanOrEqual(1);
+    expect(await screen.findByText('Бесплатный результат готов')).toBeVisible();
+    expect(await screen.findByRole('button', { name: 'Опубликовать и подключить' })).toBeEnabled();
+    expect(screen.queryByLabelText('Что изменить в виджете?')).not.toBeInTheDocument();
+    expect(screen.getByText(
+      'Чат в предпросмотре проверяет ответы виджета, но не изменяет его.',
+    )).toBeVisible();
   });
 
-  it('keeps the composer keyboard-usable with explicitly labeled controls', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      if (String(input) === '/api/auth/session') return sessionResponse();
-      return jsonResponse(project());
+  it('lets the owner correct a claimed URL and brief before the first run', async () => {
+    const claimed = {
+      ...project(),
+      source_url: 'http://legacy.example.com',
+      brief: 'Старое пожелание',
+    };
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}` && init?.method === 'PATCH') {
+        return jsonResponse({
+          ...claimed,
+          source_url: 'https://example.com/services',
+          brief: 'Новое пожелание',
+        });
+      }
+      if (url === `/api/projects/${PROJECT_ID}/runs`) return jsonResponse(run(), 202);
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(claimed);
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(run());
+      if (url === `/api/runs/${RUN_ID}/events`) return emptyEventStream();
+      throw new Error(`unexpected request: ${url}`);
     }));
+    const user = userEvent.setup();
 
     render(<StudioPage />);
 
     const url = await screen.findByLabelText('Ссылка на сайт');
-    const brief = screen.getByRole('textbox', { name: 'Сохранённое пожелание к AI-виджету' });
-    expect(url).toHaveAttribute('readonly');
-    expect(brief).toHaveAttribute('aria-readonly', 'true');
-    expect(brief.tagName).toBe('DIV');
-    await waitFor(() => expect(brief).toHaveTextContent('Спокойный консультант по услугам'));
-    expect(screen.getByRole('button', { name: 'Создать AI-виджет' })).toBeEnabled();
+    const brief = screen.getByRole('textbox', { name: 'Пожелание к AI-виджету' });
+    await waitFor(() => expect(url).toHaveValue('http://legacy.example.com'));
+    expect(screen.getByText(
+      /Публикация и подключение готового виджета доступны по тарифу/,
+    )).toBeVisible();
+    expect(screen.queryByText(/Доработка и публикация потребуют тариф/i)).not.toBeInTheDocument();
+    expect(url).not.toHaveAttribute('readonly');
+    expect(brief).not.toHaveAttribute('readonly');
+    await user.clear(url);
+    await user.type(url, 'https://EXAMPLE.com:443/services');
+    await user.clear(brief);
+    await user.type(brief, 'Новое пожелание');
+    await user.click(screen.getByRole('button', { name: 'Создать AI-виджет' }));
+
+    await waitFor(() => expect(
+      requests.some(({ url: requestUrl }) => requestUrl === `/api/projects/${PROJECT_ID}/runs`),
+    ).toBe(true));
+    const updateIndex = requests.findIndex(({ init }) => init?.method === 'PATCH');
+    const runIndex = requests.findIndex(({ url: requestUrl }) => requestUrl === `/api/projects/${PROJECT_ID}/runs`);
+    expect(updateIndex).toBeGreaterThan(-1);
+    expect(runIndex).toBeGreaterThan(updateIndex);
+    expect(JSON.parse(String(requests[updateIndex].init?.body))).toEqual({
+      url: 'https://example.com/services',
+      brief: 'Новое пожелание',
+    });
+    expect(new Headers(requests[updateIndex].init?.headers).get('X-CSRF-Token')).toBe('csrf-for-studio');
   });
 });

@@ -37,6 +37,9 @@ export interface ValidationIssue {
 }
 
 export interface WidgetArtifact {
+  id?: string;
+  quality_status?: string;
+  source?: string;
   schema_version: string;
   revision: number;
   stage: BuilderStage;
@@ -156,6 +159,7 @@ export interface SaasEvent {
 }
 
 export interface SaasPreviewArtifact extends Partial<WidgetArtifact> {
+  id?: string;
   revision: number;
   body_html: string;
   css: string;

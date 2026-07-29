@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "source": "codex_independent_visual_review",
+  "rubric": "kaigo-strict-visual-v1",
+  "score_scale": {
+    "minimum": 0,
+    "maximum": 5,
+    "normalized_divisor": 5
+  },
+  "method": "One independent review of the same six BrowserAudit screenshots and deterministic browser findings for each model. Scores use the production strict-visual dimension weights.",
+  "models": {
+    "glm-5.2": {
+      "weighted_score": 3.08,
+      "normalized_score": 0.616,
+      "verdict": "repair",
+      "assessments": {
+        "direction_fidelity": 4,
+        "page_subordination": 5,
+        "visual_hierarchy": 3,
+        "conversation_clarity": 2,
+        "typography_legibility": 3,
+        "spacing_alignment": 2,
+        "system_coherence": 3,
+        "responsive_composition": 2,
+        "craft_polish": 3,
+        "distinctiveness": 4
+      },
+      "summary": "Strong floral branding and a distinctive launcher, but multi-turn messages visibly overflow and clip on desktop and mobile. The first-open view is understandable, while the conversation state is not publishable.",
+      "screenshot_sha256": {
+        "desktop.closed": "5bec0812916cea95e2c883847226e23d645d427f786eb91a258c3f7ea455a1c1",
+        "desktop.open_initial": "4326c663b3ead961531158d9733d383f3cdf429374f5af86de8ce6eb61491cee",
+        "desktop.after_turn_2": "ebaf10df0aa3b3b825a1dffcf3926efb745eb8dfeb2c2d7b9fd33ed1724b35ee",
+        "mobile.closed": "72640650b60aa1e33e9ed786d8c0cd0ca0e5f5f7946f0a1fd0ad62371747bb48",
+        "mobile.open_initial": "d3ec11041563079ac8ec2ee856aeb4ece3943dc8cfaf1d89d3a8a6f39bfe95b4",
+        "mobile.after_turn_2": "6eefda2c4e58f4b3d62494d8fb7bafa7971a3342c96bbc1dc2e2d7dfc2f7450b"
+      }
+    },
+    "gpt-5.5": {
+      "weighted_score": 3.86,
+      "normalized_score": 0.772,
+      "verdict": "repair",
+      "assessments": {
+        "direction_fidelity": 4,
+        "page_subordination": 5,
+        "visual_hierarchy": 4,
+        "conversation_clarity": 4,
+        "typography_legibility": 4,
+        "spacing_alignment": 3,
+        "system_coherence": 4,
+        "responsive_composition": 3,
+        "craft_polish": 4,
+        "distinctiveness": 3
+      },
+      "summary": "Clear chat hierarchy, restrained Flowwow styling, and coherent desktop/mobile states. A decorative pseudo-element still increases the measured panel scroll width, so the deterministic browser gate correctly keeps the result out of publication.",
+      "screenshot_sha256": {
+        "desktop.closed": "4f00c63b59d0005d7c96b430f8623d26d37871c68dd1cab9080704325ba3020a",
+        "desktop.open_initial": "98d52fae6988c3404ee8669f0ac502b7e423ba1108d26f6d1d5d1c4654fde821",
+        "desktop.after_turn_2": "451ca2843e64ea52ded9a5d6ed3eb500774467f6f828b828be4e8829c284c436",
+        "mobile.closed": "5b0168ddd17dcc7a5a6a2e5edb15b67b88ceff8e6dd9a9345bd5063bff2fc3fa",
+        "mobile.open_initial": "2050ea52bbefc1f1b194b00bcbdcd046ff8c6f67fdbd04db5a8de5863ebd650e",
+        "mobile.after_turn_2": "4b9a65dafee412ad8b37dfb5bcaabf482d0e12d0608814801830becb052825fa"
+      }
+    }
+  }
+}

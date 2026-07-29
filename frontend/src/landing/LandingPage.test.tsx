@@ -7,14 +7,40 @@ import { LandingPage } from './LandingPage';
 afterEach(cleanup);
 
 describe('LandingPage sections', () => {
-  it('renders the complete eight-screen marketing narrative', () => {
+  it('renders the free-result promise immediately after the hero with truthful limits', () => {
+    render(<LandingPage />);
+
+    const sections = Array.from(document.querySelectorAll('section[data-landing-section]'));
+    expect(sections).toHaveLength(9);
+    expect(sections[1]).toHaveClass('free-result-section');
+    expect(screen.getByRole('heading', { name: 'Сначала результат — потом оплата' })).toBeVisible();
+    expect(screen.getByText(/одна готовая экспресс-версия бесплатно/i)).toBeVisible();
+    expect(screen.getByText(/Google или Яндекс/i)).toBeVisible();
+    expect(screen.getByText(/без карты/i)).toBeVisible();
+    expect(screen.getByText(/сначала предпросмотр и чат/i)).toBeVisible();
+    expect(screen.getByText(/платите только за публикацию и подключение готового виджета/i)).toBeVisible();
+    expect(screen.getByText(/одна на подтверждённый аккаунт/i)).toBeVisible();
+    expect(screen.getByText(/обычно 10–20 минут, сложные сайты дольше/i)).toBeVisible();
+    expect(screen.getAllByRole('textbox', { name: 'Пожелание к AI-виджету' })).toHaveLength(2);
+  });
+
+  it('uses truthful timing and destination copy in every landing call to action', () => {
+    render(<LandingPage />);
+
+    expect(screen.getByRole('heading', { name: /Обычно за 10–20 минут.*первую версию.*AI-виджета/i })).toBeVisible();
+    expect(screen.getByRole('heading', { name: /Сначала получите.*бесплатную экспресс-версию/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Получить бесплатную версию' })).toHaveLength(2);
+    expect(screen.queryByText(/Через 10 минут/)).not.toBeInTheDocument();
+  });
+
+  it('renders the complete marketing narrative', () => {
     render(<LandingPage />);
 
     expect(screen.getByRole('heading', { name: 'Как это работает' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Что видит Kaigo' })).toBeVisible();
     expect(screen.getByRole('heading', { name: /Не просто чат/ })).toBeVisible();
-    expect(screen.getByRole('heading', { name: 'Первый вариант — только начало' })).toBeVisible();
-    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(8);
+    expect(screen.getByRole('heading', { name: 'Готовый вариант — под вашим контролем' })).toBeVisible();
+    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(9);
     expect(screen.getAllByRole('textbox', { name: /ссылка на.*сайт/i })).toHaveLength(2);
   });
 
@@ -42,8 +68,9 @@ describe('LandingPage sections', () => {
 
     await user.click(timeQuestion);
     expect(timeQuestion).toHaveAttribute('aria-expanded', 'true');
-    expect(document.getElementById('faq-answer-1')).toBeInTheDocument();
-    expect(screen.getByText(/первую версию/i)).toBeVisible();
+    const timeAnswer = document.getElementById('faq-answer-1');
+    expect(timeAnswer).toBeInTheDocument();
+    expect(timeAnswer).toHaveTextContent(/первую версию/i);
 
     await user.click(timeQuestion);
     expect(timeQuestion).toHaveAttribute('aria-expanded', 'false');
@@ -60,5 +87,23 @@ describe('LandingPage sections', () => {
     expect(screen.getByText('Опубликовать', { selector: 'span' })).toBeVisible();
     expect(screen.queryByRole('link', { name: 'Политика конфиденциальности' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Условия использования' })).not.toBeInTheDocument();
+  });
+
+  it('promises only preview, dialogue checks, publication and connection', () => {
+    render(<LandingPage />);
+
+    const studioDemo = document.querySelector('.studio-demo');
+    expect(studioDemo).not.toBeNull();
+    expect(screen.getByText('Предпросмотр', { selector: '.studio-demo__checklist strong' })).toBeVisible();
+    expect(screen.getByText('Проверка диалога', { selector: '.studio-demo__checklist strong' })).toBeVisible();
+    expect(screen.getByText('Публикация и подключение', { selector: '.studio-demo__checklist strong' })).toBeVisible();
+    expect(screen.queryByRole('textbox', { name: 'Пожелание к виджету' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Применить изменение' })).not.toBeInTheDocument();
+    expect(screen.queryByText('История версий')).not.toBeInTheDocument();
+    expect(screen.queryByText('Можно дорабатывать')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Можно изменить ответы и характер общения?' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/готов к проверке и доработке/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/уточните поведение/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/дальнейшую доработку/i)).not.toBeInTheDocument();
   });
 });

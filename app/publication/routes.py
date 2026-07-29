@@ -310,6 +310,57 @@ def _published_payload(published, *, base: str) -> web.Response:
     )
 
 
+def _publication_state_payload(publication, *, base: str) -> web.Response:
+    def release_payload(release) -> dict:
+        return {
+            "release_id": str(release.release_id),
+            "artifact_id": str(release.artifact_id),
+            "previous_release_id": (
+                str(release.previous_release_id)
+                if release.previous_release_id is not None
+                else None
+            ),
+            "revision": release.revision,
+            "checksum": release.checksum,
+            "created_at": release.created_at.isoformat(),
+        }
+
+    return web.json_response(
+        {
+            "publication": {
+                "publication_id": str(publication.publication_id),
+                "stable_key": publication.stable_key,
+                "state": publication.state,
+                "allowed_domains": list(publication.allowed_domains),
+                "embed_url": f"{base}/embed/{publication.stable_key}.js",
+                "runtime_url": f"{base}/runtime/{publication.stable_key}",
+                "active_release": release_payload(publication.active_release),
+                "releases": [
+                    release_payload(release) for release in publication.releases
+                ],
+            }
+        }
+    )
+
+
+async def get_project_publication(request: web.Request) -> web.Response:
+    user_id, tenant_id = await _scope(request, verified=True)
+    project_id = _uuid(request.match_info["project_id"])
+    try:
+        publication = await _service(request).get_project_state(
+            project_id,
+            actor_user_id=user_id,
+            tenant_id=tenant_id,
+        )
+    except (PublicationNotFound, ReleaseCorrupt):
+        raise web.HTTPNotFound(
+            text=json.dumps(_error("not_found")), content_type="application/json"
+        )
+    if publication is None:
+        return web.json_response({"publication": None})
+    return _publication_state_payload(publication, base=_public_base_url(request))
+
+
 async def publish_project(request: web.Request) -> web.Response:
     user_id, tenant_id = await _scope(request, verified=True)
     await _require_csrf(request)
@@ -642,6 +693,9 @@ def setup_publication_routes(app: web.Application) -> None:
     app[PUBLICATION_CHAT_TRUSTED_PROXIES_KEY] = tuple(
         ip_network(cidr, strict=False)
         for cidr in getattr(config, "publication_chat_trusted_proxy_cidrs", ())
+    )
+    app.router.add_get(
+        "/api/projects/{project_id}/publication", get_project_publication
     )
     app.router.add_post("/api/projects/{project_id}/publish", publish_project)
     app.router.add_post(

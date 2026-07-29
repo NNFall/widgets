@@ -1,14 +1,38 @@
 import { LinkSimple } from '@phosphor-icons/react';
 import { useId, useState, type FormEvent } from 'react';
 
-const URL_ERROR = 'Введите полный адрес сайта с http:// или https://';
+import { campaignFromSearch, studioHrefWithDraft } from './campaign';
 
-function isValidWebsiteUrl(value: string) {
+const URL_ERROR = 'Введите публичный HTTPS-адрес без параметров и авторизации';
+const PRIVATE_SUFFIXES = ['.internal', '.localhost', '.local', '.lan', '.home'];
+
+export function canonicalWebsiteUrl(value: string): string | null {
+  const raw = value.trim();
+  if (
+    raw.length > 2_048
+    || raw.includes('?')
+    || raw.includes('#')
+    || raw.includes('\\')
+  ) return null;
   try {
     const url = new URL(value);
-    return (url.protocol === 'https:' || url.protocol === 'http:') && Boolean(url.hostname);
+    const hostname = url.hostname.toLowerCase().replace(/\.$/, '');
+    if (
+      url.protocol !== 'https:'
+      || url.username
+      || url.password
+      || url.port
+      || !hostname.includes('.')
+      || hostname === 'localhost'
+      || PRIVATE_SUFFIXES.some((suffix) => hostname.endsWith(suffix))
+      || hostname.includes(':')
+      || /^\d+(?:\.\d+){3}$/.test(hostname)
+      || hostname.split('.').some((label) => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))
+    ) return null;
+    url.hostname = hostname;
+    return url.href;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -23,22 +47,45 @@ export function UrlComposer({
 }: UrlComposerProps) {
   const inputId = useId();
   const errorId = useId();
+  const briefId = useId();
   const [value, setValue] = useState('');
+  const [brief, setBrief] = useState('');
   const [error, setError] = useState('');
+  const [pending, setPending] = useState(false);
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const normalizedValue = value.trim();
+    const normalizedValue = canonicalWebsiteUrl(value);
 
-    if (!isValidWebsiteUrl(normalizedValue)) {
+    if (!normalizedValue) {
       setError(URL_ERROR);
       return;
     }
 
     setError('');
-    const destination = `/studio?url=${encodeURIComponent(normalizedValue)}`;
-    window.history.pushState({}, '', destination);
-    window.dispatchEvent(new PopStateEvent('popstate'));
+    setPending(true);
+    try {
+      const campaign = campaignFromSearch();
+      const response = await fetch('/api/drafts', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: normalizedValue,
+          brief: brief.trim(),
+          ...(Object.keys(campaign).length > 0 ? { campaign } : {}),
+        }),
+      });
+      if (!response.ok) throw new Error(`draft:${response.status}`);
+      const draft = await response.json() as { id?: unknown };
+      if (typeof draft.id !== 'string' || !draft.id) throw new Error('draft:invalid');
+      window.history.pushState({}, '', studioHrefWithDraft(draft.id));
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    } catch {
+      setError('Не удалось сохранить заявку. Попробуйте ещё раз.');
+    } finally {
+      setPending(false);
+    }
   };
 
   return (
@@ -63,8 +110,21 @@ export function UrlComposer({
             if (error) setError('');
           }}
         />
-        <button type="submit" aria-label={submitAriaLabel}>Создать AI-виджет</button>
+        <button type="submit" aria-label={submitAriaLabel} disabled={pending}>
+          {pending ? 'Сохраняем…' : 'Получить бесплатную версию'}
+        </button>
       </div>
+      <label className="sr-only" htmlFor={briefId}>
+        Пожелание к AI-виджету
+      </label>
+      <textarea
+        className="url-composer__brief"
+        id={briefId}
+        maxLength={4_000}
+        placeholder="Необязательное пожелание к AI-виджету"
+        value={brief}
+        onChange={(event) => setBrief(event.target.value)}
+      />
       <p className="url-composer__error" id={errorId} role={error ? 'alert' : undefined}>
         {error}
       </p>

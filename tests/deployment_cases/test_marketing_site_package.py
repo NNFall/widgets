@@ -1,4 +1,3 @@
-import base64
 import os
 import re
 import shutil
@@ -15,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 NGINX_CONFIG = ROOT / "deploy" / "nginx" / "kaigo-marketing-site.conf"
+VITE_CONFIG = ROOT / "frontend" / "vite.config.ts"
 DEPLOY_SCRIPT = ROOT / "scripts" / "deploy_marketing_site.sh"
 DIST = ROOT / "frontend" / "dist"
 NGINX_TEST_CONFIG = ROOT / "tests" / "deployment_cases" / "nginx-marketing-test.conf"
@@ -37,6 +37,12 @@ BASH = next(
 
 
 class MarketingSitePackageTests(unittest.TestCase):
+    def test_frontend_metadata_uses_truthful_timing(self):
+        index = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn("10–20 минут", index)
+        self.assertNotIn("за 10 минут", index)
+
     def test_frontend_build_is_a_self_contained_hashed_static_package(self):
         index = (DIST / "index.html").read_text(encoding="utf-8")
         favicon = DIST / "favicon.svg"
@@ -90,14 +96,13 @@ class MarketingSitePackageTests(unittest.TestCase):
         self.assertIn("proxy_pass http://127.0.0.1:8080;", fallback)
         self.assertIn("proxy_set_header Host $host;", fallback)
 
-    def test_studio_and_builder_share_basic_auth_without_weakening_builder_proxy(self):
+    def test_only_legacy_builder_uses_basic_auth(self):
         config = NGINX_CONFIG.read_text(encoding="utf-8")
         auth_file = "/etc/nginx/.htpasswd-kaigo-builder"
 
         for exact_location in ("/studio", "/studio/"):
             block = config.split(f"location = {exact_location} {{", 1)[1].split("}", 1)[0]
-            self.assertIn('auth_basic "Kaigo Builder";', block)
-            self.assertIn(f"auth_basic_user_file {auth_file};", block)
+            self.assertNotIn("auth_basic", block)
 
         builder = config.split("location ^~ /builder/ {", 1)[1].split("}", 1)[0]
         self.assertIn('auth_basic "Kaigo Builder";', builder)
@@ -107,6 +112,15 @@ class MarketingSitePackageTests(unittest.TestCase):
         self.assertIn("proxy_buffering off;", builder)
         self.assertIn("proxy_request_buffering off;", builder)
         self.assertIn("proxy_read_timeout 1800s;", builder)
+
+    def test_vite_development_server_proxies_saas_api_to_the_application(self):
+        config = VITE_CONFIG.read_text(encoding="utf-8")
+
+        self.assertRegex(
+            config,
+            r"['\"]\/api['\"]\s*:\s*\{[^}]*"
+            r"target:\s*['\"]http:\/\/127\.0\.0\.1:8080['\"]",
+        )
 
     def test_yookassa_webhook_has_exact_unauthenticated_application_route(self):
         config = NGINX_CONFIG.read_text(encoding="utf-8")
@@ -128,13 +142,21 @@ class MarketingSitePackageTests(unittest.TestCase):
             if line.strip().startswith("add_header Content-Security-Policy")
         ]
 
-        self.assertEqual(len(csp_lines), 3)
-        for line in csp_lines:
+        self.assertEqual(len(csp_lines), 5)
+        html_csp = [line for line in csp_lines if "frame-src 'self'" in line]
+        asset_csp = [line for line in csp_lines if "default-src 'none'" in line]
+        self.assertEqual(len(html_csp), 3)
+        self.assertEqual(len(asset_csp), 2)
+        for line in html_csp:
             self.assertIn("default-src 'self'", line)
             self.assertIn("object-src 'none'", line)
             self.assertIn("frame-src 'self'", line)
             self.assertIn("frame-ancestors 'self'", line)
             self.assertNotIn("script-src 'self' 'unsafe-inline'", line)
+            self.assertNotIn("*", line)
+        for line in asset_csp:
+            self.assertIn("object-src 'none'", line)
+            self.assertIn("frame-ancestors 'none'", line)
             self.assertNotIn("*", line)
 
     def test_deploy_script_has_atomic_switch_preflight_and_rollback_contract(self):
@@ -231,23 +253,7 @@ class MarketingSitePackageTests(unittest.TestCase):
                 self.assertEqual(root_response.headers["Cache-Control"], "no-store")
 
             for studio_path in ("/studio", "/studio/"):
-                with self.assertRaises(urllib.error.HTTPError) as denied:
-                    urllib.request.urlopen(
-                        f"{base_url}{studio_path}",
-                        timeout=2,
-                    )
-                self.assertEqual(denied.exception.code, 401)
-                self.assertIn(
-                    'Basic realm="Kaigo Builder"',
-                    denied.exception.headers["WWW-Authenticate"],
-                )
-
-                credentials = base64.b64encode(b"kaigo-test:test").decode("ascii")
-                request = urllib.request.Request(
-                    f"{base_url}{studio_path}",
-                    headers={"Authorization": f"Basic {credentials}"},
-                )
-                with urllib.request.urlopen(request, timeout=2) as accepted:
+                with urllib.request.urlopen(f"{base_url}{studio_path}", timeout=2) as accepted:
                     self.assertEqual(accepted.status, 200)
 
             index = (DIST / "index.html").read_text(encoding="utf-8")

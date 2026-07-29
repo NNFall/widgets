@@ -12,6 +12,9 @@ vi.mock('./api', async (importOriginal) => {
     getBillingPayment: vi.fn(),
     getPendingBillingPayment: vi.fn(),
     getBillingSubscription: vi.fn(),
+    getProjectPublication: vi.fn(),
+    publishProject: vi.fn(),
+    rollbackPublication: vi.fn(),
     resumeBillingPayment: vi.fn(),
   };
 });
@@ -25,6 +28,13 @@ const payment = {
   created_at: '2026-07-28T12:00:00Z',
 };
 
+const gateProps = {
+  csrfToken: 'csrf-billing',
+  projectId: 'project-123',
+  artifactId: 'artifact-123',
+  revision: 4,
+};
+
 describe('UpgradeGate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -35,6 +45,7 @@ describe('UpgradeGate', () => {
       payment: null,
       checkout_url: null,
     });
+    vi.mocked(api.getProjectPublication).mockResolvedValue({ publication: null });
   });
 
   afterEach(() => {
@@ -64,7 +75,7 @@ describe('UpgradeGate', () => {
     await act(async () => {
       await Promise.resolve();
     });
-    fireEvent.click(screen.getByRole('button', { name: /доработать и опубликовать/i }));
+    fireEvent.click(screen.getByRole('button', { name: /опубликовать и подключить/i }));
 
     await act(async () => {
       await Promise.resolve();
@@ -108,7 +119,7 @@ describe('UpgradeGate', () => {
     await act(async () => {
       await Promise.resolve();
     });
-    fireEvent.click(screen.getByRole('button', { name: /доработать и опубликовать/i }));
+    fireEvent.click(screen.getByRole('button', { name: /опубликовать и подключить/i }));
     await act(async () => Promise.resolve());
 
     await act(async () => {
@@ -154,7 +165,7 @@ describe('UpgradeGate', () => {
     await act(async () => {
       await Promise.resolve();
     });
-    fireEvent.click(screen.getByRole('button', { name: /доработать и опубликовать/i }));
+    fireEvent.click(screen.getByRole('button', { name: /опубликовать и подключить/i }));
     await act(async () => Promise.resolve());
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100);
@@ -188,14 +199,14 @@ describe('UpgradeGate', () => {
     await act(async () => {
       await Promise.resolve();
     });
-    fireEvent.click(screen.getByRole('button', { name: /доработать и опубликовать/i }));
+    fireEvent.click(screen.getByRole('button', { name: /опубликовать и подключить/i }));
     await act(async () => Promise.resolve());
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100);
     });
     expect(screen.getByRole('alert')).toHaveTextContent(/оплата не завершена/i);
 
-    fireEvent.click(screen.getByRole('button', { name: /доработать и опубликовать/i }));
+    fireEvent.click(screen.getByRole('button', { name: /опубликовать и подключить/i }));
     await act(async () => Promise.resolve());
 
     expect(api.createBillingCheckout).toHaveBeenNthCalledWith(
@@ -229,8 +240,197 @@ describe('UpgradeGate', () => {
     });
 
     expect(screen.getByText('Тариф активирован')).toBeVisible();
-    expect(screen.queryByRole('button', { name: /доработать и опубликовать/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /опубликовать и подключить/i })).not.toBeInTheDocument();
     expect(api.createBillingCheckout).not.toHaveBeenCalled();
+  });
+
+  it('publishes the selected accepted artifact, shows a stable embed snippet, and rolls back a known prior release', async () => {
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({
+      subscription: {
+        id: 'subscription-123',
+        plan_code: 'starter_monthly',
+        status: 'active',
+        current_period_start: '2026-07-28T12:00:00Z',
+        current_period_end: '2026-08-28T12:00:00Z',
+      },
+    });
+    vi.mocked(api.publishProject)
+      .mockResolvedValueOnce({
+        publication_id: 'publication-123',
+        release_id: 'release-4',
+        artifact_id: 'artifact-123',
+        stable_key: 'stable-widget',
+        revision: 4,
+        allowed_domains: ['https://example.com'],
+        checksum: 'checksum-4',
+        embed_url: 'https://widgets.kaigo.space/embed/stable-widget.js',
+        runtime_url: 'https://widgets.kaigo.space/runtime/stable-widget',
+      })
+      .mockResolvedValueOnce({
+        publication_id: 'publication-123',
+        release_id: 'release-5',
+        artifact_id: 'artifact-456',
+        stable_key: 'stable-widget',
+        revision: 5,
+        allowed_domains: ['https://example.com', 'https://shop.example.com'],
+        checksum: 'checksum-5',
+        embed_url: 'https://widgets.kaigo.space/embed/stable-widget.js',
+        runtime_url: 'https://widgets.kaigo.space/runtime/stable-widget',
+      });
+    vi.mocked(api.rollbackPublication).mockResolvedValue({
+      publication_id: 'publication-123',
+      release_id: 'release-4',
+      artifact_id: 'artifact-123',
+      stable_key: 'stable-widget',
+      revision: 4,
+      allowed_domains: ['https://example.com', 'https://shop.example.com'],
+      checksum: 'checksum-4',
+      embed_url: 'https://widgets.kaigo.space/embed/stable-widget.js',
+      runtime_url: 'https://widgets.kaigo.space/runtime/stable-widget',
+    });
+
+    const view = render(<UpgradeGate {...gateProps} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.change(screen.getByLabelText('Разрешённые домены'), {
+      target: { value: 'https://example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Опубликовать виджет' }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(api.publishProject).toHaveBeenNthCalledWith(
+      1,
+      'project-123',
+      {
+        artifact_id: 'artifact-123',
+        revision: 4,
+        allowed_domains: ['https://example.com'],
+      },
+      'csrf-billing',
+    );
+    expect(screen.getByText(
+      '<script src="https://widgets.kaigo.space/embed/stable-widget.js" async></script>',
+    )).toBeVisible();
+    expect(screen.getByText(
+      'Чат в предпросмотре нужен для проверки ответов посетителю. Он не изменяет сам виджет.',
+    )).toBeVisible();
+    expect(screen.queryByText(/дорабат/i)).not.toBeInTheDocument();
+
+    view.rerender(
+      <UpgradeGate
+        {...gateProps}
+        artifactId="artifact-456"
+        revision={5}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText('Разрешённые домены'), {
+      target: { value: 'https://example.com\nhttps://shop.example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Обновить публикацию' }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(api.publishProject).toHaveBeenNthCalledWith(
+      2,
+      'project-123',
+      {
+        artifact_id: 'artifact-456',
+        revision: 5,
+        allowed_domains: ['https://example.com', 'https://shop.example.com'],
+      },
+      'csrf-billing',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Откатить к ревизии 4' }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(api.rollbackPublication).toHaveBeenCalledWith(
+      'publication-123',
+      'release-4',
+      'csrf-billing',
+    );
+  });
+
+  it('hydrates stable embed and rollback targets after Studio reload', async () => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({
+      subscription: {
+        id: 'subscription-123',
+        plan_code: 'starter_monthly',
+        status: 'active',
+        current_period_start: '2026-07-28T12:00:00Z',
+        current_period_end: '2026-08-28T12:00:00Z',
+      },
+    });
+    vi.mocked(api.getProjectPublication).mockResolvedValue({
+      publication: {
+        publication_id: 'publication-123',
+        stable_key: 'stable-widget',
+        state: 'published',
+        allowed_domains: ['https://example.com', 'https://shop.example.com'],
+        embed_url: 'https://widgets.kaigo.space/embed/stable-widget.js',
+        runtime_url: 'https://widgets.kaigo.space/runtime/stable-widget',
+        active_release: {
+          release_id: 'release-5',
+          artifact_id: 'artifact-456',
+          previous_release_id: 'release-4',
+          revision: 5,
+          checksum: 'checksum-5',
+          created_at: '2026-07-28T13:00:00Z',
+        },
+        releases: [
+          {
+            release_id: 'release-4',
+            artifact_id: 'artifact-123',
+            previous_release_id: null,
+            revision: 4,
+            checksum: 'checksum-4',
+            created_at: '2026-07-28T12:00:00Z',
+          },
+          {
+            release_id: 'release-5',
+            artifact_id: 'artifact-456',
+            previous_release_id: 'release-4',
+            revision: 5,
+            checksum: 'checksum-5',
+            created_at: '2026-07-28T13:00:00Z',
+          },
+        ],
+      },
+    });
+    vi.mocked(api.rollbackPublication).mockResolvedValue({
+      publication_id: 'publication-123',
+      release_id: 'release-4',
+      artifact_id: 'artifact-123',
+      stable_key: 'stable-widget',
+      revision: 4,
+      allowed_domains: ['https://example.com', 'https://shop.example.com'],
+      checksum: 'checksum-4',
+      embed_url: 'https://widgets.kaigo.space/embed/stable-widget.js',
+      runtime_url: 'https://widgets.kaigo.space/runtime/stable-widget',
+    });
+
+    render(<UpgradeGate {...gateProps} />);
+    expect(await screen.findByText(
+      '<script src="https://widgets.kaigo.space/embed/stable-widget.js" async></script>',
+    )).toBeVisible();
+    expect(screen.getByLabelText('Разрешённые домены')).toHaveValue(
+      'https://example.com\nhttps://shop.example.com',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Откатить к ревизии 4' }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(api.rollbackPublication).toHaveBeenCalledWith(
+      'publication-123',
+      'release-4',
+      'csrf-billing',
+    );
   });
 
   it('fails closed when initial billing recovery fails and retries the check explicitly', async () => {
@@ -248,7 +448,7 @@ describe('UpgradeGate', () => {
       await Promise.resolve();
     });
 
-    expect(screen.queryByRole('button', { name: /доработать и опубликовать/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /опубликовать и подключить/i })).not.toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent(/не удалось проверить тариф/i);
     fireEvent.click(screen.getByRole('button', { name: /повторить проверку/i }));
     await act(async () => {
@@ -257,7 +457,7 @@ describe('UpgradeGate', () => {
     });
 
     expect(api.getBillingSubscription).toHaveBeenCalledTimes(2);
-    expect(screen.getByRole('button', { name: /доработать и опубликовать/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /опубликовать и подключить/i })).toBeEnabled();
     expect(api.createBillingCheckout).not.toHaveBeenCalled();
   });
 
@@ -298,7 +498,7 @@ describe('UpgradeGate', () => {
     });
 
     expect(screen.getByRole('alert')).toHaveTextContent(/не удалось проверить тариф/i);
-    expect(screen.queryByRole('button', { name: /доработать и опубликовать/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /опубликовать и подключить/i })).not.toBeInTheDocument();
     expect(api.createBillingCheckout).not.toHaveBeenCalled();
   });
 
@@ -322,7 +522,7 @@ describe('UpgradeGate', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    fireEvent.click(screen.getByRole('button', { name: /доработать и опубликовать/i }));
+    fireEvent.click(screen.getByRole('button', { name: /опубликовать и подключить/i }));
     await act(async () => {
       await Promise.resolve();
     });
