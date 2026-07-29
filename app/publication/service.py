@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analytics.service import record_funnel_event
+from app.patterns.repository import PatternRepository
 from app.saas.models import (
     GenerationArtifact,
     GenerationRun,
@@ -175,6 +176,10 @@ class PublicationService:
                 self._verify_release(existing)
                 publication.active_release_id = existing.id
                 publication.state = "published"
+                await PatternRepository(database).mark_active_publication(
+                    project_id=project.id,
+                    artifact_id=artifact.id,
+                )
                 await record_funnel_event(
                     database,
                     event_type="published",
@@ -216,6 +221,10 @@ class PublicationService:
             await database.flush()
             publication.active_release_id = release.id
             publication.state = "published"
+            await PatternRepository(database).mark_active_publication(
+                project_id=project.id,
+                artifact_id=artifact.id,
+            )
             await record_funnel_event(
                 database,
                 event_type="published",
@@ -253,8 +262,9 @@ class PublicationService:
             stored_releases = tuple(
                 (
                     await database.scalars(
-                        select(PublicationRelease)
-                        .where(PublicationRelease.publication_id == publication.id)
+                        select(PublicationRelease).where(
+                            PublicationRelease.publication_id == publication.id
+                        )
                     )
                 ).all()
             )
@@ -274,7 +284,11 @@ class PublicationService:
             active_chain.reverse()
             active_ids = {release.id for release in active_chain}
             detached = sorted(
-                (release for release in stored_releases if release.id not in active_ids),
+                (
+                    release
+                    for release in stored_releases
+                    if release.id not in active_ids
+                ),
                 key=lambda release: (release.created_at, str(release.id)),
             )
             releases = tuple(active_chain + detached)
@@ -343,24 +357,34 @@ class PublicationService:
             self._verify_release(release)
             publication.active_release_id = release.id
             publication.state = "published"
+            await PatternRepository(database).mark_active_publication(
+                project_id=project_id,
+                artifact_id=release.artifact_id,
+            )
             return self._snapshot(publication, release, created=False)
 
     @staticmethod
     async def _require_entitlement(database: AsyncSession, user_id: int) -> None:
         verified = await database.scalar(
-            select(UserIdentity).where(
+            select(UserIdentity)
+            .where(
                 UserIdentity.user_id == user_id,
                 UserIdentity.email_verified.is_(True),
-            ).limit(1).with_for_update()
+            )
+            .limit(1)
+            .with_for_update()
         )
         if verified is None:
             raise PublicationIdentityUnverified("verified OAuth identity required")
         active = await database.scalar(
-            select(Subscription).where(
+            select(Subscription)
+            .where(
                 Subscription.user_id == user_id,
                 Subscription.status == "active",
                 Subscription.current_period_end > datetime.now(UTC),
-            ).limit(1).with_for_update()
+            )
+            .limit(1)
+            .with_for_update()
         )
         if active is None:
             raise PublicationUpgradeRequired("active subscription required")
@@ -420,7 +444,11 @@ class PublicationService:
 
     @staticmethod
     def _validated_artifact(artifact: GenerationArtifact) -> WidgetArtifact:
-        configured = artifact.config.get("artifact") if isinstance(artifact.config, dict) else None
+        configured = (
+            artifact.config.get("artifact")
+            if isinstance(artifact.config, dict)
+            else None
+        )
         if not isinstance(configured, dict):
             raise InvalidPublicationArtifact("artifact config is missing")
         try:
@@ -456,7 +484,12 @@ class PublicationService:
 
     def _source_origin(self, source_url: str) -> str:
         parsed = urlsplit(source_url)
-        if parsed.scheme.lower() != "https" or not parsed.hostname or parsed.username or parsed.password:
+        if (
+            parsed.scheme.lower() != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+        ):
             raise InvalidAllowedDomain("project source URL has no safe HTTPS origin")
         value = f"https://{parsed.hostname}"
         if parsed.port not in (None, 443):
@@ -464,13 +497,19 @@ class PublicationService:
         return self._normalize_origin(value)
 
     def _normalize_origin(self, value: str) -> str:
-        if not isinstance(value, str) or not value or any(ord(char) < 33 for char in value):
+        if (
+            not isinstance(value, str)
+            or not value
+            or any(ord(char) < 33 for char in value)
+        ):
             raise InvalidAllowedDomain("invalid allowed origin")
         parsed = urlsplit(value)
         scheme = parsed.scheme.lower()
         if scheme != "https" and not self._allow_insecure_origins:
             raise InvalidAllowedDomain("allowed origin must use HTTPS")
-        if scheme not in ({"http", "https"} if self._allow_insecure_origins else {"https"}):
+        if scheme not in (
+            {"http", "https"} if self._allow_insecure_origins else {"https"}
+        ):
             raise InvalidAllowedDomain("unsupported origin scheme")
         if (
             not parsed.hostname
@@ -496,7 +535,9 @@ class PublicationService:
                 host = host.encode("idna").decode("ascii")
             except UnicodeError as error:
                 raise InvalidAllowedDomain("invalid origin host") from error
-            if not host or any(not _HOST_LABEL.fullmatch(label) for label in host.split(".")):
+            if not host or any(
+                not _HOST_LABEL.fullmatch(label) for label in host.split(".")
+            ):
                 raise InvalidAllowedDomain("invalid origin host")
             if (
                 host == "localhost" or host.endswith(".localhost")

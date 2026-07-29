@@ -10,6 +10,14 @@
 
 ---
 
+## Execution status — 2026-07-29
+
+Pattern Registry, Composition Planner, deterministic resolver, PostgreSQL
+provenance/outcomes, publication signals and the frozen GLM-5.2/GPT-5.5
+comparison are implemented and verified. The historical checkboxes below keep
+the original TDD sequence; current evidence and honest benchmark outcomes are in
+[`docs/release-evidence/2026-07-29-saas-agent-kernel.md`](../../release-evidence/2026-07-29-saas-agent-kernel.md).
+
 ## Карта файлов
 
 - `builder_lab/patterns/models.py` — чистые immutable domain contracts.

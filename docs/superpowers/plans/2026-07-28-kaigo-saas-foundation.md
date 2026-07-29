@@ -10,6 +10,15 @@
 
 ---
 
+## Execution status — 2026-07-29
+
+Implementation, PostgreSQL 15 verification, local Browser acceptance and the
+first production promotion have been completed. The historical task checkboxes
+below preserve the original TDD sequence and are not used as the current release
+gate. Current commands, counts, production snapshot and deliberately deferred
+real OAuth/YooKassa checks are recorded in
+[`docs/release-evidence/2026-07-29-saas-agent-kernel.md`](../../release-evidence/2026-07-29-saas-agent-kernel.md).
+
 ## Карта файлов
 
 - `app/saas/models.py` — SaaS ORM-сущности без разрастания legacy `app/db/models.py`.

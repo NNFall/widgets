@@ -8,12 +8,13 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.saas.models import (
     CompositionPlanItem,
     CompositionPlanRecord,
+    GenerationRun,
     PatternOutcome,
     WidgetPatternVersion,
 )
@@ -270,19 +271,21 @@ class PatternRepository:
         metrics: PatternOutcomeMetrics,
     ) -> tuple[PatternOutcome, ...]:
         plan = await self._session.scalar(
-            select(CompositionPlanRecord).where(
-                CompositionPlanRecord.run_id == run_id
-            )
+            select(CompositionPlanRecord).where(CompositionPlanRecord.run_id == run_id)
         )
         if plan is None:
             return ()
         items = (
-            await self._session.execute(
-                select(CompositionPlanItem)
-                .where(CompositionPlanItem.composition_plan_id == plan.id)
-                .order_by(CompositionPlanItem.slot)
+            (
+                await self._session.execute(
+                    select(CompositionPlanItem)
+                    .where(CompositionPlanItem.composition_plan_id == plan.id)
+                    .order_by(CompositionPlanItem.slot)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         outcomes: list[PatternOutcome] = []
         item_count = len(items)
         for index, item in enumerate(items):
@@ -325,16 +328,63 @@ class PatternRepository:
                 )
                 self._session.add(outcome)
             else:
-                persisted = {
-                    field: getattr(outcome, field) for field in values
+                # Publication and adoption are live product signals. They may
+                # advance after the immutable terminal metrics were recorded,
+                # so a worker replay validates the facts without reverting or
+                # treating those signal changes as outcome drift.
+                immutable_values = {
+                    field: value
+                    for field, value in values.items()
+                    if field not in {"published", "adopted"}
                 }
-                if persisted != values:
-                    raise ValueError(
-                        f"pattern outcome drift for {idempotency_key}"
-                    )
+                persisted = {
+                    field: getattr(outcome, field) for field in immutable_values
+                }
+                if persisted != immutable_values:
+                    raise ValueError(f"pattern outcome drift for {idempotency_key}")
             outcomes.append(outcome)
         await self._session.flush()
         return tuple(outcomes)
+
+    async def mark_active_publication(
+        self,
+        *,
+        project_id: UUID,
+        artifact_id: UUID,
+    ) -> None:
+        """Mark outcomes for the project's currently active release.
+
+        Publication is a mutable signal over immutable outcome facts: exactly
+        the outcomes attributed to the active release are marked published.
+        Adoption is intentionally untouched because publication and rollback
+        are not evidence that a customer adopted a pattern.
+        """
+
+        project_run_ids = select(GenerationRun.id).where(
+            GenerationRun.project_id == project_id
+        )
+        await self._session.execute(
+            update(PatternOutcome)
+            .where(
+                PatternOutcome.run_id.in_(project_run_ids),
+                PatternOutcome.published.is_(True),
+                or_(
+                    PatternOutcome.final_artifact_id.is_(None),
+                    PatternOutcome.final_artifact_id != artifact_id,
+                ),
+            )
+            .values(published=False)
+        )
+        await self._session.execute(
+            update(PatternOutcome)
+            .where(
+                PatternOutcome.run_id.in_(project_run_ids),
+                PatternOutcome.final_artifact_id == artifact_id,
+                PatternOutcome.published.is_(False),
+            )
+            .values(published=True)
+        )
+        await self._session.flush()
 
 
 def _json_clone(value: Any) -> Any:
