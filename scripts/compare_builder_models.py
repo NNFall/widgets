@@ -480,6 +480,7 @@ async def run_target(
     async def generate(
         prompt: str,
         *,
+        role: str,
         temperature: float,
         metadata: Mapping[str, Any],
         error_kind: str,
@@ -510,8 +511,14 @@ async def run_target(
                 private_dir,
                 attempt=error_attempt,
                 kind=error_kind,
+                role=role,
+                provider=provider_name,
+                model=model,
+                prompt=prompt,
                 error_code=error.error_code,
+                error=error,
                 usage=error.usage,
+                aggregate_usage=usage,
                 request_id=error.request_id,
             )
             return None
@@ -522,8 +529,14 @@ async def run_target(
                 private_dir,
                 attempt=error_attempt,
                 kind=error_kind,
+                role=role,
+                provider=provider_name,
+                model=model,
+                prompt=prompt,
                 error_code=error.error_code,
+                error=error,
                 usage=ModelUsage(),
+                aggregate_usage=usage,
                 request_id=None,
             )
             return None
@@ -535,6 +548,18 @@ async def run_target(
         if response.request_id:
             request_ids.append(response.request_id)
         failure_code = None
+        _write_attempt_result(
+            private_dir,
+            attempt=error_attempt,
+            kind=error_kind,
+            role=role,
+            provider=provider_name,
+            model=model,
+            prompt=prompt,
+            usage=response.usage,
+            aggregate_usage=usage,
+            request_id=response.request_id,
+        )
         return response
 
     if seed_run is None:
@@ -553,6 +578,7 @@ async def run_target(
             )
             response = await generate(
                 prompt,
+                role=("repair" if artifact is not None else "widget_generator"),
                 temperature=request.creativity,
                 metadata={
                     "benchmark": "agent-kernel-frozen-v1",
@@ -622,6 +648,7 @@ async def run_target(
         )
         response = await generate(
             prompt,
+            role="repair",
             temperature=min(request.creativity, 0.35),
             metadata={
                 "benchmark": "agent-kernel-frozen-v1",
@@ -723,27 +750,97 @@ def _write_attempt_error(
     *,
     attempt: int,
     kind: str = "attempt",
+    role: str,
+    provider: str,
+    model: str,
+    prompt: str,
     error_code: str,
+    error: ModelProviderError,
     usage: ModelUsage,
+    aggregate_usage: ModelUsage,
     request_id: str | None,
 ) -> None:
-    (private_dir / f"{kind}-{attempt}-error.json").write_text(
-        json.dumps(
-            {
-                "attempt": attempt,
-                "error_code": error_code,
-                "usage": {
-                    "input_tokens": usage.input_tokens,
-                    "output_tokens": usage.output_tokens,
-                    "thinking_tokens": usage.thinking_tokens,
-                },
-                "request_id": request_id,
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
+    _write_private_receipt(
+        private_dir,
+        stem=f"{kind}-{attempt}-error",
+        payload={
+            "attempt": attempt,
+            "role": role,
+            "provider": provider,
+            "model": model,
+            **_prompt_identity(prompt),
+            "error_code": error_code,
+            "error_class": type(error).__name__,
+            "usage": _usage_payload(usage),
+            "aggregate_usage": _usage_payload(aggregate_usage),
+            "request_id": request_id,
+        },
     )
+
+
+def _write_attempt_result(
+    private_dir: Path,
+    *,
+    attempt: int,
+    kind: str,
+    role: str,
+    provider: str,
+    model: str,
+    prompt: str,
+    usage: ModelUsage,
+    aggregate_usage: ModelUsage,
+    request_id: str | None,
+) -> None:
+    _write_private_receipt(
+        private_dir,
+        stem=f"{kind}-{attempt}-result",
+        payload={
+            "attempt": attempt,
+            "role": role,
+            "provider": provider,
+            "model": model,
+            **_prompt_identity(prompt),
+            "usage": _usage_payload(usage),
+            "aggregate_usage": _usage_payload(aggregate_usage),
+            "request_id": request_id,
+        },
+    )
+
+
+def _write_private_receipt(
+    private_dir: Path,
+    *,
+    stem: str,
+    payload: Mapping[str, Any],
+) -> Path:
+    private_dir.mkdir(parents=True, exist_ok=True)
+    suffix = 1
+    while True:
+        name = f"{stem}.json" if suffix == 1 else f"{stem}-{suffix}.json"
+        path = private_dir / name
+        try:
+            with path.open("x", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
+                handle.write("\n")
+            return path
+        except FileExistsError:
+            suffix += 1
+
+
+def _prompt_identity(prompt: str) -> dict[str, str | int]:
+    encoded = prompt.encode("utf-8")
+    return {
+        "prompt_sha256": hashlib.sha256(encoded).hexdigest(),
+        "prompt_bytes": len(encoded),
+    }
+
+
+def _usage_payload(usage: ModelUsage) -> dict[str, int]:
+    return {
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "thinking_tokens": usage.thinking_tokens,
+    }
 
 
 def _write_audit_screenshots(private_dir: Path, report: Any) -> None:

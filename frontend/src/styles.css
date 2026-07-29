@@ -1608,7 +1608,7 @@ a {
 .site-footer nav { display: flex; justify-content: center; gap: clamp(22px, 3.4vw, 56px); font-size: 15px; }
 .site-footer__legal { display: grid; gap: 11px; justify-items: start; color: #66798a; font-size: 14px; }
 
-@media (min-width: 1281px) and (max-width: 1600px) {
+@media (min-width: 1281px) and (max-width: 1680px) {
   .site-header {
     height: 94px;
   }
@@ -1661,6 +1661,47 @@ a {
   .hero-scene {
     transform: scale(0.86);
     transform-origin: center;
+  }
+
+  .process-card {
+    width: 286px;
+    min-height: 96px;
+    padding: 14px 16px;
+  }
+
+  .process-card--1 {
+    left: -3%;
+  }
+
+  .process-card--2 {
+    left: -3.5%;
+  }
+
+  .process-card--3 {
+    left: -3.5%;
+  }
+
+  .hero-scene[data-motion-phase='source'] .hero-browser-stage,
+  .hero-scene[data-motion-phase='resetting'] .hero-browser-stage,
+  .hero-scene[data-motion-phase='scanning'][data-visible-cards='0'] .hero-browser-stage {
+    transform: translate3d(120px, 10px, 0) scale(1.14) rotate(-3deg);
+  }
+
+  .hero-scene[data-motion-phase='scanning'][data-visible-cards='1'] .hero-browser-stage {
+    transform: translate3d(144px, 7px, 0) scale(1.06) rotate(-1.6deg);
+  }
+
+  .hero-scene[data-motion-phase='scanning'][data-visible-cards='2'] .hero-browser-stage {
+    transform: translate3d(157px, 4px, 0) scale(0.98) rotate(-0.4deg);
+  }
+
+  .hero-scene[data-motion-phase='scanning'][data-visible-cards='3'] .hero-browser-stage {
+    transform: translate3d(162px, 1px, 0) scale(0.92) rotate(1.2deg);
+  }
+
+  .hero-scene[data-motion-phase='widget'] .hero-browser-stage,
+  .hero-scene[data-motion-phase='complete'] .hero-browser-stage {
+    transform: translate3d(150px, 0, 0) scale(0.88) rotate(2.2deg);
   }
 }
 

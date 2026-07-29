@@ -134,6 +134,49 @@ class BuilderLabPackagingTests(unittest.TestCase):
         self.assertRegex(dockerfile, r"(?m)^USER kaigo$")
         self.assertIn("PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", dockerfile)
 
+    def test_builder_worker_image_contains_pinned_qwen_runtime_for_agentrouter(self):
+        dockerfile = (ROOT / "Dockerfile.builder-lab").read_text(encoding="utf-8")
+        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        worker = compose.split("  builder-worker:", 1)[1].split(
+            "\n  migration:", 1
+        )[0]
+        env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+
+        self.assertIn("FROM node:22-bookworm-slim AS qwen-runtime", dockerfile)
+        self.assertIn(
+            "npm install --global @qwen-code/qwen-code@0.21.0",
+            dockerfile,
+        )
+        self.assertIn(
+            "COPY --from=qwen-runtime /usr/local/bin/node /usr/local/bin/node",
+            dockerfile,
+        )
+        self.assertIn(
+            "ln -s /usr/local/lib/node_modules/@qwen-code/qwen-code/cli-entry.js "
+            "/usr/local/bin/qwen",
+            dockerfile,
+        )
+        self.assertIn("&& qwen --version", dockerfile)
+        for name in (
+            "KAIGO_BUILDER_HYBRID_ROUTING_ENABLED",
+            "AGENTROUTER_API_KEY",
+            "AGENTROUTER_BASE_URL",
+            "AGENTROUTER_TIMEOUT_SECONDS",
+            "AGENTROUTER_QWEN_EXECUTABLE",
+            "AGENTROUTER_GPT_MODEL",
+            "AGENTROUTER_GLM_MODEL",
+            "AGENTROUTER_GPT_INPUT_PRICE_MICROUSD_PER_MILLION",
+            "AGENTROUTER_GPT_OUTPUT_PRICE_MICROUSD_PER_MILLION",
+            "AGENTROUTER_GLM_INPUT_PRICE_MICROUSD_PER_MILLION",
+            "AGENTROUTER_GLM_OUTPUT_PRICE_MICROUSD_PER_MILLION",
+        ):
+            self.assertIn(f"      {name}:", worker)
+            self.assertRegex(env_example, rf"(?m)^{name}=")
+        self.assertNotRegex(
+            env_example,
+            r"(?m)^AGENTROUTER_API_KEY=.+$",
+        )
+
     def test_deploy_prepares_demo_mount_for_the_unprivileged_image_user(self):
         deploy = (ROOT / "scripts" / "deploy_builder_lab.sh").read_text(
             encoding="utf-8"

@@ -6,6 +6,7 @@ import inspect
 import logging
 import os
 import signal
+import shutil
 import socket
 import sys
 from collections.abc import Awaitable, Callable
@@ -20,6 +21,7 @@ from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models.providers.gemini import GeminiModelProvider
+from app.models.providers.agentrouter_qwen import AgentRouterQwenProvider
 from app.models.router import (
     ModelPolicy,
     ModelRouter,
@@ -185,14 +187,86 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
     if not config.gemini_api_key:
         raise RuntimeError("GEMINI_API_KEY is required for routed builder stages")
     input_rate, output_rate = runtime_model_prices()
+    hybrid_enabled = bool(getattr(config, "hybrid_routing_enabled", False))
+    providers = {
+        "gemini": GeminiModelProvider(
+            api_key=config.gemini_api_key,
+            base_url=config.gemini_base_url,
+        )
+    }
+    if hybrid_enabled:
+        if not config.agentrouter_api_key:
+            raise RuntimeError(
+                "AGENTROUTER_API_KEY is required when hybrid routing is enabled"
+            )
+        if not config.agentrouter_base_url.startswith("https://"):
+            raise RuntimeError(
+                "AGENTROUTER_BASE_URL must use HTTPS when hybrid routing is enabled"
+            )
+        if not config.agentrouter_gpt_model or not config.agentrouter_glm_model:
+            raise RuntimeError(
+                "AgentRouter GPT and GLM model names are required for hybrid routing"
+            )
+        if shutil.which(config.agentrouter_qwen_executable) is None:
+            raise RuntimeError(
+                "AGENTROUTER_QWEN_EXECUTABLE is not available in the worker image"
+            )
+        providers["agentrouter"] = AgentRouterQwenProvider(
+            api_key=config.agentrouter_api_key,
+            base_url=config.agentrouter_base_url,
+            timeout_seconds=config.agentrouter_timeout_seconds,
+            working_directory="/tmp",
+            executable=config.agentrouter_qwen_executable,
+        )
+
+    def gemini_target(model: str) -> ProviderTarget:
+        return ProviderTarget("gemini", model, input_rate, output_rate)
+
+    def gpt_target() -> ProviderTarget:
+        return ProviderTarget(
+            "agentrouter",
+            config.agentrouter_gpt_model,
+            config.agentrouter_gpt_input_price_microusd_per_million,
+            config.agentrouter_gpt_output_price_microusd_per_million,
+        )
+
+    def glm_target() -> ProviderTarget:
+        return ProviderTarget(
+            "agentrouter",
+            config.agentrouter_glm_model,
+            config.agentrouter_glm_input_price_microusd_per_million,
+            config.agentrouter_glm_output_price_microusd_per_million,
+        )
+
+    gpt_roles = {
+        "direction_candidate",
+        "direction_judge",
+        "composition_planner",
+        "visual_judge",
+        "code_review",
+    }
+    glm_roles = {
+        "art_direction_generator",
+        "widget_generator",
+        "brand_designer",
+        "conversation_designer",
+        "motion_designer",
+        "repair",
+    }
     policies = {}
     for mode in ("direct", "express"):
         policy = get_mode_policy(mode)
         for role in set(policy.model_roles.values()):
-            target_model = (
-                config.reference_analyzer_model
-                if role == "reference_analyst"
-                else config.direct_model
+            target = (
+                gpt_target()
+                if hybrid_enabled and role in gpt_roles
+                else glm_target()
+                if hybrid_enabled and role in glm_roles
+                else gemini_target(
+                    config.reference_analyzer_model
+                    if role == "reference_analyst"
+                    else config.direct_model
+                )
             )
             prompt_version = (
                 "reference-v1"
@@ -201,58 +275,53 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
             )
             policies[(role, policy.name)] = ModelPolicy(
                 prompt_version=prompt_version,
-                targets=(
-                    ProviderTarget(
-                        "gemini",
-                        target_model,
-                        input_rate,
-                        output_rate,
-                    ),
-                ),
+                targets=(target,),
             )
-        for role in (*policy.critic_roles, policy.judge_role):
-            if role is None:
-                continue
+        for role in policy.critic_roles:
             policies[(role, policy.name)] = ModelPolicy(
                 prompt_version="visual-v1",
-                targets=(
-                    ProviderTarget(
-                        "gemini",
-                        config.visual_critic_model,
-                        input_rate,
-                        output_rate,
-                    ),
-                ),
+                targets=(gemini_target(config.visual_critic_model),),
             )
+        if policy.judge_role is not None:
+            judge_target = (
+                gpt_target()
+                if hybrid_enabled
+                else gemini_target(config.visual_critic_model)
+            )
+            policies[(policy.judge_role, policy.name)] = ModelPolicy(
+                prompt_version="visual-judge-v1",
+                targets=(judge_target,),
+            )
+        direction_target = (
+            gpt_target()
+            if hybrid_enabled
+            else gemini_target(config.direct_model)
+        )
+        for role in ("direction_candidate", "direction_judge"):
+            policies[(role, policy.name)] = ModelPolicy(
+                prompt_version="direction-v1",
+                targets=(direction_target,),
+            )
+        repair_target = (
+            glm_target()
+            if hybrid_enabled
+            else gemini_target(config.direct_model)
+        )
         policies[("repair", policy.name)] = ModelPolicy(
             prompt_version="repair-v1",
-            targets=(
-                ProviderTarget(
-                    "gemini",
-                    config.direct_model,
-                    input_rate,
-                    output_rate,
-                ),
-            ),
+            targets=(repair_target,),
+        )
+        review_target = (
+            gpt_target()
+            if hybrid_enabled
+            else gemini_target(config.visual_critic_model)
         )
         policies[("code_review", policy.name)] = ModelPolicy(
             prompt_version="code-review-v1",
-            targets=(
-                ProviderTarget(
-                    "gemini",
-                    config.visual_critic_model,
-                    input_rate,
-                    output_rate,
-                ),
-            ),
+            targets=(review_target,),
         )
     return ModelRouter(
-        providers={
-            "gemini": GeminiModelProvider(
-                api_key=config.gemini_api_key,
-                base_url=config.gemini_base_url,
-            )
-        },
+        providers=providers,
         policies=policies,
         audit=SqlModelCallAudit(factory),
     )

@@ -24,13 +24,13 @@ describe('LandingPage sections', () => {
     expect(screen.getAllByRole('textbox', { name: 'Пожелание к AI-виджету' })).toHaveLength(2);
   });
 
-  it('uses truthful timing and destination copy in every landing call to action', () => {
+  it('uses the agreed B2B promise and free-version copy in the hero', () => {
     render(<LandingPage />);
 
-    expect(screen.getByRole('heading', { name: /Обычно за 10–20 минут.*первую версию.*AI-виджета/i })).toBeVisible();
+    expect(screen.getByRole('heading', { name: /Через 10 минут.*вы сможете сказать.*наш бизнес использует AI/i })).toBeVisible();
+    expect(screen.getByText(/Kaigo бесплатно создаст первую версию AI-виджета/i)).toBeVisible();
     expect(screen.getByRole('heading', { name: /Сначала получите.*бесплатную экспресс-версию/i })).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Получить бесплатную версию' })).toHaveLength(2);
-    expect(screen.queryByText(/Через 10 минут/)).not.toBeInTheDocument();
   });
 
   it('renders the complete marketing narrative', () => {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -222,13 +223,19 @@ async def test_invalid_structured_response_is_metered_without_aborting_benchmark
     tmp_path: Path,
 ) -> None:
     class InvalidProvider:
+        prompts: list[str] = []
+
         def __init__(self, **_kwargs) -> None:
             self.calls = 0
 
-        async def generate(self, _request, *, model: str):
+        async def generate(self, request, *, model: str):
             self.calls += 1
+            self.prompts.append(request.prompt)
             raise InvalidModelResponse(
-                "not exact JSON",
+                (
+                    "not exact JSON; Authorization: Bearer test-only; "
+                    "api_key=private-provider-value"
+                ),
                 usage=ModelUsage(
                     input_tokens=100 * self.calls,
                     output_tokens=20 * self.calls,
@@ -266,6 +273,58 @@ async def test_invalid_structured_response_is_metered_without_aborting_benchmark
     }
     assert result["failure_code"] == "invalid_response"
     assert result["publishable"] is False
+    first_audit = json.loads(
+        (tmp_path / "private" / "attempt-1-error.json").read_text(encoding="utf-8")
+    )
+    second_audit = json.loads(
+        (tmp_path / "private" / "attempt-2-error.json").read_text(encoding="utf-8")
+    )
+    assert first_audit["role"] == "widget_generator"
+    assert first_audit["provider"] == "agentrouter"
+    assert first_audit["model"] == "glm-5.2"
+    first_prompt = InvalidProvider.prompts[0].encode("utf-8")
+    assert first_audit["prompt_sha256"] == hashlib.sha256(first_prompt).hexdigest()
+    assert first_audit["prompt_bytes"] == len(first_prompt)
+    assert first_audit["usage"] == {
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "thinking_tokens": 5,
+    }
+    assert first_audit["aggregate_usage"] == first_audit["usage"]
+    assert second_audit["aggregate_usage"] == result["usage"]
+    assert first_audit["error_class"] == "InvalidModelResponse"
+    assert "error_message" not in first_audit
+    encoded_audit = json.dumps(first_audit, ensure_ascii=False)
+    assert "test-only" not in encoded_audit
+    assert "private-provider-value" not in encoded_audit
+    assert "Bearer" not in encoded_audit
+    assert InvalidProvider.prompts[0] not in encoded_audit
+
+
+def test_private_attempt_receipts_are_append_only(tmp_path: Path) -> None:
+    private_dir = tmp_path / "private"
+    private_dir.mkdir()
+
+    for request_id in ("request-one", "request-two"):
+        compare_builder_models._write_attempt_result(
+            private_dir,
+            attempt=1,
+            kind="attempt",
+            role="widget_generator",
+            provider="agentrouter",
+            model="glm-5.2",
+            prompt="same prompt",
+            usage=ModelUsage(input_tokens=10, output_tokens=2, thinking_tokens=1),
+            aggregate_usage=ModelUsage(input_tokens=10, output_tokens=2, thinking_tokens=1),
+            request_id=request_id,
+        )
+
+    receipts = sorted(private_dir.glob("attempt-1-result*.json"))
+    assert len(receipts) == 2
+    assert {
+        json.loads(path.read_text(encoding="utf-8"))["request_id"]
+        for path in receipts
+    } == {"request-one", "request-two"}
 
 
 def test_browser_failure_is_converted_to_bounded_visual_repair_finding() -> None:
@@ -371,3 +430,22 @@ async def test_seeded_browser_failure_gets_separate_visual_repair(
         "thinking_tokens": 7,
     }
     assert result["failure_code"] is None
+    audit = json.loads(
+        (tmp_path / "private" / "browser-repair-1-result.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert audit["role"] == "repair"
+    assert audit["provider"] == "agentrouter"
+    assert audit["model"] == "gpt-5.5"
+    assert len(audit["prompt_sha256"]) == 64
+    assert audit["prompt_bytes"] > 0
+    assert audit["usage"] == {
+        "input_tokens": 50,
+        "output_tokens": 10,
+        "thinking_tokens": 2,
+    }
+    assert audit["aggregate_usage"] == result["usage"]
+    assert audit["request_id"] == "repair-gpt-5.5"
+    assert "error_class" not in audit
+    assert "error_message" not in audit

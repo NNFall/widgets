@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID, uuid4
 from weakref import WeakValueDictionary
 
@@ -46,6 +46,9 @@ from builder_lab.validation import (
     strip_reserved_runtime_attributes,
     validate_artifact,
 )
+
+if TYPE_CHECKING:
+    from builder_lab.reference_pipeline import ReferenceAnalysisResult
 
 
 logger = logging.getLogger(__name__)
@@ -426,20 +429,46 @@ class OrchestratorStageHandler:
             if self._routed_engine_factory is not None and request.engine is EngineName.DIRECT
             else engine
         )
+        direction_proposal_engine = engine
+        direction_judge_engine = engine
+        if (
+            stage is Stage.ART_DIRECTION
+            and self._routed_engine_factory is not None
+            and request.engine is EngineName.DIRECT
+        ):
+            direction_proposal_engine = self._routed_engine_factory(
+                claim,
+                "direction_candidate",
+            )
+            direction_judge_engine = self._routed_engine_factory(
+                claim,
+                "direction_judge",
+            )
         try:
             return await self._generate_stage(
                 request=request,
                 engine=engine,
                 repair_engine=repair_engine,
+                direction_proposal_engine=direction_proposal_engine,
+                direction_judge_engine=direction_judge_engine,
                 stage=stage,
                 previous=stage_input.previous_artifact,
                 context=stage_input.context,
                 claim=claim,
             )
         finally:
-            await engine.close()
-            if repair_engine is not engine:
-                await repair_engine.close()
+            closed: set[int] = set()
+            for routed_engine in (
+                engine,
+                repair_engine,
+                direction_proposal_engine,
+                direction_judge_engine,
+            ):
+                identity = id(routed_engine)
+                if identity in closed:
+                    continue
+                closed.add(identity)
+                await routed_engine.close()
 
     async def _analyze_reference(
         self,
@@ -496,6 +525,8 @@ class OrchestratorStageHandler:
         request: BuilderRequest,
         engine: BuilderEngine,
         repair_engine: BuilderEngine,
+        direction_proposal_engine: BuilderEngine,
+        direction_judge_engine: BuilderEngine,
         stage: Stage,
         previous: WidgetArtifact | None,
         context: dict,
@@ -513,7 +544,8 @@ class OrchestratorStageHandler:
         if request.engine is EngineName.DIRECT:
             if stage is Stage.ART_DIRECTION:
                 board = await run_direction_board(
-                    engine=engine,  # type: ignore[arg-type]
+                    proposal_engine=direction_proposal_engine,  # type: ignore[arg-type]
+                    judge_engine=direction_judge_engine,  # type: ignore[arg-type]
                     request=request,
                 )
                 selected_direction = board.selected

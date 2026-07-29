@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlsplit
 from uuid import UUID, uuid4
@@ -12,7 +13,7 @@ from aiohttp_session import get_session, setup as setup_session
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.auth.oauth import OAuthIdentity
+from app.auth.oauth import OAuthError, OAuthIdentity
 from app.auth.routes import OAUTH_PROVIDERS_KEY, setup_auth_routes
 from app.auth.session_storage import DatabaseSessionStorage
 from app.db.base import Base
@@ -55,6 +56,26 @@ class InspectingFailureProvider(FakeProvider):
             state = (await database.execute(select(OAuthState))).scalar_one()
             self.state_was_committed = state.consumed_at is not None
         raise web.HTTPBadGateway(text="provider exchange failed")
+
+
+class OAuthFailureProvider(FakeProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.exchange_calls = 0
+
+    async def exchange(self, transaction, callback):
+        self.exchange_calls += 1
+        raise OAuthError("token exchange included client-secret-value")
+
+
+class UnexpectedFailureProvider(FakeProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.exchange_calls = 0
+
+    async def exchange(self, transaction, callback):
+        self.exchange_calls += 1
+        raise RuntimeError("transport included client-secret-value")
 
 
 class ConcurrencyTrackingProvider(FakeProvider):
@@ -134,6 +155,172 @@ async def test_draft_survives_oauth_round_trip_and_cookie_rotates() -> None:
 
     await client.close()
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_oauth_start_ignores_and_clears_a_stale_pending_draft() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    app = web.Application()
+    app[SESSION_FACTORY_KEY] = factory
+    app[OAUTH_PROVIDERS_KEY] = {"google": FakeProvider()}
+    setup_session(app, DatabaseSessionStorage(max_age=3600, secure=False))
+    setup_auth_routes(app, public_base_url="https://kaigo.space")
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        draft_response = await client.post(
+            "/api/drafts",
+            json={"url": "https://stale.example", "brief": ""},
+        )
+        draft_id = (await draft_response.json())["id"]
+        async with factory() as database, database.begin():
+            draft = await database.get(AnonymousDraft, UUID(draft_id))
+            assert draft is not None
+            await database.delete(draft)
+
+        start = await client.get(
+            f"/api/auth/google/start?draft_id={draft_id}",
+            allow_redirects=False,
+        )
+
+        assert start.status == 302
+        async with factory() as database:
+            oauth_state = (await database.execute(select(OAuthState))).scalar_one()
+        assert oauth_state.draft_id is None
+        session_payload = await (await client.get("/api/auth/session")).json()
+        assert session_payload["pending_draft_id"] is None
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_provider_callback_error_is_consumed_and_redirected_safely(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    app = web.Application()
+    app[SESSION_FACTORY_KEY] = factory
+    provider = OAuthFailureProvider()
+    app[OAUTH_PROVIDERS_KEY] = {"google": provider}
+    setup_session(app, DatabaseSessionStorage(max_age=3600, secure=False))
+    setup_auth_routes(app, public_base_url="https://kaigo.space")
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    caplog.set_level(logging.WARNING, logger="app.auth.routes")
+    try:
+        start = await client.get("/api/auth/google/start", allow_redirects=False)
+        state = parse_qs(urlsplit(start.headers["Location"]).query)["state"][0]
+
+        callback = await client.get(
+            "/api/auth/google/callback"
+            f"?state={state}&error=access_denied"
+            "&error_description=client-secret-value",
+            allow_redirects=False,
+        )
+
+        assert callback.status == 302
+        assert callback.headers["Location"] == "/studio?auth_error=access_denied"
+        assert "client-secret-value" not in await callback.text()
+        assert provider.exchange_calls == 0
+        assert "provider=google" in caplog.text
+        assert "public_code=access_denied" in caplog.text
+        assert "client-secret-value" not in caplog.text
+        async with factory() as database:
+            oauth_state = (await database.execute(select(OAuthState))).scalar_one()
+        assert oauth_state.consumed_at is not None
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_provider_exchange_oauth_error_redirects_without_exposing_details(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    app = web.Application()
+    app[SESSION_FACTORY_KEY] = factory
+    provider = OAuthFailureProvider()
+    app[OAUTH_PROVIDERS_KEY] = {"google": provider}
+    setup_session(app, DatabaseSessionStorage(max_age=3600, secure=False))
+    setup_auth_routes(app, public_base_url="https://kaigo.space")
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    caplog.set_level(logging.WARNING, logger="app.auth.routes")
+    try:
+        start = await client.get("/api/auth/google/start", allow_redirects=False)
+        state = parse_qs(urlsplit(start.headers["Location"]).query)["state"][0]
+
+        callback = await client.get(
+            f"/api/auth/google/callback?state={state}&code=valid-code",
+            allow_redirects=False,
+        )
+
+        assert callback.status == 302
+        assert callback.headers["Location"] == "/studio?auth_error=oauth_failed"
+        assert "client-secret-value" not in await callback.text()
+        assert provider.exchange_calls == 1
+        assert "provider=google" in caplog.text
+        assert "public_code=oauth_failed" in caplog.text
+        assert "failure=OAuthError" in caplog.text
+        assert "client-secret-value" not in caplog.text
+
+        retry = await client.get("/api/auth/google/start", allow_redirects=False)
+        retry_state = parse_qs(urlsplit(retry.headers["Location"]).query)["state"][0]
+        assert retry.status == 302
+        assert retry_state != state
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_provider_exchange_unexpected_error_redirects_without_http_500_or_details(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    app = web.Application()
+    app[SESSION_FACTORY_KEY] = factory
+    provider = UnexpectedFailureProvider()
+    app[OAUTH_PROVIDERS_KEY] = {"google": provider}
+    setup_session(app, DatabaseSessionStorage(max_age=3600, secure=False))
+    setup_auth_routes(app, public_base_url="https://kaigo.space")
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    caplog.set_level(logging.WARNING, logger="app.auth.routes")
+    try:
+        start = await client.get("/api/auth/google/start", allow_redirects=False)
+        state = parse_qs(urlsplit(start.headers["Location"]).query)["state"][0]
+
+        callback = await client.get(
+            f"/api/auth/google/callback?state={state}&code=valid-code",
+            allow_redirects=False,
+        )
+
+        assert callback.status == 302
+        assert callback.headers["Location"] == "/studio?auth_error=provider_unavailable"
+        assert "client-secret-value" not in await callback.text()
+        assert provider.exchange_calls == 1
+        assert "provider=google" in caplog.text
+        assert "public_code=provider_unavailable" in caplog.text
+        assert "failure=RuntimeError" in caplog.text
+        assert "client-secret-value" not in caplog.text
+    finally:
+        await client.close()
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

@@ -68,6 +68,7 @@ class AgentRouterQwenProvider:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
         self._working_directory = str(working_directory) if working_directory else None
+        self._uses_package_runner = executable is None
         self._executable = executable or shutil.which("npx") or "npx"
 
     async def generate(self, request: ModelRequest, *, model: str) -> ModelResponse:
@@ -85,11 +86,18 @@ class AgentRouterQwenProvider:
                 "NO_COLOR": "1",
             }
         )
+        if self._working_directory is not None:
+            environment["HOME"] = self._working_directory
+            environment["TMPDIR"] = self._working_directory
         try:
+            package_args = (
+                ("-y", QWEN_CODE_PACKAGE)
+                if self._uses_package_runner
+                else ()
+            )
             process = await asyncio.create_subprocess_exec(
                 self._executable,
-                "-y",
-                QWEN_CODE_PACKAGE,
+                *package_args,
                 "--safe-mode",
                 "-m",
                 model,

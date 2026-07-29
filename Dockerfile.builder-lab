@@ -1,6 +1,19 @@
+FROM node:22-bookworm-slim AS qwen-runtime
+
+RUN npm install --global @qwen-code/qwen-code@0.21.0
+
 FROM python:3.11-slim
 
 WORKDIR /app
+
+# AgentRouter accepts the pinned Qwen client used by the verified benchmark,
+# while rejecting a generic HTTP client. Copy the already installed runtime so
+# the read-only worker never downloads executable code during a model call.
+COPY --from=qwen-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=qwen-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
+ENV NODE_PATH=/usr/local/lib/node_modules
+RUN ln -s /usr/local/lib/node_modules/@qwen-code/qwen-code/cli-entry.js /usr/local/bin/qwen \
+    && qwen --version
 
 # The builder/research image intentionally owns Chromium and its system
 # libraries. The production application image remains browser-free.

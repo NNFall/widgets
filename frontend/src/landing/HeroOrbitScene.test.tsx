@@ -277,10 +277,11 @@ describe('HeroOrbitScene', () => {
       /\.hero-scene\[data-motion-phase='source'\]\s+\.hero-browser-stage,\s*\.hero-scene\[data-motion-phase='resetting'\]\s+\.hero-browser-stage,\s*\.hero-scene\[data-motion-phase='scanning'\]\[data-visible-cards='0'\]\s+\.hero-browser-stage\s*\{([^}]*)\}/g,
     )].map((match) => match[1]);
 
-    expect(neutralRules).toHaveLength(3);
+    expect(neutralRules).toHaveLength(4);
     expect(neutralRules[0]).toContain('translate3d(0, 10px, 0) scale(1.14) rotate(-3deg)');
-    expect(neutralRules[1]).toContain('translate3d(-4%, 6%, 0) scale(1.1) rotate(-2.2deg)');
-    expect(neutralRules[2]).toContain('translate3d(-10%, 12%, 0) scale(1.06) rotate(-1.8deg)');
+    expect(neutralRules[1]).toContain('translate3d(120px, 10px, 0) scale(1.14) rotate(-3deg)');
+    expect(neutralRules[2]).toContain('translate3d(-4%, 6%, 0) scale(1.1) rotate(-2.2deg)');
+    expect(neutralRules[3]).toContain('translate3d(-10%, 12%, 0) scale(1.06) rotate(-1.8deg)');
     expect(stylesSource).toMatch(
       /data-motion-phase='resetting'\]\s+\.hero-browser-stage\s*\{[^}]*transition-duration:\s*600ms;/s,
     );

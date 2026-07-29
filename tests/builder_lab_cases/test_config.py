@@ -16,6 +16,17 @@ class BuilderLabConfigTests(unittest.TestCase):
             "GEMINI_BUILDER_THINKING_LEVEL": None,
             "GEMINI_BUILDER_TEMPERATURE": None,
             "GEMINI_BUILDER_MAX_REPAIRS": None,
+            "KAIGO_BUILDER_HYBRID_ROUTING_ENABLED": None,
+            "AGENTROUTER_API_KEY": None,
+            "AGENTROUTER_BASE_URL": None,
+            "AGENTROUTER_TIMEOUT_SECONDS": None,
+            "AGENTROUTER_QWEN_EXECUTABLE": None,
+            "AGENTROUTER_GPT_MODEL": None,
+            "AGENTROUTER_GLM_MODEL": None,
+            "AGENTROUTER_GPT_INPUT_PRICE_MICROUSD_PER_MILLION": None,
+            "AGENTROUTER_GPT_OUTPUT_PRICE_MICROUSD_PER_MILLION": None,
+            "AGENTROUTER_GLM_INPUT_PRICE_MICROUSD_PER_MILLION": None,
+            "AGENTROUTER_GLM_OUTPUT_PRICE_MICROUSD_PER_MILLION": None,
             "GEMINI_API_KEY": None,
             "GOOGLE_AI_API_KEY": None,
             "GOOGLE_AI_NATIVE_BASE_URL": None,
@@ -67,6 +78,17 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertEqual(config.builder_thinking_level, "high")
         self.assertEqual(config.temperature, 0.9)
         self.assertEqual(config.max_repairs, 3)
+        self.assertFalse(config.hybrid_routing_enabled)
+        self.assertIsNone(config.agentrouter_api_key)
+        self.assertEqual(config.agentrouter_base_url, "https://agentrouter.org/v1")
+        self.assertEqual(config.agentrouter_timeout_seconds, 900)
+        self.assertEqual(config.agentrouter_qwen_executable, "qwen")
+        self.assertEqual(config.agentrouter_gpt_model, "gpt-5.5")
+        self.assertEqual(config.agentrouter_glm_model, "glm-5.2")
+        self.assertEqual(config.agentrouter_gpt_input_price_microusd_per_million, 7_000_000)
+        self.assertEqual(config.agentrouter_gpt_output_price_microusd_per_million, 7_000_000)
+        self.assertEqual(config.agentrouter_glm_input_price_microusd_per_million, 6_000_000)
+        self.assertEqual(config.agentrouter_glm_output_price_microusd_per_million, 6_000_000)
         self.assertEqual(config.chat_model, "gemini-3.5-flash-lite")
         self.assertEqual(config.chat_thinking_level, "medium")
         self.assertEqual(config.chat_timeout_seconds, 45)
@@ -94,6 +116,17 @@ class BuilderLabConfigTests(unittest.TestCase):
             GEMINI_BUILDER_TEMPERATURE="1.25",
             GEMINI_BUILDER_THINKING_LEVEL="medium",
             GEMINI_BUILDER_MAX_REPAIRS="1",
+            KAIGO_BUILDER_HYBRID_ROUTING_ENABLED="true",
+            AGENTROUTER_API_KEY="router-secret",
+            AGENTROUTER_BASE_URL="https://router.example/v1/",
+            AGENTROUTER_TIMEOUT_SECONDS="321",
+            AGENTROUTER_QWEN_EXECUTABLE="/usr/local/bin/qwen",
+            AGENTROUTER_GPT_MODEL="gpt-test",
+            AGENTROUTER_GLM_MODEL="glm-test",
+            AGENTROUTER_GPT_INPUT_PRICE_MICROUSD_PER_MILLION="7100000",
+            AGENTROUTER_GPT_OUTPUT_PRICE_MICROUSD_PER_MILLION="7200000",
+            AGENTROUTER_GLM_INPUT_PRICE_MICROUSD_PER_MILLION="6100000",
+            AGENTROUTER_GLM_OUTPUT_PRICE_MICROUSD_PER_MILLION="6200000",
             GEMINI_API_KEY="secret",
             GOOGLE_AI_NATIVE_BASE_URL="https://example.test/v1beta",
             GEMINI_VISUAL_CRITIC_MODEL="gemini-3.5-flash",
@@ -111,6 +144,17 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertEqual(config.temperature, 1.25)
         self.assertEqual(config.builder_thinking_level, "medium")
         self.assertEqual(config.max_repairs, 1)
+        self.assertTrue(config.hybrid_routing_enabled)
+        self.assertEqual(config.agentrouter_api_key, "router-secret")
+        self.assertEqual(config.agentrouter_base_url, "https://router.example/v1")
+        self.assertEqual(config.agentrouter_timeout_seconds, 321)
+        self.assertEqual(config.agentrouter_qwen_executable, "/usr/local/bin/qwen")
+        self.assertEqual(config.agentrouter_gpt_model, "gpt-test")
+        self.assertEqual(config.agentrouter_glm_model, "glm-test")
+        self.assertEqual(config.agentrouter_gpt_input_price_microusd_per_million, 7_100_000)
+        self.assertEqual(config.agentrouter_gpt_output_price_microusd_per_million, 7_200_000)
+        self.assertEqual(config.agentrouter_glm_input_price_microusd_per_million, 6_100_000)
+        self.assertEqual(config.agentrouter_glm_output_price_microusd_per_million, 6_200_000)
         self.assertEqual(config.gemini_base_url, "https://example.test/v1beta")
         self.assertEqual(config.visual_critic_timeout_seconds, 75)
         self.assertEqual(config.visual_critic_thinking_level, "medium")
@@ -137,6 +181,9 @@ class BuilderLabConfigTests(unittest.TestCase):
             ("KAIGO_BUILDER_LAB_PORT", "0"),
             ("GEMINI_BUILDER_TEMPERATURE", "2.1"),
             ("GEMINI_BUILDER_MAX_REPAIRS", "5"),
+            ("AGENTROUTER_TIMEOUT_SECONDS", "0"),
+            ("AGENTROUTER_GPT_INPUT_PRICE_MICROUSD_PER_MILLION", "0"),
+            ("AGENTROUTER_GLM_OUTPUT_PRICE_MICROUSD_PER_MILLION", "100000001"),
             ("KAIGO_REFERENCE_MAX_PAGES", "6"),
             ("KAIGO_REFERENCE_SCROLL_DELAY_MS", "599"),
             ("KAIGO_REFERENCE_SCROLL_DELAY_MS", "1201"),

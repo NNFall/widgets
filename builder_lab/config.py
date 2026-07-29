@@ -68,6 +68,17 @@ class BuilderLabConfig:
     builder_thinking_level: str
     temperature: float
     max_repairs: int
+    hybrid_routing_enabled: bool
+    agentrouter_api_key: str | None
+    agentrouter_base_url: str
+    agentrouter_timeout_seconds: int
+    agentrouter_qwen_executable: str
+    agentrouter_gpt_model: str
+    agentrouter_glm_model: str
+    agentrouter_gpt_input_price_microusd_per_million: int
+    agentrouter_gpt_output_price_microusd_per_million: int
+    agentrouter_glm_input_price_microusd_per_million: int
+    agentrouter_glm_output_price_microusd_per_million: int
     enable_antigravity: bool
     gemini_api_key: str | None
     gemini_base_url: str
@@ -161,6 +172,57 @@ class BuilderLabConfig:
             ),
             temperature=_float("GEMINI_BUILDER_TEMPERATURE", 0.9, 0, 2),
             max_repairs=_int("GEMINI_BUILDER_MAX_REPAIRS", 3, 0, 4),
+            hybrid_routing_enabled=_bool(
+                "KAIGO_BUILDER_HYBRID_ROUTING_ENABLED",
+                False,
+            ),
+            agentrouter_api_key=_first_nonblank("AGENTROUTER_API_KEY"),
+            agentrouter_base_url=os.getenv(
+                "AGENTROUTER_BASE_URL",
+                "https://agentrouter.org/v1",
+            ).strip().rstrip("/"),
+            agentrouter_timeout_seconds=_int(
+                "AGENTROUTER_TIMEOUT_SECONDS",
+                900,
+                1,
+                3600,
+            ),
+            agentrouter_qwen_executable=os.getenv(
+                "AGENTROUTER_QWEN_EXECUTABLE",
+                "qwen",
+            ).strip(),
+            agentrouter_gpt_model=os.getenv(
+                "AGENTROUTER_GPT_MODEL",
+                "gpt-5.5",
+            ).strip(),
+            agentrouter_glm_model=os.getenv(
+                "AGENTROUTER_GLM_MODEL",
+                "glm-5.2",
+            ).strip(),
+            agentrouter_gpt_input_price_microusd_per_million=_int(
+                "AGENTROUTER_GPT_INPUT_PRICE_MICROUSD_PER_MILLION",
+                7_000_000,
+                1,
+                100_000_000,
+            ),
+            agentrouter_gpt_output_price_microusd_per_million=_int(
+                "AGENTROUTER_GPT_OUTPUT_PRICE_MICROUSD_PER_MILLION",
+                7_000_000,
+                1,
+                100_000_000,
+            ),
+            agentrouter_glm_input_price_microusd_per_million=_int(
+                "AGENTROUTER_GLM_INPUT_PRICE_MICROUSD_PER_MILLION",
+                6_000_000,
+                1,
+                100_000_000,
+            ),
+            agentrouter_glm_output_price_microusd_per_million=_int(
+                "AGENTROUTER_GLM_OUTPUT_PRICE_MICROUSD_PER_MILLION",
+                6_000_000,
+                1,
+                100_000_000,
+            ),
             enable_antigravity=_bool("KAIGO_BUILDER_ENABLE_ANTIGRAVITY", True),
             gemini_api_key=api_key,
             gemini_base_url=os.getenv(

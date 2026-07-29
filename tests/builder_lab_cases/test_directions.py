@@ -182,6 +182,37 @@ class DirectionBoardTests(unittest.IsolatedAsyncioTestCase):
         ])
         self.assertEqual(result.selected.proposal_id, "candidate-2")
 
+    async def test_proposals_and_blind_judgement_use_separate_engines(self):
+        proposer = BarrierDirectionEngine()
+
+        class JudgeOnly:
+            def __init__(self):
+                self.calls = []
+
+            async def judge_directions(self, *, request, proposals):
+                self.calls.append((request, proposals))
+                return DirectionJudgeResult(
+                    judgement=DirectionJudgement(
+                        selected_proposal_id="candidate-3",
+                        rationale="The strongest grounded direction.",
+                    ),
+                    usage=TokenUsage(prompt_tokens=5, output_tokens=2),
+                )
+
+        judge = JudgeOnly()
+        request = BuilderRequest(engine=EngineName.DIRECT, brief="Hybrid direction board")
+
+        result = await run_direction_board(
+            proposal_engine=proposer,
+            judge_engine=judge,
+            request=request,
+        )
+
+        self.assertEqual(len(proposer.proposal_calls), 3)
+        self.assertEqual(proposer.judge_calls, [])
+        self.assertEqual(len(judge.calls), 1)
+        self.assertEqual(result.selected.proposal_id, "candidate-3")
+
     async def test_aggregates_all_proposal_and_judge_usage_once(self):
         result = await run_direction_board(
             engine=BarrierDirectionEngine(),

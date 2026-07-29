@@ -77,7 +77,7 @@ _DIRECT_STAGES = (
 )
 _DIRECT_ROLES = {
     "reference_analysis": "reference_analyst",
-    "art_direction": "art_director",
+    "art_direction": "art_direction_generator",
     "composition": "composition_planner",
     "foundation": "widget_generator",
     "identity": "brand_designer",

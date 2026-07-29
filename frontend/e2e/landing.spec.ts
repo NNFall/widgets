@@ -1,7 +1,8 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 
-const EXACT_HERO = 'Обычно за 10–20 минут вы получите первую версию AI-виджета';
+const EXACT_HERO = 'Через 10 минут вы сможете сказать: наш бизнес использует AI';
+const EXACT_DESCRIPTION = 'Добавьте ссылку на сайт и бесплатно получите первую версию персонального AI-виджета для вашего бизнеса. Kaigo изучит страницы, услуги, стиль и вопросы клиентов.';
 
 async function expectNoHorizontalOverflow(page: Page) {
   const overflow = await page.evaluate(() =>
@@ -67,6 +68,17 @@ async function expectCompactFirstScreen(page: Page) {
     firstScreenElements.push([`process card ${index + 1}`, processCards.nth(index)]);
   }
 
+  const browserMockup = page.locator('.hero-browser-stage');
+  const browserBounds = await browserMockup.boundingBox();
+  expect(browserBounds, `browser mockup must have a rendered box at ${viewportLabel}`).not.toBeNull();
+  for (let index = 0; index < 3; index += 1) {
+    const cardBounds = await processCards.nth(index).boundingBox();
+    expect(cardBounds, `process card ${index + 1} must have a rendered box at ${viewportLabel}`).not.toBeNull();
+    const gap = (browserBounds?.x ?? 0) - ((cardBounds?.x ?? 0) + (cardBounds?.width ?? 0));
+    expect.soft(gap, `process card ${index + 1} must end before the browser mockup at ${viewportLabel}`)
+      .toBeGreaterThanOrEqual(12);
+  }
+
   const viewportTolerance = 1;
   for (const [name, locator] of firstScreenElements) {
     await expect(locator, `${name} must be visible in the completed hero at ${viewportLabel}`).toBeVisible();
@@ -128,6 +140,24 @@ test('landing compact desktop fits the first screen and exposes the brand @compa
     const diagnostic: HeroMotionDiagnostic = { sourceAt: null, completeAt: null };
     (window as Window & { __kaigoHeroMotionTiming?: HeroMotionDiagnostic }).__kaigoHeroMotionTiming = diagnostic;
 
+    const sampleCompactGap = () => {
+      const browser = document.querySelector('.hero-browser-stage')?.getBoundingClientRect();
+      const visibleCards = [...document.querySelectorAll<HTMLElement>('.process-card')]
+        .filter((card) => Number.parseFloat(getComputedStyle(card).opacity) > 0.05);
+      if (browser && visibleCards.length > 0) {
+        const gap = Math.min(
+          ...visibleCards.map((card) => browser.left - card.getBoundingClientRect().right),
+        );
+        const browserWindow = window as Window & { __kaigoHeroMinimumMotionGap?: number };
+        browserWindow.__kaigoHeroMinimumMotionGap = Math.min(
+          browserWindow.__kaigoHeroMinimumMotionGap ?? Number.POSITIVE_INFINITY,
+          gap,
+        );
+      }
+      requestAnimationFrame(sampleCompactGap);
+    };
+    requestAnimationFrame(sampleCompactGap);
+
     const sceneSelector = '[data-testid="hero-scene"]';
     const recordPhase = (scene: Element) => {
       const phase = scene.getAttribute('data-motion-phase');
@@ -162,6 +192,7 @@ test('landing compact desktop fits the first screen and exposes the brand @compa
     if (document.documentElement) inspectNode(document.documentElement);
   });
 
+  await page.setViewportSize({ width: 1_536, height: 960 });
   await page.goto('/');
 
   const scene = page.getByTestId('hero-scene');
@@ -178,6 +209,11 @@ test('landing compact desktop fits the first screen and exposes the brand @compa
   expect(motionDurationMs, 'complete phase must follow the source phase').toBeGreaterThanOrEqual(0);
   expect(motionDurationMs, 'hero motion from source to complete must finish within 12 seconds')
     .toBeLessThanOrEqual(12_000);
+  const minimumMotionGap = await page.evaluate(() => (
+    (window as Window & { __kaigoHeroMinimumMotionGap?: number }).__kaigoHeroMinimumMotionGap
+  ));
+  expect(minimumMotionGap, 'cards must not overlap the browser during compact hero motion')
+    .toBeGreaterThanOrEqual(12);
 
   await expectCompactFirstScreen(page);
   await page.setViewportSize({ width: 1_366, height: 768 });
@@ -185,8 +221,14 @@ test('landing compact desktop fits the first screen and exposes the brand @compa
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
   }));
   await expectCompactFirstScreen(page);
+  await page.setViewportSize({ width: 1_680, height: 960 });
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+  await expectCompactFirstScreen(page);
 
-  await expect.soft(page).toHaveTitle('Kaigo — бесплатная AI-версия обычно за 10–20 минут');
+  await expect.soft(page).toHaveTitle('Kaigo — AI для вашего бизнеса за 10 минут');
+  await expect.soft(page.locator('meta[name="description"]')).toHaveAttribute('content', EXACT_DESCRIPTION);
   await expect.soft(page.locator('link[rel="icon"]')).toHaveAttribute('href', '/favicon.svg');
 });
 

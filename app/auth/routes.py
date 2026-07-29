@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import logging
 import re
 import secrets
 from asyncio import Lock, Semaphore
@@ -21,8 +22,10 @@ from app.analytics.service import record_funnel_event, sanitize_campaign
 from app.auth.oauth import (
     GoogleOAuthProvider,
     OAuthCallback,
+    OAuthError,
     OAuthProvider,
     OAuthTransaction,
+    UnverifiedIdentity,
     YandexOAuthProvider,
 )
 from app.auth.service import link_identity_and_claim_draft
@@ -39,6 +42,41 @@ ENTRY_MAX_BODY_BYTES_KEY = web.AppKey("entry_max_body_bytes", int)
 OAUTH_CALLBACK_SEMAPHORE_KEY = web.AppKey("oauth_callback_semaphore", Semaphore)
 _MAX_SOURCE_URL_CHARS = 2_048
 _MAX_BRIEF_CHARS = 4_000
+logger = logging.getLogger(__name__)
+
+
+def _oauth_failure_location(public_code: str) -> str:
+    return f"/studio?auth_error={public_code}"
+
+
+def _provider_callback_public_code(provider_error: str) -> str:
+    if provider_error == "access_denied":
+        return "access_denied"
+    if provider_error in {"server_error", "temporarily_unavailable"}:
+        return "provider_unavailable"
+    return "oauth_failed"
+
+
+def _exchange_public_code(error: OAuthError) -> str:
+    return "identity_unverified" if isinstance(error, UnverifiedIdentity) else "oauth_failed"
+
+
+def _clear_oauth_binding(session) -> None:
+    session.pop("oauth_state_id", None)
+    session.pop("oauth_session_binding", None)
+
+
+def _log_oauth_failure(
+    *, provider: str, public_code: str, failure: str
+) -> None:
+    # Provider descriptions and exception messages are intentionally omitted:
+    # they can contain authorization codes or provider-side diagnostics.
+    logger.warning(
+        "oauth_callback_failed provider=%s public_code=%s failure=%s",
+        provider,
+        public_code,
+        failure,
+    )
 
 
 class _EntryRateLimiter:
@@ -279,7 +317,13 @@ async def auth_start(request: web.Request) -> web.StreamResponse:
     )
     requested_draft = request.query.get("draft_id")
     pending_draft = session.get("pending_draft_id")
-    draft_id = requested_draft if requested_draft == pending_draft else None
+    draft_id = None
+    draft_candidate = None
+    if requested_draft and requested_draft == pending_draft:
+        try:
+            draft_candidate = UUID(requested_draft)
+        except (TypeError, ValueError):
+            draft_candidate = None
     browser_binding = secrets.token_urlsafe(32)
     session["oauth_session_binding"] = browser_binding
 
@@ -298,7 +342,15 @@ async def auth_start(request: web.Request) -> web.StreamResponse:
     )
     async with session_scope(request.app) as database:
         await _cleanup_expired_auth_records(database, datetime.now(UTC))
-        draft = await database.get(AnonymousDraft, UUID(draft_id)) if draft_id else None
+        draft = (
+            await database.get(AnonymousDraft, draft_candidate)
+            if draft_candidate is not None
+            else None
+        )
+        if requested_draft == pending_draft and draft is None:
+            session.pop("pending_draft_id", None)
+            session.pop("pending_draft_claim", None)
+        draft_id = draft.id if draft is not None else None
         oauth_state = OAuthState(
             state_digest=state_digest,
             session_binding_digest=token_digest(browser_binding),
@@ -306,7 +358,7 @@ async def auth_start(request: web.Request) -> web.StreamResponse:
             pkce_verifier=verifier,
             nonce=nonce,
             return_path="/studio",
-            draft_id=UUID(draft_id) if draft_id else None,
+            draft_id=draft_id,
             expires_at=datetime.now(UTC) + timedelta(minutes=10),
         )
         database.add(oauth_state)
@@ -392,6 +444,17 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
                 content_type="application/json",
             )
 
+    _clear_oauth_binding(browser_session)
+    provider_callback_error = request.query.get("error", "")
+    if provider_callback_error:
+        public_code = _provider_callback_public_code(provider_callback_error)
+        _log_oauth_failure(
+            provider=provider_name,
+            public_code=public_code,
+            failure="provider_callback",
+        )
+        raise web.HTTPFound(_oauth_failure_location(public_code))
+
     transaction = OAuthTransaction(
         state=raw_state,
         code_verifier=claimed["pkce_verifier"],
@@ -399,10 +462,32 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
         nonce=claimed["nonce"] or "",
         redirect_uri=f"{request.app['public_base_url']}/api/auth/{provider_name}/callback",
     )
-    async with request.app[OAUTH_CALLBACK_SEMAPHORE_KEY]:
-        identity = await provider.exchange(
-            transaction, OAuthCallback(code=code, state=raw_state)
+    try:
+        async with request.app[OAUTH_CALLBACK_SEMAPHORE_KEY]:
+            identity = await provider.exchange(
+                transaction, OAuthCallback(code=code, state=raw_state)
+            )
+    except OAuthError as error:
+        public_code = _exchange_public_code(error)
+        _log_oauth_failure(
+            provider=provider_name,
+            public_code=public_code,
+            failure=type(error).__name__,
         )
+        raise web.HTTPFound(_oauth_failure_location(public_code)) from None
+    except web.HTTPException:
+        raise
+    except Exception as error:
+        # Network, provider JSON, and verifier failures must not become a raw
+        # HTTP 500 or leak provider diagnostics to the browser. Cancellation
+        # and process-level errors inherit BaseException and are not swallowed.
+        public_code = "provider_unavailable"
+        _log_oauth_failure(
+            provider=provider_name,
+            public_code=public_code,
+            failure=type(error).__name__,
+        )
+        raise web.HTTPFound(_oauth_failure_location(public_code)) from None
 
     async with session_scope(request.app) as database:
         claimed_state_id = claimed["id"]
@@ -431,8 +516,6 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
             campaign=draft.campaign if draft is not None else None,
         )
 
-    browser_session.pop("oauth_state_id", None)
-    browser_session.pop("oauth_session_binding", None)
     old_identity = browser_session.identity
     storage = request[STORAGE_KEY]
     if old_identity and isinstance(storage, DatabaseSessionStorage):

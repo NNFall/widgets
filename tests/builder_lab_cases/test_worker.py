@@ -93,6 +93,7 @@ def test_runtime_router_has_explicit_repair_and_code_review_policies(
         direct_model="gemini-builder",
         reference_analyzer_model="gemini-reference",
         visual_critic_model="gemini-review",
+        hybrid_routing_enabled=False,
     )
     router = run_builder_worker.make_runtime_model_router(config, None)
 
@@ -100,6 +101,95 @@ def test_runtime_router_has_explicit_repair_and_code_review_policies(
     assert ("repair", "express") in router._policies
     assert ("code_review", "direct") in router._policies
     assert ("code_review", "express") in router._policies
+
+
+def test_runtime_router_maps_hybrid_roles_to_gpt_glm_and_gemini(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION", "100")
+    monkeypatch.setenv("GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION", "200")
+    monkeypatch.setattr(run_builder_worker.shutil, "which", lambda executable: executable)
+    config = SimpleNamespace(
+        gemini_api_key="gemini-key",
+        gemini_base_url="https://gemini.example",
+        direct_model="gemini-builder",
+        reference_analyzer_model="gemini-reference",
+        visual_critic_model="gemini-vision",
+        hybrid_routing_enabled=True,
+        agentrouter_api_key="router-key",
+        agentrouter_base_url="https://agentrouter.org/v1",
+        agentrouter_timeout_seconds=900,
+        agentrouter_qwen_executable="qwen",
+        agentrouter_gpt_model="gpt-5.5",
+        agentrouter_glm_model="glm-5.2",
+        agentrouter_gpt_input_price_microusd_per_million=7_000_000,
+        agentrouter_gpt_output_price_microusd_per_million=7_000_000,
+        agentrouter_glm_input_price_microusd_per_million=6_000_000,
+        agentrouter_glm_output_price_microusd_per_million=6_000_000,
+    )
+
+    router = run_builder_worker.make_runtime_model_router(config, None)
+
+    for mode in ("direct", "express"):
+        for role in (
+            "direction_candidate",
+            "direction_judge",
+            "composition_planner",
+            "visual_judge",
+            "code_review",
+        ):
+            target = router._policies[(role, mode)].targets[0]
+            assert (target.provider, target.model) == ("agentrouter", "gpt-5.5")
+            assert target.input_price_microusd_per_million == 7_000_000
+            assert target.output_price_microusd_per_million == 7_000_000
+        for role in (
+            "art_direction_generator",
+            "widget_generator",
+            "brand_designer",
+            "conversation_designer",
+            "motion_designer",
+            "repair",
+        ):
+            target = router._policies[(role, mode)].targets[0]
+            assert (target.provider, target.model) == ("agentrouter", "glm-5.2")
+            assert target.input_price_microusd_per_million == 6_000_000
+            assert target.output_price_microusd_per_million == 6_000_000
+        for role in (
+            "reference_analyst",
+            "conversation_ux",
+            "brand_motion",
+            "adversarial_customer",
+        ):
+            target = router._policies[(role, mode)].targets[0]
+            assert target.provider == "gemini"
+
+
+def test_runtime_router_fails_closed_when_hybrid_configuration_is_missing(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION", "100")
+    monkeypatch.setenv("GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION", "200")
+    config = SimpleNamespace(
+        gemini_api_key="gemini-key",
+        gemini_base_url="https://gemini.example",
+        direct_model="gemini-builder",
+        reference_analyzer_model="gemini-reference",
+        visual_critic_model="gemini-vision",
+        hybrid_routing_enabled=True,
+        agentrouter_api_key=None,
+        agentrouter_base_url="https://agentrouter.org/v1",
+        agentrouter_timeout_seconds=900,
+        agentrouter_qwen_executable="qwen",
+        agentrouter_gpt_model="gpt-5.5",
+        agentrouter_glm_model="glm-5.2",
+        agentrouter_gpt_input_price_microusd_per_million=7_000_000,
+        agentrouter_gpt_output_price_microusd_per_million=7_000_000,
+        agentrouter_glm_input_price_microusd_per_million=6_000_000,
+        agentrouter_glm_output_price_microusd_per_million=6_000_000,
+    )
+
+    with pytest.raises(RuntimeError, match="AGENTROUTER_API_KEY"):
+        run_builder_worker.make_runtime_model_router(config, None)
 
 
 def test_production_repair_verifier_factory_uses_router_not_direct_gemini() -> None:

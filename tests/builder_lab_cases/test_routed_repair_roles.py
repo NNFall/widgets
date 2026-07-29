@@ -8,13 +8,20 @@ from sqlalchemy import select
 from app.models.contracts import ModelRequest, ModelResponse, ModelUsage, ProviderCapabilities
 from app.models.router import ModelPolicy, ModelRouter, ProviderTarget, SqlModelCallAudit
 from app.saas.models import ModelCall
+from builder_lab.engines.base import (
+    DirectionJudgeResult,
+    DirectionProposalResult,
+    EngineResult,
+)
 from builder_lab.engines.gemini_direct import GeminiDirectEngine
 from builder_lab.models import (
     BuilderRequest,
+    DirectionJudgement,
     DirectionProposal,
     DirectionRole,
     EngineName,
     Stage,
+    TokenUsage,
 )
 from builder_lab.worker import OrchestratorStageHandler, RunClaim, StageInput
 from tests.builder_lab_cases.test_validation import GOOD_HTML, artifact
@@ -224,3 +231,80 @@ async def test_visual_finding_artifact_generation_uses_repair_role(tmp_path) -> 
         ]
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_art_direction_uses_distinct_candidate_judge_and_artifact_roles() -> None:
+    created_roles: list[str] = []
+    closed_roles: list[str] = []
+
+    class Queue:
+        async def stage_input(self, claim):
+            return StageInput(
+                request=BuilderRequest(
+                    engine=EngineName.DIRECT,
+                    brief="Split the direction board",
+                )
+            )
+
+    class RoutedEngine:
+        def __init__(self, role: str) -> None:
+            self.role = role
+
+        async def propose_direction(self, *, request, role, proposal_id):
+            assert self.role == "direction_candidate"
+            return DirectionProposalResult(
+                proposal=DirectionProposal(
+                    proposal_id=proposal_id,
+                    role=role,
+                    title=f"Direction {proposal_id}",
+                    art_direction="Grounded visual direction.",
+                    interaction_model="Compact conversational widget.",
+                    safeguards=("Keep the host site visible",),
+                ),
+                usage=TokenUsage(prompt_tokens=1),
+            )
+
+        async def judge_directions(self, *, request, proposals):
+            assert self.role == "direction_judge"
+            return DirectionJudgeResult(
+                judgement=DirectionJudgement(
+                    selected_proposal_id="candidate-2",
+                    rationale="Best grounded direction.",
+                ),
+                usage=TokenUsage(prompt_tokens=2),
+            )
+
+        async def generate(self, **kwargs):
+            assert self.role == "art_direction_generator"
+            assert kwargs["selected_direction"].proposal_id == "candidate-2"
+            return EngineResult(
+                artifact=artifact(revision=1, stage=Stage.ART_DIRECTION),
+                usage=TokenUsage(prompt_tokens=3),
+            )
+
+        async def close(self):
+            closed_roles.append(self.role)
+
+    def factory(claim, role):
+        created_roles.append(role)
+        return RoutedEngine(role)
+
+    handler = OrchestratorStageHandler(
+        queue=Queue(),
+        engine_factories={},
+        reference_analyzer=lambda _url: None,
+        routed_engine_factory=factory,
+    )
+
+    result = await handler(_claim(__import__("uuid").uuid4(), stage="art_direction"))
+
+    assert result.artifact is not None
+    assert result.context["selected_direction"]["proposal_id"] == "candidate-2"
+    assert created_roles == [
+        "art_direction_generator",
+        "repair",
+        "direction_candidate",
+        "direction_judge",
+    ]
+    assert sorted(closed_roles) == sorted(created_roles)

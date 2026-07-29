@@ -13,11 +13,24 @@ type SessionSnapshot = {
 type GateState =
   | { status: 'loading' }
   | { status: 'open' }
-  | { status: 'auth'; draftId: string | null; providers: string[] }
+  | { status: 'auth'; draftId: string | null; providers: string[]; authMessage: string | null }
   | { status: 'error'; message: string };
+
+const OAUTH_ERROR_MESSAGES: Record<string, string> = {
+  access_denied: 'Вход отменён. Выберите способ входа и попробуйте ещё раз.',
+  provider_unavailable: 'Сервис входа временно недоступен. Попробуйте ещё раз.',
+  identity_unverified: 'Не удалось подтвердить почту аккаунта. Попробуйте другой аккаунт.',
+  oauth_failed: 'Не удалось завершить вход. Попробуйте ещё раз.',
+};
 
 function requestedDraftId() {
   return new URLSearchParams(window.location.search).get('draft')?.trim() ?? '';
+}
+
+function requestedAuthErrorMessage() {
+  const code = new URLSearchParams(window.location.search).get('auth_error')?.trim();
+  if (!code) return null;
+  return OAUTH_ERROR_MESSAGES[code] ?? OAUTH_ERROR_MESSAGES.oauth_failed;
 }
 
 export function AuthGate({ children }: { children: ReactNode }) {
@@ -69,6 +82,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
           status: 'auth',
           draftId,
           providers: session.providers ?? [],
+          authMessage: requestedAuthErrorMessage(),
         });
       } catch (error) {
         if (controller.signal.aborted) return;
@@ -112,6 +126,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       <section className="auth-gate__card">
         <span className="auth-gate__eyebrow">Бесплатная экспресс-версия</span>
         <h1>Сначала сохраните результат</h1>
+        {state.authMessage && <p role="alert">{state.authMessage}</p>}
         <p>
           Войдите один раз — ссылка на сайт уже сохранена. Kaigo создаст первую версию бесплатно,
           а платить нужно только за публикацию и подключение готового виджета.

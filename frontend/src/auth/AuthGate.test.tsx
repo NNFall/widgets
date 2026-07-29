@@ -55,6 +55,47 @@ it('does not attach an unbound draft id to OAuth', async () => {
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 
+it('explains a cancelled OAuth callback in Russian and keeps retry actions', async () => {
+  window.history.replaceState({}, '', '/studio?auth_error=access_denied');
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({
+    enabled: true,
+    authenticated: false,
+    pending_draft_id: 'draft-retry',
+    providers: ['google', 'yandex'],
+  }))));
+
+  render(<AuthGate><h1>Закрытая студия</h1></AuthGate>);
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Вход отменён. Выберите способ входа и попробуйте ещё раз.',
+  );
+  expect(screen.getByRole('link', { name: 'Продолжить с Google' })).toHaveAttribute(
+    'href',
+    '/api/auth/google/start?draft_id=draft-retry',
+  );
+  expect(screen.getByRole('link', { name: 'Продолжить с Яндексом' })).toHaveAttribute(
+    'href',
+    '/api/auth/yandex/start?draft_id=draft-retry',
+  );
+});
+
+it('does not render an unknown OAuth error code from the URL', async () => {
+  window.history.replaceState({}, '', '/studio?auth_error=client-secret-value');
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({
+    enabled: true,
+    authenticated: false,
+    pending_draft_id: null,
+    providers: ['google'],
+  }))));
+
+  render(<AuthGate><h1>Закрытая студия</h1></AuthGate>);
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Не удалось завершить вход. Попробуйте ещё раз.',
+  );
+  expect(screen.queryByText('client-secret-value')).not.toBeInTheDocument();
+});
+
 it('claims a bound draft for an authenticated user before rendering Studio', async () => {
   window.history.replaceState({}, '', '/studio?draft=draft-brief-1');
   const fetchMock = vi.fn()

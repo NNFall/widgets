@@ -116,12 +116,18 @@ class DirectionBoardResult:
 
 async def run_direction_board(
     *,
-    engine: DirectionEngine,
+    engine: DirectionEngine | None = None,
+    proposal_engine: DirectionEngine | None = None,
+    judge_engine: DirectionEngine | None = None,
     request: BuilderRequest,
 ) -> DirectionBoardResult:
+    proposer = proposal_engine or engine
+    judge = judge_engine or engine
+    if proposer is None or judge is None:
+        raise ValueError("direction board requires proposal and judge engines")
     tasks = tuple(
         asyncio.create_task(
-            engine.propose_direction(
+            proposer.propose_direction(
                 request=request,
                 role=role,
                 proposal_id=f"candidate-{index}",
@@ -164,7 +170,7 @@ async def run_direction_board(
         )
 
     try:
-        judge_result = await engine.judge_directions(
+        judge_result = await judge.judge_directions(
             request=request,
             proposals=proposals,
         )

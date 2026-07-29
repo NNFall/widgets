@@ -282,7 +282,7 @@ async def test_cli_version_is_pinned_and_environment_is_allowlisted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("UNRELATED_SECRET", "must-not-leak")
-    provider = AgentRouterQwenProvider(api_key="unit-test-key", executable="qwen")
+    provider = AgentRouterQwenProvider(api_key="unit-test-key")
     process = FakeProcess(stdout=_event_stream("plain text"))
     launch = AsyncMock(return_value=process)
 
@@ -300,6 +300,32 @@ async def test_cli_version_is_pinned_and_environment_is_allowlisted(
     assert environment["OPENAI_BASE_URL"] == "https://agentrouter.org/v1"
     assert environment["OPENAI_MODEL"] == "glm-5.2"
     assert environment["NO_COLOR"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_preinstalled_qwen_executable_skips_runtime_npx_download() -> None:
+    provider = AgentRouterQwenProvider(
+        api_key="unit-test-key",
+        executable="/usr/local/bin/qwen",
+        working_directory="/tmp",
+    )
+    process = FakeProcess(stdout=_event_stream("plain text"))
+    launch = AsyncMock(return_value=process)
+
+    with patch(
+        "app.models.providers.agentrouter_qwen.asyncio.create_subprocess_exec",
+        new=launch,
+    ):
+        await provider.generate(ModelRequest(prompt="Generate"), model="gpt-5.5")
+
+    assert launch.await_args.args[:2] == (
+        "/usr/local/bin/qwen",
+        "--safe-mode",
+    )
+    assert agentrouter_qwen.QWEN_CODE_PACKAGE not in launch.await_args.args
+    assert launch.await_args.kwargs["cwd"] == "/tmp"
+    assert launch.await_args.kwargs["env"]["HOME"] == "/tmp"
+    assert launch.await_args.kwargs["env"]["TMPDIR"] == "/tmp"
 
 
 def test_processes_start_in_an_isolated_platform_group() -> None:
