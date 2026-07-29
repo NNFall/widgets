@@ -1705,6 +1705,21 @@ def test_stage_result_rejects_unbounded_or_non_json_payloads() -> None:
         )
 
 
+def test_stage_result_accepts_reference_completed_event() -> None:
+    result = StageResult(
+        public_message="Анализ исходного сайта завершён",
+        events=(
+            {
+                "event_type": "reference.completed",
+                "status": "completed",
+                "message": "Анализ исходного сайта завершён",
+            },
+        ),
+    )
+
+    assert result.events[0]["event_type"] == "reference.completed"
+
+
 @pytest.mark.asyncio
 async def test_stage_result_boundary_rejects_wrong_stage_artifact_before_event(
     tmp_path,
