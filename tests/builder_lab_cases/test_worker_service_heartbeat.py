@@ -120,3 +120,29 @@ def test_worker_service_identity_is_explicit_and_complete(monkeypatch) -> None:
         "release-1",
         "sha256:" + "a" * 64,
     )
+
+
+def test_worker_model_prices_prefer_builder_specific_values(monkeypatch) -> None:
+    monkeypatch.setenv("GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION", "300000")
+    monkeypatch.setenv("GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION", "2500000")
+    monkeypatch.setenv(
+        "GEMINI_BUILDER_INPUT_PRICE_MICROUSD_PER_MILLION", "1500000"
+    )
+    monkeypatch.setenv(
+        "GEMINI_BUILDER_OUTPUT_PRICE_MICROUSD_PER_MILLION", "7500000"
+    )
+
+    assert run_builder_worker.runtime_model_prices() == (1_500_000, 7_500_000)
+
+
+def test_worker_model_prices_keep_legacy_fallback(monkeypatch) -> None:
+    monkeypatch.delenv(
+        "GEMINI_BUILDER_INPUT_PRICE_MICROUSD_PER_MILLION", raising=False
+    )
+    monkeypatch.delenv(
+        "GEMINI_BUILDER_OUTPUT_PRICE_MICROUSD_PER_MILLION", raising=False
+    )
+    monkeypatch.setenv("GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION", "1500000")
+    monkeypatch.setenv("GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION", "7500000")
+
+    assert run_builder_worker.runtime_model_prices() == (1_500_000, 7_500_000)

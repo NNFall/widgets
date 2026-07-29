@@ -148,10 +148,22 @@ def _required_positive_int(name: str) -> int:
     return value
 
 
+def _required_positive_int_with_fallback(primary: str, fallback: str) -> int:
+    if os.getenv(primary, "").strip():
+        return _required_positive_int(primary)
+    return _required_positive_int(fallback)
+
+
 def runtime_model_prices() -> tuple[int, int]:
     return (
-        _required_positive_int("GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION"),
-        _required_positive_int("GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION"),
+        _required_positive_int_with_fallback(
+            "GEMINI_BUILDER_INPUT_PRICE_MICROUSD_PER_MILLION",
+            "GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION",
+        ),
+        _required_positive_int_with_fallback(
+            "GEMINI_BUILDER_OUTPUT_PRICE_MICROUSD_PER_MILLION",
+            "GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION",
+        ),
     )
 
 
