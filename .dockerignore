@@ -14,6 +14,10 @@ docker-compose.yml
 venv
 env
 
+# Frontend dependencies are host/build artifacts, not application source.
+node_modules/
+frontend/node_modules/
+
 # Python cache
 __pycache__
 *.pyc
