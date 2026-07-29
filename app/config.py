@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from ipaddress import ip_network
+from ipaddress import ip_address, ip_network
 from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
@@ -10,6 +10,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 _ALLOWED_ENVIRONMENTS = frozenset({"development", "test", "production"})
+_PRIVATE_PROVIDER_NETWORKS = tuple(
+    ip_network(cidr)
+    for cidr in (
+        "10.0.0.0/8",
+        "127.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "::1/128",
+        "fc00::/7",
+    )
+)
 
 
 @dataclass(slots=True)
@@ -48,6 +59,7 @@ class AppConfig:
     expected_worker_boot_id: str | None = None
     chat_provider_api_key: str | None = field(default=None, repr=False)
     chat_provider_base_url: str = "https://generativelanguage.googleapis.com"
+    allow_insecure_provider_proxy: bool = False
     chat_model: str = "gemini-3.5-flash-lite"
     chat_timeout_seconds: float = 45
     chat_session_ttl_seconds: int = 3_600
@@ -172,7 +184,12 @@ class AppConfig:
                 ) from error
         self.entry_trusted_proxy_cidrs = tuple(entry_trusted_proxy_cidrs)
         parsed = urlsplit(self.chat_provider_base_url)
-        if parsed.scheme != "https" or not parsed.netloc:
+        private_http_proxy = (
+            parsed.scheme == "http"
+            and self.allow_insecure_provider_proxy
+            and _is_private_provider_host(parsed.hostname)
+        )
+        if not parsed.netloc or (parsed.scheme != "https" and not private_http_proxy):
             raise ValueError("chat_provider_base_url must be an absolute https URL")
         if (
             isinstance(self.chat_timeout_seconds, bool)
@@ -257,6 +274,16 @@ def _env_flag(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_private_provider_host(hostname: str | None) -> bool:
+    if not hostname:
+        return False
+    try:
+        address = ip_address(hostname)
+    except ValueError:
+        return False
+    return any(address in network for network in _PRIVATE_PROVIDER_NETWORKS)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -430,6 +457,9 @@ def load_config() -> AppConfig:
         chat_provider_base_url=os.getenv(
             "GOOGLE_AI_NATIVE_BASE_URL",
             "https://generativelanguage.googleapis.com",
+        ),
+        allow_insecure_provider_proxy=_env_flag(
+            "KAIGO_ALLOW_INSECURE_PROVIDER_PROXY"
         ),
         chat_model=os.getenv("GEMINI_CHAT_MODEL", "gemini-3.5-flash-lite"),
         chat_timeout_seconds=_env_int("GEMINI_CHAT_TIMEOUT_SECONDS", 45),

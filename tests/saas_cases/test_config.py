@@ -303,6 +303,50 @@ def test_production_chat_provider_accepts_explicit_zero_prices(
     assert config.chat_output_price_microusd_per_million == 0
 
 
+def test_private_http_provider_proxy_requires_explicit_opt_in() -> None:
+    with pytest.raises(ValueError, match="absolute https URL"):
+        AppConfig(
+            database_url="postgresql://db",
+            chat_provider_base_url="http://172.19.0.1:8787/private/v1beta",
+        )
+
+    config = AppConfig(
+        database_url="postgresql://db",
+        chat_provider_base_url="http://172.19.0.1:8787/private/v1beta",
+        allow_insecure_provider_proxy=True,
+    )
+
+    assert config.chat_provider_base_url.startswith("http://172.19.0.1:")
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://8.8.8.8/v1beta",
+        "http://example.com/v1beta",
+    ],
+)
+def test_insecure_provider_opt_in_never_allows_public_hosts(base_url: str) -> None:
+    with pytest.raises(ValueError, match="absolute https URL"):
+        AppConfig(
+            database_url="postgresql://db",
+            chat_provider_base_url=base_url,
+            allow_insecure_provider_proxy=True,
+        )
+
+
+def test_load_config_reads_private_provider_proxy_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _database(monkeypatch)
+    monkeypatch.setenv(
+        "GOOGLE_AI_NATIVE_BASE_URL", "http://172.19.0.1:8787/private/v1beta"
+    )
+    monkeypatch.setenv("KAIGO_ALLOW_INSECURE_PROVIDER_PROXY", "true")
+
+    assert load_config().allow_insecure_provider_proxy is True
+
+
 def test_chat_user_rate_limit_prefers_user_name_and_supports_legacy_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
