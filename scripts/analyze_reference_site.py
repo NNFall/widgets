@@ -22,7 +22,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from PIL import Image, UnidentifiedImageError
 
-from app.models.contracts import ModelRequest
+from app.models.contracts import ModelRequest, ModelRouteExhausted, ModelUsage
 from app.models.structured_generation import (
     GeminiStructuredGenerationBackend,
     StructuredGenerationBackend,
@@ -111,11 +111,13 @@ class ReferenceAnalysisError(RuntimeError):
         public_message: str,
         *,
         diagnostic: str | None = None,
+        usage: ModelUsage | None = None,
     ) -> None:
         super().__init__(public_message)
         self.error_code = error_code
         self.public_message = public_message
         self.diagnostic = diagnostic
+        self.usage = usage or ModelUsage()
 
 
 @dataclass(frozen=True)
@@ -602,13 +604,52 @@ async def analyze_reference_site(
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise ReferenceAnalysisError(
             "invalid_semantic_output",
-            "Gemini returned an invalid grounded reference",
+            (
+                "Gemini returned an invalid grounded reference"
+                if owned_backend
+                else "The generation service returned an invalid grounded reference"
+            ),
             diagnostic=last_semantic_error or type(exc).__name__,
         ) from exc
+    except ModelRouteExhausted as exc:
+        raise ReferenceAnalysisError(
+            exc.error_code,
+            (
+                "The generation service returned an invalid grounded reference"
+                if exc.error_code == "invalid_response"
+                else "Reference analysis could not complete the request"
+            ),
+            diagnostic=exc.diagnostic,
+            usage=ModelUsage(
+                input_tokens=usage["prompt_tokens"] + exc.usage.input_tokens,
+                output_tokens=(
+                    usage["output_tokens"]
+                    + usage["thinking_tokens"]
+                    + exc.usage.output_tokens
+                ),
+                thinking_tokens=(
+                    usage["thinking_tokens"] + exc.usage.thinking_tokens
+                ),
+            ),
+        ) from exc
     except TimeoutError as exc:
-        raise ReferenceAnalysisError("analysis_timeout", "Gemini reference analysis timed out") from exc
+        raise ReferenceAnalysisError(
+            "analysis_timeout",
+            (
+                "Gemini reference analysis timed out"
+                if owned_backend
+                else "Reference analysis timed out"
+            ),
+        ) from exc
     except Exception as exc:
-        raise ReferenceAnalysisError("analysis_unavailable", "Gemini reference analysis is unavailable") from exc
+        raise ReferenceAnalysisError(
+            "analysis_unavailable",
+            (
+                "Gemini reference analysis is unavailable"
+                if owned_backend
+                else "Reference analysis service is unavailable"
+            ),
+        ) from exc
     finally:
         if owned_backend:
             await backend.aclose()

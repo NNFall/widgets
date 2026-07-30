@@ -64,6 +64,12 @@ class BuilderLabConfigTests(unittest.TestCase):
             "KAIGO_REFERENCE_MAX_SCROLL_HEIGHT": None,
             "KAIGO_REFERENCE_TRACE_TTL_SECONDS": None,
             "KAIGO_REFERENCE_RESPECT_ROBOTS": None,
+            "KAIGO_ENVIRONMENT": None,
+            "KAIGO_GENERATION_FORENSICS_ENABLED": None,
+            "KAIGO_GENERATION_FORENSICS_ROOT": None,
+            "KAIGO_GENERATION_FORENSICS_TTL_HOURS": None,
+            "KAIGO_GENERATION_FORENSICS_MAX_BYTES": None,
+            "KAIGO_GENERATION_FORENSICS_ADMIN_EMAILS": None,
         }
         base.update(values)
         clean = {key: value for key, value in base.items() if value is not None}
@@ -81,7 +87,7 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertFalse(config.hybrid_routing_enabled)
         self.assertIsNone(config.agentrouter_api_key)
         self.assertEqual(config.agentrouter_base_url, "https://agentrouter.org/v1")
-        self.assertEqual(config.agentrouter_timeout_seconds, 900)
+        self.assertEqual(config.agentrouter_timeout_seconds, 180)
         self.assertEqual(config.agentrouter_qwen_executable, "qwen")
         self.assertEqual(config.agentrouter_gpt_model, "gpt-5.5")
         self.assertEqual(config.agentrouter_glm_model, "glm-5.2")
@@ -109,6 +115,8 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertEqual(config.reference_scroll_delay_ms, 750)
         self.assertEqual(config.reference_warmup_ms, 5000)
         self.assertTrue(config.reference_respect_robots)
+        self.assertFalse(config.generation_forensics.enabled)
+        self.assertEqual(config.generation_forensics.ttl_hours, 120)
 
     def test_accepts_configured_values(self):
         config = self.load(
@@ -139,6 +147,14 @@ class BuilderLabConfigTests(unittest.TestCase):
             GEMINI_ANTIGRAVITY_MAX_TOTAL_TOKENS="750000",
             KAIGO_BROWSER_AUDIT_TIMEOUT_MS="15000",
             KAIGO_BROWSER_AUDIT_TOTAL_TIMEOUT_SECONDS="150",
+            KAIGO_ENVIRONMENT="test",
+            KAIGO_GENERATION_FORENSICS_ENABLED="true",
+            KAIGO_GENERATION_FORENSICS_ROOT="/var/lib/kaigo/forensics",
+            KAIGO_GENERATION_FORENSICS_TTL_HOURS="96",
+            KAIGO_GENERATION_FORENSICS_MAX_BYTES="123456",
+            KAIGO_GENERATION_FORENSICS_ADMIN_EMAILS=(
+                " Admin@Example.com,ops@example.com "
+            ),
         )
         self.assertEqual(config.port, 9012)
         self.assertEqual(config.temperature, 1.25)
@@ -164,6 +180,27 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertEqual(config.antigravity_max_total_tokens, 750_000)
         self.assertEqual(config.browser_audit_timeout_ms, 15_000)
         self.assertEqual(config.browser_audit_total_timeout_seconds, 150)
+        self.assertTrue(config.generation_forensics.enabled)
+        self.assertEqual(
+            config.generation_forensics.root.as_posix(), "/var/lib/kaigo/forensics"
+        )
+        self.assertEqual(config.generation_forensics.ttl_hours, 96)
+        self.assertEqual(config.generation_forensics.max_bytes, 123_456)
+        self.assertEqual(
+            config.generation_forensics.admin_emails,
+            ("admin@example.com", "ops@example.com"),
+        )
+
+    def test_agentrouter_timeout_accepts_production_boundaries(self):
+        for value in ("120", "360"):
+            with self.subTest(value=value):
+                config = self.load(AGENTROUTER_TIMEOUT_SECONDS=value)
+                self.assertEqual(config.agentrouter_timeout_seconds, int(value))
+
+    def test_agentrouter_timeout_rejects_values_outside_production_bounds(self):
+        for value in ("119", "361", "900"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.load(AGENTROUTER_TIMEOUT_SECONDS=value)
 
     def test_non_loopback_is_rejected_by_default(self):
         with self.assertRaisesRegex(ValueError, "loopback"):

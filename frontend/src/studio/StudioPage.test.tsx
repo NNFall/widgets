@@ -359,6 +359,8 @@ describe('StudioPage', () => {
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Финальная визуальная проверка не пройдена');
+    expect(alert).toHaveTextContent('История запуска сохранена, но версия виджета не была создана.');
+    expect(alert).not.toHaveTextContent('Последняя доступная версия и история запуска сохранены.');
     const timeline = screen.getByRole('region', { name: 'Диалог с генератором' });
     expect(within(timeline).getByText('Финальная визуальная проверка не пройдена.')).toBeVisible();
     expect(within(timeline).queryByText('Gemini returned an invalid grounded reference')).not.toBeInTheDocument();
@@ -366,6 +368,21 @@ describe('StudioPage', () => {
     expect(details.closest('details')).not.toHaveAttribute('open');
     expect(within(alert).getByText('Gemini returned an invalid grounded reference')).toBeInTheDocument();
     expect(screen.getAllByText('Gemini returned an invalid grounded reference')).toHaveLength(1);
+  });
+
+  it('confirms that the latest widget version is preserved when a failed run has an artifact', async () => {
+    localStorage.setItem(ACTIVE_RUN_STORAGE_KEY, 'run-123');
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(snapshot({
+      status: 'failed',
+      artifact,
+      error_code: 'visual_quality_failed',
+    })))));
+
+    render(<StudioPage />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Последняя доступная версия и история запуска сохранены.');
+    expect(alert).not.toHaveTextContent('История запуска сохранена, но версия виджета не была создана.');
   });
 
   it('explains a protected Studio 401 in Russian without forgetting the active run', async () => {
@@ -379,7 +396,37 @@ describe('StudioPage', () => {
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Доступ к Studio не подтверждён. Обновите страницу и войдите снова.');
     expect(within(alert).getByText('Unauthorized')).toBeInTheDocument();
+    expect(alert).not.toHaveTextContent('Последняя доступная версия и история запуска сохранены.');
+    expect(alert).not.toHaveTextContent('История запуска сохранена, но версия виджета не была создана.');
     expect(localStorage.getItem(ACTIVE_RUN_STORAGE_KEY)).toBe('run-123');
+  });
+
+  it('does not claim persistence when polling fails for a running run without an artifact', async () => {
+    vi.useFakeTimers();
+    localStorage.setItem(ACTIVE_RUN_STORAGE_KEY, 'run-123');
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(() => Promise.resolve(jsonResponse(snapshot({ status: 'running' }))))
+      .mockImplementation(() => Promise.resolve(jsonResponse({
+        error: { code: 'provider_unavailable', message: 'Temporarily unavailable', retryable: true },
+      }, 503)));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<StudioPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(FakeEventSource.instances).toHaveLength(1);
+    act(() => FakeEventSource.instances[0].fail());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_100);
+      await Promise.resolve();
+    });
+
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Сервис генерации сейчас недоступен');
+    expect(alert).not.toHaveTextContent('Последняя доступная версия и история запуска сохранены.');
+    expect(alert).not.toHaveTextContent('История запуска сохранена, но версия виджета не была создана.');
   });
 
   it('ignores a stale slower snapshot after a newer terminal revision was accepted', async () => {

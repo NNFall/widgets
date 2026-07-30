@@ -3,12 +3,14 @@ import json
 import unittest
 from datetime import datetime, timezone
 
+from app.models.contracts import ModelUsage
 from builder_lab.reference_models import (
     CrawlFailure,
     ReferenceCrawlResult,
     ReferencePageEvidence,
     ScreenshotEvidence,
 )
+from builder_lab.models import TokenUsage
 from builder_lab.reference_pipeline import (
     GeminiReferencePipeline,
     ReferencePipelineError,
@@ -119,6 +121,71 @@ class FakeCrawler:
 
 
 class ReferencePipelineTests(unittest.IsolatedAsyncioTestCase):
+    async def test_terminal_routed_failure_crosses_pipeline_with_usage_and_diagnostic(self):
+        diagnostic = (
+            '{"terminal_reason":"all_generation_timeout",'
+            '"route_attempts":[{"cost_microusd":12345}]}'
+        )
+
+        async def analyzer(**_kwargs):
+            from scripts.analyze_reference_site import ReferenceAnalysisError
+
+            raise ReferenceAnalysisError(
+                "route_exhausted",
+                "Сервис анализа сайта не смог завершить запрос",
+                diagnostic=diagnostic,
+                usage=ModelUsage(input_tokens=100, output_tokens=20),
+            )
+
+        pipeline = GeminiReferencePipeline(
+            crawler=FakeCrawler(crawl_result()),
+            analyzer=analyzer,
+            api_key="direct-key-is-not-used",
+            model="routed-model",
+            thinking_level="high",
+            base_url="https://example.invalid",
+        )
+
+        with self.assertRaises(ReferencePipelineError) as caught:
+            await pipeline.analyze(
+                "https://example.com/",
+                structured_backend=object(),
+            )
+
+        self.assertEqual(caught.exception.error_code, "route_exhausted")
+        self.assertEqual(
+            caught.exception.usage,
+            TokenUsage(prompt_tokens=100, output_tokens=20),
+        )
+        self.assertEqual(caught.exception.diagnostic, diagnostic)
+
+    async def test_routed_analyzer_failure_is_provider_neutral(self):
+        async def analyzer(**_kwargs):
+            raise RuntimeError("private Gemini GPT GLM AgentRouter failure")
+
+        pipeline = GeminiReferencePipeline(
+            crawler=FakeCrawler(crawl_result()),
+            analyzer=analyzer,
+            api_key="direct-key-is-not-used",
+            model="routed-model",
+            thinking_level="high",
+            base_url="https://example.invalid",
+        )
+
+        with self.assertRaises(ReferencePipelineError) as caught:
+            await pipeline.analyze(
+                "https://example.com/",
+                structured_backend=object(),
+            )
+
+        self.assertEqual(caught.exception.error_code, "reference_analysis_failed")
+        self.assertFalse(
+            any(
+                provider in caught.exception.public_message
+                for provider in ("Gemini", "GPT", "GLM", "AgentRouter")
+            )
+        )
+
     async def test_captures_six_states_and_returns_bounded_grounded_context(self):
         crawler = FakeCrawler(crawl_result())
         analyzer_calls = []

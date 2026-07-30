@@ -177,6 +177,23 @@ class BuilderLabPackagingTests(unittest.TestCase):
             r"(?m)^AGENTROUTER_API_KEY=.+$",
         )
 
+    def test_hybrid_routing_defaults_off_in_compose_and_env_example(self):
+        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        worker = compose.split("  builder-worker:", 1)[1].split(
+            "\n  migration:", 1
+        )[0]
+        env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "      KAIGO_BUILDER_HYBRID_ROUTING_ENABLED: "
+            "${KAIGO_BUILDER_HYBRID_ROUTING_ENABLED:-false}",
+            worker,
+        )
+        self.assertRegex(
+            env_example,
+            r"(?m)^KAIGO_BUILDER_HYBRID_ROUTING_ENABLED=false$",
+        )
+
     def test_deploy_prepares_demo_mount_for_the_unprivileged_image_user(self):
         deploy = (ROOT / "scripts" / "deploy_builder_lab.sh").read_text(
             encoding="utf-8"

@@ -882,6 +882,91 @@ async def test_sse_resumes_without_duplicates_heartbeats_and_closes_on_terminal(
 
 
 @pytest.mark.asyncio
+async def test_unknown_legacy_event_is_fail_closed_for_get_and_sse(tmp_path) -> None:
+    engine, factory, client, project_id, _ = await _project_app(tmp_path)
+    try:
+        async with factory() as database, database.begin():
+            run = GenerationRun(
+                project_id=project_id,
+                mode="express",
+                state="completed",
+                progress=100,
+                next_event_sequence=3,
+                idempotency_key="legacy-event-projection",
+            )
+            database.add(run)
+            await database.flush()
+            database.add_all(
+                [
+                    GenerationEvent(
+                        id=204,
+                        run_id=run.id,
+                        sequence=1,
+                        event_type="stage.started",
+                        public_message="Начато; token=private-message-value",
+                        payload={
+                            "status": "running",
+                            "stage": "foundation",
+                            "attempt": 2,
+                            "max_executions": 6,
+                            "diagnostic": "private-known-diagnostic",
+                            "request": {"token": "private-known-request"},
+                        },
+                    ),
+                    GenerationEvent(
+                        id=205,
+                        run_id=run.id,
+                        sequence=2,
+                        event_type="legacy.secret_event",
+                        public_message="token=private-legacy-message",
+                        payload={
+                            "status": "running",
+                            "diagnostic": "private-legacy-diagnostic",
+                        },
+                    ),
+                ]
+            )
+            run_id = run.id
+
+        await client.post("/test/login/10")
+        snapshot_response = await client.get(f"/api/runs/{run_id}")
+        sse_response = await client.get(f"/api/runs/{run_id}/events")
+
+        assert snapshot_response.status == 200
+        snapshot_events = (await snapshot_response.json())["events"]
+        assert snapshot_events[0] == {
+            "sequence": 1,
+            "type": "stage.started",
+            "message": "Начато; token=[REDACTED]",
+            "payload": {
+                "status": "running",
+                "stage": "foundation",
+                "attempt": 2,
+                "max_executions": 6,
+            },
+            "created_at": snapshot_events[0]["created_at"],
+        }
+        assert snapshot_events[1] == {
+            "sequence": 2,
+            "type": "generation.unknown",
+            "message": None,
+            "payload": {},
+            "created_at": snapshot_events[1]["created_at"],
+        }
+
+        assert sse_response.status == 200
+        sse_body = await sse_response.text()
+        assert "event: stage.started" in sse_body
+        assert "event: generation.unknown" in sse_body
+        assert "event: legacy.secret_event" not in sse_body
+        if "private-" in sse_body:
+            pytest.fail("private legacy event material leaked into SSE")
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_terminal_sse_drains_more_than_one_page_without_duplicates(
     tmp_path,
 ) -> None:

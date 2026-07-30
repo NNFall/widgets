@@ -887,9 +887,10 @@ async def stream_events(request: web.Request) -> web.StreamResponse:
             terminal = run.state in TERMINAL_STATES
         if events:
             for event in events:
-                data = json.dumps(serialize_event(event), ensure_ascii=False, separators=(",", ":"))
+                serialized = serialize_event(event)
+                data = json.dumps(serialized, ensure_ascii=False, separators=(",", ":"))
                 await response.write(
-                    f"id: {event.sequence}\nevent: {event.event_type}\ndata: {data}\n\n".encode()
+                    f"id: {event.sequence}\nevent: {serialized['type']}\ndata: {data}\n\n".encode()
                 )
                 cursor = event.sequence
             if terminal and len(events) < SSE_PAGE_SIZE:

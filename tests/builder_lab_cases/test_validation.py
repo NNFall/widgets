@@ -59,7 +59,7 @@ class ArtifactValidationTests(unittest.TestCase):
           <summary class="kaigo-widget__summary">Параметры проекта</summary>
           <label class="kaigo-widget__label" for="kaigo-email">Почта</label>
           <input id="kaigo-email" name="email" type="checkbox" checked autocomplete="off">
-          <svg viewBox="0 0 24 24"><line x1="2" y1="12" x2="22" y2="12" stroke-dasharray="4 2" stroke-dashoffset="1"></line></svg>
+          <svg viewBox="0 0 24 24"><line x1="2" y1="12" x2="22" y2="12" fill="#abc" stroke="currentColor" stroke-dasharray="4 2" stroke-dashoffset="1"></line></svg>
         </details>
         """
         candidate = artifact(
@@ -146,6 +146,28 @@ class ArtifactValidationTests(unittest.TestCase):
         self.assertIn("forbidden_element", codes)
         self.assertIn("unsafe_data_url", codes)
 
+    def test_rejects_svg_paint_urls_in_final_artifact(self):
+        paint_values = (
+            ("fill", "https://evil.test/paint.svg#gradient"),
+            ("stroke", "data:image/svg+xml;base64,PHN2Zy8+"),
+            ("stop-color", "url(https://evil.test/paint.svg#gradient)"),
+            ("fill", "url(#local-gradient)"),
+        )
+
+        for attribute, value in paint_values:
+            with self.subTest(attribute=attribute, value=value):
+                svg = (
+                    '<svg viewBox="0 0 10 10">'
+                    f'<rect {attribute}="{value}"></rect></svg>'
+                )
+                candidate = artifact(
+                    body_html=GOOD_HTML.replace(
+                        "</section>",
+                        svg + "</section>",
+                    )
+                )
+                self.assertIn("unsafe_svg_paint", self.codes(candidate))
+
     def test_rejects_malformed_and_oversized_html(self):
         self.assertIn("malformed_html", self.codes(artifact(body_html=GOOD_HTML + "<div>")))
         self.assertIn("html_too_large", self.codes(artifact(body_html="<div>" + ("x" * 70_000) + "</div>")))
@@ -164,6 +186,24 @@ class ArtifactValidationTests(unittest.TestCase):
         self.assertIn("unsafe_css_at_rule", codes)
         self.assertIn("external_css_resource", codes)
 
+    def test_rejects_css_url_between_quoted_comment_delimiters(self):
+        css = GOOD_CSS + """
+.kaigo-widget {
+  content: "/*";
+  background: url(https://evil.test/a.png);
+  content: "*/";
+}
+"""
+
+        self.assertIn("external_css_resource", self.codes(artifact(css=css)))
+
+    def test_rejects_css_url_function_hidden_by_identifier_escape(self):
+        css = GOOD_CSS + r"""
+.kaigo-widget { background: u\72l(https://evil.test/a.png); }
+"""
+
+        self.assertIn("unsafe_css_value", self.codes(artifact(css=css)))
+
     def test_accepts_safe_properties_whose_names_end_with_behavior(self):
         css = GOOD_CSS + """
 .kaigo-widget {
@@ -173,6 +213,15 @@ class ArtifactValidationTests(unittest.TestCase):
 """
 
         self.assertNotIn("unsafe_css_value", self.codes(artifact(css=css)))
+
+    def test_accepts_comment_delimiters_inside_quoted_css_content(self):
+        css = GOOD_CSS + """
+.kaigo-widget::before {
+  content: "/*";
+}
+"""
+
+        self.assertEqual(self.codes(artifact(css=css)), [])
 
     def test_all_unset_must_restore_border_box_in_the_same_rule(self):
         unsafe = GOOD_CSS + """

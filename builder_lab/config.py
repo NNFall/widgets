@@ -5,6 +5,7 @@ import os
 import re
 from dataclasses import dataclass
 
+from .forensics.config import GenerationForensicsConfig
 from .model_config import normalize_thinking_level
 from .models import EngineName
 
@@ -123,6 +124,7 @@ class BuilderLabConfig:
     reference_max_scroll_height: int
     reference_trace_ttl_seconds: int
     reference_respect_robots: bool
+    generation_forensics: GenerationForensicsConfig
 
     def __post_init__(self) -> None:
         if self.chat_session_secret is not None and (
@@ -183,9 +185,9 @@ class BuilderLabConfig:
             ).strip().rstrip("/"),
             agentrouter_timeout_seconds=_int(
                 "AGENTROUTER_TIMEOUT_SECONDS",
-                900,
-                1,
-                3600,
+                180,
+                120,
+                360,
             ),
             agentrouter_qwen_executable=os.getenv(
                 "AGENTROUTER_QWEN_EXECUTABLE",
@@ -340,4 +342,7 @@ class BuilderLabConfig:
                 "KAIGO_REFERENCE_TRACE_TTL_SECONDS", 3600, 300, 86400
             ),
             reference_respect_robots=_bool("KAIGO_REFERENCE_RESPECT_ROBOTS", True),
+            generation_forensics=GenerationForensicsConfig.from_env(
+                environment=os.getenv("KAIGO_ENVIRONMENT", "development")
+            ),
         )

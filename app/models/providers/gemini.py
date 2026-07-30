@@ -17,6 +17,7 @@ from app.models.contracts import (
     ModelUsage,
     ProviderCapabilities,
     ProviderQuotaExceeded,
+    ProviderTimeout,
     ProviderUnavailable,
 )
 from app.models.generation_policy import generation_policy
@@ -332,7 +333,7 @@ def _provider_error(error: Exception) -> Exception:
     if category == "model_unavailable":
         return ModelUnavailable("The selected Gemini model is unavailable")
     if category == "generation_timeout":
-        return ProviderUnavailable("Gemini generation timed out")
+        return ProviderTimeout("Gemini generation timed out")
     return ProviderUnavailable("Gemini is temporarily unavailable")
 
 

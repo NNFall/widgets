@@ -1,12 +1,20 @@
 import asyncio
 import unittest
 
+from app.models.contracts import (
+    ModelRequest,
+    ModelResponse,
+    ModelUsage,
+    ProviderCapabilities,
+)
+from app.models.router import InMemoryModelCallAudit, ModelPolicy, ModelRouter, ProviderTarget
 from builder_lab.directions import DirectionBoardError, DIRECTION_ROLES, run_direction_board
 from builder_lab.engines.base import (
     BuilderEngineError,
     DirectionJudgeResult,
     DirectionProposalResult,
 )
+from builder_lab.engines.gemini_direct import GeminiDirectEngine
 from builder_lab.models import (
     BuilderRequest,
     CreativeProfile,
@@ -213,6 +221,118 @@ class DirectionBoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(judge.calls), 1)
         self.assertEqual(result.selected.proposal_id, "candidate-3")
 
+    async def test_offline_primary_timeout_falls_back_for_three_candidates_and_judge(self):
+        class HangingPrimary:
+            capabilities = ProviderCapabilities(structured_output=True)
+
+            def __init__(self):
+                self.calls = 0
+
+            async def generate(
+                self,
+                request: ModelRequest,
+                *,
+                model: str,
+            ) -> ModelResponse:
+                self.calls += 1
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+
+        class GeminiFallback:
+            capabilities = ProviderCapabilities(structured_output=True)
+
+            def __init__(self):
+                self.proposal_calls = 0
+                self.judge_calls = 0
+
+            async def generate(
+                self,
+                request: ModelRequest,
+                *,
+                model: str,
+            ) -> ModelResponse:
+                properties = dict((request.response_schema or {}).get("properties", {}))
+                if "selected_proposal_id" in properties:
+                    self.judge_calls += 1
+                    parsed = {
+                        "selected_proposal_id": "candidate-2",
+                        "rationale": "Best truthful and bounded interaction.",
+                    }
+                else:
+                    self.proposal_calls += 1
+                    parsed = {
+                        "title": "Fallback direction",
+                        "art_direction": "Editorial geometry with restrained typography.",
+                        "interaction_model": "A bounded launcher opens the working panel.",
+                        "safeguards": ["No fake actions", "No generic chat bubbles"],
+                    }
+                return ModelResponse(
+                    text="{}",
+                    parsed=parsed,
+                    usage=ModelUsage(input_tokens=10, output_tokens=4, thinking_tokens=1),
+                    request_id=f"gemini-{self.proposal_calls}-{self.judge_calls}",
+                )
+
+        primary = HangingPrimary()
+        fallback = GeminiFallback()
+        audit = InMemoryModelCallAudit()
+        targets = (
+            ProviderTarget("agentrouter", "gpt-primary", 1, 1),
+            ProviderTarget("gemini", "gemini-fallback", 1, 1),
+        )
+        router = ModelRouter(
+            providers={"agentrouter": primary, "gemini": fallback},
+            policies={
+                (role, "express"): ModelPolicy(
+                    prompt_version="direction-v2",
+                    targets=targets,
+                )
+                for role in ("direction_candidate", "direction_judge")
+            },
+            audit=audit,
+        )
+        proposer = GeminiDirectEngine(
+            model_router=router,
+            routing_role="direction_candidate",
+            routing_mode="express",
+            routing_timeout_seconds=1.0,
+        )
+        judge = GeminiDirectEngine(
+            model_router=router,
+            routing_role="direction_judge",
+            routing_mode="express",
+            routing_timeout_seconds=1.0,
+        )
+
+        result = await asyncio.wait_for(
+            run_direction_board(
+                proposal_engine=proposer,
+                judge_engine=judge,
+                request=BuilderRequest(
+                    engine=EngineName.DIRECT,
+                    brief="Offline routed direction board",
+                ),
+            ),
+            timeout=3.0,
+        )
+
+        self.assertEqual(len(result.proposals), 3)
+        self.assertEqual(result.selected.proposal_id, "candidate-2")
+        self.assertEqual(primary.calls, 4)
+        self.assertEqual(fallback.proposal_calls, 3)
+        self.assertEqual(fallback.judge_calls, 1)
+        self.assertEqual(
+            [call.status for call in audit.calls].count("failed"),
+            4,
+        )
+        self.assertEqual(
+            [call.status for call in audit.calls].count("completed"),
+            4,
+        )
+        self.assertEqual(result.usage.prompt_tokens, 40)
+        self.assertEqual(result.usage.output_tokens, 12)
+        self.assertEqual(result.usage.thinking_tokens, 4)
+
     async def test_aggregates_all_proposal_and_judge_usage_once(self):
         result = await run_direction_board(
             engine=BarrierDirectionEngine(),
@@ -275,7 +395,63 @@ class DirectionBoardTests(unittest.IsolatedAsyncioTestCase):
                 request=BuilderRequest(engine=EngineName.DIRECT, brief="RAW BUREAU widget"),
             )
         self.assertEqual(caught.exception.error_code, "invalid_artifact")
+        self.assertNotIn("Gemini", caught.exception.public_message)
         self.assertEqual(engine.cancelled, 2)
+
+    async def test_parallel_provider_failure_preserves_infrastructure_code_and_cancels_siblings(self):
+        class FailingProviderEngine:
+            def __init__(self):
+                self.started = 0
+                self.cancelled = 0
+                self.judge_calls = 0
+                self.all_started = asyncio.Event()
+                self.never = asyncio.Event()
+
+            async def propose_direction(self, *, proposal_id, **_kwargs):
+                self.started += 1
+                if self.started == 3:
+                    self.all_started.set()
+                try:
+                    await self.all_started.wait()
+                    if proposal_id == "candidate-1":
+                        raise BuilderEngineError(
+                            "generation_timeout",
+                            "Gemini timed out after GPT and GLM routing failed",
+                            diagnostic="ProviderTimeout: upstream deadline",
+                            usage=TokenUsage(
+                                prompt_tokens=17,
+                                output_tokens=8,
+                                thinking_tokens=3,
+                            ),
+                        )
+                    await self.never.wait()
+                    raise AssertionError("unreachable")
+                except asyncio.CancelledError:
+                    self.cancelled += 1
+                    raise
+
+            async def judge_directions(self, **_kwargs):
+                self.judge_calls += 1
+                raise AssertionError("judge must not run")
+
+        engine = FailingProviderEngine()
+        with self.assertRaises(DirectionBoardError) as caught:
+            await run_direction_board(
+                engine=engine,
+                request=BuilderRequest(
+                    engine=EngineName.DIRECT,
+                    brief="RAW BUREAU widget",
+                ),
+            )
+
+        self.assertEqual(caught.exception.error_code, "generation_timeout")
+        for provider_name in ("Gemini", "GPT", "GLM"):
+            self.assertNotIn(provider_name, caught.exception.public_message)
+        self.assertEqual(engine.cancelled, 2)
+        self.assertEqual(engine.judge_calls, 0)
+        self.assertEqual(caught.exception.usage.prompt_tokens, 17)
+        self.assertEqual(caught.exception.usage.output_tokens, 8)
+        self.assertEqual(caught.exception.usage.thinking_tokens, 3)
 
     async def test_aggregates_usage_from_all_simultaneous_failed_proposals(self):
         class FailedProposals:
@@ -304,6 +480,36 @@ class DirectionBoardTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(caught.exception.usage.prompt_tokens, 30)
         self.assertEqual(caught.exception.usage.output_tokens, 6)
+
+    async def test_board_contract_failures_use_provider_neutral_public_messages(self):
+        class InvalidContractEngine:
+            def __init__(self, mutation):
+                self.mutation = mutation
+
+            async def propose_direction(self, *, role, proposal_id, **_kwargs):
+                if self.mutation == "roles":
+                    role = DirectionRole.BRAND_ARCHAEOLOGIST
+                if self.mutation == "ids" and proposal_id == "candidate-3":
+                    proposal_id = "candidate-2"
+                return DirectionProposalResult(
+                    proposal=proposal(role, proposal_id),
+                )
+
+            async def judge_directions(self, **_kwargs):
+                raise AssertionError("judge must not run")
+
+        for mutation in ("roles", "ids"):
+            with self.subTest(mutation=mutation):
+                with self.assertRaises(DirectionBoardError) as caught:
+                    await run_direction_board(
+                        engine=InvalidContractEngine(mutation),
+                        request=BuilderRequest(
+                            engine=EngineName.DIRECT,
+                            brief="Provider-neutral board error",
+                        ),
+                    )
+                for provider_name in ("Gemini", "GPT", "GLM"):
+                    self.assertNotIn(provider_name, caught.exception.public_message)
 
     def test_direction_contract_is_bounded_and_anonymous_payload_hides_role(self):
         item = proposal(DirectionRole.BRAND_ARCHAEOLOGIST, "candidate-1")

@@ -9,7 +9,22 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from PIL import Image
 
+from app.models.contracts import (
+    InvalidModelResponse,
+    ModelResponse,
+    ModelRouteAttempt,
+    ModelRouteExhausted,
+    ModelUsage,
+    ProviderCapabilities,
+)
+from app.models.router import (
+    InMemoryModelCallAudit,
+    ModelPolicy,
+    ModelRouter,
+    ProviderTarget,
+)
 from builder_lab.browser_audit import BrowserAuditReport, CapturedScreenshot
+from builder_lab.models import TokenUsage
 from builder_lab.visual_critic import (
     GeminiVisualCritic,
     VISUAL_CRITIC_SCHEMA,
@@ -225,6 +240,142 @@ class FakeSequenceClient:
 
 
 class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
+    async def test_routed_critic_allows_router_to_finalize_terminal_usage(self):
+        class BilledFailure:
+            capabilities = ProviderCapabilities(images=True, structured_output=True)
+
+            async def generate(self, request, *, model):
+                raise InvalidModelResponse(
+                    "invalid upstream response",
+                    usage=ModelUsage(input_tokens=100, output_tokens=20),
+                )
+
+        class HangingFallback:
+            capabilities = ProviderCapabilities(images=True, structured_output=True)
+
+            async def generate(self, request, *, model):
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+
+        router = ModelRouter(
+            providers={
+                "primary": BilledFailure(),
+                "fallback": HangingFallback(),
+            },
+            policies={
+                (VisualCriticRole.ADVERSARIAL_CUSTOMER.value, "express"): ModelPolicy(
+                    prompt_version="visual-v1",
+                    targets=(
+                        ProviderTarget(
+                            "primary",
+                            "gpt-5.5",
+                            1_000_000,
+                            1_000_000,
+                        ),
+                        ProviderTarget("fallback", "gemini-fallback", 1, 1),
+                    ),
+                )
+            },
+            audit=InMemoryModelCallAudit(),
+        )
+        critic = GeminiVisualCritic(
+            model_router=router,
+            routing_mode="express",
+            routing_timeout_seconds=0.3,
+        )
+
+        with self.assertRaises(VisualCriticError) as caught:
+            await critic.critique(
+                audit=report(),
+                brief="Compact AI assistant.",
+                art_direction="Brand-matched chat.",
+            )
+
+        self.assertEqual(caught.exception.error_code, "route_exhausted")
+        self.assertEqual(
+            caught.exception.usage,
+            TokenUsage(prompt_tokens=100, output_tokens=20),
+        )
+        self.assertIn('"cost_microusd":120', caught.exception.diagnostic)
+
+    async def test_routed_critique_preserves_terminal_exhaustion_usage_and_cost(self):
+        attempt = ModelRouteAttempt(
+            provider="agentrouter",
+            model="gpt-5.5",
+            outcome="failed",
+            latency_ms=321,
+            usage=ModelUsage(input_tokens=100, output_tokens=20),
+            cost_microusd=12_345,
+            cost_state="reported",
+            error_code="generation_timeout",
+        )
+        route_error = ModelRouteExhausted(
+            attempts=(attempt,),
+            usage=ModelUsage(input_tokens=100, output_tokens=20),
+        )
+
+        class ExhaustedRouter:
+            def __init__(self):
+                self.calls = []
+
+            async def generate(self, **kwargs):
+                self.calls.append(kwargs)
+                raise route_error
+
+        router = ExhaustedRouter()
+        critic = GeminiVisualCritic(
+            model_router=router,
+            routing_mode="express",
+            routing_timeout_seconds=120,
+        )
+
+        with self.assertRaises(VisualCriticError) as caught:
+            await critic.critique(
+                audit=report(),
+                brief="Compact AI assistant.",
+                art_direction="Brand-matched chat.",
+            )
+
+        self.assertEqual(caught.exception.error_code, "route_exhausted")
+        self.assertEqual(
+            caught.exception.usage,
+            TokenUsage(prompt_tokens=100, output_tokens=20),
+        )
+        self.assertEqual(caught.exception.diagnostic, route_error.diagnostic)
+        self.assertIn('"cost_microusd":12345', caught.exception.diagnostic)
+        self.assertEqual(len(router.calls), 1)
+
+    async def test_routed_critique_passes_its_internal_deadline_to_router(self):
+        class Router:
+            def __init__(self):
+                self.calls = []
+
+            async def generate(self, **kwargs):
+                self.calls.append(kwargs)
+                payload = response_payload()
+                return ModelResponse(
+                    text=json.dumps(payload),
+                    parsed=payload,
+                    raw={"provider": "agentrouter", "model": "routed-model"},
+                )
+
+        router = Router()
+        critic = GeminiVisualCritic(
+            model_router=router,
+            routing_mode="express",
+            routing_timeout_seconds=120,
+        )
+
+        await critic.critique(
+            audit=report(),
+            brief="Compact AI assistant.",
+            art_direction="Brand-matched chat.",
+        )
+
+        self.assertEqual(len(router.calls), 1)
+        self.assertGreater(router.calls[0]["timeout_seconds"], 119)
+        self.assertLessEqual(router.calls[0]["timeout_seconds"], 120)
+
     async def test_role_instruction_and_contract_retry_are_independent(self):
         invalid = response_payload()
         invalid["observations"][0]["observation"] = "Generic answer."

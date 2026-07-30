@@ -1,4 +1,5 @@
 import asyncio
+import json
 import types
 
 import pytest
@@ -13,7 +14,7 @@ from builder_lab.visual_critic import (
     VisualCriticResult,
     VisualCriticRole,
 )
-from builder_lab.visual_review import VisualJudgeResult
+from builder_lab.visual_review import VisualJudgeError, VisualJudgeResult
 from builder_lab.visual_models import (
     NormalizedRegion,
     VisualCategory,
@@ -259,3 +260,136 @@ async def test_only_one_valid_role_is_inconclusive_not_visual_quality_failure():
 
     assert caught.value.error_code == "visual_review_inconclusive"
     assert caught.value.usage.prompt_tokens == 17
+
+
+@pytest.mark.asyncio
+async def test_terminal_critic_route_exhaustion_crosses_committee_when_quorum_is_lost():
+    diagnostic = (
+        '{"terminal_reason":"all_generation_timeout",'
+        '"route_attempts":[{"cost_microusd":12345}]}'
+    )
+    terminal = VisualCriticError(
+        "route_exhausted",
+        "route failed",
+        diagnostic=diagnostic,
+        usage=TokenUsage(prompt_tokens=100, output_tokens=20),
+    )
+    transient = VisualCriticError(
+        "visual_critic_unavailable",
+        "critic unavailable",
+        usage=TokenUsage(prompt_tokens=5),
+    )
+    critics = {
+        VisualCriticRole.CONVERSATION_UX: FakeCritic(result(tokens=7)),
+        VisualCriticRole.BRAND_MOTION: FakeCritic(error=terminal),
+        VisualCriticRole.ADVERSARIAL_CUSTOMER: FakeCritic(error=transient),
+    }
+
+    with pytest.raises(VisualCommitteeError) as caught:
+        await committee(critics).critique(
+            audit=types.SimpleNamespace(),
+            brief="Brief",
+            art_direction="Direction",
+        )
+
+    assert caught.value.error_code == "route_exhausted"
+    assert caught.value.usage == TokenUsage(prompt_tokens=112, output_tokens=20)
+    aggregated = json.loads(caught.value.diagnostic)
+    assert aggregated["terminal_reason"] == "committee_terminal_failures"
+    assert aggregated["role_failures"] == [
+        {
+            "role": "brand_motion",
+            "error_code": "route_exhausted",
+            "route": {
+                "terminal_reason": "all_generation_timeout",
+                "route_attempts": [{"usage": {}, "cost_microusd": 12345}],
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mixed_terminal_critic_failures_are_order_independent_and_keep_each_cost():
+    invalid = VisualCriticError(
+        "invalid_response",
+        "invalid output",
+        diagnostic=(
+            '{"terminal_reason":"all_invalid_response",'
+            '"route_attempts":[{"provider":"primary","model":"model-a",'
+            '"outcome":"failed","latency_ms":1,"usage":{"input_tokens":9,'
+            '"output_tokens":3,"thinking_tokens":0},"cost_microusd":111,'
+            '"cost_state":"estimated","error_code":"invalid_response"}]}'
+        ),
+        usage=TokenUsage(prompt_tokens=9, output_tokens=3),
+    )
+    exhausted = VisualCriticError(
+        "route_exhausted",
+        "route exhausted",
+        diagnostic=(
+            '{"terminal_reason":"all_generation_timeout",'
+            '"route_attempts":[{"provider":"fallback","model":"model-b",'
+            '"outcome":"failed","latency_ms":2,"usage":{"input_tokens":100,'
+            '"output_tokens":20,"thinking_tokens":0},"cost_microusd":222,'
+            '"cost_state":"reported","error_code":"generation_timeout"}]}'
+        ),
+        usage=TokenUsage(prompt_tokens=100, output_tokens=20),
+    )
+    critics = {
+        VisualCriticRole.CONVERSATION_UX: FakeCritic(error=invalid),
+        VisualCriticRole.BRAND_MOTION: FakeCritic(error=exhausted),
+        VisualCriticRole.ADVERSARIAL_CUSTOMER: FakeCritic(result(tokens=7)),
+    }
+
+    with pytest.raises(VisualCommitteeError) as caught:
+        await committee(critics).critique(
+            audit=types.SimpleNamespace(),
+            brief="Brief",
+            art_direction="Direction",
+        )
+
+    assert caught.value.error_code == "route_exhausted"
+    assert caught.value.usage == TokenUsage(prompt_tokens=116, output_tokens=23)
+    diagnostic = json.loads(caught.value.diagnostic)
+    assert diagnostic["terminal_reason"] == "committee_terminal_failures"
+    assert [item["error_code"] for item in diagnostic["role_failures"]] == [
+        "invalid_response",
+        "route_exhausted",
+    ]
+    assert [
+        item["route"]["route_attempts"][0]["cost_microusd"]
+        for item in diagnostic["role_failures"]
+    ] == [111, 222]
+
+
+@pytest.mark.asyncio
+async def test_terminal_route_exhaustion_crosses_committee_with_usage_and_provenance():
+    class TerminalJudge(FakeJudge):
+        async def judge(self, *, role_results):
+            self.calls.append(role_results)
+            raise VisualJudgeError(
+                "route_exhausted",
+                "route failed",
+                diagnostic='{"terminal_reason":"mixed_provider_failures"}',
+                usage=TokenUsage(prompt_tokens=11, output_tokens=4, thinking_tokens=2),
+            )
+
+    critics = {
+        role: FakeCritic(result(tokens=10))
+        for role in VisualCriticRole
+    }
+    judge = TerminalJudge(judged_result())
+
+    with pytest.raises(VisualCommitteeError) as caught:
+        await committee(critics, judge).critique(
+            audit=types.SimpleNamespace(),
+            brief="Brief",
+            art_direction="Direction",
+        )
+
+    assert caught.value.error_code == "route_exhausted"
+    assert caught.value.usage == TokenUsage(
+        prompt_tokens=41,
+        output_tokens=4,
+        thinking_tokens=2,
+    )
+    assert caught.value.diagnostic == '{"terminal_reason":"mixed_provider_failures"}'

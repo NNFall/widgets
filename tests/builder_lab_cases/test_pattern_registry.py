@@ -8,9 +8,15 @@ import pytest
 
 from builder_lab.patterns.models import PatternCategory
 from builder_lab.patterns.registry import (
+    PatternIntegrationMode,
     PatternRegistry,
     PatternRegistryError,
     load_builtin_registry,
+)
+
+from ._pattern_source_fixtures import (
+    rewrite_source_manifest,
+    write_source_pattern,
 )
 
 
@@ -117,3 +123,127 @@ def test_public_catalog_excludes_implementation_assets() -> None:
     assert all("html" not in item and "css" not in item for item in catalog)
     assert all("implementation_sha256" in item for item in catalog)
 
+
+def test_v1_is_loaded_for_history_but_not_selectable() -> None:
+    registry = load_builtin_registry()
+
+    legacy = registry.resolve("orb-pulse", 1)
+
+    assert legacy.integration_mode is PatternIntegrationMode.LEGACY_REFERENCE
+    assert legacy not in registry.selectable_for(PatternCategory.LAUNCHER)
+    assert registry.planner_catalog() == ()
+    assert len(registry.public_catalog()) == 10
+
+
+def test_source_manifest_rejects_behavior_javascript(tmp_path: Path) -> None:
+    pattern = write_source_pattern(
+        tmp_path / "status-capsule-v1",
+        pattern_id="status-capsule",
+        category=PatternCategory.LAUNCHER,
+    )
+    (pattern / "behavior.js").write_text(
+        "setTimeout(() => {}, 1)",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PatternRegistryError, match="unexpected pattern asset"):
+        PatternRegistry.load(tmp_path)
+
+
+def test_source_manifest_requires_runtime_provenance(tmp_path: Path) -> None:
+    pattern = write_source_pattern(
+        tmp_path / "status-capsule-v1",
+        pattern_id="status-capsule",
+        category=PatternCategory.LAUNCHER,
+    )
+    manifest = json.loads((pattern / "manifest.json").read_text(encoding="utf-8"))
+    del manifest["provenance"]
+    rewrite_source_manifest(pattern, manifest)
+
+    with pytest.raises(PatternRegistryError, match="manifest fields"):
+        PatternRegistry.load(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("root_class", "kaigo-pattern-ok}body"),
+        ("css_variable", "--kaigo-pattern-ok;color:red"),
+    ],
+)
+def test_source_manifest_uses_strict_css_token_grammar(
+    tmp_path: Path,
+    field: str,
+    value: str,
+) -> None:
+    kwargs = {
+        "root_class": value if field == "root_class" else None,
+        "css_variable": value if field == "css_variable" else None,
+    }
+    write_source_pattern(
+        tmp_path / "status-capsule-v1",
+        pattern_id="status-capsule",
+        category=PatternCategory.LAUNCHER,
+        parameter_name="size_px" if field == "css_variable" else None,
+        **kwargs,
+    )
+
+    with pytest.raises(PatternRegistryError, match=field.replace("_", " ")):
+        PatternRegistry.load(tmp_path)
+
+
+def test_source_status_is_operational_and_does_not_change_immutable_hash(
+    tmp_path: Path,
+) -> None:
+    pattern = write_source_pattern(
+        tmp_path / "status-capsule-v1",
+        pattern_id="status-capsule",
+        category=PatternCategory.LAUNCHER,
+    )
+    active = PatternRegistry.load(tmp_path).resolve("status-capsule", 1)
+    manifest = json.loads((pattern / "manifest.json").read_text(encoding="utf-8"))
+    manifest["status"] = "deprecated"
+    original_hash = manifest["implementation_sha256"]
+    (pattern / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    deprecated_registry = PatternRegistry.load(tmp_path)
+    deprecated = deprecated_registry.resolve("status-capsule", 1)
+
+    assert deprecated.implementation_sha256 == original_hash
+    assert deprecated.implementation_sha256 == active.implementation_sha256
+    assert deprecated not in deprecated_registry.selectable_for(
+        PatternCategory.LAUNCHER
+    )
+
+
+def test_source_public_snapshot_has_contract_but_no_assets(tmp_path: Path) -> None:
+    write_source_pattern(
+        tmp_path / "status-capsule-v1",
+        pattern_id="status-capsule",
+        category=PatternCategory.LAUNCHER,
+    )
+
+    public = PatternRegistry.load(tmp_path).resolve("status-capsule", 1).public_dict()
+
+    assert public["integration_mode"] == "runtime_source"
+    assert public["source_contract"]["runtime_contract_id"] == "chat-v1"
+    assert public["provenance"]["review_state"] == "verified"
+    assert not {"html", "css", "javascript"}.intersection(public)
+
+
+def test_legacy_manifest_snapshot_shape_is_unchanged() -> None:
+    legacy = load_builtin_registry().resolve("orb-pulse", 1).public_dict()
+
+    assert set(legacy) == {
+        "pattern_id",
+        "version",
+        "category",
+        "status",
+        "description",
+        "parameter_schema",
+        "incompatible_with",
+        "implementation_sha256",
+    }

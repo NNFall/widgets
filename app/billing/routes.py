@@ -244,7 +244,9 @@ async def pending_payment(request: web.Request) -> web.Response:
                 select(PaymentAttempt)
                 .where(
                     PaymentAttempt.user_id == user_id,
-                    PaymentAttempt.status.in_(("creating", "pending", "failed")),
+                    PaymentAttempt.status.in_(
+                        ("creating", "pending", "failed", "dispatch_unknown")
+                    ),
                 )
                 .order_by(
                     PaymentAttempt.updated_at.desc(),

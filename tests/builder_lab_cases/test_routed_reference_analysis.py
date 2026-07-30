@@ -11,6 +11,8 @@ from app.db.base import Base
 from app.models.contracts import (
     ModelRequest,
     ModelResponse,
+    ModelRouteAttempt,
+    ModelRouteExhausted,
     ModelUsage,
     ProviderCapabilities,
 )
@@ -22,7 +24,11 @@ from app.models.router import (
 )
 from app.models.structured_generation import RoutedStructuredGenerationBackend
 from app.saas.models import ModelCall
-from scripts.analyze_reference_site import REFERENCE_ANALYSIS_SCHEMA, analyze_reference_site
+from scripts.analyze_reference_site import (
+    REFERENCE_ANALYSIS_SCHEMA,
+    ReferenceAnalysisError,
+    analyze_reference_site,
+)
 from tests.builder_lab_cases.test_analyze_reference_site import (
     REQUIRED_LABELS,
     evidence_with_manifest,
@@ -32,6 +38,118 @@ from tests.saas_cases.test_trial_service import _database
 
 
 POSTGRES_URL = os.getenv("KAIGO_TEST_POSTGRES_URL")
+
+
+@pytest.mark.asyncio
+async def test_routed_reference_preserves_terminal_route_usage_and_cost(tmp_path) -> None:
+    attempt = ModelRouteAttempt(
+        provider="agentrouter",
+        model="glm-5.2-reference",
+        outcome="failed",
+        latency_ms=456,
+        usage=ModelUsage(input_tokens=100, output_tokens=20, thinking_tokens=5),
+        cost_microusd=12_345,
+        cost_state="reported",
+        error_code="generation_timeout",
+    )
+    route_error = ModelRouteExhausted(
+        attempts=(attempt,),
+        usage=ModelUsage(input_tokens=100, output_tokens=20, thinking_tokens=5),
+    )
+
+    class ExhaustedBackend:
+        model_name = "routed-model"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate(self, request: ModelRequest) -> ModelResponse:
+            self.calls += 1
+            if self.calls == 1:
+                payload = valid_analysis(REQUIRED_LABELS)
+                payload["public_facts"] = []
+                return ModelResponse(
+                    text="{}",
+                    parsed=payload,
+                    usage=ModelUsage(
+                        input_tokens=30,
+                        output_tokens=10,
+                        thinking_tokens=2,
+                    ),
+                )
+            raise route_error
+
+    inputs, manifest = evidence_with_manifest(tmp_path)
+    backend = ExhaustedBackend()
+
+    with pytest.raises(ReferenceAnalysisError) as caught:
+        await analyze_reference_site(
+            source_url="https://rawbureau.ru/",
+            allowed_hosts={"rawbureau.ru"},
+            screenshot_inputs=inputs,
+            evidence_root=tmp_path,
+            captured_at="2026-07-19T12:10:23.127441+00:00",
+            coverage_status="complete",
+            capture_manifest=manifest,
+            api_key=None,
+            structured_backend=backend,
+        )
+
+    assert caught.value.error_code == "route_exhausted"
+    assert caught.value.usage == ModelUsage(
+        input_tokens=130,
+        output_tokens=30,
+        thinking_tokens=7,
+    )
+    assert caught.value.diagnostic == route_error.diagnostic
+    assert '"cost_microusd":12345' in caught.value.diagnostic
+    assert not any(
+        provider in caught.value.public_message
+        for provider in ("Gemini", "GPT", "GLM", "AgentRouter")
+    )
+    assert backend.calls == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exception_type", "error_code"),
+    [
+        (ValueError, "invalid_semantic_output"),
+        (TimeoutError, "analysis_timeout"),
+        (RuntimeError, "analysis_unavailable"),
+    ],
+)
+async def test_routed_reference_errors_are_provider_neutral(
+    tmp_path,
+    exception_type,
+    error_code,
+) -> None:
+    class FailingBackend:
+        model_name = "routed-model"
+
+        async def generate(self, request: ModelRequest) -> ModelResponse:
+            raise exception_type("private Gemini GPT GLM AgentRouter failure")
+
+    inputs, manifest = evidence_with_manifest(tmp_path)
+
+    with pytest.raises(ReferenceAnalysisError) as caught:
+        await analyze_reference_site(
+            source_url="https://rawbureau.ru/",
+            allowed_hosts={"rawbureau.ru"},
+            screenshot_inputs=inputs,
+            evidence_root=tmp_path,
+            captured_at="2026-07-19T12:10:23.127441+00:00",
+            coverage_status="complete",
+            capture_manifest=manifest,
+            api_key=None,
+            structured_backend=FailingBackend(),
+        )
+
+    assert caught.value.error_code == error_code
+    assert not any(
+        provider in caught.value.public_message
+        for provider in ("Gemini", "GPT", "GLM", "AgentRouter")
+    )
 
 
 @pytest.mark.asyncio

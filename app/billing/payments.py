@@ -13,7 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analytics.service import record_funnel_event
 from app.billing.catalog import PLAN_CATALOG, BillingPlan
-from app.billing.contracts import CheckoutCommand, Money, PaymentProvider, PaymentStatus
+from app.billing.contracts import (
+    CheckoutCommand,
+    Money,
+    PaymentProvider,
+    PaymentStatus,
+    validate_provider_idempotency_key,
+)
 from app.db.models import User
 from app.saas.models import (
     PaymentAttempt,
@@ -66,6 +72,8 @@ _IDEMPOTENCY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
 _MERCHANT_ACCOUNT_FINGERPRINT_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _LEGACY_UNKNOWN_MERCHANT_ACCOUNT = "!" * 64
 _CHECKOUT_CREATION_LEASE = timedelta(seconds=30)
+_PROVIDER_IDEMPOTENCY_WINDOW = timedelta(hours=24)
+_PROVIDER_DISPATCH_SAFETY_MARGIN = timedelta(minutes=5)
 
 
 class BillingService:
@@ -115,7 +123,49 @@ class BillingService:
         # our globally unique attempt prevents two users choosing the same
         # public key from sharing one provider payment. It also stays below
         # YooKassa's 64-character limit and is stable for crash recovery.
-        return f"kaigo:{attempt_id}"
+        return f"kaigo-{attempt_id}"
+
+    @staticmethod
+    def _payload_timestamp(payload: dict, field_name: str) -> datetime:
+        value = payload.get(field_name)
+        if not isinstance(value, str):
+            raise BillingError("payment attempt requires manual recovery")
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError as error:
+            raise BillingError("payment attempt requires manual recovery") from error
+        if parsed.tzinfo is None:
+            raise BillingError("payment attempt requires manual recovery")
+        return parsed.astimezone(UTC)
+
+    @classmethod
+    def _stored_provider_dispatch(
+        cls,
+        attempt: PaymentAttempt,
+        *,
+        now: datetime,
+    ) -> tuple[str, datetime]:
+        payload = attempt.payload
+        if not isinstance(payload, dict):
+            raise BillingError("payment attempt requires manual recovery")
+        key = payload.get("provider_idempotency_key")
+        try:
+            key = validate_provider_idempotency_key(key)
+        except ValueError as error:
+            raise BillingError("payment attempt requires manual recovery") from error
+        if key != cls._provider_idempotency_key(attempt.id):
+            raise BillingError("payment attempt requires manual recovery")
+        first_dispatched_at = cls._payload_timestamp(
+            payload, "first_dispatched_at"
+        )
+        expires_at = cls._payload_timestamp(
+            payload, "provider_idempotency_expires_at"
+        )
+        if expires_at != first_dispatched_at + _PROVIDER_IDEMPOTENCY_WINDOW:
+            raise BillingError("payment attempt requires manual recovery")
+        if now >= expires_at - _PROVIDER_DISPATCH_SAFETY_MARGIN:
+            raise BillingError("provider idempotency window expired")
+        return key, expires_at
 
     def _assert_merchant_account(self, attempt: PaymentAttempt) -> None:
         if not self.is_current_merchant_account(attempt):
@@ -195,8 +245,8 @@ class BillingService:
                     )
                 if row.checkout_url:
                     return self._checkout_result(row, created=False)
-                if row.status == "failed":
-                    raise BillingError("previous checkout creation failed")
+                if row.status in {"failed", "dispatch_unknown"}:
+                    raise BillingError("previous checkout outcome is unresolved")
         raise BillingError("checkout creation is still in progress")
 
     async def create_checkout(
@@ -221,6 +271,8 @@ class BillingService:
             created = False
             dispatch = False
             lease_token: str | None = None
+            provider_idempotency_key: str | None = None
+            provider_idempotency_expires_at: datetime | None = None
             try:
                 async with self._sessions() as database, database.begin():
                     # Locking the user serializes checkout decisions across
@@ -237,7 +289,7 @@ class BillingService:
                         .where(
                             PaymentAttempt.user_id == user_id,
                             PaymentAttempt.status.in_(
-                                ("creating", "pending", "failed")
+                                ("creating", "pending", "failed", "dispatch_unknown")
                             ),
                             or_(
                                 PaymentAttempt.provider != self._provider.name,
@@ -256,6 +308,31 @@ class BillingService:
                         raise MerchantAccountMismatch(
                             "payment attempt merchant account does not match "
                             "configured provider"
+                        )
+                    unresolved_attempt = await database.scalar(
+                        select(PaymentAttempt)
+                        .where(
+                            PaymentAttempt.user_id == user_id,
+                            PaymentAttempt.idempotency_key != idempotency_key,
+                            PaymentAttempt.status.in_(
+                                (
+                                    "creating",
+                                    "pending",
+                                    "failed",
+                                    "dispatch_unknown",
+                                )
+                            ),
+                        )
+                        .order_by(
+                            PaymentAttempt.updated_at.desc(),
+                            PaymentAttempt.created_at.desc(),
+                        )
+                        .with_for_update()
+                        .limit(1)
+                    )
+                    if unresolved_attempt is not None:
+                        raise BillingError(
+                            "unresolved payment attempt blocks new checkout"
                         )
                     attempt = await database.scalar(
                         select(PaymentAttempt)
@@ -291,19 +368,31 @@ class BillingService:
                             and updated_at is not None
                             and updated_at <= now - _CHECKOUT_CREATION_LEASE
                         ):
+                            (
+                                provider_idempotency_key,
+                                provider_idempotency_expires_at,
+                            ) = self._stored_provider_dispatch(attempt, now=now)
                             lease_token = uuid4().hex
                             attempt.updated_at = now
-                            attempt.payload = {"checkout_lease_token": lease_token}
+                            payload = dict(attempt.payload)
+                            payload["checkout_lease_token"] = lease_token
+                            attempt.payload = payload
                             dispatch = True
-                        elif attempt.status == "failed":
+                        elif attempt.status in {"failed", "dispatch_unknown"}:
                             # The provider request may have been accepted even
                             # when our process observed a transport failure.
                             # Retrying the same attempt with the deterministic
                             # provider key is the only safe way to reconcile it.
+                            (
+                                provider_idempotency_key,
+                                provider_idempotency_expires_at,
+                            ) = self._stored_provider_dispatch(attempt, now=now)
                             lease_token = uuid4().hex
                             attempt.status = "creating"
                             attempt.updated_at = now
-                            attempt.payload = {"checkout_lease_token": lease_token}
+                            payload = dict(attempt.payload)
+                            payload["checkout_lease_token"] = lease_token
+                            attempt.payload = payload
                             dispatch = True
                     else:
                         attempt = PaymentAttempt(
@@ -323,8 +412,22 @@ class BillingService:
                         )
                         database.add(attempt)
                         await database.flush()
+                        first_dispatched_at = datetime.now(UTC)
+                        provider_idempotency_key = self._provider_idempotency_key(
+                            attempt.id
+                        )
+                        provider_idempotency_expires_at = (
+                            first_dispatched_at + _PROVIDER_IDEMPOTENCY_WINDOW
+                        )
                         lease_token = uuid4().hex
-                        attempt.payload = {"checkout_lease_token": lease_token}
+                        attempt.payload = {
+                            "checkout_lease_token": lease_token,
+                            "provider_idempotency_key": provider_idempotency_key,
+                            "first_dispatched_at": first_dispatched_at.isoformat(),
+                            "provider_idempotency_expires_at": (
+                                provider_idempotency_expires_at.isoformat()
+                            ),
+                        }
                         created = True
                         dispatch = True
                     await record_funnel_event(
@@ -369,9 +472,20 @@ class BillingService:
             try:
                 if lease_token is None:
                     raise BillingError("checkout creation lease is missing")
+                if (
+                    provider_idempotency_key is None
+                    or provider_idempotency_expires_at is None
+                ):
+                    raise BillingError("payment attempt requires manual recovery")
+                if (
+                    datetime.now(UTC)
+                    >= provider_idempotency_expires_at
+                    - _PROVIDER_DISPATCH_SAFETY_MARGIN
+                ):
+                    raise BillingError("provider idempotency window expired")
                 checkout = await self._provider.create_checkout(
                     CheckoutCommand(
-                        idempotency_key=self._provider_idempotency_key(attempt_id),
+                        idempotency_key=provider_idempotency_key,
                         amount=plan.amount,
                         description=plan.title,
                         metadata=metadata,
@@ -396,7 +510,7 @@ class BillingService:
                         and failed.checkout_url is None
                         and failed.payload.get("checkout_lease_token") == lease_token
                     ):
-                        failed.status = "failed"
+                        failed.status = "dispatch_unknown"
                 raise
 
             lost_lease = False
@@ -443,7 +557,12 @@ class BillingService:
             if attempt is None:
                 raise PaymentNotFound("payment attempt not found")
             self._assert_merchant_account(attempt)
-            if attempt.status not in {"creating", "pending", "failed"}:
+            if attempt.status not in {
+                "creating",
+                "pending",
+                "failed",
+                "dispatch_unknown",
+            }:
                 raise BillingError("payment attempt cannot be resumed")
             plan = self._stored_plan(attempt)
             idempotency_key = attempt.idempotency_key

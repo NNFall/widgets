@@ -21,6 +21,7 @@ from app.models.contracts import (
     ModelUsage,
     ProviderCapabilities,
     ProviderQuotaExceeded,
+    ProviderTimeout,
     ProviderUnavailable,
     UnsupportedModelRequest,
 )
@@ -29,6 +30,7 @@ from app.models.contracts import (
 QWEN_CODE_VERSION = "0.21.0"
 QWEN_CODE_PACKAGE = f"@qwen-code/qwen-code@{QWEN_CODE_VERSION}"
 _SIGKILL = getattr(signal, "SIGKILL", 9)
+_PROCESS_CLEANUP_TIMEOUT_SECONDS = 5.0
 
 _HOST_ENVIRONMENT_ALLOWLIST = (
     "PATH",
@@ -58,7 +60,7 @@ class AgentRouterQwenProvider:
         *,
         api_key: str,
         base_url: str = "https://agentrouter.org/v1",
-        timeout_seconds: float = 900.0,
+        timeout_seconds: float = 180.0,
         working_directory: str | Path | None = None,
         executable: str | None = None,
     ) -> None:
@@ -129,7 +131,7 @@ class AgentRouterQwenProvider:
             raise
         except TimeoutError as error:
             await _terminate_process_tree(process)
-            raise ProviderUnavailable("AgentRouter generation timed out") from error
+            raise ProviderTimeout("AgentRouter generation timed out") from error
         except Exception as error:
             await _terminate_process_tree(process)
             raise ProviderUnavailable(
@@ -186,28 +188,33 @@ async def _terminate_process_tree(
     platform: str | None = None,
 ) -> None:
     platform = platform or os.name
+    cleanup_deadline = (
+        asyncio.get_running_loop().time() + _PROCESS_CLEANUP_TIMEOUT_SECONDS
+    )
     if process.returncode is None and getattr(process, "pid", None):
         if platform == "nt":
             with suppress(Exception):
-                taskkill = await asyncio.create_subprocess_exec(
-                    "taskkill.exe",
-                    "/PID",
-                    str(process.pid),
-                    "/T",
-                    "/F",
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                    env=_allowlisted_host_environment(),
-                    **_process_start_options("nt"),
-                )
-                await taskkill.communicate()
+                async with asyncio.timeout_at(cleanup_deadline):
+                    taskkill = await asyncio.create_subprocess_exec(
+                        "taskkill.exe",
+                        "/PID",
+                        str(process.pid),
+                        "/T",
+                        "/F",
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                        env=_allowlisted_host_environment(),
+                        **_process_start_options("nt"),
+                    )
+                    await taskkill.communicate()
         else:
             with suppress(ProcessLookupError, PermissionError):
                 os.killpg(process.pid, _SIGKILL)
     with suppress(ProcessLookupError):
         process.kill()
     with suppress(Exception):
-        await process.wait()
+        async with asyncio.timeout_at(cleanup_deadline):
+            await process.wait()
 
 
 def parse_qwen_json_output(

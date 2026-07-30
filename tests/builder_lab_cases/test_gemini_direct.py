@@ -4,6 +4,14 @@ import types as std_types
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from app.models.contracts import (
+    BilledModelProviderError,
+    ModelResponse,
+    ModelRouteAttempt,
+    ModelRouteExhausted,
+    ModelUsage,
+    ProviderTimeout,
+)
 from builder_lab.engines.base import BuilderEngineError
 from builder_lab.engines.gemini_direct import (
     GeminiDirectEngine,
@@ -56,6 +64,10 @@ class FakeClient:
         self.aio = std_types.SimpleNamespace(models=self.models)
 
 
+class BilledProviderUnavailable(BilledModelProviderError):
+    error_code = "provider_unavailable"
+
+
 def fake_response(candidate=None):
     candidate = candidate or artifact(revision=2, stage=Stage.FOUNDATION)
     usage = std_types.SimpleNamespace(
@@ -81,6 +93,178 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             locale="ru",
             creativity=1.1,
         )
+
+    async def test_routed_provider_timeout_becomes_builder_generation_timeout(self):
+        router = std_types.SimpleNamespace(
+            generate=AsyncMock(
+                side_effect=ProviderTimeout("AgentRouter GPT request timed out")
+            )
+        )
+        engine = GeminiDirectEngine(
+            model="configured-gemini-model",
+            model_router=router,
+            routing_role="direction_candidate",
+        )
+
+        with self.assertRaises(BuilderEngineError) as caught:
+            await engine.propose_direction(
+                request=self.request,
+                role=DirectionRole.BRAND_ARCHAEOLOGIST,
+                proposal_id="candidate-1",
+            )
+
+        self.assertEqual(caught.exception.error_code, "generation_timeout")
+        for provider_name in ("Gemini", "GPT", "GLM"):
+            self.assertNotIn(provider_name, caught.exception.public_message)
+
+    async def test_routed_provider_unavailable_becomes_provider_neutral_builder_error(self):
+        router = std_types.SimpleNamespace(
+            generate=AsyncMock(
+                side_effect=BilledProviderUnavailable(
+                    "Gemini fallback after GPT and GLM was unavailable",
+                    usage=ModelUsage(
+                        input_tokens=19,
+                        output_tokens=11,
+                        thinking_tokens=4,
+                    ),
+                    request_id="billed-failure-1",
+                )
+            )
+        )
+        engine = GeminiDirectEngine(
+            model="configured-gemini-model",
+            model_router=router,
+            routing_role="widget_generator",
+        )
+
+        with self.assertRaises(BuilderEngineError) as caught:
+            await engine.generate(
+                request=self.request,
+                stage=Stage.FOUNDATION,
+                revision=1,
+            )
+
+        self.assertEqual(caught.exception.error_code, "provider_unavailable")
+        self.assertEqual(caught.exception.usage.prompt_tokens, 19)
+        self.assertEqual(caught.exception.usage.output_tokens, 7)
+        self.assertEqual(caught.exception.usage.thinking_tokens, 4)
+        self.assertIn("BilledProviderUnavailable", caught.exception.diagnostic)
+        for provider_name in ("Gemini", "GPT", "GLM"):
+            self.assertNotIn(provider_name, caught.exception.public_message)
+
+    async def test_routed_result_diagnostic_uses_actual_provider_and_model(self):
+        payload = artifact(revision=1, stage=Stage.FOUNDATION).to_dict()
+        router = std_types.SimpleNamespace(
+            generate=AsyncMock(
+                return_value=ModelResponse(
+                    text=json.dumps(payload),
+                    parsed=payload,
+                    usage=ModelUsage(input_tokens=12, output_tokens=5),
+                    request_id="routed-response-1",
+                    raw={"provider": "agentrouter", "model": "gpt-5.5"},
+                )
+            )
+        )
+        engine = GeminiDirectEngine(
+            model="configured-gemini-model",
+            model_router=router,
+            routing_role="widget_generator",
+        )
+
+        result = await engine.generate(
+            request=self.request,
+            stage=Stage.FOUNDATION,
+            revision=1,
+        )
+
+        self.assertEqual(result.diagnostic, "provider=agentrouter; model=gpt-5.5")
+
+    async def test_route_exhaustion_preserves_safe_attempt_diagnostic_and_usage(self):
+        route_error = ModelRouteExhausted(
+            attempts=(
+                ModelRouteAttempt(
+                    provider="agentrouter",
+                    model="gpt-5.5",
+                    outcome="failed",
+                    latency_ms=100,
+                    usage=ModelUsage(input_tokens=15, output_tokens=6, thinking_tokens=2),
+                    cost_microusd=123,
+                    cost_state="reported",
+                    error_code="invalid_response",
+                ),
+                ModelRouteAttempt(
+                    provider="gemini",
+                    model="gemini-fallback",
+                    outcome="failed",
+                    latency_ms=80,
+                    usage=ModelUsage(),
+                    cost_microusd=0,
+                    cost_state="unknown",
+                    error_code="provider_unavailable",
+                ),
+            ),
+            usage=ModelUsage(input_tokens=15, output_tokens=6, thinking_tokens=2),
+        )
+        router = std_types.SimpleNamespace(generate=AsyncMock(side_effect=route_error))
+        engine = GeminiDirectEngine(
+            model_router=router,
+            routing_role="direction_candidate",
+            routing_timeout_seconds=180,
+        )
+
+        with self.assertRaises(BuilderEngineError) as caught:
+            await engine.propose_direction(
+                request=self.request,
+                role=DirectionRole.BRAND_ARCHAEOLOGIST,
+                proposal_id="candidate-1",
+            )
+
+        self.assertEqual(caught.exception.error_code, "route_exhausted")
+        self.assertEqual(caught.exception.diagnostic, route_error.diagnostic)
+        self.assertEqual(caught.exception.usage.prompt_tokens, 15)
+        self.assertEqual(caught.exception.usage.output_tokens, 4)
+        self.assertEqual(caught.exception.usage.thinking_tokens, 2)
+        for provider_name in ("Gemini", "GPT", "GLM"):
+            self.assertNotIn(provider_name, caught.exception.public_message)
+        routed_timeout = router.generate.await_args.kwargs["timeout_seconds"]
+        self.assertGreater(routed_timeout, 0)
+        self.assertLessEqual(routed_timeout, 180)
+
+    async def test_routed_local_validation_error_is_provider_neutral(self):
+        router = std_types.SimpleNamespace(
+            generate=AsyncMock(
+                return_value=ModelResponse(
+                    text="{}",
+                    parsed={"unexpected": "payload"},
+                    usage=ModelUsage(input_tokens=4, output_tokens=2),
+                    raw={"provider": "agentrouter", "model": "gpt-5.5"},
+                )
+            )
+        )
+        engine = GeminiDirectEngine(
+            model_router=router,
+            routing_role="direction_candidate",
+            routing_timeout_seconds=180,
+        )
+
+        with self.assertRaises(BuilderEngineError) as caught:
+            await engine.propose_direction(
+                request=self.request,
+                role=DirectionRole.BRAND_ARCHAEOLOGIST,
+                proposal_id="candidate-1",
+            )
+
+        self.assertEqual(caught.exception.error_code, "invalid_artifact")
+        for provider_name in ("Gemini", "GPT", "GLM"):
+            self.assertNotIn(provider_name, caught.exception.public_message)
+        self.assertEqual(router.generate.await_count, 2)
+        timeouts = [
+            call.kwargs["timeout_seconds"]
+            for call in router.generate.await_args_list
+        ]
+        self.assertGreater(timeouts[0], timeouts[1])
+        self.assertLessEqual(timeouts[0], 180)
+        self.assertGreater(timeouts[1], 0)
 
     async def test_builds_structured_async_request_and_parses_usage(self):
         client = FakeClient(response=fake_response())

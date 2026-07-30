@@ -40,11 +40,13 @@ class ReferencePipelineError(RuntimeError):
         public_message: str,
         *,
         diagnostic: str | None = None,
+        usage: TokenUsage | None = None,
     ) -> None:
         super().__init__(public_message)
         self.error_code = error_code
         self.public_message = public_message
         self.diagnostic = diagnostic
+        self.usage = usage or TokenUsage()
 
 
 @dataclass(frozen=True)
@@ -267,6 +269,11 @@ class GeminiReferencePipeline:
         *,
         structured_backend: StructuredGenerationBackend | None = None,
     ) -> ReferenceAnalysisResult:
+        resolved_backend = (
+            structured_backend
+            if structured_backend is not None
+            else self._structured_backend
+        )
         try:
             crawl = await self._crawler.crawl(source_url)
         except UnsafeReferenceUrl as exc:
@@ -319,27 +326,56 @@ class GeminiReferencePipeline:
                     thinking_level=self._thinking_level,
                     base_url=self._base_url,
                     timeout_seconds=self._timeout_seconds,
-                    structured_backend=(
-                        structured_backend or self._structured_backend
-                    ),
+                    structured_backend=resolved_backend,
                 )
             except ReferenceAnalysisError as exc:
+                terminal_route_error = exc.error_code in {
+                    "route_exhausted",
+                    "invalid_response",
+                }
                 error_code = (
-                    "missing_api_key"
-                    if exc.error_code == "missing_api_key"
-                    else "reference_analysis_failed"
+                    exc.error_code
+                    if terminal_route_error
+                    else (
+                        "missing_api_key"
+                        if exc.error_code == "missing_api_key"
+                        else "reference_analysis_failed"
+                    )
+                )
+                model_usage = getattr(exc, "usage", None)
+                usage = (
+                    TokenUsage(
+                        prompt_tokens=model_usage.input_tokens,
+                        output_tokens=max(
+                            0,
+                            model_usage.output_tokens
+                            - model_usage.thinking_tokens,
+                        ),
+                        thinking_tokens=model_usage.thinking_tokens,
+                    )
+                    if model_usage is not None
+                    else TokenUsage()
                 )
                 raise ReferencePipelineError(
                     error_code,
                     exc.public_message,
-                    diagnostic=str(
-                        getattr(exc, "diagnostic", None) or str(exc)
-                    )[:1_000],
+                    diagnostic=(
+                        getattr(exc, "diagnostic", None)
+                        if terminal_route_error
+                        else str(
+                            getattr(exc, "diagnostic", None) or str(exc)
+                        )[:1_000]
+                    ),
+                    usage=usage,
                 ) from exc
             except Exception as exc:
                 raise ReferencePipelineError(
                     "reference_analysis_failed",
-                    "Gemini не завершил визуальный анализ сайта",
+                    (
+                        "Gemini не завершил визуальный анализ сайта"
+                        if resolved_backend is None
+                        else "Сервис генерации не завершил визуальный анализ сайта"
+                    ),
                     diagnostic=f"{type(exc).__name__}: {str(exc)[:1_000]}",
                 ) from exc
         return compile_reference_context(analysis)

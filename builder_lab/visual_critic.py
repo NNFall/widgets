@@ -8,6 +8,7 @@ import string
 import hashlib
 import inspect
 import re
+import time
 import colorsys
 import warnings
 from dataclasses import dataclass, replace
@@ -18,7 +19,7 @@ from google import genai
 from google.genai import types
 from PIL import Image, ImageDraw, ImageFont
 
-from app.models.contracts import ModelRequest, ModelResponse
+from app.models.contracts import ModelRequest, ModelResponse, ModelRouteExhausted
 from app.models.router import ModelRouter
 
 from .browser_audit import (
@@ -773,6 +774,7 @@ class GeminiVisualCritic:
         thinking_level: str = "high",
         base_url: str = "https://generativelanguage.googleapis.com",
         timeout_seconds: float = 60,
+        routing_timeout_seconds: float = 180,
         client: Any | None = None,
         proof_code_factory: Callable[[ScreenshotState], str] = _random_code,
         role: VisualCriticRole = VisualCriticRole.ADVERSARIAL_CUSTOMER,
@@ -787,6 +789,7 @@ class GeminiVisualCritic:
         self.model = model
         self.thinking_level = normalize_thinking_level(thinking_level)
         self.timeout_seconds = timeout_seconds
+        self.routing_timeout_seconds = routing_timeout_seconds
         self.role = VisualCriticRole(role)
         self._model_router = model_router
         self._routing_mode = routing_mode
@@ -808,6 +811,11 @@ class GeminiVisualCritic:
     ) -> VisualCriticResult:
         total_usage = TokenUsage()
         correction: str | None = None
+        routing_deadline = (
+            time.monotonic() + self.routing_timeout_seconds
+            if self._model_router is not None
+            else None
+        )
         for attempt in range(2):
             try:
                 result = await self._critique_once(
@@ -815,6 +823,7 @@ class GeminiVisualCritic:
                     brief=brief,
                     art_direction=art_direction,
                     validation_correction=correction,
+                    routing_deadline=routing_deadline,
                 )
             except asyncio.CancelledError:
                 raise
@@ -843,6 +852,7 @@ class GeminiVisualCritic:
         brief: str,
         art_direction: str,
         validation_correction: str | None = None,
+        routing_deadline: float | None = None,
     ) -> VisualCriticResult:
         if not isinstance(audit, BrowserAuditReport):
             raise TypeError("audit must be BrowserAuditReport")
@@ -960,21 +970,32 @@ class GeminiVisualCritic:
             thinking_config=policy.thinking_config,
         )
         try:
-            async with asyncio.timeout(self.timeout_seconds):
-                if self._model_router is not None:
-                    response = await self._model_router.generate(
-                        role=self.role.value,
-                        mode=self._routing_mode,
-                        run_id=self._run_id,
-                        request=ModelRequest(
-                            prompt=config.system_instruction + "\n\n" + "\n".join(router_text),
-                            images=tuple(router_images),
-                            response_schema=VISUAL_CRITIC_SCHEMA,
-                            temperature=0.1,
-                            metadata={"thinking_level": self.thinking_level},
-                        ),
-                    )
-                else:
+            call_timeout_seconds = (
+                routing_deadline - time.monotonic()
+                if routing_deadline is not None
+                else self.timeout_seconds
+            )
+            if self._model_router is not None:
+                if call_timeout_seconds <= 0:
+                    raise TimeoutError("visual critic routing deadline expired")
+                # The router owns its deadline plus bounded audit/provider cleanup.
+                # Wrapping it in the same outer timeout would cancel finalization
+                # before route_exhausted can preserve billed usage and provenance.
+                response = await self._model_router.generate(
+                    role=self.role.value,
+                    mode=self._routing_mode,
+                    run_id=self._run_id,
+                    request=ModelRequest(
+                        prompt=config.system_instruction + "\n\n" + "\n".join(router_text),
+                        images=tuple(router_images),
+                        response_schema=VISUAL_CRITIC_SCHEMA,
+                        temperature=0.1,
+                        metadata={"thinking_level": self.thinking_level},
+                    ),
+                    timeout_seconds=call_timeout_seconds,
+                )
+            else:
+                async with asyncio.timeout(call_timeout_seconds):
                     response = await self._client.aio.models.generate_content(  # type: ignore[union-attr]
                         model=self.model,
                         contents=contents,
@@ -985,6 +1006,20 @@ class GeminiVisualCritic:
         except TimeoutError as exc:
             raise VisualCriticError(
                 "visual_critic_timeout", "Gemini visual critic не завершил проверку вовремя"
+            ) from exc
+        except ModelRouteExhausted as exc:
+            raise VisualCriticError(
+                exc.error_code,
+                "Сервис визуальной проверки не смог завершить запрос",
+                diagnostic=exc.diagnostic,
+                usage=TokenUsage(
+                    prompt_tokens=exc.usage.input_tokens,
+                    output_tokens=max(
+                        0,
+                        exc.usage.output_tokens - exc.usage.thinking_tokens,
+                    ),
+                    thinking_tokens=exc.usage.thinking_tokens,
+                ),
             ) from exc
         except Exception as exc:
             raise VisualCriticError(

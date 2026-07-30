@@ -14,6 +14,7 @@ from app.models.contracts import (
     ModelUnavailable,
     ProviderCapabilities,
     ProviderQuotaExceeded,
+    ProviderTimeout,
     ProviderUnavailable,
 )
 from app.models.providers.gemini import GeminiModelProvider
@@ -271,7 +272,7 @@ async def test_routed_gemini_uses_model_specific_provider_schema() -> None:
             RuntimeError("404 NOT_FOUND: models/gemini-nope is not found"),
             ModelUnavailable,
         ),
-        (TimeoutError("upstream timeout"), ProviderUnavailable),
+        (TimeoutError("upstream timeout"), ProviderTimeout),
         (RuntimeError("connection refused https://private-route"), ProviderUnavailable),
     ],
 )

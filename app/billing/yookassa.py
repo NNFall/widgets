@@ -10,10 +10,15 @@ import httpx
 from app.billing.contracts import (
     CheckoutCommand,
     Money,
+    PaymentCancellationReason,
+    PaymentReceipt,
     PaymentStatus,
     ProviderCheckout,
     ProviderNotification,
     ProviderPayment,
+    ProviderPaymentMethod,
+    RecurringPaymentCommand,
+    validate_provider_idempotency_key,
 )
 
 
@@ -26,6 +31,101 @@ class YooKassaVerificationError(YooKassaError):
 
 
 _PAYMENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,255}$")
+_CANCELLATION_PARTIES = frozenset({"yoo_money", "payment_network", "merchant"})
+
+
+def _validated_provider_id(value: object, *, field_name: str) -> str:
+    if not isinstance(value, str) or not _PAYMENT_ID_PATTERN.fullmatch(value):
+        raise YooKassaVerificationError(f"provider {field_name} is invalid")
+    return value
+
+
+def _validated_idempotency_key(value: object) -> str:
+    try:
+        return validate_provider_idempotency_key(value)
+    except ValueError as error:
+        raise YooKassaVerificationError(
+            "provider idempotency key is invalid"
+        ) from error
+
+
+def _provider_amount(money: Money) -> dict[str, str]:
+    return {
+        "value": f"{Decimal(money.amount_minor) / Decimal(100):.2f}",
+        "currency": money.currency,
+    }
+
+
+def _provider_quantity(quantity: Decimal) -> int | float:
+    if quantity == quantity.to_integral_value():
+        return int(quantity)
+    return float(quantity)
+
+
+def _receipt_payload(receipt: PaymentReceipt, *, expected_amount: Money) -> dict[str, object]:
+    if not isinstance(receipt, PaymentReceipt):
+        raise ValueError("receipt must be a validated PaymentReceipt")
+    total_minor = Decimal(0)
+    items: list[dict[str, object]] = []
+    for item in receipt.items:
+        if item.amount.currency != expected_amount.currency:
+            raise ValueError("receipt total currency does not match payment amount")
+        total_minor += Decimal(item.amount.amount_minor) * Decimal(item.quantity)
+        items.append(
+            {
+                "description": item.description,
+                "quantity": _provider_quantity(item.quantity),
+                "amount": _provider_amount(item.amount),
+                "vat_code": item.vat_code,
+                "measure": item.measure,
+                "payment_mode": item.payment_mode,
+                "payment_subject": item.payment_subject,
+            }
+        )
+    if total_minor != Decimal(expected_amount.amount_minor):
+        raise ValueError("receipt total does not match payment amount")
+    payload: dict[str, object] = {
+        "customer": {"email": receipt.customer_email},
+        "items": items,
+    }
+    if receipt.tax_system_code is not None:
+        payload["tax_system_code"] = receipt.tax_system_code
+    return payload
+
+
+def _payment_method(payload: object) -> ProviderPaymentMethod | None:
+    if not isinstance(payload, dict) or payload.get("saved") is not True:
+        return None
+    method_id = _validated_provider_id(
+        payload.get("id"), field_name="payment method id"
+    )
+    method_type = payload.get("type")
+    if method_type is not None and (
+        not isinstance(method_type, str) or not method_type.strip()
+    ):
+        raise YooKassaVerificationError("provider payment method type is invalid")
+    return ProviderPaymentMethod(
+        provider_payment_method_id=method_id,
+        saved=True,
+        method_type=method_type,
+    )
+
+
+def _cancellation_reason(
+    payload: object, *, status: PaymentStatus
+) -> PaymentCancellationReason | None:
+    if status is not PaymentStatus.CANCELLED or payload is None:
+        return None
+    if not isinstance(payload, dict):
+        raise YooKassaVerificationError("provider cancellation details are invalid")
+    party = payload.get("party")
+    reason = payload.get("reason")
+    if party not in _CANCELLATION_PARTIES or not isinstance(reason, str):
+        raise YooKassaVerificationError("provider cancellation details are invalid")
+    try:
+        return PaymentCancellationReason(reason)
+    except ValueError:
+        return PaymentCancellationReason.UNKNOWN
 
 
 def _money(payload: object) -> Money:
@@ -54,11 +154,14 @@ def _metadata(payload: object) -> dict[str, str]:
 
 
 def _status(value: object) -> PaymentStatus:
-    if value == "canceled":
-        return PaymentStatus.CANCELLED
+    statuses = {
+        "pending": PaymentStatus.PENDING,
+        "succeeded": PaymentStatus.SUCCEEDED,
+        "canceled": PaymentStatus.CANCELLED,
+    }
     try:
-        return PaymentStatus(str(value))
-    except ValueError as error:
+        return statuses[value]
+    except (KeyError, TypeError) as error:
         raise YooKassaVerificationError("provider status is invalid") from error
 
 
@@ -95,23 +198,28 @@ class YooKassaProvider:
         )
 
     async def create_checkout(self, command: CheckoutCommand) -> ProviderCheckout:
+        idempotency_key = _validated_idempotency_key(command.idempotency_key)
+        body: dict[str, object] = {
+            "amount": _provider_amount(command.amount),
+            "capture": True,
+            "confirmation": {
+                "type": "redirect",
+                "return_url": self._return_url,
+            },
+            "description": command.description,
+            "metadata": dict(command.metadata),
+        }
+        if command.save_payment_method is not None:
+            body["save_payment_method"] = command.save_payment_method
+        if command.receipt is not None:
+            body["receipt"] = _receipt_payload(
+                command.receipt, expected_amount=command.amount
+            )
         try:
             response = await self._client.post(
                 "/payments",
-                headers={"Idempotence-Key": command.idempotency_key},
-                json={
-                    "amount": {
-                        "value": f"{Decimal(command.amount.amount_minor) / Decimal(100):.2f}",
-                        "currency": command.amount.currency,
-                    },
-                    "capture": True,
-                    "confirmation": {
-                        "type": "redirect",
-                        "return_url": self._return_url,
-                    },
-                    "description": command.description,
-                    "metadata": dict(command.metadata),
-                },
+                headers={"Idempotence-Key": idempotency_key},
+                json=body,
             )
             response.raise_for_status()
             payload = response.json()
@@ -132,7 +240,45 @@ class YooKassaProvider:
             paid=payment.paid,
             metadata=payment.metadata,
             test_mode=payment.test_mode,
+            payment_method=payment.payment_method,
         )
+
+    async def create_recurring_payment(
+        self, command: RecurringPaymentCommand
+    ) -> ProviderPayment:
+        idempotency_key = _validated_idempotency_key(command.idempotency_key)
+        payment_method_id = _validated_provider_id(
+            command.payment_method_id, field_name="payment method id"
+        )
+        body: dict[str, object] = {
+            "amount": _provider_amount(command.amount),
+            "capture": True,
+            "payment_method_id": payment_method_id,
+            "description": command.description,
+            "metadata": dict(command.metadata),
+        }
+        if command.receipt is not None:
+            body["receipt"] = _receipt_payload(
+                command.receipt, expected_amount=command.amount
+            )
+        try:
+            response = await self._client.post(
+                "/payments",
+                headers={"Idempotence-Key": idempotency_key},
+                json=body,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as error:
+            raise YooKassaError("YooKassa recurring payment request failed") from error
+        payment = self._parse_payment(payload)
+        self._verify_payment(
+            payment,
+            expected_id=payment.provider_payment_id,
+            expected_amount=command.amount,
+            expected_metadata=command.metadata,
+        )
+        return payment
 
     def parse_notification(self, payload: object) -> ProviderNotification:
         if not isinstance(payload, dict) or payload.get("event") not in {
@@ -153,17 +299,11 @@ class YooKassaProvider:
         expected_amount: Money | None = None,
         expected_metadata: Mapping[str, str] | None = None,
     ) -> ProviderPayment:
-        try:
-            response = await self._client.get(
-                f"/payments/{notification.provider_payment_id}"
-            )
-            response.raise_for_status()
-            payload = response.json()
-        except (httpx.HTTPError, ValueError) as error:
-            raise YooKassaError("YooKassa payment verification failed") from error
-        payment = self._parse_payment(payload)
-        if payment.provider_payment_id != notification.provider_payment_id:
-            raise YooKassaVerificationError("provider payment id mismatch")
+        payment = await self.get_payment(
+            notification.provider_payment_id,
+            expected_amount=expected_amount,
+            expected_metadata=expected_metadata,
+        )
         if notification.event == "payment.succeeded":
             if payment.status is not PaymentStatus.SUCCEEDED or not payment.paid:
                 raise YooKassaVerificationError(
@@ -174,31 +314,79 @@ class YooKassaProvider:
                 raise YooKassaVerificationError("provider payment is not canceled")
         else:
             raise YooKassaVerificationError("notification event is invalid")
+        return payment
+
+    async def get_payment(
+        self,
+        provider_payment_id: str,
+        *,
+        expected_amount: Money | None = None,
+        expected_metadata: Mapping[str, str] | None = None,
+    ) -> ProviderPayment:
+        safe_payment_id = _validated_provider_id(
+            provider_payment_id, field_name="payment id"
+        )
+        try:
+            response = await self._client.get(f"/payments/{safe_payment_id}")
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as error:
+            raise YooKassaError("YooKassa payment verification failed") from error
+        payment = self._parse_payment(payload)
+        self._verify_payment(
+            payment,
+            expected_id=safe_payment_id,
+            expected_amount=expected_amount,
+            expected_metadata=expected_metadata,
+        )
+        return payment
+
+    def _verify_payment(
+        self,
+        payment: ProviderPayment,
+        *,
+        expected_id: str,
+        expected_amount: Money | None,
+        expected_metadata: Mapping[str, str] | None,
+    ) -> None:
+        if payment.provider_payment_id != expected_id:
+            raise YooKassaVerificationError("provider payment id mismatch")
         if payment.test_mode is not self._test_mode:
             raise YooKassaVerificationError("provider test mode mismatch")
         if expected_amount is not None and payment.amount != expected_amount:
             raise YooKassaVerificationError("provider payment amount mismatch")
         if expected_metadata is not None and payment.metadata != dict(expected_metadata):
             raise YooKassaVerificationError("provider payment metadata mismatch")
-        return payment
 
     @staticmethod
     def _parse_payment(payload: object) -> ProviderPayment:
         if not isinstance(payload, dict):
             raise YooKassaVerificationError("provider response is invalid")
-        payment_id = payload.get("id")
-        if not isinstance(payment_id, str) or not payment_id:
-            raise YooKassaVerificationError("provider payment id is invalid")
+        payment_id = _validated_provider_id(payload.get("id"), field_name="payment id")
         paid, test_mode = payload.get("paid"), payload.get("test")
         if not isinstance(paid, bool) or not isinstance(test_mode, bool):
             raise YooKassaVerificationError("provider payment flags are invalid")
+        status = _status(payload.get("status"))
+        if (
+            (status is PaymentStatus.PENDING and paid)
+            or (status is PaymentStatus.SUCCEEDED and not paid)
+            or (status is PaymentStatus.CANCELLED and paid)
+        ):
+            raise YooKassaVerificationError("provider payment flags are inconsistent")
+        payment_method = None
+        if status is PaymentStatus.SUCCEEDED and paid:
+            payment_method = _payment_method(payload.get("payment_method"))
         return ProviderPayment(
             provider_payment_id=payment_id,
-            status=_status(payload.get("status")),
+            status=status,
             amount=_money(payload.get("amount")),
             paid=paid,
             metadata=_metadata(payload.get("metadata")),
             test_mode=test_mode,
+            payment_method=payment_method,
+            cancellation_reason=_cancellation_reason(
+                payload.get("cancellation_details"), status=status
+            ),
         )
 
     async def aclose(self) -> None:

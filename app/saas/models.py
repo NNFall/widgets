@@ -144,6 +144,53 @@ class GenerationRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class GenerationStageAttempt(Base):
+    __tablename__ = "generation_stage_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "stage",
+            "ordinal",
+            name="uq_generation_stage_attempt_run_stage_ordinal",
+        ),
+        UniqueConstraint(
+            "id",
+            "run_id",
+            name="uq_generation_stage_attempt_id_run",
+        ),
+        CheckConstraint(
+            "ordinal > 0",
+            name="ck_generation_stage_attempt_ordinal_positive",
+        ),
+        CheckConstraint(
+            "status IN ('running', 'result_staged', 'completed', 'failed', "
+            "'interrupted', 'cancelled', 'accounting_failed')",
+            name="ck_generation_stage_attempt_status",
+        ),
+        CheckConstraint(
+            "status IN ('running', 'result_staged') OR finished_at IS NOT NULL",
+            name="ck_generation_stage_attempt_terminal_finished",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("generation_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    stage: Mapped[str] = mapped_column(String(64), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class WorkerServiceLease(Base):
     """Singleton liveness record for the currently expected builder process."""
 
@@ -168,7 +215,120 @@ class GenerationEvent(Base):
     event_type: Mapped[str] = mapped_column(String(128), nullable=False)
     public_message: Mapped[str | None] = mapped_column(Text)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    registry_version: Mapped[int | None] = mapped_column(Integer)
+    public_payload: Mapped[dict[str, Any] | None] = mapped_column(_json_document())
+    forensic_ref: Mapped[str | None] = mapped_column(String(512))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class GenerationForensicManifest(Base):
+    __tablename__ = "generation_forensic_manifests"
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_generation_forensic_manifest_run"),
+        UniqueConstraint(
+            "storage_key", name="uq_generation_forensic_manifest_storage_key"
+        ),
+        CheckConstraint(
+            "schema_version > 0",
+            name="ck_generation_forensic_manifest_schema_version_positive",
+        ),
+        CheckConstraint(
+            "state IN ('pending', 'active', 'completed', 'failed', "
+            "'cancelled', 'degraded')",
+            name="ck_generation_forensic_manifest_state",
+        ),
+        CheckConstraint(
+            "last_event_sequence >= 0 AND entry_count >= 0 AND byte_count >= 0",
+            name="ck_generation_forensic_manifest_counts_nonnegative",
+        ),
+        CheckConstraint(
+            "manifest_sha256 IS NULL OR length(manifest_sha256) = 64",
+            name="ck_generation_forensic_manifest_sha256_length",
+        ),
+        Index(
+            "ix_generation_forensic_manifests_user_created_at",
+            "user_id",
+            "created_at",
+        ),
+        Index(
+            "ix_generation_forensic_manifests_state_expires_at",
+            "state",
+            "expires_at",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("generation_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    project_id: Mapped[UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    last_event_sequence: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    entry_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    byte_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    manifest_sha256: Mapped[str | None] = mapped_column(String(64))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", _json_document(), nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class GenerationForensicAccessLog(Base):
+    __tablename__ = "generation_forensic_access_logs"
+    __table_args__ = (
+        CheckConstraint(
+            "action IN ('search', 'view', 'export')",
+            name="ck_generation_forensic_access_action",
+        ),
+        Index(
+            "ix_generation_forensic_access_logs_run_created_at",
+            "run_id",
+            "created_at",
+        ),
+        Index(
+            "ix_generation_forensic_access_logs_actor_created_at",
+            "actor_email",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    actor_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    allowed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("generation_runs.id", ondelete="SET NULL"), index=True
+    )
+    project_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), index=True
+    )
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", _json_document(), nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 Index(
@@ -228,9 +388,77 @@ class ArtifactEvidence(Base):
 
 class ModelCall(Base):
     __tablename__ = "model_calls"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["stage_attempt_id", "run_id"],
+            ["generation_stage_attempts.id", "generation_stage_attempts.run_id"],
+            name="fk_model_calls_stage_attempt_run",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "logical_invocation_id",
+            "fallback_index",
+            name="uq_model_call_logical_fallback",
+        ),
+        CheckConstraint(
+            "stage_attempt_id IS NULL OR run_id IS NOT NULL",
+            name="ck_model_calls_stage_attempt_requires_run",
+        ),
+        CheckConstraint(
+            "semantic_attempt > 0",
+            name="ck_model_calls_semantic_attempt_positive",
+        ),
+        CheckConstraint(
+            "fallback_index > 0",
+            name="ck_model_calls_fallback_index_positive",
+        ),
+        CheckConstraint(
+            "cache_read_tokens >= 0 AND cache_write_tokens >= 0",
+            name="ck_model_calls_cache_tokens_nonnegative",
+        ),
+        CheckConstraint(
+            "thinking_tokens <= output_tokens AND "
+            "cache_read_tokens + cache_write_tokens <= input_tokens",
+            name="ck_model_calls_token_subsets",
+        ),
+        CheckConstraint(
+            "(actual_provider IS NULL) = (actual_model IS NULL)",
+            name="ck_model_calls_actual_identity_pair",
+        ),
+        CheckConstraint(
+            "cost_state IN ('reported', 'estimated', 'unknown', 'not_billed')",
+            name="ck_model_calls_cost_state_value",
+        ),
+        CheckConstraint(
+            "cost_microusd IS NULL OR cost_microusd >= 0",
+            name="ck_model_calls_cost_nonnegative",
+        ),
+        CheckConstraint(
+            "(cost_state = 'unknown' AND cost_microusd IS NULL) OR "
+            "(cost_state = 'not_billed' AND cost_microusd = 0) OR "
+            "(cost_state IN ('reported', 'estimated') "
+            "AND cost_microusd IS NOT NULL)",
+            name="ck_model_calls_cost_state_amount",
+        ),
+    )
 
     id: Mapped[UUID] = _uuid_pk()
     run_id: Mapped[UUID | None] = mapped_column(ForeignKey("generation_runs.id", ondelete="SET NULL"), index=True)
+    stage_attempt_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), index=True
+    )
+    logical_invocation_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), nullable=False, default=uuid4
+    )
+    operation: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="legacy_unclassified"
+    )
+    semantic_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    candidate_id: Mapped[str | None] = mapped_column(String(64))
+    persona: Mapped[str | None] = mapped_column(String(64))
+    fallback_index: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    actual_provider: Mapped[str | None] = mapped_column(String(64))
+    actual_model: Mapped[str | None] = mapped_column(String(128))
     artifact_id: Mapped[UUID | None] = mapped_column(ForeignKey("generation_artifacts.id", ondelete="SET NULL"))
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     model: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -248,11 +476,22 @@ class ModelCall(Base):
     input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     thinking_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    cache_read_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    cache_write_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
     latency_ms: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     error_code: Mapped[str | None] = mapped_column(String(128))
     error_message: Mapped[str | None] = mapped_column(Text)
-    cost_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    cost_state: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="estimated"
+    )
+    cost_microusd: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True, default=0
+    )
     pricing_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

@@ -195,6 +195,11 @@ async def test_subscription_hides_expired_and_pending_payment_recovers(tmp_path)
 
         plan = PLAN_CATALOG["starter_monthly"]
         async with factory() as database, database.begin():
+            prior = await database.get(
+                PaymentAttempt, UUID(created["payment"]["id"])
+            )
+            assert prior is not None
+            prior.status = "cancelled"
             stuck = PaymentAttempt(
                 user_id=10,
                 provider="fakepay",
@@ -212,6 +217,15 @@ async def test_subscription_hides_expired_and_pending_payment_recovers(tmp_path)
             database.add(stuck)
             await database.flush()
             stuck_id = stuck.id
+            first_dispatched_at = datetime.now(UTC) - timedelta(minutes=1)
+            stuck.payload = {
+                "provider_idempotency_key": f"kaigo-{stuck_id}",
+                "first_dispatched_at": first_dispatched_at.isoformat(),
+                "provider_idempotency_expires_at": (
+                    first_dispatched_at + timedelta(hours=24)
+                ).isoformat(),
+            }
+            stuck.updated_at = datetime.now(UTC) - timedelta(minutes=1)
         resumed = await client.post(
             f"/api/billing/payments/{stuck_id}/resume",
             headers={"X-CSRF-Token": "csrf"},
@@ -369,7 +383,7 @@ async def test_checkout_sanitizes_temporary_provider_failure(tmp_path) -> None:
 
         pending = await client.get("/api/billing/payments/pending")
         recoverable = await pending.json()
-        assert recoverable["payment"]["status"] == "failed"
+        assert recoverable["payment"]["status"] == "dispatch_unknown"
         payment_id = recoverable["payment"]["id"]
 
         async def restored(command):

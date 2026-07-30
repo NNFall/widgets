@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+import re
 
 import pytest
 import pytest_asyncio
@@ -151,9 +152,9 @@ async def test_provider_idempotency_is_global_even_when_public_keys_match(
 
     assert first.payment_id != second.payment_id
     provider_keys = [call.idempotency_key for call in provider.checkout_calls]
-    assert provider_keys == [f"kaigo:{first.payment_id}", f"kaigo:{second.payment_id}"]
+    assert provider_keys == [f"kaigo-{first.payment_id}", f"kaigo-{second.payment_id}"]
     assert len(set(provider_keys)) == 2
-    assert all(len(key) <= 64 for key in provider_keys)
+    assert all(re.fullmatch(r"[0-9A-Za-z+_.-]{1,64}", key) for key in provider_keys)
 
 
 @pytest.mark.asyncio
@@ -167,7 +168,10 @@ async def test_stale_creating_checkout_is_recovered_with_same_provider_key(
             user_id=10,
             provider="fakepay",
             merchant_account_fingerprint="a" * 64,
-            idempotency_key="stale-checkout-key",
+            # Public idempotency keys historically allowed a colon. Existing
+            # attempts must remain resumable while the provider header uses
+            # the canonical validated key stored before its first dispatch.
+            idempotency_key="legacy:checkout:key",
             plan_code=plan.code,
             plan_snapshot=plan.snapshot(),
             plan_fingerprint=plan.fingerprint(),
@@ -180,15 +184,137 @@ async def test_stale_creating_checkout_is_recovered_with_same_provider_key(
         database.add(stuck)
         await database.flush()
         stuck_id = stuck.id
+        first_dispatched_at = datetime.now(UTC) - timedelta(minutes=1)
+        stuck.payload = {
+            "provider_idempotency_key": f"kaigo-{stuck_id}",
+            "first_dispatched_at": first_dispatched_at.isoformat(),
+            "provider_idempotency_expires_at": (
+                first_dispatched_at + timedelta(hours=24)
+            ).isoformat(),
+        }
+        stuck.updated_at = datetime.now(UTC) - timedelta(minutes=1)
 
     provider = FakeProvider()
     result = await BillingService(factory, provider).create_checkout(
-        10, "starter_monthly", "stale-checkout-key"
+        10, "starter_monthly", "legacy:checkout:key"
     )
 
     assert result.payment_id == stuck_id
     assert result.created is False
-    assert provider.checkout_calls[0].idempotency_key == f"kaigo:{stuck_id}"
+    assert provider.checkout_calls[0].idempotency_key == f"kaigo-{stuck_id}"
+
+
+@pytest.mark.asyncio
+async def test_legacy_ambiguous_attempt_without_provider_key_fails_closed(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+    plan = PLAN_CATALOG["starter_monthly"]
+    async with factory() as database, database.begin():
+        attempt = PaymentAttempt(
+            user_id=10,
+            provider="fakepay",
+            merchant_account_fingerprint="a" * 64,
+            idempotency_key="legacy:ambiguous:key",
+            plan_code=plan.code,
+            plan_snapshot=plan.snapshot(),
+            plan_fingerprint=plan.fingerprint(),
+            amount_minor=plan.amount.amount_minor,
+            currency=plan.amount.currency,
+            status="failed",
+            payload={},
+        )
+        database.add(attempt)
+
+    provider = FakeProvider()
+    with pytest.raises(BillingError, match="manual recovery"):
+        await BillingService(factory, provider).create_checkout(
+            10, "starter_monthly", "legacy:ambiguous:key"
+        )
+
+    assert provider.checkout_calls == []
+
+
+@pytest.mark.asyncio
+async def test_provider_post_is_blocked_at_or_after_idempotency_expiry(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+    plan = PLAN_CATALOG["starter_monthly"]
+    async with factory() as database, database.begin():
+        attempt = PaymentAttempt(
+            user_id=10,
+            provider="fakepay",
+            merchant_account_fingerprint="a" * 64,
+            idempotency_key="expired-provider-window",
+            plan_code=plan.code,
+            plan_snapshot=plan.snapshot(),
+            plan_fingerprint=plan.fingerprint(),
+            amount_minor=plan.amount.amount_minor,
+            currency=plan.amount.currency,
+            status="failed",
+            payload={},
+        )
+        database.add(attempt)
+        await database.flush()
+        first_dispatched_at = datetime.now(UTC) - timedelta(hours=24, seconds=1)
+        attempt.payload = {
+            "provider_idempotency_key": f"kaigo-{attempt.id}",
+            "first_dispatched_at": first_dispatched_at.isoformat(),
+            "provider_idempotency_expires_at": (
+                first_dispatched_at + timedelta(hours=24)
+            ).isoformat(),
+        }
+
+    provider = FakeProvider()
+    with pytest.raises(BillingError, match="idempotency window expired"):
+        await BillingService(factory, provider).create_checkout(
+            10, "starter_monthly", "expired-provider-window"
+        )
+
+    assert provider.checkout_calls == []
+
+
+@pytest.mark.asyncio
+async def test_provider_post_is_blocked_inside_dispatch_safety_margin(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+    plan = PLAN_CATALOG["starter_monthly"]
+    async with factory() as database, database.begin():
+        attempt = PaymentAttempt(
+            user_id=10,
+            provider="fakepay",
+            merchant_account_fingerprint="a" * 64,
+            idempotency_key="provider-window-safety-margin",
+            plan_code=plan.code,
+            plan_snapshot=plan.snapshot(),
+            plan_fingerprint=plan.fingerprint(),
+            amount_minor=plan.amount.amount_minor,
+            currency=plan.amount.currency,
+            status="failed",
+            payload={},
+        )
+        database.add(attempt)
+        await database.flush()
+        first_dispatched_at = datetime.now(UTC) - timedelta(
+            hours=23, minutes=59
+        )
+        attempt.payload = {
+            "provider_idempotency_key": f"kaigo-{attempt.id}",
+            "first_dispatched_at": first_dispatched_at.isoformat(),
+            "provider_idempotency_expires_at": (
+                first_dispatched_at + timedelta(hours=24)
+            ).isoformat(),
+        }
+
+    provider = FakeProvider()
+    with pytest.raises(BillingError, match="idempotency window"):
+        await BillingService(factory, provider).create_checkout(
+            10, "starter_monthly", "provider-window-safety-margin"
+        )
+
+    assert provider.checkout_calls == []
 
 
 @pytest.mark.asyncio
@@ -276,6 +402,23 @@ async def test_failed_provider_call_retries_same_attempt_and_provider_key(
     with pytest.raises(RuntimeError, match="connection dropped"):
         await service.create_checkout(10, "starter_monthly", "flaky-same-key")
 
+    async with factory() as database:
+        attempt = await database.scalar(
+            select(PaymentAttempt).where(
+                PaymentAttempt.idempotency_key == "flaky-same-key"
+            )
+        )
+        assert attempt.payload["provider_idempotency_key"] == (
+            f"kaigo-{attempt.id}"
+        )
+        first_dispatched_at = datetime.fromisoformat(
+            attempt.payload["first_dispatched_at"]
+        )
+        expires_at = datetime.fromisoformat(
+            attempt.payload["provider_idempotency_expires_at"]
+        )
+        assert expires_at - first_dispatched_at == timedelta(hours=24)
+
     recovered = await service.create_checkout(
         10, "starter_monthly", "flaky-same-key"
     )
@@ -284,6 +427,39 @@ async def test_failed_provider_call_retries_same_attempt_and_provider_key(
     assert len(provider.checkout_calls) == 2
     assert provider.checkout_calls[0].idempotency_key == provider.checkout_calls[1].idempotency_key
     assert provider.checkout_calls[0].metadata == provider.checkout_calls[1].metadata
+
+
+@pytest.mark.asyncio
+async def test_unknown_provider_outcome_blocks_different_public_key(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+
+    class LostResponseProvider(FakeProvider):
+        async def create_checkout(self, command: CheckoutCommand) -> ProviderCheckout:
+            self.checkout_calls.append(command)
+            raise RuntimeError("response lost after provider may have accepted payment")
+
+    provider = LostResponseProvider()
+    service = BillingService(factory, provider)
+    with pytest.raises(RuntimeError, match="response lost"):
+        await service.create_checkout(
+            10, "starter_monthly", "ambiguous-first-public-key"
+        )
+
+    with pytest.raises(BillingError, match="unresolved payment attempt"):
+        await service.create_checkout(
+            10, "starter_monthly", "different-public-key"
+        )
+
+    assert len(provider.checkout_calls) == 1
+    async with factory() as database:
+        attempt = await database.scalar(
+            select(PaymentAttempt).where(
+                PaymentAttempt.idempotency_key == "ambiguous-first-public-key"
+            )
+        )
+        assert attempt.status == "dispatch_unknown"
 
 
 @pytest.mark.asyncio
