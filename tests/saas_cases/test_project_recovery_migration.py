@@ -172,7 +172,7 @@ async def test_postgres_project_recovery_migration_backfills_historical_rows(
         assert reserved_trial["trial_settlement"] is None
         assert reserved_trial["trial_settled_at"] is None
         assert provider_dispatched is True
-        assert current_revision == "0015_yookassa_recurring_foundation"
+        assert current_revision == "0016_project_versions"
     finally:
         if target_engine is not None:
             await target_engine.dispose()

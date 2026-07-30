@@ -28,6 +28,7 @@ EXPECTED_TABLES = {
     "payment_webhook_events",
     "publications",
     "publication_releases",
+    "project_versions",
 }
 
 
@@ -134,6 +135,151 @@ def test_terminal_trial_settlement_fields_and_recovery_index_are_persisted() -> 
     runs = Base.metadata.tables["generation_runs"]
     assert {"failure_category", "trial_settlement", "trial_settled_at"} <= set(runs.c.keys())
     assert "ix_generation_runs_unsettled_terminal" in {index.name for index in runs.indexes}
+
+
+def _foreign_key(table_name: str, constraint_name: str) -> ForeignKeyConstraint:
+    return next(
+        constraint
+        for constraint in Base.metadata.tables[table_name].constraints
+        if isinstance(constraint, ForeignKeyConstraint)
+        and constraint.name == constraint_name
+    )
+
+
+def test_project_version_schema_is_exact_and_project_scoped() -> None:
+    versions = Base.metadata.tables["project_versions"]
+
+    assert set(versions.c.keys()) == {
+        "id",
+        "project_id",
+        "ordinal",
+        "run_id",
+        "artifact_id",
+        "parent_version_id",
+        "kind",
+        "change_request",
+        "idempotency_key",
+        "created_at",
+    }
+    assert {
+        "uq_project_version_ordinal",
+        "uq_project_version_membership",
+        "uq_project_version_restore_idempotency",
+    } <= _constraint_names("project_versions", UniqueConstraint)
+    assert {
+        "ck_project_version_ordinal_positive",
+        "ck_project_version_kind",
+        "ck_project_version_shape",
+    } <= _constraint_names("project_versions", CheckConstraint)
+    assert {
+        "fk_project_versions_run_membership",
+        "fk_project_versions_artifact_membership",
+        "fk_project_versions_parent_membership",
+    } <= _constraint_names("project_versions", ForeignKeyConstraint)
+
+    shape = next(
+        constraint
+        for constraint in versions.constraints
+        if isinstance(constraint, CheckConstraint)
+        and constraint.name == "ck_project_version_shape"
+    )
+    shape_sql = " ".join(str(shape.sqltext).split())
+    assert "kind = 'initial'" in shape_sql
+    assert "parent_version_id IS NULL" in shape_sql
+    assert "change_request IS NULL" in shape_sql
+    assert "kind = 'refinement'" in shape_sql
+    assert "parent_version_id IS NOT NULL" in shape_sql
+    assert "length(trim(change_request)) BETWEEN 1 AND 2000" in shape_sql
+    assert "kind = 'restore'" in shape_sql
+
+    run_membership = _foreign_key(
+        "project_versions", "fk_project_versions_run_membership"
+    )
+    assert tuple(element.parent.name for element in run_membership.elements) == (
+        "project_id",
+        "run_id",
+    )
+    assert tuple(element.target_fullname for element in run_membership.elements) == (
+        "generation_runs.project_id",
+        "generation_runs.id",
+    )
+    artifact_membership = _foreign_key(
+        "project_versions", "fk_project_versions_artifact_membership"
+    )
+    assert tuple(element.parent.name for element in artifact_membership.elements) == (
+        "run_id",
+        "artifact_id",
+    )
+    assert tuple(
+        element.target_fullname for element in artifact_membership.elements
+    ) == (
+        "generation_artifacts.run_id",
+        "generation_artifacts.id",
+    )
+    parent_membership = _foreign_key(
+        "project_versions", "fk_project_versions_parent_membership"
+    )
+    assert tuple(element.parent.name for element in parent_membership.elements) == (
+        "project_id",
+        "parent_version_id",
+    )
+    assert tuple(element.target_fullname for element in parent_membership.elements) == (
+        "project_versions.project_id",
+        "project_versions.id",
+    )
+
+
+def test_project_version_pointers_and_membership_keys_are_deferred() -> None:
+    projects = Base.metadata.tables["projects"]
+    runs = Base.metadata.tables["generation_runs"]
+    releases = Base.metadata.tables["publication_releases"]
+
+    assert projects.c.active_version_id.nullable is True
+    assert runs.c.source_version_id.nullable is True
+    assert runs.c.change_request.nullable is True
+    assert runs.c.change_request.type.length == 2000
+    assert releases.c.project_version_id.nullable is True
+    assert next(iter(releases.c.project_version_id.foreign_keys)).target_fullname == (
+        "project_versions.id"
+    )
+    assert "uq_generation_run_membership" in _constraint_names(
+        "generation_runs", UniqueConstraint
+    )
+    assert "uq_generation_artifact_membership" in _constraint_names(
+        "generation_artifacts", UniqueConstraint
+    )
+
+    active_membership = _foreign_key(
+        "projects", "fk_projects_active_version_membership"
+    )
+    assert tuple(element.parent.name for element in active_membership.elements) == (
+        "id",
+        "active_version_id",
+    )
+    assert tuple(
+        element.target_fullname for element in active_membership.elements
+    ) == (
+        "project_versions.project_id",
+        "project_versions.id",
+    )
+    assert active_membership.deferrable is True
+    assert active_membership.initially == "DEFERRED"
+
+    source_membership = _foreign_key(
+        "generation_runs", "fk_generation_runs_source_version_membership"
+    )
+    assert tuple(element.parent.name for element in source_membership.elements) == (
+        "project_id",
+        "source_version_id",
+    )
+    assert tuple(
+        element.target_fullname for element in source_membership.elements
+    ) == (
+        "project_versions.project_id",
+        "project_versions.id",
+    )
+    assert source_membership.deferrable is True
+    assert source_membership.initially == "DEFERRED"
 
 
 def test_publication_release_constraints_are_artifact_idempotent_and_referential() -> None:

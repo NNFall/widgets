@@ -334,7 +334,7 @@ async def test_postgres_publication_migration_and_concurrent_first_publish(monke
                 "SELECT count(*) FROM pg_constraint "
                 "WHERE conname = 'fk_publications_active_release_membership'"
             ))
-        assert revision == "0015_yookassa_recurring_foundation"
+        assert revision == "0016_project_versions"
         assert fk == 1
         assert membership_fk == 1
 

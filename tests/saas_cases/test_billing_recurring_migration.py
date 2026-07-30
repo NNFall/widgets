@@ -471,7 +471,7 @@ async def test_postgres_recurring_migration_round_trip_and_constraints(
             )
 
         await asyncio.to_thread(command.upgrade, config, "head")
-        assert await _revision(target_engine) == "0015_yookassa_recurring_foundation"
+        assert await _revision(target_engine) == "0016_project_versions"
 
         async with target_engine.connect() as connection:
             subscription = (

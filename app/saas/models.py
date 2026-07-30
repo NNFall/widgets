@@ -99,6 +99,16 @@ class AnonymousDraft(Base):
 
 class Project(Base):
     __tablename__ = "projects"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["id", "active_version_id"],
+            ["project_versions.project_id", "project_versions.id"],
+            name="fk_projects_active_version_membership",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+    )
 
     id: Mapped[UUID] = _uuid_pk()
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -108,13 +118,29 @@ class Project(Base):
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="draft")
     active_run_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     active_revision: Mapped[int | None] = mapped_column(Integer)
+    active_version_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class GenerationRun(Base):
     __tablename__ = "generation_runs"
-    __table_args__ = (UniqueConstraint("project_id", "idempotency_key", name="uq_project_run_idempotency"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "idempotency_key", name="uq_project_run_idempotency"
+        ),
+        UniqueConstraint(
+            "project_id", "id", name="uq_generation_run_membership"
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "source_version_id"],
+            ["project_versions.project_id", "project_versions.id"],
+            name="fk_generation_runs_source_version_membership",
+            use_alter=True,
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+    )
 
     id: Mapped[UUID] = _uuid_pk()
     project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -125,6 +151,8 @@ class GenerationRun(Base):
     last_completed_stage: Mapped[str | None] = mapped_column(String(64))
     next_event_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_version_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    change_request: Mapped[str | None] = mapped_column(String(2000))
     lease_owner: Mapped[str | None] = mapped_column(String(128))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -360,7 +388,12 @@ Index(
 
 class GenerationArtifact(Base):
     __tablename__ = "generation_artifacts"
-    __table_args__ = (UniqueConstraint("run_id", "revision", name="uq_run_artifact_revision"),)
+    __table_args__ = (
+        UniqueConstraint("run_id", "revision", name="uq_run_artifact_revision"),
+        UniqueConstraint(
+            "run_id", "id", name="uq_generation_artifact_membership"
+        ),
+    )
 
     id: Mapped[UUID] = _uuid_pk()
     run_id: Mapped[UUID] = mapped_column(ForeignKey("generation_runs.id", ondelete="CASCADE"), nullable=False, index=True)
@@ -373,6 +406,87 @@ class GenerationArtifact(Base):
     quality_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unreviewed")
     provenance: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ProjectVersion(Base):
+    __tablename__ = "project_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "ordinal", name="uq_project_version_ordinal"
+        ),
+        UniqueConstraint(
+            "project_id", "id", name="uq_project_version_membership"
+        ),
+        UniqueConstraint(
+            "project_id",
+            "idempotency_key",
+            name="uq_project_version_restore_idempotency",
+        ),
+        CheckConstraint(
+            "ordinal > 0",
+            name="ck_project_version_ordinal_positive",
+        ),
+        CheckConstraint(
+            "kind IN ('initial', 'refinement', 'restore')",
+            name="ck_project_version_kind",
+        ),
+        CheckConstraint(
+            "(kind = 'initial' AND parent_version_id IS NULL "
+            "AND change_request IS NULL) "
+            "OR (kind = 'refinement' AND parent_version_id IS NOT NULL "
+            "AND change_request IS NOT NULL "
+            "AND length(trim(change_request)) BETWEEN 1 AND 2000) "
+            "OR (kind = 'restore' AND parent_version_id IS NOT NULL "
+            "AND change_request IS NULL)",
+            name="ck_project_version_shape",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "run_id"],
+            ["generation_runs.project_id", "generation_runs.id"],
+            name="fk_project_versions_run_membership",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        ForeignKeyConstraint(
+            ["run_id", "artifact_id"],
+            ["generation_artifacts.run_id", "generation_artifacts.id"],
+            name="fk_project_versions_artifact_membership",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "parent_version_id"],
+            ["project_versions.project_id", "project_versions.id"],
+            name="fk_project_versions_parent_membership",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    project_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "projects.id",
+            name="fk_project_versions_project_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    run_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, index=True)
+    artifact_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), nullable=False, index=True
+    )
+    parent_version_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    change_request: Mapped[str | None] = mapped_column(String(2000))
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class ArtifactEvidence(Base):
@@ -1131,6 +1245,13 @@ class PublicationRelease(Base):
     id: Mapped[UUID] = _uuid_pk()
     publication_id: Mapped[UUID] = mapped_column(ForeignKey("publications.id", ondelete="CASCADE"), nullable=False, index=True)
     artifact_id: Mapped[UUID] = mapped_column(ForeignKey("generation_artifacts.id", ondelete="RESTRICT"), nullable=False)
+    project_version_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "project_versions.id",
+            name="fk_publication_releases_project_version_id",
+            ondelete="RESTRICT",
+        )
+    )
     previous_release_id: Mapped[UUID | None] = mapped_column(ForeignKey("publication_releases.id", ondelete="SET NULL"))
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
     asset_manifest: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
