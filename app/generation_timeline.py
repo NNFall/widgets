@@ -363,4 +363,71 @@ async def load_owner_timeline_summary(
     }
 
 
-__all__ = ["load_owner_timeline_summary"]
+async def load_operator_timeline_summary(
+    database: AsyncSession,
+    *,
+    run_id: UUID,
+) -> dict[str, Any] | None:
+    """Load the same aggregate contract after resolving scope server-side."""
+
+    scope = (
+        await database.execute(
+            select(Project.owner_user_id, Project.tenant_id)
+            .join(GenerationRun, GenerationRun.project_id == Project.id)
+            .where(GenerationRun.id == run_id)
+        )
+    ).one_or_none()
+    if scope is None:
+        return None
+    return await load_owner_timeline_summary(
+        database,
+        run_id=run_id,
+        owner_user_id=scope.owner_user_id,
+        tenant_id=scope.tenant_id,
+    )
+
+
+async def load_operator_recent_runs(
+    database: AsyncSession,
+    *,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """List a bounded set of identifiers and timestamps without run payloads."""
+
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+        raise ValueError("operator run limit must be between 1 and 100")
+    rows = (
+        await database.execute(
+            select(
+                GenerationRun.id,
+                GenerationRun.project_id,
+                Project.owner_user_id,
+                GenerationRun.state,
+                GenerationRun.created_at,
+                GenerationRun.started_at,
+                GenerationRun.finished_at,
+            )
+            .join(Project, GenerationRun.project_id == Project.id)
+            .order_by(GenerationRun.created_at.desc(), GenerationRun.id.desc())
+            .limit(limit)
+        )
+    ).all()
+    return [
+        {
+            "id": str(row.id),
+            "project_id": str(row.project_id),
+            "owner_user_id": _bounded_int(row.owner_user_id),
+            "state": row.state if row.state in _RUN_STATES else "unknown",
+            "created_at": _iso_utc(row.created_at),
+            "started_at": _iso_utc(row.started_at),
+            "finished_at": _iso_utc(row.finished_at),
+        }
+        for row in rows
+    ]
+
+
+__all__ = [
+    "load_operator_recent_runs",
+    "load_operator_timeline_summary",
+    "load_owner_timeline_summary",
+]
