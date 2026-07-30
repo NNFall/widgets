@@ -9,6 +9,7 @@ vi.mock('./api', async (importOriginal) => {
   return {
     ...original,
     createBillingCheckout: vi.fn(),
+    disableBillingAutoRenew: vi.fn(),
     getBillingPayment: vi.fn(),
     getPendingBillingPayment: vi.fn(),
     getBillingSubscription: vi.fn(),
@@ -33,6 +34,16 @@ const gateProps = {
   projectId: 'project-123',
   artifactId: 'artifact-123',
   revision: 4,
+};
+
+const activeSubscription = {
+  id: 'subscription-123',
+  plan_code: 'starter_monthly',
+  status: 'active' as const,
+  current_period_start: '2026-07-28T12:00:00Z',
+  current_period_end: '2026-08-28T12:00:00Z',
+  auto_renew: true,
+  next_renewal_at: '2026-08-28T12:00:00Z',
 };
 
 describe('UpgradeGate', () => {
@@ -84,12 +95,83 @@ describe('UpgradeGate', () => {
       'starter_monthly',
       'csrf-billing',
       'checkout-request-123',
+      false,
     );
     expect(open).toHaveBeenCalledWith('about:blank', '_blank');
     expect(paymentWindow.opener).toBeNull();
     expect(replace).toHaveBeenCalledWith('https://yoomoney.ru/checkout/payment-123');
     expect(close).not.toHaveBeenCalled();
     expect(screen.getByRole('status')).toHaveTextContent(/ожидаем подтверждение оплаты/i);
+  });
+
+  it('sends auto-renew only after the user explicitly selects the consent checkbox', async () => {
+    vi.spyOn(window, 'open').mockReturnValue(null);
+    vi.mocked(api.createBillingCheckout).mockResolvedValue({
+      payment,
+      checkout_url: 'https://yoomoney.ru/checkout/payment-123',
+      created: true,
+    });
+
+    render(<UpgradeGate csrfToken="csrf-billing" />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const consent = screen.getByRole('checkbox', {
+      name: /продлевать тариф автоматически/i,
+    });
+    expect(consent).not.toBeChecked();
+    fireEvent.click(consent);
+    fireEvent.click(screen.getByRole('button', { name: /опубликовать и подключить/i }));
+    await act(async () => Promise.resolve());
+
+    expect(api.createBillingCheckout).toHaveBeenCalledWith(
+      'starter_monthly',
+      'csrf-billing',
+      'checkout-request-123',
+      true,
+    );
+  });
+
+  it('freezes renewal consent with the idempotency key across an ambiguous retry', async () => {
+    vi.spyOn(window, 'open').mockReturnValue(null);
+    vi.mocked(api.createBillingCheckout)
+      .mockRejectedValueOnce(new Error('network outcome unknown'))
+      .mockResolvedValueOnce({
+        payment,
+        checkout_url: 'https://yoomoney.ru/checkout/payment-123',
+        created: false,
+      });
+
+    render(<UpgradeGate csrfToken="csrf-billing" />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const consent = screen.getByRole('checkbox', {
+      name: /продлевать тариф автоматически/i,
+    });
+    fireEvent.click(screen.getByRole('button', { name: /опубликовать и подключить/i }));
+    await act(async () => Promise.resolve());
+
+    expect(consent).toBeDisabled();
+    expect(consent).not.toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: /опубликовать и подключить/i }));
+    await act(async () => Promise.resolve());
+
+    expect(api.createBillingCheckout).toHaveBeenNthCalledWith(
+      1,
+      'starter_monthly',
+      'csrf-billing',
+      'checkout-request-123',
+      false,
+    );
+    expect(api.createBillingCheckout).toHaveBeenNthCalledWith(
+      2,
+      'starter_monthly',
+      'csrf-billing',
+      'checkout-request-123',
+      false,
+    );
   });
 
   it('polls single-flight and stops after the subscription becomes active', async () => {
@@ -106,13 +188,7 @@ describe('UpgradeGate', () => {
     vi.mocked(api.getBillingSubscription)
       .mockResolvedValueOnce({ subscription: null })
       .mockResolvedValueOnce({
-        subscription: {
-          id: 'subscription-123',
-          plan_code: 'starter_monthly',
-          status: 'active',
-          current_period_start: '2026-07-28T12:00:00Z',
-          current_period_end: '2026-08-28T12:00:00Z',
-        },
+        subscription: activeSubscription,
       });
 
     render(<UpgradeGate csrfToken="csrf-billing" pollIntervalMs={100} />);
@@ -146,6 +222,44 @@ describe('UpgradeGate', () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
     expect(api.getBillingPayment).toHaveBeenCalledOnce();
+  });
+
+  it('polls only the local payment endpoint every 3 seconds for at most 400 attempts', async () => {
+    vi.mocked(api.getPendingBillingPayment).mockResolvedValue({
+      payment,
+      checkout_url: 'https://checkout.yookassa.ru/payment-123',
+    });
+    vi.mocked(api.getBillingPayment).mockResolvedValue({ payment });
+
+    render(<UpgradeGate csrfToken="csrf-billing" />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_999);
+    });
+    expect(api.getBillingPayment).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(api.getBillingPayment).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(399 * 3_000);
+    });
+    expect(api.getBillingPayment).toHaveBeenCalledTimes(400);
+    expect(api.resumeBillingPayment).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /подтверждение оплаты заняло больше обычного/i,
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(api.getBillingPayment).toHaveBeenCalledTimes(400);
   });
 
   it('aborts polling and never updates after unmount', async () => {
@@ -214,24 +328,20 @@ describe('UpgradeGate', () => {
       'starter_monthly',
       'csrf-billing',
       '00000000-0000-4000-8000-000000000001',
+      false,
     );
     expect(api.createBillingCheckout).toHaveBeenNthCalledWith(
       2,
       'starter_monthly',
       'csrf-billing',
       '00000000-0000-4000-8000-000000000002',
+      false,
     );
   });
 
   it('restores an already active subscription without offering another checkout', async () => {
     vi.mocked(api.getBillingSubscription).mockResolvedValue({
-      subscription: {
-        id: 'subscription-123',
-        plan_code: 'starter_monthly',
-        status: 'active',
-        current_period_start: '2026-07-28T12:00:00Z',
-        current_period_end: '2026-08-28T12:00:00Z',
-      },
+      subscription: activeSubscription,
     });
 
     render(<UpgradeGate csrfToken="csrf-billing" />);
@@ -244,15 +354,40 @@ describe('UpgradeGate', () => {
     expect(api.createBillingCheckout).not.toHaveBeenCalled();
   });
 
+  it('disables auto-renew without hiding the active entitlement', async () => {
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({
+      subscription: activeSubscription,
+    });
+    vi.mocked(api.disableBillingAutoRenew).mockResolvedValue({
+      subscription: {
+        ...activeSubscription,
+        auto_renew: false,
+        next_renewal_at: null,
+      },
+    });
+
+    render(<UpgradeGate csrfToken="csrf-billing" />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /отключить автопродление/i }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(api.disableBillingAutoRenew).toHaveBeenCalledWith(
+      'subscription-123',
+      'csrf-billing',
+    );
+    expect(screen.getByText(/автопродление выключено/i)).toBeVisible();
+    expect(screen.getByText(/доступ сохранится до/i)).toBeVisible();
+    expect(screen.getByText('Тариф активирован')).toBeVisible();
+  });
+
   it('publishes the selected accepted artifact, shows a stable embed snippet, and rolls back a known prior release', async () => {
     vi.mocked(api.getBillingSubscription).mockResolvedValue({
-      subscription: {
-        id: 'subscription-123',
-        plan_code: 'starter_monthly',
-        status: 'active',
-        current_period_start: '2026-07-28T12:00:00Z',
-        current_period_end: '2026-08-28T12:00:00Z',
-      },
+      subscription: activeSubscription,
     });
     vi.mocked(api.publishProject)
       .mockResolvedValueOnce({
@@ -358,13 +493,7 @@ describe('UpgradeGate', () => {
   it('hydrates stable embed and rollback targets after Studio reload', async () => {
     vi.useRealTimers();
     vi.mocked(api.getBillingSubscription).mockResolvedValue({
-      subscription: {
-        id: 'subscription-123',
-        plan_code: 'starter_monthly',
-        status: 'active',
-        current_period_start: '2026-07-28T12:00:00Z',
-        current_period_end: '2026-08-28T12:00:00Z',
-      },
+      subscription: activeSubscription,
     });
     vi.mocked(api.getProjectPublication).mockResolvedValue({
       publication: {

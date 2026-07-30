@@ -27,9 +27,7 @@ _MERCHANT_CUTOVER_MESSAGE = (
 )
 
 
-def _error(
-    code: str, message: str, *, retryable: bool = False
-) -> dict[str, object]:
+def _error(code: str, message: str, *, retryable: bool = False) -> dict[str, object]:
     return {"error": {"code": code, "message": message, "retryable": retryable}}
 
 
@@ -59,6 +57,8 @@ def _subscription(row: Subscription) -> dict[str, object]:
         "status": row.status,
         "current_period_start": _time(row.current_period_start),
         "current_period_end": _time(row.current_period_end),
+        "auto_renew": row.auto_renew,
+        "next_renewal_at": _time(row.next_renewal_at),
     }
 
 
@@ -101,23 +101,40 @@ async def create_checkout(request: web.Request) -> web.Response:
             text=json.dumps(_error("invalid_json", "Некорректный JSON")),
             content_type="application/json",
         ) from error
-    if not isinstance(payload, dict) or set(payload) != {"plan_code"}:
+    if (
+        not isinstance(payload, dict)
+        or not set(payload).issubset({"plan_code", "auto_renew"})
+        or "plan_code" not in payload
+    ):
         return web.json_response(
-            _error("invalid_request", "Передайте только код тарифа"), status=400
+            _error(
+                "invalid_request",
+                "Передайте код тарифа и при необходимости согласие на автопродление",
+            ),
+            status=400,
         )
     plan_code = payload.get("plan_code")
+    auto_renew = payload.get("auto_renew", False)
     idempotency_key = request.headers.get("Idempotency-Key", "")
-    if not isinstance(plan_code, str):
+    if not isinstance(plan_code, str) or not isinstance(auto_renew, bool):
         return web.json_response(_error("invalid_plan", "Тариф не выбран"), status=400)
     try:
         result = await _service(request).create_checkout(
-            user_id, plan_code, idempotency_key
+            user_id,
+            plan_code,
+            idempotency_key,
+            auto_renew=auto_renew,
         )
     except (UnknownPlan, ValueError):
-        return web.json_response(_error("invalid_request", "Тариф или ключ некорректны"), status=400)
+        return web.json_response(
+            _error("invalid_request", "Тариф или ключ некорректны"), status=400
+        )
     except CheckoutIdempotencyConflict:
         return web.json_response(
-            _error("idempotency_conflict", "Этот ключ уже использован для другого тарифа"),
+            _error(
+                "idempotency_conflict",
+                "Этот ключ уже использован с другими параметрами оплаты",
+            ),
             status=409,
         )
     except MerchantAccountMismatch:
@@ -130,7 +147,9 @@ async def create_checkout(request: web.Request) -> web.Response:
         )
     except YooKassaVerificationError:
         return web.json_response(
-            _error("provider_response_invalid", "Платёжная система вернула неверный ответ"),
+            _error(
+                "provider_response_invalid", "Платёжная система вернула неверный ответ"
+            ),
             status=502,
         )
     except YooKassaError:
@@ -182,7 +201,9 @@ async def resume_checkout(request: web.Request) -> web.Response:
         )
     except YooKassaVerificationError:
         return web.json_response(
-            _error("provider_response_invalid", "Платёжная система вернула неверный ответ"),
+            _error(
+                "provider_response_invalid", "Платёжная система вернула неверный ответ"
+            ),
             status=502,
         )
     except YooKassaError:
@@ -263,19 +284,11 @@ async def pending_payment(request: web.Request) -> web.Response:
         # an older deployment; exposing either checkout while the account is in
         # cutover would make payment fulfillment ambiguous.
         attempt = next(
-            (
-                row
-                for row in attempts
-                if not service.is_current_merchant_account(row)
-            ),
+            (row for row in attempts if not service.is_current_merchant_account(row)),
             attempts[0],
         )
         recovery = _merchant_recovery(service, attempt)
-        checkout_url = (
-            attempt.checkout_url
-            if recovery["status"] == "ready"
-            else None
-        )
+        checkout_url = attempt.checkout_url if recovery["status"] == "ready" else None
         return web.json_response(
             {
                 "payment": _payment(attempt),
@@ -304,12 +317,31 @@ async def subscription_status(request: web.Request) -> web.Response:
         )
 
 
+async def disable_auto_renew(request: web.Request) -> web.Response:
+    user_id, _tenant_id = await _scope(request)
+    await _require_csrf(request)
+    try:
+        subscription_id = UUID(request.match_info["subscription_id"])
+    except (ValueError, TypeError) as error:
+        raise web.HTTPNotFound() from error
+    try:
+        subscription = await _service(request).disable_auto_renew(
+            user_id,
+            subscription_id,
+        )
+    except PaymentNotFound:
+        raise web.HTTPNotFound() from None
+    return web.json_response({"subscription": _subscription(subscription)})
+
+
 async def yookassa_webhook(request: web.Request) -> web.Response:
     try:
         payload = await request.json()
         result = await _service(request).handle_notification(payload)
     except (PaymentNotFound, YooKassaVerificationError, ValueError):
-        return web.json_response(_error("invalid_notification", "Платёж не подтверждён"), status=400)
+        return web.json_response(
+            _error("invalid_notification", "Платёж не подтверждён"), status=400
+        )
     except YooKassaError:
         response = web.json_response(
             _error(
@@ -358,11 +390,13 @@ async def billing_success(_request: web.Request) -> web.Response:
 def setup_billing_routes(app: web.Application) -> None:
     app.router.add_post("/api/billing/checkout", create_checkout)
     app.router.add_get("/api/billing/payments/pending", pending_payment)
-    app.router.add_post(
-        "/api/billing/payments/{payment_id}/resume", resume_checkout
-    )
+    app.router.add_post("/api/billing/payments/{payment_id}/resume", resume_checkout)
     app.router.add_get("/api/billing/payments/{payment_id}", payment_status)
     app.router.add_get("/api/billing/subscription", subscription_status)
+    app.router.add_post(
+        "/api/billing/subscriptions/{subscription_id}/auto-renew/off",
+        disable_auto_renew,
+    )
     app.router.add_post("/api/billing/webhooks/yookassa", yookassa_webhook)
     app.router.add_get("/billing/success", billing_success)
 

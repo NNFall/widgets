@@ -6,11 +6,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.billing.contracts import Money, PaymentProvider, PaymentStatus
-from app.billing.payments import BillingService
+from app.billing.payments import (
+    LEGACY_MIGRATED_PLAN_CODE,
+    LEGACY_UNKNOWN_MERCHANT,
+    BillingService,
+)
 from app.saas.models import PaymentAttempt
 
 
@@ -73,7 +77,15 @@ class PaymentReconciler:
     ):
         return (
             PaymentAttempt.provider == provider_name,
-            PaymentAttempt.merchant_account_fingerprint == merchant_account_fingerprint,
+            or_(
+                PaymentAttempt.merchant_account_fingerprint
+                == merchant_account_fingerprint,
+                and_(
+                    PaymentAttempt.merchant_account_fingerprint
+                    == LEGACY_UNKNOWN_MERCHANT,
+                    PaymentAttempt.plan_code == LEGACY_MIGRATED_PLAN_CODE,
+                ),
+            ),
             PaymentAttempt.provider_payment_id.is_not(None),
             PaymentAttempt.status.in_(
                 ("pending", "creating", "failed", "dispatch_unknown")

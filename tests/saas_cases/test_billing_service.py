@@ -17,6 +17,7 @@ from app.billing.contracts import (
     ProviderCheckout,
     ProviderNotification,
     ProviderPayment,
+    ProviderPaymentMethod,
 )
 from app.billing.catalog import PLAN_CATALOG, BillingPlan
 from app.billing.payments import (
@@ -28,6 +29,7 @@ from app.billing.reconciliation import PaymentReconciler
 from app.db.base import Base
 from app.db.models import Tenant, User
 from app.saas.models import (
+    BillingPaymentMethod,
     PaymentAttempt,
     PaymentWebhookEvent,
     Subscription,
@@ -154,6 +156,314 @@ async def test_checkout_is_server_priced_and_idempotent_per_user(billing_db) -> 
         assert attempt.plan_code == "starter_monthly"
         assert attempt.plan_snapshot["amount_minor"] == 199_000
         assert len(attempt.plan_fingerprint) == 64
+
+
+@pytest.mark.asyncio
+async def test_checkout_persists_explicit_auto_renew_consent_and_replays_exact_intent(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+    provider = FakeProvider()
+    service = BillingService(factory, provider)
+
+    checkout = await service.create_checkout(
+        10,
+        "starter_monthly",
+        "auto-renew-consent-key",
+        auto_renew=True,
+    )
+
+    assert provider.checkout_calls[0].save_payment_method is True
+    async with factory() as database:
+        attempt = await database.get(PaymentAttempt, checkout.payment_id)
+        assert attempt is not None
+        assert attempt.purpose == "initial"
+        assert attempt.auto_renew_requested is True
+        assert attempt.save_payment_method_requested is True
+        assert attempt.consent_version == "yookassa-auto-renew-v1"
+        assert attempt.consented_at is not None
+
+    with pytest.raises(CheckoutIdempotencyConflict):
+        await service.create_checkout(
+            10,
+            "starter_monthly",
+            "auto-renew-consent-key",
+            auto_renew=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_verified_saved_method_enables_only_explicitly_consented_subscription(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+    provider = FakeProvider()
+    service = BillingService(factory, provider)
+
+    opted_in = await service.create_checkout(
+        10,
+        "starter_monthly",
+        "saved-method-opt-in",
+        auto_renew=True,
+    )
+    opted_out = await service.create_checkout(
+        11,
+        "starter_monthly",
+        "saved-method-opt-out",
+        auto_renew=False,
+    )
+
+    async with factory() as database:
+        opted_in_attempt = await database.get(PaymentAttempt, opted_in.payment_id)
+        opted_out_attempt = await database.get(PaymentAttempt, opted_out.payment_id)
+        assert opted_in_attempt is not None
+        assert opted_out_attempt is not None
+        opted_in_payment = ProviderPayment(
+            provider_payment_id=str(opted_in_attempt.provider_payment_id),
+            status=PaymentStatus.SUCCEEDED,
+            amount=Money(opted_in_attempt.amount_minor, opted_in_attempt.currency),
+            paid=True,
+            metadata=service._metadata(opted_in_attempt),
+            test_mode=True,
+            payment_method=ProviderPaymentMethod(
+                provider_payment_method_id="saved-method-owner",
+                saved=True,
+                method_type="bank_card",
+            ),
+        )
+        opted_out_payment = ProviderPayment(
+            provider_payment_id=str(opted_out_attempt.provider_payment_id),
+            status=PaymentStatus.SUCCEEDED,
+            amount=Money(opted_out_attempt.amount_minor, opted_out_attempt.currency),
+            paid=True,
+            metadata=service._metadata(opted_out_attempt),
+            test_mode=True,
+            payment_method=ProviderPaymentMethod(
+                provider_payment_method_id="saved-method-without-consent",
+                saved=True,
+                method_type="bank_card",
+            ),
+        )
+
+    await service.apply_verified_payment(
+        opted_in.payment_id,
+        opted_in_payment,
+        source="webhook",
+    )
+    await service.apply_verified_payment(
+        opted_out.payment_id,
+        opted_out_payment,
+        source="webhook",
+    )
+
+    async with factory() as database:
+        methods = list(
+            await database.scalars(
+                select(BillingPaymentMethod).order_by(BillingPaymentMethod.user_id)
+            )
+        )
+        subscriptions = list(
+            await database.scalars(select(Subscription).order_by(Subscription.user_id))
+        )
+        stored_opted_in_attempt = await database.get(
+            PaymentAttempt,
+            opted_in.payment_id,
+        )
+
+    assert len(methods) == 1
+    assert methods[0].user_id == 10
+    assert (
+        methods[0].merchant_account_fingerprint == provider.merchant_account_fingerprint
+    )
+    assert methods[0].provider_payment_method_id == "saved-method-owner"
+    assert methods[0].status == "active"
+    assert stored_opted_in_attempt is not None
+    assert stored_opted_in_attempt.payment_method_id == methods[0].id
+    opted_in_subscription, opted_out_subscription = subscriptions
+    assert opted_in_subscription.auto_renew is True
+    assert (
+        opted_in_subscription.merchant_account_fingerprint
+        == provider.merchant_account_fingerprint
+    )
+    assert opted_in_subscription.payment_method_id == methods[0].id
+    assert (
+        opted_in_subscription.next_renewal_at
+        == opted_in_subscription.current_period_end
+    )
+    assert opted_out_subscription.auto_renew is False
+    assert opted_out_subscription.payment_method_id is None
+    assert opted_out_subscription.next_renewal_at is None
+
+
+@pytest.mark.asyncio
+async def test_unsaved_method_never_enables_auto_renew(billing_db) -> None:
+    _engine, factory = billing_db
+    provider = FakeProvider()
+    service = BillingService(factory, provider)
+    checkout = await service.create_checkout(
+        10,
+        "starter_monthly",
+        "unsaved-method-opt-in",
+        auto_renew=True,
+    )
+
+    async with factory() as database:
+        attempt = await database.get(PaymentAttempt, checkout.payment_id)
+        assert attempt is not None
+        payment = ProviderPayment(
+            provider_payment_id=str(attempt.provider_payment_id),
+            status=PaymentStatus.SUCCEEDED,
+            amount=Money(attempt.amount_minor, attempt.currency),
+            paid=True,
+            metadata=service._metadata(attempt),
+            test_mode=True,
+            payment_method=None,
+        )
+
+    await service.apply_verified_payment(
+        checkout.payment_id,
+        payment,
+        source="reconciliation",
+    )
+
+    async with factory() as database:
+        assert (
+            await database.scalar(
+                select(func.count()).select_from(BillingPaymentMethod)
+            )
+        ) == 0
+        subscription = await database.scalar(select(Subscription))
+        assert subscription is not None
+        assert subscription.auto_renew is False
+        assert subscription.payment_method_id is None
+        assert subscription.next_renewal_at is None
+
+
+@pytest.mark.asyncio
+async def test_one_time_purchase_does_not_revoke_existing_auto_renew_consent(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+    provider = FakeProvider()
+    service = BillingService(factory, provider)
+
+    opted_in = await service.create_checkout(
+        10,
+        "starter_monthly",
+        "existing-auto-renew-opt-in",
+        auto_renew=True,
+    )
+    async with factory() as database:
+        attempt = await database.get(PaymentAttempt, opted_in.payment_id)
+        assert attempt is not None
+        first_payment = ProviderPayment(
+            provider_payment_id=str(attempt.provider_payment_id),
+            status=PaymentStatus.SUCCEEDED,
+            amount=Money(attempt.amount_minor, attempt.currency),
+            paid=True,
+            metadata=service._metadata(attempt),
+            test_mode=True,
+            payment_method=ProviderPaymentMethod(
+                provider_payment_method_id="existing-auto-renew-method",
+                saved=True,
+            ),
+        )
+    await service.apply_verified_payment(
+        opted_in.payment_id,
+        first_payment,
+        source="webhook",
+    )
+
+    one_time = await service.create_checkout(
+        10,
+        "starter_monthly",
+        "one-time-does-not-revoke",
+        auto_renew=False,
+    )
+    async with factory() as database:
+        attempt = await database.get(PaymentAttempt, one_time.payment_id)
+        subscription_before = await database.scalar(select(Subscription))
+        assert attempt is not None
+        assert subscription_before is not None
+        method_id = subscription_before.payment_method_id
+        second_payment = ProviderPayment(
+            provider_payment_id=str(attempt.provider_payment_id),
+            status=PaymentStatus.SUCCEEDED,
+            amount=Money(attempt.amount_minor, attempt.currency),
+            paid=True,
+            metadata=service._metadata(attempt),
+            test_mode=True,
+            payment_method=None,
+        )
+    await service.apply_verified_payment(
+        one_time.payment_id,
+        second_payment,
+        source="webhook",
+    )
+
+    async with factory() as database:
+        subscription = await database.scalar(select(Subscription))
+        assert subscription is not None
+        assert subscription.auto_renew is True
+        assert subscription.payment_method_id == method_id
+        assert subscription.next_renewal_at == subscription.current_period_end
+
+
+@pytest.mark.asyncio
+async def test_saved_method_identity_cannot_be_claimed_by_another_user(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+    provider = FakeProvider()
+    service = BillingService(factory, provider)
+
+    first = await service.create_checkout(
+        10,
+        "starter_monthly",
+        "saved-method-first-owner",
+        auto_renew=True,
+    )
+    second = await service.create_checkout(
+        11,
+        "starter_monthly",
+        "saved-method-second-owner",
+        auto_renew=True,
+    )
+
+    async def verified_payment(attempt_id) -> ProviderPayment:
+        async with factory() as database:
+            attempt = await database.get(PaymentAttempt, attempt_id)
+            assert attempt is not None
+            return ProviderPayment(
+                provider_payment_id=str(attempt.provider_payment_id),
+                status=PaymentStatus.SUCCEEDED,
+                amount=Money(attempt.amount_minor, attempt.currency),
+                paid=True,
+                metadata=service._metadata(attempt),
+                test_mode=True,
+                payment_method=ProviderPaymentMethod(
+                    provider_payment_method_id="same-opaque-method-id",
+                    saved=True,
+                ),
+            )
+
+    await service.apply_verified_payment(
+        first.payment_id,
+        await verified_payment(first.payment_id),
+        source="webhook",
+    )
+    with pytest.raises(BillingError, match="belongs to another user"):
+        await service.apply_verified_payment(
+            second.payment_id,
+            await verified_payment(second.payment_id),
+            source="webhook",
+        )
+
+    async with factory() as database:
+        methods = list(await database.scalars(select(BillingPaymentMethod)))
+        subscriptions = list(await database.scalars(select(Subscription)))
+    assert [method.user_id for method in methods] == [10]
+    assert [subscription.user_id for subscription in subscriptions] == [10]
 
 
 @pytest.mark.asyncio

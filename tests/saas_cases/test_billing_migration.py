@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 import importlib
 import os
@@ -153,15 +154,65 @@ async def test_sqlite_merchant_account_migration_backfills_and_downgrades(
 @pytest.mark.skipif(not POSTGRES_URL, reason="KAIGO_TEST_POSTGRES_URL is not configured")
 async def test_postgres_billing_migration_and_concurrent_fulfillment(monkeypatch) -> None:
     from app.billing.catalog import PLAN_CATALOG, BillingPlan
-    from app.billing.payments import BillingService
+    from app.billing.contracts import ProviderPaymentMethod
+    from app.billing.payments import BillingService, MerchantAccountMismatch
+    from app.billing.reconciliation import PaymentReconciler
     from app.db.models import Tenant, User
     from app.saas.models import (
+        BillingPaymentMethod,
         PaymentAttempt,
         PaymentWebhookEvent,
         Subscription,
         UsageLedger,
     )
     from tests.saas_cases.test_billing_service import FakeProvider
+
+    class LegacySavedMethodProvider(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.get_started = asyncio.Event()
+            self.verify_started = asyncio.Event()
+            self.release_verification = asyncio.Event()
+
+        @staticmethod
+        def _with_saved_method(payment):
+            return replace(
+                payment,
+                payment_method=ProviderPaymentMethod(
+                    provider_payment_method_id="legacy-saved-method",
+                    saved=True,
+                    method_type="bank_card",
+                ),
+            )
+
+        async def verify_notification(self, *args, **kwargs):
+            self.verify_started.set()
+            await self.release_verification.wait()
+            return self._with_saved_method(
+                await super().verify_notification(*args, **kwargs)
+            )
+
+        async def get_payment(self, *args, **kwargs):
+            self.get_started.set()
+            await self.release_verification.wait()
+            return self._with_saved_method(await super().get_payment(*args, **kwargs))
+
+    class RejectingProvider(FakeProvider):
+        async def verify_notification(
+            self,
+            notification,
+            *,
+            expected_amount=None,
+            expected_metadata=None,
+        ):
+            self.verify_calls.append(
+                (
+                    notification,
+                    expected_amount,
+                    dict(expected_metadata or {}),
+                )
+            )
+            raise RuntimeError("verified provider GET rejected")
 
     source_url = make_url(POSTGRES_URL)
     if source_url.drivername == "postgresql":
@@ -203,7 +254,6 @@ async def test_postgres_billing_migration_and_concurrent_fulfillment(monkeypatch
             )
         await asyncio.to_thread(command.upgrade, config, "head")
 
-        provider = FakeProvider()
         async with factory() as database:
             legacy = await database.get(PaymentAttempt, legacy_id)
             legacy_plan = BillingPlan.from_snapshot(legacy.plan_snapshot)
@@ -215,19 +265,101 @@ async def test_postgres_billing_migration_and_concurrent_fulfillment(monkeypatch
                 legacy.merchant_account_fingerprint
                 == LEGACY_UNKNOWN_MERCHANT
             )
-        legacy_result = await BillingService(factory, provider).handle_notification(
-            {"payment_id": "legacy-pay-1"}
-        )
-        assert legacy_result.processed is True
-        async with factory() as database:
-            legacy_subscription = await database.get(
-                Subscription, legacy_result.subscription_id
+            legacy_expected_metadata = BillingService._metadata(legacy)
+
+        rejecting_provider = RejectingProvider("b" * 64)
+        with pytest.raises(RuntimeError, match="verified provider GET rejected"):
+            await BillingService(factory, rejecting_provider).handle_notification(
+                {"payment_id": "legacy-pay-1"}
             )
+        assert len(rejecting_provider.verify_calls) == 1
+        async with factory() as database:
+            rejected = await database.get(PaymentAttempt, legacy_id)
+            assert rejected.merchant_account_fingerprint == LEGACY_UNKNOWN_MERCHANT
+            assert await database.scalar(
+                select(func.count()).select_from(PaymentWebhookEvent)
+            ) == 0
+            assert await database.scalar(
+                select(func.count()).select_from(UsageLedger)
+            ) == 0
+
+        provider = LegacySavedMethodProvider()
+        legacy_service = BillingService(factory, provider)
+        legacy_reconciler = PaymentReconciler(
+            factory,
+            provider,
+            payment_service=legacy_service,
+        )
+        assert await legacy_reconciler._due_attempt_ids(
+            now=datetime.now(UTC),
+            limit=10,
+        ) == [legacy_id]
+        reconciliation_task = asyncio.create_task(legacy_reconciler.run_once())
+        await asyncio.wait_for(provider.get_started.wait(), timeout=2)
+        webhook_task = asyncio.create_task(
+            legacy_service.handle_notification({"payment_id": "legacy-pay-1"})
+        )
+        await asyncio.wait_for(provider.verify_started.wait(), timeout=2)
+        provider.release_verification.set()
+        legacy_reconciliation, legacy_webhook = await asyncio.gather(
+            reconciliation_task,
+            webhook_task,
+        )
+        assert legacy_reconciliation == {legacy_id: "succeeded"}
+        assert legacy_webhook.payment_id == legacy_id
+        assert len(provider.get_calls) == 1
+        assert len(provider.verify_calls) == 1
+        assert provider.get_calls[0][2] == legacy_expected_metadata
+        assert provider.verify_calls[0][2] == legacy_expected_metadata
+
+        async with factory() as database:
+            fulfilled_legacy = await database.get(PaymentAttempt, legacy_id)
+            assert (
+                fulfilled_legacy.merchant_account_fingerprint
+                == provider.merchant_account_fingerprint
+            )
+            assert fulfilled_legacy.payment_method_id is None
+            legacy_subscription = await database.scalar(
+                select(Subscription).where(Subscription.user_id == 2)
+            )
+            assert legacy_subscription is not None
             assert legacy_subscription.user_id == 2
+            assert legacy_subscription.auto_renew is False
+            assert legacy_subscription.merchant_account_fingerprint is None
+            assert legacy_subscription.payment_method_id is None
             legacy_credit = await database.scalar(
                 select(UsageLedger).where(UsageLedger.user_id == 2)
             )
             assert legacy_credit.amount == 1_000_000
+            legacy_event = await database.scalar(
+                select(PaymentWebhookEvent).where(
+                    PaymentWebhookEvent.payment_attempt_id == legacy_id
+                )
+            )
+            assert legacy_event is not None
+            assert (
+                legacy_event.merchant_account_fingerprint
+                == provider.merchant_account_fingerprint
+            )
+            assert await database.scalar(
+                select(func.count()).select_from(UsageLedger)
+            ) == 1
+            assert await database.scalar(
+                select(func.count()).select_from(PaymentWebhookEvent)
+            ) == 1
+            assert await database.scalar(
+                select(func.count()).select_from(BillingPaymentMethod)
+            ) == 0
+
+        cross_merchant = FakeProvider("b" * 64)
+        with pytest.raises(
+            MerchantAccountMismatch,
+            match="merchant account does not match",
+        ):
+            await BillingService(factory, cross_merchant).handle_notification(
+                {"payment_id": "legacy-pay-1"}
+            )
+        assert cross_merchant.verify_calls == []
 
         plan = PLAN_CATALOG["starter_monthly"]
         winner_session = factory()

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   BuilderApiError,
   createBillingCheckout,
+  disableBillingAutoRenew,
   getBillingPayment,
   getPendingBillingPayment,
   getBillingSubscription,
@@ -13,10 +14,11 @@ import {
   resumeBillingPayment,
   type PublicationRelease,
 } from './api';
+import type { BillingSubscription } from './types';
 
 const DEFAULT_PLAN_CODE = 'starter_monthly';
-const DEFAULT_POLL_INTERVAL_MS = 2_000;
-const DEFAULT_MAX_POLL_ATTEMPTS = 150;
+const DEFAULT_POLL_INTERVAL_MS = 3_000;
+const DEFAULT_MAX_POLL_ATTEMPTS = 400;
 
 type UpgradeState =
   | 'checking'
@@ -56,6 +58,17 @@ function checkoutKey() {
   return crypto.randomUUID();
 }
 
+function subscriptionEndLabel(value: string | undefined) {
+  if (!value) return 'конца оплаченного периода';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'конца оплаченного периода';
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(date);
+}
+
 export function UpgradeGate({
   csrfToken,
   projectId = '',
@@ -67,6 +80,10 @@ export function UpgradeGate({
   const [state, setState] = useState<UpgradeState>(csrfToken ? 'checking' : 'idle');
   const [paymentId, setPaymentId] = useState<string | null>(null);
   const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
+  const [subscription, setSubscription] = useState<BillingSubscription | null>(null);
+  const [autoRenewConsent, setAutoRenewConsent] = useState(false);
+  const [autoRenewPending, setAutoRenewPending] = useState(false);
+  const [autoRenewError, setAutoRenewError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recoveryAttempt, setRecoveryAttempt] = useState(0);
   const [allowedDomains, setAllowedDomains] = useState('');
@@ -75,6 +92,7 @@ export function UpgradeGate({
   const [publicationPending, setPublicationPending] = useState(false);
   const [publicationError, setPublicationError] = useState<string | null>(null);
   const idempotencyKeyRef = useRef<string | null>(null);
+  const autoRenewIntentRef = useRef<boolean | null>(null);
 
   useEffect(() => {
     if (!csrfToken) {
@@ -89,9 +107,11 @@ export function UpgradeGate({
         const { subscription } = await getBillingSubscription(abort.signal);
         if (abort.signal.aborted) return;
         if (subscription?.status === 'active') {
+          setSubscription(subscription);
           setState('active');
           return;
         }
+        setSubscription(null);
         const pending = await getPendingBillingPayment(abort.signal);
         if (abort.signal.aborted) return;
         if (pending.payment === null && pending.checkout_url === null) {
@@ -161,6 +181,7 @@ export function UpgradeGate({
         if (abort.signal.aborted) return;
         if (payment.status === 'cancelled' || payment.status === 'failed') {
           idempotencyKeyRef.current = null;
+          autoRenewIntentRef.current = null;
           setState('checkout_error');
           setError('Оплата не завершена. Можно открыть платёжную страницу и попробовать ещё раз.');
           return;
@@ -169,6 +190,7 @@ export function UpgradeGate({
           const { subscription } = await getBillingSubscription(abort.signal);
           if (abort.signal.aborted) return;
           if (subscription?.status === 'active') {
+            setSubscription(subscription);
             setState('active');
             setError(null);
             return;
@@ -252,13 +274,16 @@ export function UpgradeGate({
     setError(null);
     setCheckoutUrl(null);
     const idempotencyKey = idempotencyKeyRef.current ?? checkoutKey();
+    const autoRenewIntent = autoRenewIntentRef.current ?? autoRenewConsent;
     idempotencyKeyRef.current = idempotencyKey;
+    autoRenewIntentRef.current = autoRenewIntent;
 
     try {
       const checkout = await createBillingCheckout(
         DEFAULT_PLAN_CODE,
         csrfToken,
         idempotencyKey,
+        autoRenewIntent,
       );
       const safeUrl = safeCheckoutUrl(checkout.checkout_url);
       if (!safeUrl) throw new Error('invalid_checkout_url');
@@ -283,6 +308,20 @@ export function UpgradeGate({
   const retryRecovery = () => {
     setState('checking');
     setRecoveryAttempt((attempt) => attempt + 1);
+  };
+
+  const disableAutoRenew = async () => {
+    if (!csrfToken || !subscription?.auto_renew || autoRenewPending) return;
+    setAutoRenewPending(true);
+    setAutoRenewError(null);
+    try {
+      const result = await disableBillingAutoRenew(subscription.id, csrfToken);
+      setSubscription(result.subscription);
+    } catch {
+      setAutoRenewError('Не удалось отключить автопродление. Попробуйте ещё раз.');
+    } finally {
+      setAutoRenewPending(false);
+    }
   };
 
   const publish = async () => {
@@ -363,6 +402,20 @@ export function UpgradeGate({
             ? 'Чат в предпросмотре нужен для проверки ответов посетителю. Он не изменяет сам виджет.'
             : 'Он останется доступен в проекте. Тариф открывает публикацию и подключение виджета к вашему сайту.'}
         </p>
+        {!active && (
+          <label className="studio-upgrade__renewal-consent">
+            <input
+              type="checkbox"
+              checked={autoRenewConsent}
+              onChange={(event) => setAutoRenewConsent(event.target.checked)}
+              disabled={working || idempotencyKeyRef.current !== null}
+            />
+            <span>
+              <strong>Продлевать тариф автоматически</strong>
+              <small>ЮKassa сохранит способ оплаты только после успешного платежа. Автопродление можно отключить в любой момент.</small>
+            </span>
+          </label>
+        )}
         {working && (
           <p className="studio-upgrade__status" role="status">
             {state === 'checking'
@@ -373,6 +426,9 @@ export function UpgradeGate({
           </p>
         )}
         {error && <p className="studio-upgrade__error" role="alert">{error}</p>}
+        {autoRenewError && (
+          <p className="studio-upgrade__error" role="alert">{autoRenewError}</p>
+        )}
         {checkoutUrl && state !== 'active' && (
           <a
             className="studio-upgrade__checkout"
@@ -385,6 +441,11 @@ export function UpgradeGate({
         )}
         {active && (
           <div className="studio-upgrade__publication">
+            <p className="studio-upgrade__renewal-status">
+              {subscription?.auto_renew
+                ? 'Автопродление включено.'
+                : `Автопродление выключено. Доступ сохранится до ${subscriptionEndLabel(subscription?.current_period_end)}.`}
+            </p>
             <label htmlFor="studio-publication-domains">Разрешённые домены</label>
             <textarea
               id="studio-publication-domains"
@@ -413,6 +474,16 @@ export function UpgradeGate({
           {rollbackTarget && (
             <button type="button" onClick={() => void rollback()} disabled={publicationPending}>
               Откатить к ревизии {rollbackTarget.revision}
+            </button>
+          )}
+          {subscription?.auto_renew && (
+            <button
+              type="button"
+              onClick={() => void disableAutoRenew()}
+              disabled={autoRenewPending}
+            >
+              {autoRenewPending ? <Clock aria-hidden size={18} /> : null}
+              Отключить автопродление
             </button>
           )}
         </div>

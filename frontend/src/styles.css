@@ -3592,6 +3592,19 @@ a {
 .studio-upgrade__active { display: inline-flex; gap: 7px; align-items: center; margin-top: 10px; font-size: 14px; font-weight: 800; }
 .studio-upgrade__checkout { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 .studio-upgrade__active { color: #26735c !important; }
+.studio-upgrade__renewal-consent {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-top: 12px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.studio-upgrade__renewal-consent input { margin-top: 4px; accent-color: var(--sage); }
+.studio-upgrade__renewal-consent span { display: grid; gap: 2px; }
+.studio-upgrade__renewal-consent small { max-width: 68ch; color: #687983; line-height: 1.45; }
+.studio-upgrade__renewal-status { margin-bottom: 12px !important; font-weight: 700; }
+.studio-upgrade__actions { display: grid; gap: 8px; }
 
 @media (max-width: 760px) {
   .studio-upgrade { grid-template-columns: auto minmax(0, 1fr); }

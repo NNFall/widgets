@@ -127,6 +127,8 @@ export interface BillingSubscription {
   status: 'pending' | 'active' | 'past_due' | 'cancelled' | 'expired';
   current_period_start: string;
   current_period_end: string;
+  auto_renew: boolean;
+  next_renewal_at: string | null;
 }
 
 export interface SaasProject {

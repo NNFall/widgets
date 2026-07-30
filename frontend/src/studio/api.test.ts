@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 import {
   createBillingCheckout,
+  disableBillingAutoRenew,
   getBillingPayment,
   getPendingBillingPayment,
   getBillingSubscription,
@@ -84,6 +85,7 @@ it('creates a billing checkout with session credentials, CSRF and idempotency', 
     'starter_monthly',
     'csrf-billing',
     'checkout-stable-key',
+    true,
   )).resolves.toMatchObject({
     payment: { id: 'payment-123', status: 'pending' },
     created: true,
@@ -96,7 +98,40 @@ it('creates a billing checkout with session credentials, CSRF and idempotency', 
   expect(init.method).toBe('POST');
   expect(new Headers(init.headers).get('X-CSRF-Token')).toBe('csrf-billing');
   expect(new Headers(init.headers).get('Idempotency-Key')).toBe('checkout-stable-key');
-  expect(JSON.parse(String(init.body))).toEqual({ plan_code: 'starter_monthly' });
+  expect(JSON.parse(String(init.body))).toEqual({
+    plan_code: 'starter_monthly',
+    auto_renew: true,
+  });
+});
+
+it('disables auto-renew through an owner-scoped CSRF-protected route', async () => {
+  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+    subscription: {
+      id: 'subscription/123',
+      plan_code: 'starter_monthly',
+      status: 'active',
+      current_period_start: '2026-07-28T12:00:00Z',
+      current_period_end: '2026-08-28T12:00:00Z',
+      auto_renew: false,
+      next_renewal_at: null,
+    },
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  vi.stubGlobal('fetch', fetchMock);
+
+  await expect(
+    disableBillingAutoRenew('subscription/123', 'csrf-billing'),
+  ).resolves.toMatchObject({
+    subscription: { id: 'subscription/123', auto_renew: false },
+  });
+
+  const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+  expect(url).toBe(
+    '/api/billing/subscriptions/subscription%2F123/auto-renew/off',
+  );
+  expect(init.credentials).toBe('include');
+  expect(init.method).toBe('POST');
+  expect(new Headers(init.headers).get('X-CSRF-Token')).toBe('csrf-billing');
+  expect(init.body).toBeUndefined();
 });
 
 it('reads payment and subscription state through authenticated SaaS routes', async () => {

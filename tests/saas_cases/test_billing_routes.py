@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import json
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -19,7 +20,7 @@ from app.billing.yookassa import YooKassaError
 from app.db.base import Base
 from app.db.models import Tenant, User
 from app.db.session import SESSION_FACTORY_KEY
-from app.saas.models import PaymentAttempt, Subscription
+from app.saas.models import BillingPaymentMethod, PaymentAttempt, Subscription
 from tests.saas_cases.test_billing_service import FakeProvider
 
 
@@ -100,6 +101,160 @@ async def test_checkout_requires_auth_csrf_and_server_plan(tmp_path) -> None:
         assert replay.status == 200
         assert (await replay.json())["payment"]["id"] == payload["payment"]["id"]
         assert len(provider.checkout_calls) == 1
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_checkout_accepts_only_explicit_boolean_auto_renew_consent(
+    tmp_path,
+) -> None:
+    engine, factory, provider, client = await _billing_app(tmp_path)
+    try:
+        await client.post("/test/login/10")
+        invalid = await client.post(
+            "/api/billing/checkout",
+            json={"plan_code": "starter_monthly", "auto_renew": "yes"},
+            headers={
+                "Idempotency-Key": "invalid-auto-renew-consent",
+                "X-CSRF-Token": "csrf",
+            },
+        )
+        assert invalid.status == 400
+
+        response = await client.post(
+            "/api/billing/checkout",
+            json={"plan_code": "starter_monthly", "auto_renew": True},
+            headers={
+                "Idempotency-Key": "explicit-auto-renew-consent",
+                "X-CSRF-Token": "csrf",
+            },
+        )
+        assert response.status == 201
+        payload = await response.json()
+        assert provider.checkout_calls[-1].save_payment_method is True
+        async with factory() as database:
+            attempt = await database.get(
+                PaymentAttempt,
+                UUID(payload["payment"]["id"]),
+            )
+            assert attempt is not None
+            assert attempt.auto_renew_requested is True
+            assert attempt.save_payment_method_requested is True
+        assert "provider_payment_method_id" not in json.dumps(payload)
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_disable_auto_renew_is_owner_scoped_csrf_protected_and_idempotent(
+    tmp_path,
+) -> None:
+    engine, factory, _provider, client = await _billing_app(tmp_path)
+    try:
+        await client.post("/test/login/10")
+        checkout = await client.post(
+            "/api/billing/checkout",
+            json={"plan_code": "starter_monthly"},
+            headers={
+                "Idempotency-Key": "auto-renew-off-seed",
+                "X-CSRF-Token": "csrf",
+            },
+        )
+        checkout_payload = await checkout.json()
+        attempt_id = UUID(checkout_payload["payment"]["id"])
+        now = datetime.now(UTC)
+        period_end = now + timedelta(days=30)
+        async with factory() as database, database.begin():
+            attempt = await database.get(PaymentAttempt, attempt_id)
+            assert attempt is not None
+            method = BillingPaymentMethod(
+                user_id=10,
+                provider=attempt.provider,
+                merchant_account_fingerprint=attempt.merchant_account_fingerprint,
+                provider_payment_method_id="private-saved-method",
+                source_payment_attempt_id=attempt.id,
+                status="active",
+                consent_version="yookassa-auto-renew-v1",
+                consented_at=now,
+                saved_at=now,
+            )
+            database.add(method)
+            await database.flush()
+            subscription = Subscription(
+                user_id=10,
+                provider=attempt.provider,
+                merchant_account_fingerprint=attempt.merchant_account_fingerprint,
+                payment_method_id=method.id,
+                payment_attempt_id=attempt.id,
+                plan_code=attempt.plan_code,
+                plan_snapshot=attempt.plan_snapshot,
+                plan_fingerprint=attempt.plan_fingerprint,
+                status="active",
+                current_period_start=now,
+                current_period_end=period_end,
+                auto_renew=True,
+                next_renewal_at=period_end,
+                auto_renew_enabled_at=now,
+            )
+            database.add(subscription)
+            await database.flush()
+            subscription_id = subscription.id
+
+        serialized_responses = [
+            await client.get("/api/billing/subscription"),
+            await client.get(f"/api/billing/payments/{attempt_id}"),
+            await client.get("/api/billing/payments/pending"),
+        ]
+        for response in serialized_responses:
+            assert response.status == 200
+            assert "provider_payment_method_id" not in json.dumps(await response.json())
+
+        missing_csrf = await client.post(
+            f"/api/billing/subscriptions/{subscription_id}/auto-renew/off"
+        )
+        assert missing_csrf.status == 403
+
+        await client.post("/test/login/11")
+        other_owner = await client.post(
+            f"/api/billing/subscriptions/{subscription_id}/auto-renew/off",
+            headers={"X-CSRF-Token": "csrf"},
+        )
+        assert other_owner.status == 404
+
+        await client.post("/test/login/10")
+        first = await client.post(
+            f"/api/billing/subscriptions/{subscription_id}/auto-renew/off",
+            headers={"X-CSRF-Token": "csrf"},
+        )
+        assert first.status == 200
+        first_payload = await first.json()
+        assert first_payload["subscription"]["auto_renew"] is False
+        assert first_payload["subscription"]["current_period_end"] == (
+            period_end.isoformat().replace("+00:00", "Z")
+        )
+        assert "provider_payment_method_id" not in json.dumps(first_payload)
+
+        second = await client.post(
+            f"/api/billing/subscriptions/{subscription_id}/auto-renew/off",
+            headers={"X-CSRF-Token": "csrf"},
+        )
+        assert second.status == 200
+        assert await second.json() == first_payload
+
+        async with factory() as database:
+            stored = await database.get(Subscription, subscription_id)
+            assert stored is not None
+            assert stored.status == "active"
+            assert stored.current_period_end is not None
+            stored_period_end = stored.current_period_end
+            if stored_period_end.tzinfo is None:
+                stored_period_end = stored_period_end.replace(tzinfo=UTC)
+            assert stored_period_end == period_end
+            assert stored.auto_renew is False
+            assert stored.next_renewal_at is None
     finally:
         await client.close()
         await engine.dispose()

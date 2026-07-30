@@ -135,6 +135,7 @@ export function createBillingCheckout(
   planCode: string,
   csrfToken: string,
   idempotencyKey: string,
+  autoRenew = false,
 ) {
   return saasRequestJson<BillingCheckout>('/api/billing/checkout', {
     method: 'POST',
@@ -142,7 +143,7 @@ export function createBillingCheckout(
       'Idempotency-Key': idempotencyKey,
       'X-CSRF-Token': csrfToken,
     },
-    body: JSON.stringify({ plan_code: planCode }),
+    body: JSON.stringify({ plan_code: planCode, auto_renew: autoRenew }),
   });
 }
 
@@ -174,6 +175,19 @@ export function getBillingSubscription(signal?: AbortSignal) {
   return saasRequestJson<{ subscription: BillingSubscription | null }>(
     '/api/billing/subscription',
     { signal },
+  );
+}
+
+export function disableBillingAutoRenew(
+  subscriptionId: string,
+  csrfToken: string,
+) {
+  return saasRequestJson<{ subscription: BillingSubscription }>(
+    `/api/billing/subscriptions/${encodeURIComponent(subscriptionId)}/auto-renew/off`,
+    {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': csrfToken },
+    },
   );
 }
 
