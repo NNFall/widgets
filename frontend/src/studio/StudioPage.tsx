@@ -67,13 +67,39 @@ function readyFreeResult(snapshot: BuilderRunSnapshot | null) {
     && Boolean(artifact.id);
 }
 
-function ErrorNotice({ error }: { error: StudioError }) {
+type ErrorPersistenceState = 'saved_artifact' | 'terminal_without_artifact' | 'unknown';
+
+function errorPersistenceState(snapshot: BuilderRunSnapshot | null): ErrorPersistenceState {
+  if (selectedArtifact(snapshot)) return 'saved_artifact';
+  if (
+    snapshot
+    && (snapshot.status === 'failed' || snapshot.status === 'cancelled')
+    && snapshot.artifact === null
+    && snapshot.draft_artifact === null
+  ) {
+    return 'terminal_without_artifact';
+  }
+  return 'unknown';
+}
+
+function ErrorNotice({
+  error,
+  persistence,
+}: {
+  error: StudioError;
+  persistence: ErrorPersistenceState;
+}) {
   return (
     <div className="studio-error" role="alert">
       <div className="studio-error__mark" aria-hidden>!</div>
       <div>
         <strong>{error.message}</strong>
-        <p>Последняя доступная версия и история запуска сохранены.</p>
+        {persistence === 'saved_artifact' && (
+          <p>Последняя доступная версия и история запуска сохранены.</p>
+        )}
+        {persistence === 'terminal_without_artifact' && (
+          <p>История запуска сохранена, но версия виджета не была создана.</p>
+        )}
         <details>
           <summary>Детали</summary>
           <pre>{error.raw}</pre>
@@ -98,6 +124,7 @@ export function StudioPage() {
   const hydratedRun = useRef<string | null>(null);
   const previewAnchorRef = useRef<HTMLElement>(null);
   const artifact = selectedArtifact(controller.snapshot);
+  const persistence = errorPersistenceState(controller.snapshot);
   const freeResultReady = readyFreeResult(controller.snapshot);
   const status = controller.snapshot?.status ?? null;
   const running = status === 'created' || status === 'queued' || status === 'running';
@@ -258,7 +285,7 @@ export function StudioPage() {
         </header>
         <main className="studio-shell studio-shell--composer">
           {controller.error && !controller.project ? (
-            <ErrorNotice error={controller.error} />
+            <ErrorNotice error={controller.error} persistence={persistence} />
           ) : controller.isHydrating || !controller.project ? (
             <p className="studio-composer__loading" role="status">Загружаем проект…</p>
           ) : (
@@ -272,7 +299,9 @@ export function StudioPage() {
               onSubmit={submitRun}
             />
           )}
-          {controller.error && controller.project && <ErrorNotice error={controller.error} />}
+          {controller.error && controller.project && (
+            <ErrorNotice error={controller.error} persistence={persistence} />
+          )}
         </main>
       </div>
     );
@@ -406,7 +435,9 @@ export function StudioPage() {
             </button>
           </div>
 
-          {(controller.error || formError) && controller.error && <ErrorNotice error={controller.error} />}
+          {(controller.error || formError) && controller.error && (
+            <ErrorNotice error={controller.error} persistence={persistence} />
+          )}
 
           <StudioTimeline events={controller.events} running={running} />
 
