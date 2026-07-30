@@ -543,7 +543,7 @@ async def test_postgres_project_versions_backfill_preserves_manifest_v1_releases
         await asyncio.to_thread(command.upgrade, config, "head")
         target_engine = create_async_engine(rendered)
 
-        assert await _revision(target_engine) == "0016_project_versions"
+        assert await _revision(target_engine) == "0017_funnel_journeys"
         async with target_engine.connect() as connection:
             versions = (
                 (

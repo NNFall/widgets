@@ -91,9 +91,9 @@ def test_schema_auto_creation_is_explicit_and_disabled_by_default() -> None:
 def test_alembic_has_one_production_head() -> None:
     config = Config(str(ROOT / "alembic.ini"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["0016_project_versions"]
-    assert script.get_revision("0016_project_versions").down_revision == (
-        "0015_yookassa_recurring_foundation"
+    assert script.get_heads() == ["0017_funnel_journeys"]
+    assert script.get_revision("0017_funnel_journeys").down_revision == (
+        "0016_project_versions"
     )
     assert script.get_revision("0014_generation_forensics").down_revision == (
         "0013_pattern_registry"
@@ -525,7 +525,7 @@ def test_disposable_postgres_preflight_legacy_and_additive_round_trip(
         assert preflight.inspect_schema(rendered).alembic_revisions == ()
 
         assert preflight.run_preflight(rendered, apply=True) == 0
-        assert asyncio.run(revision()) == "0016_project_versions"
+        assert asyncio.run(revision()) == "0017_funnel_journeys"
 
         head_snapshot = preflight.inspect_schema(rendered)
         assert preflight.classify_schema(head_snapshot) == preflight.MigrationPlan(
@@ -666,7 +666,7 @@ def test_disposable_postgres_preflight_legacy_and_additive_round_trip(
 
         asyncio.run(execute("ALTER TABLE funnel_events ADD COLUMN unexpected TEXT"))
         assert preflight.run_preflight(rendered, apply=False) == 2
-        assert asyncio.run(revision()) == "0016_project_versions"
+        assert asyncio.run(revision()) == "0017_funnel_journeys"
         asyncio.run(execute("ALTER TABLE funnel_events DROP COLUMN unexpected"))
 
         asyncio.run(
@@ -730,7 +730,7 @@ def test_disposable_postgres_preflight_legacy_and_additive_round_trip(
             )
         )
         command.upgrade(config, "head")
-        assert asyncio.run(revision()) == "0016_project_versions"
+        assert asyncio.run(revision()) == "0017_funnel_journeys"
     finally:
         asyncio.run(drop_database())
 

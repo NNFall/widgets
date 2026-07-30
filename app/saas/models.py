@@ -39,6 +39,20 @@ def _json_document():
     return JSON().with_variant(JSONB(), "postgresql")
 
 
+class FunnelJourney(Base):
+    __tablename__ = "funnel_journeys"
+
+    id: Mapped[UUID] = _uuid_pk()
+    campaign_source: Mapped[str | None] = mapped_column(String(255))
+    campaign_medium: Mapped[str | None] = mapped_column(String(255))
+    campaign_name: Mapped[str | None] = mapped_column(String(255))
+    campaign_term: Mapped[str | None] = mapped_column(String(255))
+    campaign_content: Mapped[str | None] = mapped_column(String(255))
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+
+
 class UserIdentity(Base):
     __tablename__ = "user_identities"
     __table_args__ = (UniqueConstraint("provider", "provider_subject", name="uq_identity_subject"),)
@@ -79,6 +93,14 @@ class OAuthState(Base):
     nonce: Mapped[str | None] = mapped_column(String(255))
     return_path: Mapped[str] = mapped_column(String(1024), nullable=False, default="/studio")
     draft_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    journey_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "funnel_journeys.id",
+            name="fk_oauth_states_journey_id",
+            ondelete="SET NULL",
+        ),
+        index=True,
+    )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -91,6 +113,14 @@ class AnonymousDraft(Base):
     brief: Mapped[str | None] = mapped_column(Text)
     campaign: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
     claim_token_digest: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    journey_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "funnel_journeys.id",
+            name="fk_anonymous_drafts_journey_id",
+            ondelete="SET NULL",
+        ),
+        index=True,
+    )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     claimed_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -113,6 +143,14 @@ class Project(Base):
     id: Mapped[UUID] = _uuid_pk()
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     owner_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    journey_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "funnel_journeys.id",
+            name="fk_projects_journey_id",
+            ondelete="SET NULL",
+        ),
+        index=True,
+    )
     source_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     brief: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="draft")
@@ -144,6 +182,14 @@ class GenerationRun(Base):
 
     id: Mapped[UUID] = _uuid_pk()
     project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    journey_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "funnel_journeys.id",
+            name="fk_generation_runs_journey_id",
+            ondelete="SET NULL",
+        ),
+        index=True,
+    )
     mode: Mapped[str] = mapped_column(String(32), nullable=False)
     state: Mapped[str] = mapped_column(String(50), nullable=False, default="queued")
     progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -1049,6 +1095,22 @@ class PaymentAttempt(Base):
 
     id: Mapped[UUID] = _uuid_pk()
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "projects.id",
+            name="fk_payment_attempts_project_id",
+            ondelete="SET NULL",
+        ),
+        index=True,
+    )
+    journey_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "funnel_journeys.id",
+            name="fk_payment_attempts_journey_id",
+            ondelete="SET NULL",
+        ),
+        index=True,
+    )
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     merchant_account_fingerprint: Mapped[str] = mapped_column(
         String(64), nullable=False
@@ -1157,11 +1219,25 @@ class FunnelEvent(Base):
     __tablename__ = "funnel_events"
     __table_args__ = (
         UniqueConstraint("event_key", name="uq_funnel_events_event_key"),
+        Index(
+            "ix_funnel_events_journey_type_occurred",
+            "journey_id",
+            "event_type",
+            "occurred_at",
+        ),
     )
 
     id: Mapped[UUID] = _uuid_pk()
     event_key: Mapped[str] = mapped_column(String(255), nullable=False)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    journey_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "funnel_journeys.id",
+            name="fk_funnel_events_journey_id",
+            ondelete="SET NULL",
+        ),
+        index=True,
+    )
     anonymous_draft_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("anonymous_drafts.id", ondelete="SET NULL")
     )
@@ -1211,6 +1287,14 @@ class Publication(Base):
 
     id: Mapped[UUID] = _uuid_pk()
     project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), unique=True, nullable=False)
+    journey_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "funnel_journeys.id",
+            name="fk_publications_journey_id",
+            ondelete="SET NULL",
+        ),
+        index=True,
+    )
     stable_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     allowed_domains: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     state: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
