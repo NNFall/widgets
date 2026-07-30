@@ -48,7 +48,7 @@ async def plan_composition(
         result = await engine.plan_composition(
             request=request,
             selected_direction=selected_direction,
-            public_catalog=registry.public_catalog(),
+            public_catalog=registry.planner_catalog(),
             correction=diagnostic or None,
         )
         total_usage = total_usage + result.usage
