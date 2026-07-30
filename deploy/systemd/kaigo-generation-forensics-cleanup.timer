@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Kaigo generation forensic cleanup hourly
+
+[Timer]
+OnBootSec=7m
+OnUnitActiveSec=1h
+Persistent=true
+RandomizedDelaySec=3m
+Unit=kaigo-generation-forensics-cleanup.service
+
+[Install]
+WantedBy=timers.target

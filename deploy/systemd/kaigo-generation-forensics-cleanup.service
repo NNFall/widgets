@@ -1,0 +1,19 @@
+[Unit]
+Description=Delete expired Kaigo generation forensic evidence
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/kaigo/current/scripts/cleanup_generation_forensics.py
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/kaigo/current
+Environment=COMPOSE_PROJECT_NAME=kaigo
+EnvironmentFile=/etc/kaigo/release.env
+ExecStart=/usr/bin/docker compose --profile operations run --rm --no-deps generation-forensics-cleanup
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/kaigo/generation-forensics
+TimeoutStartSec=180

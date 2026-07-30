@@ -14,6 +14,11 @@ services:
       KAIGO_BUILDER_WORKER_IMAGE_IDENTITY: ${KAIGO_BUILDER_WORKER_IMAGE_IDENTITY:-}
       KAIGO_BUILDER_WORKER_BOOT_ID: ${KAIGO_BUILDER_WORKER_BOOT_ID:-}
       KAIGO_READINESS_TOKEN: ${KAIGO_READINESS_TOKEN:-}
+      KAIGO_GENERATION_FORENSICS_ENABLED: ${KAIGO_GENERATION_FORENSICS_ENABLED:-false}
+      KAIGO_GENERATION_FORENSICS_ROOT: /var/lib/kaigo/generation-forensics
+      KAIGO_GENERATION_FORENSICS_TTL_HOURS: ${KAIGO_GENERATION_FORENSICS_TTL_HOURS:-120}
+      KAIGO_GENERATION_FORENSICS_MAX_BYTES: ${KAIGO_GENERATION_FORENSICS_MAX_BYTES:-10737418240}
+      KAIGO_GENERATION_FORENSICS_ADMIN_EMAILS: ${KAIGO_GENERATION_FORENSICS_ADMIN_EMAILS:-}
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
@@ -111,7 +116,14 @@ services:
       GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION: ${GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION:-}
       GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION: ${GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION:-}
       KAIGO_BUILDER_EVIDENCE_DIR: /app/data/builder-evidence
+      KAIGO_GENERATION_FORENSICS_ENABLED: ${KAIGO_GENERATION_FORENSICS_ENABLED:-false}
+      KAIGO_GENERATION_FORENSICS_ROOT: /var/lib/kaigo/generation-forensics
+      KAIGO_GENERATION_FORENSICS_TTL_HOURS: ${KAIGO_GENERATION_FORENSICS_TTL_HOURS:-120}
+      KAIGO_GENERATION_FORENSICS_MAX_BYTES: ${KAIGO_GENERATION_FORENSICS_MAX_BYTES:-10737418240}
+      KAIGO_GENERATION_FORENSICS_ADMIN_EMAILS: ${KAIGO_GENERATION_FORENSICS_ADMIN_EMAILS:-}
     command: ["python", "scripts/run_builder_worker.py"]
+    volumes:
+      - ${KAIGO_GENERATION_FORENSICS_HOST_DIR:-./data/generation-forensics}:/var/lib/kaigo/generation-forensics:rw
     tmpfs:
       - /tmp:size=536870912,mode=1777
       - /app/data/builder-evidence:size=536870912,mode=0700,uid=10001,gid=10001
@@ -137,6 +149,39 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://widget_admin:change-me@db:5432/widget_platform}
     command: ["python", "scripts/preflight_saas_schema.py"]
     restart: "no"
+    networks:
+      kaigo_app_db:
+    depends_on:
+      db:
+        condition: service_healthy
+
+  generation-forensics-cleanup:
+    profiles:
+      - operations
+    image: ${KAIGO_APP_IMAGE:-ai_project-app:local}
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      KAIGO_ENVIRONMENT: production
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://widget_admin:change-me@db:5432/widget_platform}
+      KAIGO_GENERATION_FORENSICS_ENABLED: ${KAIGO_GENERATION_FORENSICS_ENABLED:-false}
+      KAIGO_GENERATION_FORENSICS_ROOT: /var/lib/kaigo/generation-forensics
+      KAIGO_GENERATION_FORENSICS_TTL_HOURS: ${KAIGO_GENERATION_FORENSICS_TTL_HOURS:-120}
+      KAIGO_GENERATION_FORENSICS_MAX_BYTES: ${KAIGO_GENERATION_FORENSICS_MAX_BYTES:-10737418240}
+      KAIGO_GENERATION_FORENSICS_ADMIN_EMAILS: ${KAIGO_GENERATION_FORENSICS_ADMIN_EMAILS:-}
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    command: ["python", "scripts/cleanup_generation_forensics.py"]
+    restart: "no"
+    volumes:
+      - ${KAIGO_GENERATION_FORENSICS_HOST_DIR:-./data/generation-forensics}:/var/lib/kaigo/generation-forensics:rw
+    tmpfs:
+      - /tmp:size=67108864,mode=1777
     networks:
       kaigo_app_db:
     depends_on:
