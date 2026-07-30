@@ -7,6 +7,8 @@ from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
+from builder_lab.forensics.config import GenerationForensicsConfig
+
 load_dotenv()
 
 _ALLOWED_ENVIRONMENTS = frozenset({"development", "test", "production"})
@@ -71,6 +73,9 @@ class AppConfig:
     chat_global_concurrency: int = 4
     chat_input_price_microusd_per_million: int = 0
     chat_output_price_microusd_per_million: int = 0
+    generation_forensics: GenerationForensicsConfig = field(
+        default_factory=GenerationForensicsConfig.disabled
+    )
 
     def __post_init__(self) -> None:
         self.environment = self.environment.strip().lower()
@@ -78,6 +83,11 @@ class AppConfig:
             raise ValueError(
                 "environment must be development, test, or production"
             )
+        if not isinstance(self.generation_forensics, GenerationForensicsConfig):
+            raise ValueError(
+                "generation_forensics must be a GenerationForensicsConfig"
+            )
+        self.generation_forensics.validate_for_environment(self.environment)
         if self.environment == "production" and self.auto_create_schema:
             raise ValueError("schema auto-creation is forbidden in production")
         oauth_pairs = (
@@ -485,5 +495,8 @@ def load_config() -> AppConfig:
         chat_output_price_microusd_per_million=_chat_price(
             "GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION",
             required=chat_prices_required,
+        ),
+        generation_forensics=GenerationForensicsConfig.from_env(
+            environment=environment
         ),
     )

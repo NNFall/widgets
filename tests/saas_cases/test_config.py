@@ -1,12 +1,68 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.config import AppConfig, load_config
+from builder_lab.forensics.config import GenerationForensicsConfig
 
 
 def _database(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://kaigo:test@db/kaigo")
+    for name in (
+        "KAIGO_GENERATION_FORENSICS_ENABLED",
+        "KAIGO_GENERATION_FORENSICS_ROOT",
+        "KAIGO_GENERATION_FORENSICS_TTL_HOURS",
+        "KAIGO_GENERATION_FORENSICS_MAX_BYTES",
+        "KAIGO_GENERATION_FORENSICS_ADMIN_EMAILS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_app_loads_shared_generation_forensics_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _database(monkeypatch)
+    root = tmp_path / "private-forensics"
+    monkeypatch.setenv("KAIGO_ENVIRONMENT", "test")
+    monkeypatch.setenv("KAIGO_GENERATION_FORENSICS_ENABLED", "true")
+    monkeypatch.setenv("KAIGO_GENERATION_FORENSICS_ROOT", str(root))
+    monkeypatch.setenv("KAIGO_GENERATION_FORENSICS_TTL_HOURS", "96")
+    monkeypatch.setenv("KAIGO_GENERATION_FORENSICS_MAX_BYTES", "123456")
+    monkeypatch.setenv(
+        "KAIGO_GENERATION_FORENSICS_ADMIN_EMAILS",
+        " Admin@Example.com,ops@example.com ",
+    )
+
+    config = load_config()
+
+    assert config.generation_forensics.enabled is True
+    assert config.generation_forensics.root == root
+    assert config.generation_forensics.ttl_hours == 96
+    assert config.generation_forensics.max_bytes == 123_456
+    assert config.generation_forensics.admin_emails == (
+        "admin@example.com",
+        "ops@example.com",
+    )
+
+
+def test_app_config_revalidates_direct_production_forensics_config() -> None:
+    unsafe = GenerationForensicsConfig(
+        enabled=True,
+        root=Path("relative/private"),
+        ttl_hours=96,
+        max_bytes=1024,
+        admin_emails=(),
+    )
+
+    with pytest.raises(ValueError, match="absolute|120|allowlist"):
+        AppConfig(
+            database_url="postgresql://db",
+            environment="production",
+            generation_forensics=unsafe,
+        )
 
 
 def _production_chat_provider(monkeypatch: pytest.MonkeyPatch) -> None:
