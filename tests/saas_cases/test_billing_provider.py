@@ -857,6 +857,51 @@ async def test_yookassa_recurring_payment_uses_saved_method_without_confirmation
 
 
 @pytest.mark.asyncio
+async def test_yookassa_recurring_response_may_be_immediately_succeeded() -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "pay_recurring_succeeded",
+                "status": "succeeded",
+                "paid": True,
+                "amount": {"value": "1990.00", "currency": "RUB"},
+                "metadata": {"payment_attempt_id": "renewal-succeeded"},
+                "test": True,
+            },
+            request=request,
+        )
+
+    provider = YooKassaProvider(
+        shop_id="shop",
+        secret_key="secret",
+        return_url="https://kaigo.space/billing/success",
+        test_mode=True,
+        transport=httpx.MockTransport(handler),
+    )
+    result = await provider.create_recurring_payment(
+        RecurringPaymentCommand(
+            idempotency_key="renewal-succeeded-key",
+            payment_method_id="opaque-method-id",
+            amount=Money(199_000, "RUB"),
+            description="Kaigo Starter renewal",
+            metadata={"payment_attempt_id": "renewal-succeeded"},
+        )
+    )
+
+    assert result.provider_payment_id == "pay_recurring_succeeded"
+    assert result.status is PaymentStatus.SUCCEEDED
+    assert result.paid is True
+    assert len(requests) == 1
+    assert requests[0].method == "POST"
+    assert "confirmation" not in json.loads(requests[0].content)
+    await provider.aclose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("payment_method_id", ["", "../unsafe", "has space", "x" * 256])
 async def test_yookassa_recurring_payment_rejects_unsafe_method_id_before_request(
     payment_method_id: str,
