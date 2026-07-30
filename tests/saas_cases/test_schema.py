@@ -22,6 +22,7 @@ EXPECTED_TABLES = {
     "generation_forensic_access_logs",
     "usage_ledger",
     "trial_entitlements",
+    "billing_payment_methods",
     "subscriptions",
     "payment_attempts",
     "payment_webhook_events",

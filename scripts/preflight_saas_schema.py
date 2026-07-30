@@ -320,6 +320,9 @@ EXPECTED_VERSIONED_SCHEMA_FINGERPRINTS: Mapping[str, str] = MappingProxyType(
         "0014_generation_forensics": (
             "f244430e3e1b92259c35e8ae2ec93d611b8a0a4a0f458623576b0b9074eb3d15"
         ),
+        "0015_yookassa_recurring_foundation": (
+            "a94711d160ea0002f2c3451b9ba5b1f2fa106d49aee84425d4a2bdb7a6c17725"
+        ),
     }
 )
 

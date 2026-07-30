@@ -268,6 +268,13 @@ async def test_postgres_billing_migration_and_concurrent_fulfillment(monkeypatch
         assert recovered.payment_id == winner_id
         assert recovered.created is False
         assert provider.checkout_calls == []
+        # The insert-race scenario above intentionally leaves a pending row.
+        # Resolve that synthetic attempt before exercising an unrelated new
+        # checkout, because the service correctly blocks parallel unresolved
+        # payments for the same user.
+        async with factory() as database, database.begin():
+            persisted = await database.get(PaymentAttempt, winner_id)
+            persisted.status = "cancelled"
 
         checkout_service = BillingService(factory, provider)
         checkout = await checkout_service.create_checkout(
@@ -311,7 +318,7 @@ async def test_postgres_billing_migration_and_concurrent_fulfillment(monkeypatch
             revision = await connection.run_sync(
                 lambda sync: MigrationContext.configure(sync).get_current_revision()
             )
-        assert revision == "0014_generation_forensics"
+        assert revision == "0015_yookassa_recurring_foundation"
 
         await asyncio.to_thread(command.downgrade, config, "0008_publication_releases")
         async with target_engine.connect() as connection:

@@ -318,7 +318,7 @@ async def test_postgres_generation_forensics_round_trip_and_constraints(
         await asyncio.to_thread(command.upgrade, config, "head")
         target_engine = create_async_engine(rendered)
 
-        assert await _revision(target_engine) == "0014_generation_forensics"
+        assert await _revision(target_engine) == "0015_yookassa_recurring_foundation"
         assert {
             "generation_forensic_manifests",
             "generation_forensic_access_logs",
@@ -957,7 +957,7 @@ async def test_postgres_generation_forensics_round_trip_and_constraints(
         target_engine = None
         await asyncio.to_thread(command.upgrade, config, "head")
         target_engine = create_async_engine(rendered)
-        assert await _revision(target_engine) == "0014_generation_forensics"
+        assert await _revision(target_engine) == "0015_yookassa_recurring_foundation"
         async with target_engine.connect() as connection:
             reupgraded = (
                 await connection.execute(

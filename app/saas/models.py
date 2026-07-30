@@ -15,6 +15,7 @@ from sqlalchemy import (
     Integer,
     Index,
     JSON,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -707,6 +708,65 @@ class TrialEntitlement(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class BillingPaymentMethod(Base):
+    __tablename__ = "billing_payment_methods"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "merchant_account_fingerprint",
+            "provider_payment_method_id",
+            name="uq_billing_payment_method_provider_identity",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'disabled', 'invalid')",
+            name="ck_billing_payment_method_status",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "users.id",
+            name="fk_billing_payment_methods_user_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    merchant_account_fingerprint: Mapped[str] = mapped_column(
+        String(64), nullable=False
+    )
+    provider_payment_method_id: Mapped[str] = mapped_column(
+        String(255), nullable=False
+    )
+    source_payment_attempt_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "payment_attempts.id",
+            name="fk_billing_payment_methods_source_attempt",
+            ondelete="SET NULL",
+        )
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    consent_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    consented_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    saved_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class Subscription(Base):
     __tablename__ = "subscriptions"
     __table_args__ = (
@@ -714,6 +774,12 @@ class Subscription(Base):
             "status <> 'active' OR (current_period_start IS NOT NULL AND "
             "current_period_end IS NOT NULL AND current_period_end > current_period_start)",
             name="ck_subscription_finite_period",
+        ),
+        CheckConstraint(
+            "NOT auto_renew OR (payment_method_id IS NOT NULL "
+            "AND merchant_account_fingerprint IS NOT NULL "
+            "AND next_renewal_at IS NOT NULL)",
+            name="ck_subscription_auto_renew_ready",
         ),
         Index(
             "uq_subscriptions_one_active_user",
@@ -729,6 +795,14 @@ class Subscription(Base):
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     provider_customer_id: Mapped[str | None] = mapped_column(String(255))
     provider_subscription_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    merchant_account_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    payment_method_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "billing_payment_methods.id",
+            name="fk_subscriptions_payment_method",
+            ondelete="SET NULL",
+        )
+    )
     payment_attempt_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("payment_attempts.id", ondelete="SET NULL")
     )
@@ -738,6 +812,19 @@ class Subscription(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     current_period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    auto_renew: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=false(),
+    )
+    next_renewal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    auto_renew_enabled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    auto_renew_disabled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -754,6 +841,96 @@ class PaymentAttempt(Base):
         UniqueConstraint(
             "provider", "provider_payment_id", name="uq_payment_attempt_provider_payment"
         ),
+        UniqueConstraint(
+            "id",
+            "subscription_id",
+            "billing_period_start",
+            "billing_period_end",
+            "renewal_attempt_number",
+            name="uq_payment_attempt_retry_target",
+        ),
+        ForeignKeyConstraint(
+            [
+                "retry_of_payment_attempt_id",
+                "subscription_id",
+                "billing_period_start",
+                "billing_period_end",
+                "retry_of_renewal_attempt_number",
+            ],
+            [
+                "payment_attempts.id",
+                "payment_attempts.subscription_id",
+                "payment_attempts.billing_period_start",
+                "payment_attempts.billing_period_end",
+                "payment_attempts.renewal_attempt_number",
+            ],
+            name="fk_payment_attempts_retry_target",
+            use_alter=True,
+        ),
+        CheckConstraint(
+            "purpose IN ('initial', 'renewal')",
+            name="ck_payment_attempt_purpose",
+        ),
+        CheckConstraint(
+            "(purpose = 'initial' AND billing_period_start IS NULL "
+            "AND billing_period_end IS NULL AND renewal_attempt_number IS NULL "
+            "AND retry_of_payment_attempt_id IS NULL "
+            "AND retry_of_renewal_attempt_number IS NULL "
+            "AND next_dispatch_at IS NULL) "
+            "OR (purpose = 'renewal' AND subscription_id IS NOT NULL "
+            "AND payment_method_id IS NOT NULL "
+            "AND renewal_attempt_number IS NOT NULL "
+            "AND renewal_attempt_number IN (1, 2) "
+            "AND billing_period_start IS NOT NULL "
+            "AND billing_period_end IS NOT NULL "
+            "AND billing_period_end > billing_period_start "
+            "AND ((renewal_attempt_number = 1 "
+            "AND retry_of_payment_attempt_id IS NULL "
+            "AND retry_of_renewal_attempt_number IS NULL "
+            "AND next_dispatch_at IS NULL) "
+            "OR (renewal_attempt_number = 2 "
+            "AND retry_of_payment_attempt_id IS NOT NULL "
+            "AND retry_of_renewal_attempt_number = 1 "
+            "AND next_dispatch_at IS NOT NULL)))",
+            name="ck_payment_attempt_renewal_period",
+        ),
+        CheckConstraint(
+            "(purpose = 'initial' AND ((auto_renew_requested IS FALSE "
+            "AND (save_payment_method_requested IS NULL "
+            "OR save_payment_method_requested IS FALSE) "
+            "AND consent_version IS NULL AND consented_at IS NULL) "
+            "OR (auto_renew_requested IS TRUE "
+            "AND save_payment_method_requested IS TRUE "
+            "AND consent_version IS NOT NULL AND consented_at IS NOT NULL))) "
+            "OR (purpose = 'renewal' AND auto_renew_requested IS TRUE "
+            "AND save_payment_method_requested IS FALSE "
+            "AND consent_version IS NOT NULL AND consented_at IS NOT NULL)",
+            name="ck_payment_attempt_auto_renew_consent",
+        ),
+        CheckConstraint(
+            "(reconcile_lease_token IS NULL "
+            "AND reconcile_lease_expires_at IS NULL) "
+            "OR (reconcile_lease_token IS NOT NULL "
+            "AND reconcile_lease_expires_at IS NOT NULL)",
+            name="ck_payment_attempt_reconcile_lease",
+        ),
+        CheckConstraint(
+            "(first_dispatched_at IS NULL "
+            "AND provider_idempotency_expires_at IS NULL) "
+            "OR (first_dispatched_at IS NOT NULL "
+            "AND provider_idempotency_expires_at IS NOT NULL "
+            "AND provider_idempotency_expires_at > first_dispatched_at)",
+            name="ck_payment_attempt_idempotency_window",
+        ),
+        Index(
+            "uq_payment_attempt_renewal_sequence",
+            "subscription_id",
+            "billing_period_start",
+            "renewal_attempt_number",
+            unique=True,
+            postgresql_where=text("purpose = 'renewal'"),
+            sqlite_where=text("purpose = 'renewal'"),
+        ),
     )
 
     id: Mapped[UUID] = _uuid_pk()
@@ -761,6 +938,68 @@ class PaymentAttempt(Base):
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     merchant_account_fingerprint: Mapped[str] = mapped_column(
         String(64), nullable=False
+    )
+    purpose: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="initial",
+        server_default=text("'initial'"),
+    )
+    subscription_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "subscriptions.id",
+            name="fk_payment_attempts_subscription",
+            ondelete="SET NULL",
+            use_alter=True,
+        )
+    )
+    payment_method_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "billing_payment_methods.id",
+            name="fk_payment_attempts_payment_method",
+            ondelete="SET NULL",
+            use_alter=True,
+        )
+    )
+    billing_period_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    billing_period_end: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    renewal_attempt_number: Mapped[int | None] = mapped_column(SmallInteger)
+    retry_of_payment_attempt_id: Mapped[UUID | None] = mapped_column(Uuid)
+    retry_of_renewal_attempt_number: Mapped[int | None] = mapped_column(
+        SmallInteger
+    )
+    next_dispatch_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    auto_renew_requested: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=false(),
+    )
+    consent_version: Mapped[str | None] = mapped_column(String(64))
+    consented_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    save_payment_method_requested: Mapped[bool | None] = mapped_column(Boolean)
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    first_dispatched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    provider_idempotency_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    last_reconciled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    next_reconcile_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    reconcile_lease_token: Mapped[str | None] = mapped_column(String(64))
+    reconcile_lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
     )
     provider_payment_id: Mapped[str | None] = mapped_column(String(255))
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -785,6 +1024,12 @@ class PaymentWebhookEvent(Base):
     id: Mapped[UUID] = _uuid_pk()
     provider: Mapped[str] = mapped_column(String(32), nullable=False)
     provider_event_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    merchant_account_fingerprint: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default="!" * 64,
+        server_default=text("'!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'"),
+    )
     payment_attempt_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("payment_attempts.id", ondelete="SET NULL"), index=True
     )
