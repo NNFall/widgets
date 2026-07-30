@@ -2,9 +2,10 @@ import type { BuilderEvent } from './types';
 
 export const STUDIO_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   missing_api_key: 'Сервис генерации пока не настроен.',
-  provider_unavailable: 'Gemini сейчас недоступен. Запуск можно повторить позже.',
-  model_unavailable: 'Выбранная модель Gemini сейчас недоступна.',
-  quota_exceeded: 'Лимит Gemini временно исчерпан. Попробуйте позже.',
+  provider_unavailable: 'Сервис генерации сейчас недоступен. Запуск можно повторить позже.',
+  model_unavailable: 'Выбранная модель сейчас недоступна.',
+  quota_exceeded: 'Лимит сервиса генерации временно исчерпан. Попробуйте позже.',
+  route_exhausted: 'Ни один доступный сервис генерации не смог завершить запрос. Попробуйте позже.',
   generation_timeout: 'Генерация заняла слишком много времени и была остановлена.',
   invalid_artifact: 'Полученную версию не удалось безопасно открыть.',
   visual_quality_failed: 'Финальная визуальная проверка не пройдена.',

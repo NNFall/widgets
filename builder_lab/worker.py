@@ -90,6 +90,7 @@ _PROVIDER_FAILURE_CODES = frozenset({
     "agent_unavailable",
     "quota_exceeded",
     "model_not_found",
+    "route_exhausted",
 })
 _INFRASTRUCTURE_FAILURE_CODES = frozenset({
     "generation_timeout",
@@ -101,6 +102,7 @@ _INFRASTRUCTURE_FAILURE_CODES = frozenset({
 _MODEL_OUTPUT_FAILURE_CODES = frozenset({
     "invalid_artifact",
     "invalid_structured_output",
+    "invalid_response",
     "reference_analysis_invalid",
     "visual_quality_failed",
     "visual_review_inconclusive",
@@ -501,6 +503,7 @@ class OrchestratorStageHandler:
                 exc.error_code,
                 exc.public_message,
                 diagnostic=exc.diagnostic,
+                usage=exc.usage,
             ) from exc
         if not isinstance(analysis, ReferenceAnalysisResult):
             raise BuilderEngineError(
@@ -1413,6 +1416,7 @@ class PostgresWorkerQueue:
                 "attempt_id": str(claim.attempt_id),
                 "error_code": error.error_code,
                 "diagnostic": error.diagnostic,
+                "usage": error.usage.to_dict(),
             },
         )
         self._append_event(

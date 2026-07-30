@@ -81,7 +81,7 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertFalse(config.hybrid_routing_enabled)
         self.assertIsNone(config.agentrouter_api_key)
         self.assertEqual(config.agentrouter_base_url, "https://agentrouter.org/v1")
-        self.assertEqual(config.agentrouter_timeout_seconds, 900)
+        self.assertEqual(config.agentrouter_timeout_seconds, 180)
         self.assertEqual(config.agentrouter_qwen_executable, "qwen")
         self.assertEqual(config.agentrouter_gpt_model, "gpt-5.5")
         self.assertEqual(config.agentrouter_glm_model, "glm-5.2")
@@ -164,6 +164,17 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertEqual(config.antigravity_max_total_tokens, 750_000)
         self.assertEqual(config.browser_audit_timeout_ms, 15_000)
         self.assertEqual(config.browser_audit_total_timeout_seconds, 150)
+
+    def test_agentrouter_timeout_accepts_production_boundaries(self):
+        for value in ("120", "360"):
+            with self.subTest(value=value):
+                config = self.load(AGENTROUTER_TIMEOUT_SECONDS=value)
+                self.assertEqual(config.agentrouter_timeout_seconds, int(value))
+
+    def test_agentrouter_timeout_rejects_values_outside_production_bounds(self):
+        for value in ("119", "361", "900"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.load(AGENTROUTER_TIMEOUT_SECONDS=value)
 
     def test_non_loopback_is_rejected_by_default(self):
         with self.assertRaisesRegex(ValueError, "loopback"):

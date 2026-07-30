@@ -262,6 +262,12 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
             config.agentrouter_glm_output_price_microusd_per_million,
         )
 
+    def gpt_targets() -> tuple[ProviderTarget, ...]:
+        return (gpt_target(), gemini_target(config.direct_model))
+
+    def glm_targets() -> tuple[ProviderTarget, ...]:
+        return (glm_target(), gemini_target(config.direct_model))
+
     gpt_roles = {
         "direction_candidate",
         "direction_judge",
@@ -281,15 +287,17 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
     for mode in ("direct", "express"):
         policy = get_mode_policy(mode)
         for role in set(policy.model_roles.values()):
-            target = (
-                gpt_target()
+            targets = (
+                gpt_targets()
                 if hybrid_enabled and role in gpt_roles
-                else glm_target()
+                else glm_targets()
                 if hybrid_enabled and role in glm_roles
-                else gemini_target(
-                    config.reference_analyzer_model
-                    if role == "reference_analyst"
-                    else config.direct_model
+                else (
+                    gemini_target(
+                        config.reference_analyzer_model
+                        if role == "reference_analyst"
+                        else config.direct_model
+                    ),
                 )
             )
             prompt_version = (
@@ -299,7 +307,7 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
             )
             policies[(role, policy.name)] = ModelPolicy(
                 prompt_version=prompt_version,
-                targets=(target,),
+                targets=targets,
             )
         for role in policy.critic_roles:
             policies[(role, policy.name)] = ModelPolicy(
@@ -307,42 +315,42 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
                 targets=(gemini_target(config.visual_critic_model),),
             )
         if policy.judge_role is not None:
-            judge_target = (
-                gpt_target()
+            judge_targets = (
+                gpt_targets()
                 if hybrid_enabled
-                else gemini_target(config.visual_critic_model)
+                else (gemini_target(config.visual_critic_model),)
             )
             policies[(policy.judge_role, policy.name)] = ModelPolicy(
                 prompt_version="visual-judge-v1",
-                targets=(judge_target,),
+                targets=judge_targets,
             )
-        direction_target = (
-            gpt_target()
+        direction_targets = (
+            gpt_targets()
             if hybrid_enabled
-            else gemini_target(config.direct_model)
+            else (gemini_target(config.direct_model),)
         )
         for role in ("direction_candidate", "direction_judge"):
             policies[(role, policy.name)] = ModelPolicy(
                 prompt_version="direction-v1",
-                targets=(direction_target,),
+                targets=direction_targets,
             )
-        repair_target = (
-            glm_target()
+        repair_targets = (
+            glm_targets()
             if hybrid_enabled
-            else gemini_target(config.direct_model)
+            else (gemini_target(config.direct_model),)
         )
         policies[("repair", policy.name)] = ModelPolicy(
             prompt_version="repair-v1",
-            targets=(repair_target,),
+            targets=repair_targets,
         )
-        review_target = (
-            gpt_target()
+        review_targets = (
+            gpt_targets()
             if hybrid_enabled
-            else gemini_target(config.visual_critic_model)
+            else (gemini_target(config.visual_critic_model),)
         )
         policies[("code_review", policy.name)] = ModelPolicy(
             prompt_version="code-review-v1",
-            targets=(review_target,),
+            targets=review_targets,
         )
     return ModelRouter(
         providers=providers,
@@ -362,6 +370,7 @@ def make_repair_verifier_factory(
         model=config.visual_critic_model,
         thinking_level=config.visual_critic_thinking_level,
         timeout_seconds=config.visual_critic_timeout_seconds,
+        routing_timeout_seconds=config.agentrouter_timeout_seconds,
         model_router=model_router,
         routing_mode=mode,
         routing_role="code_review",
@@ -418,6 +427,7 @@ async def run() -> None:
                     run_id=claim.run_id,
                     routing_role=role,
                     routing_mode=get_mode_policy(claim.mode).name,
+                    routing_timeout_seconds=config.agentrouter_timeout_seconds,
                     model=config.direct_model,
                     thinking_level=config.builder_thinking_level,
                 ),

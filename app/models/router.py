@@ -4,8 +4,9 @@ import asyncio
 import inspect
 import math
 import time
+from contextlib import suppress
 from dataclasses import dataclass, replace
-from typing import Mapping, Protocol
+from typing import Callable, Mapping, Protocol
 from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -18,11 +19,32 @@ from app.models.contracts import (
     ModelProviderError,
     ModelRequest,
     ModelResponse,
+    ModelRouteAttempt,
+    ModelRouteExhausted,
     ModelUsage,
     ProviderCapabilities,
     ProviderTimeout,
     UnsupportedModelRequest,
 )
+
+
+_FALLBACK_ERROR_CODES = frozenset(
+    {
+        "generation_timeout",
+        "provider_unavailable",
+        "quota_exceeded",
+        "model_unavailable",
+        "invalid_response",
+        # Capability failures are target-specific, so a capable target may continue.
+        "unsupported_request",
+    }
+)
+_ROUTE_FINALIZATION_GRACE_SECONDS = 0.01
+_PROVIDER_CANCELLATION_GRACE_SECONDS = 0.02
+
+
+class _ProviderCleanupIncomplete(ModelProviderError):
+    error_code = "provider_cleanup_incomplete"
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +154,7 @@ class ModelRouter:
         self._audit = audit
         self._close_lock = asyncio.Lock()
         self._closed = False
+        self._provider_reapers: set[asyncio.Task[None]] = set()
 
     async def generate(
         self,
@@ -153,8 +176,21 @@ class ModelRouter:
         except KeyError as error:
             raise ValueError(f"no model policy for {role}:{mode}") from error
 
-        last_error: ModelProviderError | None = None
+        route_deadline = (
+            time.monotonic() + timeout_seconds
+            if timeout_seconds is not None
+            else None
+        )
+        finalization_deadline = (
+            route_deadline + _ROUTE_FINALIZATION_GRACE_SECONDS
+            if route_deadline is not None
+            else None
+        )
+        route_attempts: list[ModelRouteAttempt] = []
+        total_usage = ModelUsage()
         for attempt, target in enumerate(policy.targets, start=1):
+            if route_deadline is not None and time.monotonic() >= route_deadline:
+                break
             call_id = uuid4()
             provider_dispatched = False
             try:
@@ -164,97 +200,177 @@ class ModelRouter:
             started = time.perf_counter()
             try:
                 _ensure_supported(provider, target, request)
-                await self._audit.record(
-                    _audit_record(
-                        call_id=call_id,
-                        run_id=run_id,
-                        target=target,
-                        role=role,
-                        mode=mode,
-                        prompt_version=policy.prompt_version,
-                        attempt=attempt,
-                        provider_dispatched=True,
-                        status="dispatched",
-                        started=started,
-                    )
+                dispatched_record = _audit_record(
+                    call_id=call_id,
+                    run_id=run_id,
+                    target=target,
+                    role=role,
+                    mode=mode,
+                    prompt_version=policy.prompt_version,
+                    attempt=attempt,
+                    provider_dispatched=True,
+                    status="dispatched",
+                    started=started,
                 )
-                provider_dispatched = True
-                if timeout_seconds is None:
-                    response = await provider.generate(request, model=target.model)
+                if route_deadline is None:
+                    await self._audit.record(dispatched_record)
                 else:
                     try:
-                        async with asyncio.timeout(timeout_seconds):
-                            response = await provider.generate(
-                                request,
-                                model=target.model,
-                            )
+                        async with asyncio.timeout_at(route_deadline):
+                            await self._audit.record(dispatched_record)
                     except TimeoutError as error:
                         raise ProviderTimeout(
-                            f"provider attempt exceeded {timeout_seconds:g} seconds"
+                            "model route deadline expired during audit"
                         ) from error
+                attempt_timeout: float | None = None
+                if route_deadline is not None:
+                    targets_left = len(policy.targets) - attempt + 1
+                    remaining = route_deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise ProviderTimeout(
+                            "model route deadline expired before provider dispatch"
+                        )
+                    attempt_timeout = remaining / targets_left
+                provider_dispatched = True
+                try:
+                    response = await _bounded_provider_generate(
+                        provider,
+                        request,
+                        model=target.model,
+                        timeout_seconds=attempt_timeout,
+                        finalization_deadline=finalization_deadline,
+                        reap_unsettled=self._schedule_provider_task_reaper,
+                    )
+                except TimeoutError as error:
+                    assert attempt_timeout is not None
+                    raise ProviderTimeout(
+                        f"provider attempt exceeded {attempt_timeout:g} seconds"
+                    ) from error
+                if route_deadline is not None and time.monotonic() >= route_deadline:
+                    raise ProviderTimeout("model route deadline expired")
             except asyncio.CancelledError:
-                await _record_finalization_safe(
-                    self._audit,
-                    _audit_record(
-                        call_id=call_id,
-                        run_id=run_id,
-                        target=target,
-                        role=role,
-                        mode=mode,
-                        prompt_version=policy.prompt_version,
-                        attempt=attempt,
-                        provider_dispatched=provider_dispatched,
-                        status="cancelled",
-                        started=started,
-                        error_code="cancelled",
-                        error_message="provider call cancelled",
-                    ),
-                )
+                # Audit storage is best-effort on cancellation: it must never
+                # replace the caller's cancellation with a storage failure.
+                with suppress(BaseException):
+                    await _record_finalization_safe(
+                        self._audit,
+                        _audit_record(
+                            call_id=call_id,
+                            run_id=run_id,
+                            target=target,
+                            role=role,
+                            mode=mode,
+                            prompt_version=policy.prompt_version,
+                            attempt=attempt,
+                            provider_dispatched=provider_dispatched,
+                            status="cancelled",
+                            started=started,
+                            error_code="cancelled",
+                            error_message="provider call cancelled",
+                        ),
+                        deadline=(
+                            time.monotonic() + _ROUTE_FINALIZATION_GRACE_SECONDS
+                        ),
+                    )
                 raise
             except ModelProviderError as error:
-                last_error = error
                 usage = (
                     error.usage
                     if isinstance(error, BilledModelProviderError)
                     else ModelUsage()
                 )
-                await _record_finalization_safe(
-                    self._audit,
-                    ModelCallAuditRecord(
-                        call_id=call_id,
-                        run_id=run_id,
+                total_usage = _add_usage(total_usage, usage)
+                latency_ms = _elapsed_ms(started)
+                cost_microusd = _cost_microusd(
+                    target,
+                    usage.input_tokens,
+                    usage.output_tokens,
+                )
+                route_attempts.append(
+                    ModelRouteAttempt(
                         provider=target.provider,
                         model=target.model,
-                        role=role,
-                        mode=mode,
-                        prompt_version=policy.prompt_version,
-                        attempt=attempt,
-                        provider_dispatched=provider_dispatched,
-                        status="failed",
-                        input_tokens=usage.input_tokens,
-                        output_tokens=usage.output_tokens,
-                        thinking_tokens=usage.thinking_tokens,
-                        latency_ms=_elapsed_ms(started),
-                        cost_microusd=_cost_microusd(
-                            target,
-                            usage.input_tokens,
-                            usage.output_tokens,
-                        ),
-                        request_id=(
-                            error.request_id
-                            if isinstance(error, BilledModelProviderError)
-                            else None
+                        outcome="failed",
+                        latency_ms=latency_ms,
+                        usage=usage,
+                        cost_microusd=cost_microusd,
+                        cost_state=_failed_cost_state(
+                            error,
+                            provider_dispatched=provider_dispatched,
+                            usage=usage,
                         ),
                         error_code=error.error_code,
-                        error_message=str(error)[:1000],
-                        pricing_snapshot=_pricing_snapshot(target),
-                    ),
+                    )
                 )
+                try:
+                    failed_audit_recorded = await _record_finalization_safe(
+                        self._audit,
+                        ModelCallAuditRecord(
+                            call_id=call_id,
+                            run_id=run_id,
+                            provider=target.provider,
+                            model=target.model,
+                            role=role,
+                            mode=mode,
+                            prompt_version=policy.prompt_version,
+                            attempt=attempt,
+                            provider_dispatched=provider_dispatched,
+                            status="failed",
+                            input_tokens=usage.input_tokens,
+                            output_tokens=usage.output_tokens,
+                            thinking_tokens=usage.thinking_tokens,
+                            latency_ms=latency_ms,
+                            cost_microusd=cost_microusd,
+                            request_id=(
+                                error.request_id
+                                if isinstance(error, BilledModelProviderError)
+                                else None
+                            ),
+                            error_code=error.error_code,
+                            error_message=error.error_code,
+                            pricing_snapshot=_pricing_snapshot(target),
+                        ),
+                        deadline=finalization_deadline,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as audit_error:
+                    raise ModelRouteExhausted(
+                        attempts=tuple(route_attempts),
+                        usage=total_usage,
+                    ) from audit_error
+                if not failed_audit_recorded:
+                    raise ModelRouteExhausted(
+                        attempts=tuple(route_attempts),
+                        usage=total_usage,
+                    )
+                if (
+                    attempt < len(policy.targets)
+                    and error.error_code not in _FALLBACK_ERROR_CODES
+                ):
+                    raise
                 continue
 
             usage = response.usage
+            total_usage = _add_usage(total_usage, usage)
             cost = _cost_microusd(target, usage.input_tokens, usage.output_tokens)
-            await _record_finalization_safe(
+            latency_ms = _elapsed_ms(started)
+            route_attempts.append(
+                ModelRouteAttempt(
+                    provider=target.provider,
+                    model=target.model,
+                    outcome="completed",
+                    latency_ms=latency_ms,
+                    usage=usage,
+                    cost_microusd=cost,
+                    cost_state=(
+                        "estimated"
+                        if usage.input_tokens or usage.output_tokens
+                        else "unknown"
+                    ),
+                )
+            )
+            terminal_audit_recorded = await _record_finalization_safe(
                 self._audit,
                 ModelCallAuditRecord(
                     call_id=call_id,
@@ -270,23 +386,35 @@ class ModelRouter:
                     input_tokens=usage.input_tokens,
                     output_tokens=usage.output_tokens,
                     thinking_tokens=usage.thinking_tokens,
-                    latency_ms=_elapsed_ms(started),
+                    latency_ms=latency_ms,
                     cost_microusd=cost,
                     request_id=response.request_id,
                     pricing_snapshot=_pricing_snapshot(target),
                 ),
+                deadline=finalization_deadline,
             )
+            if not terminal_audit_recorded:
+                raise RuntimeError(
+                    "terminal model-call audit could not be finalized"
+                )
             return replace(
                 response,
+                usage=total_usage,
                 raw={
                     **dict(response.raw or {}),
                     "provider": target.provider,
                     "model": target.model,
+                    "route_attempts": [
+                        route_attempt.to_dict() for route_attempt in route_attempts
+                    ],
                 },
             )
 
-        if last_error is not None:
-            raise last_error
+        if route_attempts:
+            raise ModelRouteExhausted(
+                attempts=tuple(route_attempts),
+                usage=total_usage,
+            )
         raise RuntimeError("model policy contained no executable targets")
 
     async def aclose(self) -> None:
@@ -296,6 +424,13 @@ class ModelRouter:
             self._closed = True
             providers = tuple({id(provider): provider for provider in self._providers.values()}.values())
             errors: list[BaseException] = []
+            while self._provider_reapers:
+                reapers = tuple(self._provider_reapers)
+                results = await asyncio.gather(*reapers, return_exceptions=True)
+                self._provider_reapers.difference_update(reapers)
+                errors.extend(
+                    result for result in results if isinstance(result, BaseException)
+                )
             for provider in providers:
                 close = getattr(provider, "aclose", None)
                 if not callable(close):
@@ -308,6 +443,18 @@ class ModelRouter:
                     errors.append(error)
             if errors:
                 raise errors[0]
+
+    def _schedule_provider_task_reaper(
+        self,
+        task: asyncio.Task[ModelResponse],
+    ) -> None:
+        if task.done():
+            _consume_task_result(task)
+            return
+        reaper = asyncio.create_task(_reap_provider_task(task))
+        self._provider_reapers.add(reaper)
+        reaper.add_done_callback(self._provider_reapers.discard)
+        reaper.add_done_callback(_consume_task_result)
 
 
 def _ensure_supported(
@@ -328,6 +475,30 @@ def _ensure_supported(
         raise UnsupportedModelRequest(
             f"{target.provider} does not support structured output"
         )
+
+
+def _add_usage(left: ModelUsage, right: ModelUsage) -> ModelUsage:
+    return ModelUsage(
+        input_tokens=left.input_tokens + right.input_tokens,
+        output_tokens=left.output_tokens + right.output_tokens,
+        thinking_tokens=left.thinking_tokens + right.thinking_tokens,
+    )
+
+
+def _failed_cost_state(
+    error: ModelProviderError,
+    *,
+    provider_dispatched: bool,
+    usage: ModelUsage,
+) -> str:
+    if not provider_dispatched:
+        return "not_billed"
+    if isinstance(error, BilledModelProviderError) and (
+        usage.input_tokens or usage.output_tokens
+    ):
+        return "estimated"
+    # A dispatched failure with no usage report is not proof of a free call.
+    return "unknown"
 
 
 def _elapsed_ms(started: float) -> int:
@@ -399,12 +570,180 @@ def _audit_record(
 async def _record_finalization_safe(
     audit: ModelCallAudit,
     record: ModelCallAuditRecord,
-) -> None:
+    *,
+    deadline: float | None = None,
+) -> bool:
     finalization = asyncio.create_task(audit.record(record))
     try:
-        await asyncio.shield(finalization)
+        if deadline is None:
+            await asyncio.shield(finalization)
+        else:
+            remaining = max(0.0, deadline - time.monotonic())
+            if remaining <= 0:
+                finalization.cancel()
+                finalization.add_done_callback(_consume_task_result)
+                return False
+            await asyncio.wait_for(
+                asyncio.shield(finalization),
+                timeout=remaining,
+            )
+        return True
+    except TimeoutError:
+        finalization.cancel()
+        finalization.add_done_callback(_consume_task_result)
+        return False
+    except asyncio.CancelledError:
+        finalization.cancel()
+        finalization.add_done_callback(_consume_task_result)
+        raise
+
+
+def _consume_task_result(task: asyncio.Task[object]) -> None:
+    with suppress(BaseException):
+        task.result()
+
+
+async def _bounded_provider_generate(
+    provider: ModelProvider,
+    request: ModelRequest,
+    *,
+    model: str,
+    timeout_seconds: float | None,
+    finalization_deadline: float | None,
+    reap_unsettled: Callable[[asyncio.Task[ModelResponse]], None],
+) -> ModelResponse:
+    task = asyncio.create_task(provider.generate(request, model=model))
+    try:
+        if timeout_seconds is None:
+            return await asyncio.shield(task)
+        return await asyncio.wait_for(
+            asyncio.shield(task),
+            timeout=timeout_seconds,
+        )
+    except TimeoutError:
+        cleanup_deadline = time.monotonic() + _PROVIDER_CANCELLATION_GRACE_SECONDS
+        if finalization_deadline is not None:
+            cleanup_deadline = min(cleanup_deadline, finalization_deadline)
+        try:
+            settled = await _cancel_and_settle_provider_task(
+                task,
+                deadline=cleanup_deadline,
+            )
+        except asyncio.CancelledError:
+            if task.done():
+                _consume_task_result(task)
+            else:
+                reap_unsettled(task)
+            raise
+        if not settled:
+            reap_unsettled(task)
+            raise _ProviderCleanupIncomplete(
+                "timed-out provider task did not stop inside cleanup budget"
+            )
+        raise
     except asyncio.CancelledError:
         try:
-            await finalization
-        finally:
+            settled = await _cancel_and_settle_provider_task(
+                task,
+                deadline=time.monotonic() + _PROVIDER_CANCELLATION_GRACE_SECONDS,
+            )
+        except asyncio.CancelledError:
+            if task.done():
+                _consume_task_result(task)
+            else:
+                reap_unsettled(task)
             raise
+        if not settled:
+            reap_unsettled(task)
+        raise
+
+
+async def _cancel_and_settle_provider_task(
+    task: asyncio.Task[ModelResponse],
+    *,
+    deadline: float | None,
+) -> bool:
+    if task.done():
+        _consume_task_result(task)
+        return True
+    if deadline is None:
+        task.cancel()
+        if await _wait_for_provider_task(task, timeout_seconds=None):
+            return True
+        task.add_done_callback(_consume_task_result)
+        return False
+    cancellation_attempts = 3
+    for cleanup_attempt in range(cancellation_attempts):
+        if task.done():
+            _consume_task_result(task)
+            return True
+        task.cancel()
+        remaining = max(0.0, deadline - time.monotonic())
+        if remaining <= 0:
+            break
+        attempts_left = cancellation_attempts - cleanup_attempt
+        settle_slice = remaining / attempts_left
+        if await _wait_for_provider_task(task, timeout_seconds=settle_slice):
+            return True
+    if task.done():
+        _consume_task_result(task)
+        return True
+    # A cancellation raised at the exact cleanup deadline can complete on the
+    # next ready-queue turn after wait_for reports its own timeout. Give that
+    # already-issued cancellation one non-blocking settle turn before deciding
+    # that the provider remains live.
+    await asyncio.sleep(0)
+    if task.done():
+        _consume_task_result(task)
+        return True
+    task.add_done_callback(_consume_task_result)
+    return False
+
+
+async def _wait_for_provider_task(
+    task: asyncio.Task[ModelResponse],
+    *,
+    timeout_seconds: float | None,
+) -> bool:
+    try:
+        if timeout_seconds is None:
+            await asyncio.shield(task)
+        else:
+            await asyncio.wait_for(
+                asyncio.shield(task),
+                timeout=timeout_seconds,
+            )
+    except TimeoutError:
+        pass
+    except asyncio.CancelledError:
+        current = asyncio.current_task()
+        if current is not None and current.cancelling():
+            raise
+        if not task.done():
+            raise
+    except Exception:
+        # Provider failures are consumed below once the provider task is known
+        # to be terminal. They must not replace the route's timeout/cancellation.
+        pass
+    if task.done():
+        _consume_task_result(task)
+        return True
+    return False
+
+
+async def _reap_provider_task(task: asyncio.Task[ModelResponse]) -> None:
+    try:
+        while not task.done():
+            task.cancel()
+            await _wait_for_provider_task(
+                task,
+                timeout_seconds=_PROVIDER_CANCELLATION_GRACE_SECONDS,
+            )
+            if not task.done():
+                await asyncio.sleep(0)
+    finally:
+        if task.done():
+            _consume_task_result(task)
+        else:
+            task.cancel()
+            task.add_done_callback(_consume_task_result)

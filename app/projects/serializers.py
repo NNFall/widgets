@@ -4,22 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from app.saas.models import GenerationArtifact, GenerationEvent, GenerationRun, Project
-
-_PUBLIC_EVENT_PAYLOAD_FIELDS = frozenset({
-    "status",
-    "stage",
-    "revision",
-    "next_stage",
-    "usage",
-    "issues",
-    "changes",
-    "error_code",
-    "output_refs",
-    "attempt",
-    "max_executions",
-    "not_before",
-    "supersedes_sequence",
-})
+from builder_lab.generation_events import project_public_generation_event
 
 
 def _timestamp(value: datetime | None) -> str | None:
@@ -27,16 +12,16 @@ def _timestamp(value: datetime | None) -> str | None:
 
 
 def serialize_event(event: GenerationEvent) -> dict[str, Any]:
-    raw_payload = event.payload if isinstance(event.payload, dict) else {}
+    projected = project_public_generation_event(
+        event_type=event.event_type,
+        public_message=event.public_message,
+        payload=event.payload,
+    )
     return {
         "sequence": event.sequence,
-        "type": event.event_type,
-        "message": event.public_message,
-        "payload": {
-            key: raw_payload[key]
-            for key in _PUBLIC_EVENT_PAYLOAD_FIELDS
-            if key in raw_payload
-        },
+        "type": projected.event_type,
+        "message": projected.message,
+        "payload": projected.payload,
         "created_at": _timestamp(event.created_at),
     }
 

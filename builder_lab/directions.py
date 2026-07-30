@@ -24,6 +24,15 @@ DIRECTION_ROLES = (
     DirectionRole.HOSTILE_CONVERSION_ACCESSIBILITY_CRITIC,
 )
 
+_INFRASTRUCTURE_PUBLIC_MESSAGES = {
+    "generation_timeout": "Сервис генерации не завершил этап вовремя",
+    "provider_unavailable": "Сервис генерации временно недоступен",
+    "quota_exceeded": "Квота сервиса генерации временно исчерпана",
+    "model_unavailable": "Выбранная модель генерации временно недоступна",
+    "invalid_response": "Сервис генерации вернул некорректный ответ",
+    "unsupported_request": "Сервис генерации не поддерживает этот запрос",
+}
+
 
 class DirectionBoardError(BuilderEngineError):
     def __init__(
@@ -70,13 +79,16 @@ def _board_error(
             usage = usage + exc.usage
         return DirectionBoardError(
             exc.error_code,
-            exc.public_message,
+            _INFRASTRUCTURE_PUBLIC_MESSAGES.get(
+                exc.error_code,
+                exc.public_message,
+            ),
             usage=usage,
             diagnostic=exc.diagnostic,
         )
     return DirectionBoardError(
         "invalid_artifact",
-        "Gemini вернул некорректный контракт визуального направления",
+        "Сервис генерации вернул некорректный контракт визуального направления",
         usage=usage,
         diagnostic=f"{type(exc).__name__}: {exc}",
     )
@@ -155,7 +167,7 @@ async def run_direction_board(
     if tuple(proposal.role for proposal in proposals) != DIRECTION_ROLES:
         raise DirectionBoardError(
             "invalid_artifact",
-            "Gemini вернул некорректные роли визуальных направлений",
+            "Сервис генерации вернул некорректные роли визуальных направлений",
             usage=proposal_usage,
         )
     if tuple(proposal.proposal_id for proposal in proposals) != (
@@ -165,7 +177,7 @@ async def run_direction_board(
     ):
         raise DirectionBoardError(
             "invalid_artifact",
-            "Gemini вернул некорректные идентификаторы направлений",
+            "Сервис генерации вернул некорректные идентификаторы направлений",
             usage=proposal_usage,
         )
 
@@ -184,7 +196,7 @@ async def run_direction_board(
     }:
         raise DirectionBoardError(
             "invalid_artifact",
-            "Gemini выбрал отсутствующее визуальное направление",
+            "Сервис генерации выбрал отсутствующее визуальное направление",
             usage=total_usage,
         )
     return DirectionBoardResult(

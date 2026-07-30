@@ -4,6 +4,7 @@ import os
 import signal
 import shutil
 import subprocess
+import sys
 from types import SimpleNamespace
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -11,12 +12,13 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db.base import Base
 from app.db.models import Tenant, User
+from app.models.providers.agentrouter_qwen import AgentRouterQwenProvider
 from app.saas.models import (
     GenerationArtifact,
     GenerationEvent,
@@ -48,9 +50,10 @@ from builder_lab.worker import (
     RunClaim,
     StageInput,
     StageResult,
+    failure_category_for_error,
 )
 from scripts.run_builder_worker import install_signal_handlers, load_stage_handler
-from scripts import run_builder_worker
+from scripts import run_agentrouter_widget_benchmark, run_builder_worker
 from tests.builder_lab_cases.test_validation import artifact
 
 
@@ -145,7 +148,7 @@ def test_runtime_router_maps_hybrid_roles_to_gpt_glm_and_gemini(
         hybrid_routing_enabled=True,
         agentrouter_api_key="router-key",
         agentrouter_base_url="https://agentrouter.org/v1",
-        agentrouter_timeout_seconds=900,
+        agentrouter_timeout_seconds=180,
         agentrouter_qwen_executable="qwen",
         agentrouter_gpt_model="gpt-5.5",
         agentrouter_glm_model="glm-5.2",
@@ -165,10 +168,14 @@ def test_runtime_router_maps_hybrid_roles_to_gpt_glm_and_gemini(
             "visual_judge",
             "code_review",
         ):
-            target = router._policies[(role, mode)].targets[0]
-            assert (target.provider, target.model) == ("agentrouter", "gpt-5.5")
-            assert target.input_price_microusd_per_million == 7_000_000
-            assert target.output_price_microusd_per_million == 7_000_000
+            targets = router._policies[(role, mode)].targets
+            assert [(target.provider, target.model) for target in targets] == [
+                ("agentrouter", "gpt-5.5"),
+                ("gemini", "gemini-builder"),
+            ]
+            assert targets[0].provider != targets[1].provider
+            assert targets[0].input_price_microusd_per_million == 7_000_000
+            assert targets[0].output_price_microusd_per_million == 7_000_000
         for role in (
             "art_direction_generator",
             "widget_generator",
@@ -177,18 +184,49 @@ def test_runtime_router_maps_hybrid_roles_to_gpt_glm_and_gemini(
             "motion_designer",
             "repair",
         ):
-            target = router._policies[(role, mode)].targets[0]
-            assert (target.provider, target.model) == ("agentrouter", "glm-5.2")
-            assert target.input_price_microusd_per_million == 6_000_000
-            assert target.output_price_microusd_per_million == 6_000_000
-        for role in (
-            "reference_analyst",
-            "conversation_ux",
-            "brand_motion",
-            "adversarial_customer",
-        ):
-            target = router._policies[(role, mode)].targets[0]
-            assert target.provider == "gemini"
+            targets = router._policies[(role, mode)].targets
+            assert [(target.provider, target.model) for target in targets] == [
+                ("agentrouter", "glm-5.2"),
+                ("gemini", "gemini-builder"),
+            ]
+            assert targets[0].provider != targets[1].provider
+            assert targets[0].input_price_microusd_per_million == 6_000_000
+            assert targets[0].output_price_microusd_per_million == 6_000_000
+        image_roles = {
+            "reference_analyst": "gemini-reference",
+            "conversation_ux": "gemini-vision",
+            "brand_motion": "gemini-vision",
+            "adversarial_customer": "gemini-vision",
+        }
+        for role, model in image_roles.items():
+            targets = router._policies[(role, mode)].targets
+            assert [(target.provider, target.model) for target in targets] == [
+                ("gemini", model)
+            ]
+
+    assert router._providers["agentrouter"]._timeout_seconds == 180
+
+
+def test_provider_diverse_runtime_uses_short_default_but_benchmark_can_opt_in_to_900(
+    monkeypatch,
+) -> None:
+    provider = AgentRouterQwenProvider(api_key="router-key", executable="qwen")
+    assert provider._timeout_seconds == 180
+    assert provider._timeout_seconds < 900
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_agentrouter_widget_benchmark.py",
+            "--model",
+            "gpt-5.5",
+            "--timeout",
+            "900",
+        ],
+    )
+    benchmark = run_agentrouter_widget_benchmark.parse_args()
+    assert benchmark.timeout == 900
 
 
 def test_runtime_router_fails_closed_when_hybrid_configuration_is_missing(
@@ -226,6 +264,7 @@ def test_production_repair_verifier_factory_uses_router_not_direct_gemini() -> N
         visual_critic_model="gemini-review",
         visual_critic_thinking_level="high",
         visual_critic_timeout_seconds=12,
+        agentrouter_timeout_seconds=180,
     )
     router = SimpleNamespace(generate=object())
     run_id = uuid4()
@@ -242,6 +281,8 @@ def test_production_repair_verifier_factory_uses_router_not_direct_gemini() -> N
     assert verifier._routing_mode == "express"
     assert verifier._run_id == run_id
     assert verifier._client is None
+    assert verifier.timeout_seconds == 12
+    assert verifier.routing_timeout_seconds == 180
 
 
 @pytest.mark.asyncio
@@ -1548,6 +1589,113 @@ async def test_deterministic_engine_error_fails_immediately_with_safe_fields(
             assert run.error_code == "provider_unavailable"
             assert run.error_message == "Модель генерации сейчас не настроена"
             assert "secret" not in run.error_message
+    finally:
+        await engine.dispose()
+
+
+def test_invalid_response_is_classified_as_model_invalid_output() -> None:
+    category = failure_category_for_error(
+        BuilderEngineError(
+            "invalid_response",
+            "Сервис генерации вернул некорректный ответ",
+        )
+    )
+
+    assert category.value == "model_invalid_output"
+
+
+@pytest.mark.asyncio
+async def test_route_exhaustion_fails_once_and_persists_aggregate_usage(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id)
+    calls = 0
+    diagnostic = (
+        'route_attempts=[{"provider":"agentrouter","model":"gpt-5.5",'
+        '"outcome":"failed","error_code":"generation_timeout"},'
+        '{"provider":"gemini","model":"gemini-fallback",'
+        '"outcome":"failed","error_code":"provider_unavailable"}]'
+    )
+
+    async def handle(_claim):
+        nonlocal calls
+        calls += 1
+        raise BuilderEngineError(
+            "route_exhausted",
+            "Сервис генерации не смог завершить запрос доступным маршрутом",
+            diagnostic=diagnostic,
+            usage=TokenUsage(prompt_tokens=31, output_tokens=12, thinking_tokens=4),
+        )
+
+    worker = BuilderWorker(
+        queue=queue,
+        worker_id="route-exhausted-worker",
+        stage_handler=handle,
+    )
+    try:
+        assert await worker.run_once()
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_id)
+            events = list(
+                (
+                    await database.execute(
+                        select(GenerationEvent)
+                        .where(GenerationEvent.run_id == run_id)
+                        .order_by(GenerationEvent.sequence)
+                    )
+                ).scalars()
+            )
+            usage_row = (
+                await database.execute(
+                    select(
+                        func.coalesce(
+                            func.sum(
+                                GenerationEvent.payload["usage"][
+                                    "prompt_tokens"
+                                ].as_integer()
+                            ),
+                            0,
+                        ),
+                        func.coalesce(
+                            func.sum(
+                                GenerationEvent.payload["usage"][
+                                    "output_tokens"
+                                ].as_integer()
+                            ),
+                            0,
+                        ),
+                        func.coalesce(
+                            func.sum(
+                                GenerationEvent.payload["usage"][
+                                    "thinking_tokens"
+                                ].as_integer()
+                            ),
+                            0,
+                        ),
+                    ).where(GenerationEvent.run_id == run_id)
+                )
+            ).one()
+        failed = next(event for event in events if event.event_type == "stage.failed")
+        run_failed = next(event for event in events if event.event_type == "run.failed")
+        assert calls == 1
+        assert run is not None
+        assert run.state == "failed"
+        assert run.error_code == "route_exhausted"
+        assert run.failure_category == "provider"
+        assert not any(
+            event.event_type == "stage.retry_scheduled" for event in events
+        )
+        assert failed.payload["usage"] == {
+            "prompt_tokens": 31,
+            "output_tokens": 12,
+            "thinking_tokens": 4,
+            "total_tokens": 47,
+        }
+        assert failed.payload["diagnostic"] == diagnostic
+        assert "usage" not in run_failed.payload
+        assert tuple(int(value) for value in usage_row) == (31, 12, 4)
     finally:
         await engine.dispose()
 

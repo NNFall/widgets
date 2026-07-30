@@ -183,9 +183,9 @@ class BuilderLabConfig:
             ).strip().rstrip("/"),
             agentrouter_timeout_seconds=_int(
                 "AGENTROUTER_TIMEOUT_SECONDS",
-                900,
-                1,
-                3600,
+                180,
+                120,
+                360,
             ),
             agentrouter_qwen_executable=os.getenv(
                 "AGENTROUTER_QWEN_EXECUTABLE",

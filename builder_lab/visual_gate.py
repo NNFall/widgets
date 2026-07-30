@@ -809,6 +809,11 @@ class VisualRepairGate:
                     raise
                 except Exception as exc:
                     usage = getattr(exc, "usage", TokenUsage())
+                    route_error_code = getattr(exc, "error_code", None)
+                    terminal_route_error = route_error_code in {
+                        "route_exhausted",
+                        "invalid_response",
+                    }
                     LOGGER.warning(
                         "visual critic failed run_id=%s attempt=%s error_code=%s diagnostic=%s",
                         run_id,
@@ -823,10 +828,23 @@ class VisualRepairGate:
                         status="failed",
                         message="Визуальная проверка завершилась ошибкой",
                         revision=candidate.revision,
-                        usage=usage,
+                        # Terminal usage is persisted by worker stage.failed.
+                        # Keeping it here too would double the run aggregate.
+                        usage=TokenUsage() if terminal_route_error else usage,
                     )
+                    if terminal_route_error:
+                        raise BuilderEngineError(
+                            route_error_code,
+                            (
+                                "Сервис визуальной проверки вернул некорректный ответ"
+                                if route_error_code == "invalid_response"
+                                else "Сервис визуальной проверки не смог завершить запрос"
+                            ),
+                            diagnostic=getattr(exc, "diagnostic", None),
+                            usage=usage,
+                        ) from exc
                     if (
-                        getattr(exc, "error_code", None)
+                        route_error_code
                         in {
                             "visual_evidence_unproven",
                             "invalid_visual_critique",

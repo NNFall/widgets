@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import time
 from dataclasses import dataclass
 from typing import Any, Mapping
 from uuid import UUID
@@ -10,7 +11,12 @@ from uuid import UUID
 from google import genai
 from google.genai import types
 
-from app.models.contracts import ModelRequest, ModelResponse
+from app.models.contracts import (
+    ModelRequest,
+    ModelResponse,
+    ModelRouteExhausted,
+    ModelUsage,
+)
 from app.models.router import ModelRouter
 
 from .engines.gemini_direct import (
@@ -304,6 +310,14 @@ def _response_usage(response: Any) -> TokenUsage:
     )
 
 
+def _model_usage(usage: ModelUsage) -> TokenUsage:
+    return TokenUsage(
+        prompt_tokens=usage.input_tokens,
+        output_tokens=max(0, usage.output_tokens - usage.thinking_tokens),
+        thinking_tokens=usage.thinking_tokens,
+    )
+
+
 def _response_payload(response: Any) -> dict[str, Any]:
     parsed = getattr(response, "parsed", None)
     if isinstance(parsed, dict):
@@ -443,6 +457,7 @@ class GeminiVisualJudge:
         thinking_level: str = "high",
         base_url: str = "https://generativelanguage.googleapis.com",
         timeout_seconds: float = 60,
+        routing_timeout_seconds: float = 180,
         client: Any | None = None,
         model_router: ModelRouter | None = None,
         routing_mode: str = "direct",
@@ -457,6 +472,7 @@ class GeminiVisualJudge:
         self.model = model
         self.thinking_level = normalize_thinking_level(thinking_level)
         self.timeout_seconds = timeout_seconds
+        self.routing_timeout_seconds = routing_timeout_seconds
         self._model_router = model_router
         self._routing_mode = routing_mode
         self._routing_role = routing_role
@@ -476,7 +492,13 @@ class GeminiVisualJudge:
     ) -> VisualJudgeResult:
         total_usage = TokenUsage()
         correction = ""
-        for attempt in range(3):
+        deadline = time.monotonic() + (
+            self.routing_timeout_seconds
+            if self._model_router is not None
+            else self.timeout_seconds
+        )
+        semantic_attempts = 2 if self._model_router is not None else 3
+        for attempt in range(semantic_attempts):
             role_payload = {
                 role.value: result.critique.to_dict()
                 for role, result in role_results.items()
@@ -521,20 +543,22 @@ class GeminiVisualJudge:
                 thinking_config=policy.thinking_config,
             )
             try:
-                async with asyncio.timeout(self.timeout_seconds):
-                    if self._model_router is not None:
-                        response = await self._model_router.generate(
-                            role=self._routing_role,
-                            mode=self._routing_mode,
-                            run_id=self._run_id,
-                            request=ModelRequest(
-                                prompt=config.system_instruction + "\n\n" + contents[0].text,
-                                response_schema=VISUAL_JUDGE_SCHEMA,
-                                temperature=0.1,
-                                metadata={"thinking_level": self.thinking_level},
-                            ),
-                        )
-                    else:
+                remaining_seconds = max(deadline - time.monotonic(), 1e-6)
+                if self._model_router is not None:
+                    response = await self._model_router.generate(
+                        role=self._routing_role,
+                        mode=self._routing_mode,
+                        run_id=self._run_id,
+                        request=ModelRequest(
+                            prompt=config.system_instruction + "\n\n" + contents[0].text,
+                            response_schema=VISUAL_JUDGE_SCHEMA,
+                            temperature=0.1,
+                            metadata={"thinking_level": self.thinking_level},
+                        ),
+                        timeout_seconds=remaining_seconds,
+                    )
+                else:
+                    async with asyncio.timeout(remaining_seconds):
                         response = await self._client.aio.models.generate_content(  # type: ignore[union-attr]
                             model=self.model,
                             contents=contents,
@@ -542,17 +566,31 @@ class GeminiVisualJudge:
                         )
             except asyncio.CancelledError:
                 raise
+            except ModelRouteExhausted as exc:
+                raise VisualJudgeError(
+                    exc.error_code,
+                    (
+                        "Визуальный судья получил некорректные ответы"
+                        if exc.error_code == "invalid_response"
+                        else "Визуальный судья не смог завершить проверку"
+                    ),
+                    diagnostic=exc.diagnostic,
+                    usage=total_usage + _model_usage(exc.usage),
+                ) from exc
             except TimeoutError as exc:
                 raise VisualJudgeError(
                     "visual_judge_timeout",
-                    "Визуальный судья Gemini не завершил проверку вовремя",
+                    "Визуальный судья не завершил проверку вовремя",
                     usage=total_usage,
                 ) from exc
             except Exception as exc:
                 raise VisualJudgeError(
                     "visual_judge_unavailable",
-                    "Визуальный судья Gemini временно недоступен",
-                    diagnostic=f"{type(exc).__name__}: {exc}",
+                    "Визуальный судья временно недоступен",
+                    diagnostic=(
+                        getattr(exc, "diagnostic", None)
+                        or f"{type(exc).__name__}: {exc}"
+                    ),
                     usage=total_usage,
                 ) from exc
             usage = _response_usage(response)
@@ -563,7 +601,7 @@ class GeminiVisualJudge:
                     role_results,
                 )
             except (VisualJudgeError, ValueError, json.JSONDecodeError) as exc:
-                if attempt < 2:
+                if attempt < semantic_attempts - 1:
                     correction = (
                         "\nPrevious judgement failed local validation. Correct only "
                         f"the JSON contract and source references: {exc}"
@@ -611,6 +649,7 @@ class GeminiRepairVerifier:
         thinking_level: str = "high",
         base_url: str = "https://generativelanguage.googleapis.com",
         timeout_seconds: float = 60,
+        routing_timeout_seconds: float = 180,
         client: Any | None = None,
         model_router: ModelRouter | None = None,
         routing_mode: str = "direct",
@@ -629,6 +668,7 @@ class GeminiRepairVerifier:
         self.model = model
         self.thinking_level = normalize_thinking_level(thinking_level)
         self.timeout_seconds = timeout_seconds
+        self.routing_timeout_seconds = routing_timeout_seconds
         self._model_router = model_router
         self._routing_mode = routing_mode
         self._routing_role = routing_role
@@ -650,6 +690,11 @@ class GeminiRepairVerifier:
     ) -> RepairVerificationResult:
         total_usage = TokenUsage()
         correction = ""
+        deadline = time.monotonic() + (
+            self.routing_timeout_seconds
+            if self._model_router is not None
+            else self.timeout_seconds
+        )
         changed_fields = {
             field: {
                 "before": before.to_dict()[field],
@@ -700,6 +745,7 @@ class GeminiRepairVerifier:
                 thinking_config=policy.thinking_config,
             )
             try:
+                remaining_seconds = max(deadline - time.monotonic(), 1e-6)
                 if self._model_router is not None:
                     response = await self._model_router.generate(
                         role=self._routing_role,
@@ -711,10 +757,10 @@ class GeminiRepairVerifier:
                             temperature=0.1,
                             metadata={"thinking_level": self.thinking_level},
                         ),
-                        timeout_seconds=self.timeout_seconds,
+                        timeout_seconds=remaining_seconds,
                     )
                 else:
-                    async with asyncio.timeout(self.timeout_seconds):
+                    async with asyncio.timeout(remaining_seconds):
                         response = await self._client.aio.models.generate_content(  # type: ignore[union-attr]
                             model=self.model,
                             contents=contents,
@@ -722,6 +768,17 @@ class GeminiRepairVerifier:
                         )
             except asyncio.CancelledError:
                 raise
+            except ModelRouteExhausted as exc:
+                raise RepairVerificationError(
+                    exc.error_code,
+                    (
+                        "Проверяющий получил некорректные ответы"
+                        if exc.error_code == "invalid_response"
+                        else "Проверяющий не смог завершить проверку"
+                    ),
+                    diagnostic=exc.diagnostic,
+                    usage=total_usage + _model_usage(exc.usage),
+                ) from exc
             except TimeoutError as exc:
                 raise RepairVerificationError(
                     "repair_verifier_timeout",

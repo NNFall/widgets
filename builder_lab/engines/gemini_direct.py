@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+from collections.abc import Mapping
 from typing import Any
 
 from google import genai
@@ -13,7 +15,13 @@ from app.models.providers.gemini import (
     classify_gemini_error,
     gemini_usage_counts,
 )
-from app.models.contracts import ModelRequest, ModelResponse
+from app.models.contracts import (
+    BilledModelProviderError,
+    ModelProviderError,
+    ModelRequest,
+    ModelResponse,
+    ModelUsage,
+)
 from app.models.router import ModelRouter
 
 from ..model_config import generation_policy, normalize_thinking_level
@@ -95,14 +103,15 @@ def _provider_error(exc: Exception) -> BuilderEngineError:
 
 
 def _usage(response: Any) -> TokenUsage:
-    if isinstance(response, ModelResponse):
+    if isinstance(response, (ModelResponse, ModelUsage)):
+        usage = response.usage if isinstance(response, ModelResponse) else response
         return TokenUsage(
-            prompt_tokens=response.usage.input_tokens,
+            prompt_tokens=usage.input_tokens,
             output_tokens=max(
                 0,
-                response.usage.output_tokens - response.usage.thinking_tokens,
+                usage.output_tokens - usage.thinking_tokens,
             ),
-            thinking_tokens=response.usage.thinking_tokens,
+            thinking_tokens=usage.thinking_tokens,
         )
     counts = gemini_usage_counts(response)
     # Builder Lab's historical TokenUsage adds thinking_tokens in total_tokens,
@@ -112,6 +121,17 @@ def _usage(response: Any) -> TokenUsage:
         output_tokens=counts.candidate_tokens,
         thinking_tokens=counts.thinking_tokens,
     )
+
+
+def _response_diagnostic(response: Any, *, fallback_model: str) -> str:
+    raw = getattr(response, "raw", None)
+    provider = raw.get("provider") if isinstance(raw, Mapping) else None
+    model = (
+        raw.get("model") if isinstance(raw, Mapping) else None
+    ) or getattr(response, "model_version", None) or fallback_model
+    if provider:
+        return f"provider={provider}; model={model}"
+    return f"model={model}"
 
 
 def _response_payload(response: Any) -> dict[str, Any]:
@@ -144,6 +164,7 @@ class GeminiDirectEngine:
         model_router: ModelRouter | None = None,
         routing_role: str | None = None,
         routing_mode: str = "direct",
+        routing_timeout_seconds: float | None = None,
         run_id: Any | None = None,
     ) -> None:
         if model_router is None and (not api_key or not api_key.strip()):
@@ -157,6 +178,7 @@ class GeminiDirectEngine:
         self._model_router = model_router
         self._routing_role = routing_role
         self._routing_mode = routing_mode
+        self._routing_timeout_seconds = routing_timeout_seconds
         self._run_id = run_id
         self._owned_client = model_router is None and client is None
         self._client = None
@@ -172,19 +194,54 @@ class GeminiDirectEngine:
         prompt: str,
         schema: dict[str, Any],
         temperature: float,
+        routing_deadline: float | None = None,
     ) -> Any:
         if self._model_router is not None:
-            return await self._model_router.generate(
-                role=str(self._routing_role),
-                mode=self._routing_mode,
-                run_id=self._run_id,
-                request=ModelRequest(
-                    prompt=prompt,
-                    response_schema=schema,
-                    temperature=temperature,
-                    metadata={"thinking_level": self.thinking_level},
-                ),
-            )
+            routing_timeout_seconds = self._routing_timeout_seconds
+            if routing_deadline is not None:
+                routing_timeout_seconds = max(
+                    routing_deadline - time.monotonic(),
+                    1e-6,
+                )
+            try:
+                return await self._model_router.generate(
+                    role=str(self._routing_role),
+                    mode=self._routing_mode,
+                    run_id=self._run_id,
+                    request=ModelRequest(
+                        prompt=prompt,
+                        response_schema=schema,
+                        temperature=temperature,
+                        metadata={"thinking_level": self.thinking_level},
+                    ),
+                    timeout_seconds=routing_timeout_seconds,
+                )
+            except ModelProviderError as exc:
+                public_messages = {
+                    "generation_timeout": "Сервис генерации не завершил этап вовремя",
+                    "quota_exceeded": "Квота сервиса генерации временно исчерпана",
+                    "model_unavailable": "Выбранная модель генерации временно недоступна",
+                    "invalid_response": "Сервис генерации вернул некорректный ответ",
+                    "unsupported_request": "Сервис генерации не поддерживает этот запрос",
+                    "route_exhausted": "Сервис генерации не смог завершить запрос доступным маршрутом",
+                }
+                usage = (
+                    _usage(exc.usage)
+                    if isinstance(exc, BilledModelProviderError)
+                    else TokenUsage()
+                )
+                raise BuilderEngineError(
+                    exc.error_code,
+                    public_messages.get(
+                        exc.error_code,
+                        "Сервис генерации временно недоступен",
+                    ),
+                    diagnostic=(
+                        getattr(exc, "diagnostic", None)
+                        or f"{type(exc).__name__}: {exc}"
+                    ),
+                    usage=usage,
+                ) from exc
         policy = generation_policy(
             self.model,
             self.thinking_level,
@@ -218,6 +275,11 @@ class GeminiDirectEngine:
                 await asyncio.sleep(retry_delays[attempt])
         raise AssertionError("unreachable provider retry loop")
 
+    def _new_routing_deadline(self) -> float | None:
+        if self._model_router is None or self._routing_timeout_seconds is None:
+            return None
+        return time.monotonic() + self._routing_timeout_seconds
+
     async def propose_direction(
         self,
         *,
@@ -227,7 +289,9 @@ class GeminiDirectEngine:
     ) -> DirectionProposalResult:
         prompt = build_direction_proposal_prompt(request=request, role=role)
         total_usage = TokenUsage()
-        for attempt in range(3):
+        routing_deadline = self._new_routing_deadline()
+        semantic_attempts = 2 if self._model_router is not None else 3
+        for attempt in range(semantic_attempts):
             attempt_prompt = prompt
             if attempt:
                 attempt_prompt += (
@@ -235,11 +299,16 @@ class GeminiDirectEngine:
                     "Return a fresh complete proposal and keep every field within the exact "
                     "numeric limits above."
                 )
-            response = await self._generate_structured(
-                prompt=attempt_prompt,
-                schema=DIRECTION_PROPOSAL_JSON_SCHEMA,
-                temperature=request.creativity,
-            )
+            try:
+                response = await self._generate_structured(
+                    prompt=attempt_prompt,
+                    schema=DIRECTION_PROPOSAL_JSON_SCHEMA,
+                    temperature=request.creativity,
+                    routing_deadline=routing_deadline,
+                )
+            except BuilderEngineError as exc:
+                exc.usage = total_usage + exc.usage
+                raise
             total_usage = total_usage + _usage(response)
             try:
                 payload = _response_payload(response)
@@ -261,11 +330,11 @@ class GeminiDirectEngine:
                     safeguards=tuple(str(item) for item in safeguards),
                 )
             except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-                if attempt < 2:
+                if attempt < semantic_attempts - 1:
                     continue
                 raise BuilderEngineError(
                     "invalid_artifact",
-                    "Gemini вернул некорректное визуальное направление",
+                    "Сервис генерации вернул некорректное визуальное направление",
                     diagnostic=f"{type(exc).__name__}: {exc}",
                     usage=total_usage,
                 ) from exc
@@ -276,7 +345,7 @@ class GeminiDirectEngine:
                     getattr(response, "request_id", None)
                     or getattr(response, "response_id", None)
                 ),
-                diagnostic=f"model={getattr(response, 'model_version', None) or self.model}",
+                diagnostic=_response_diagnostic(response, fallback_model=self.model),
             )
         raise AssertionError("unreachable direction proposal loop")
 
@@ -293,7 +362,9 @@ class GeminiDirectEngine:
             prior_briefs=prior_briefs,
         )
         total_usage = TokenUsage()
-        for attempt in range(3):
+        routing_deadline = self._new_routing_deadline()
+        semantic_attempts = 2 if self._model_router is not None else 3
+        for attempt in range(semantic_attempts):
             attempt_prompt = prompt
             if attempt:
                 attempt_prompt += (
@@ -301,11 +372,16 @@ class GeminiDirectEngine:
                     "budgets. Return a fresh complete object with exactly summary, "
                     "decisions and safeguards within the numeric limits above."
                 )
-            response = await self._generate_structured(
-                prompt=attempt_prompt,
-                schema=CONCEPT_ROLE_BRIEF_JSON_SCHEMA,
-                temperature=request.creativity,
-            )
+            try:
+                response = await self._generate_structured(
+                    prompt=attempt_prompt,
+                    schema=CONCEPT_ROLE_BRIEF_JSON_SCHEMA,
+                    temperature=request.creativity,
+                    routing_deadline=routing_deadline,
+                )
+            except BuilderEngineError as exc:
+                exc.usage = total_usage + exc.usage
+                raise
             total_usage = total_usage + _usage(response)
             try:
                 payload = _response_payload(response)
@@ -315,11 +391,11 @@ class GeminiDirectEngine:
                 )
                 brief = ConceptRoleBrief.from_dict(payload, role=role)
             except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-                if attempt < 2:
+                if attempt < semantic_attempts - 1:
                     continue
                 raise BuilderEngineError(
                     "invalid_artifact",
-                    "Gemini вернул некорректный контракт концептуальной роли",
+                    "Сервис генерации вернул некорректный контракт концептуальной роли",
                     diagnostic=f"{type(exc).__name__}: {exc}",
                     usage=total_usage,
                 ) from exc
@@ -330,9 +406,7 @@ class GeminiDirectEngine:
                     getattr(response, "request_id", None)
                     or getattr(response, "response_id", None)
                 ),
-                diagnostic=(
-                    f"model={getattr(response, 'model_version', None) or self.model}"
-                ),
+                diagnostic=_response_diagnostic(response, fallback_model=self.model),
             )
         raise AssertionError("unreachable concept role loop")
 
@@ -349,6 +423,7 @@ class GeminiDirectEngine:
             prompt=prompt,
             schema=DIRECTION_JUDGE_JSON_SCHEMA,
             temperature=0.2,
+            routing_deadline=self._new_routing_deadline(),
         )
         try:
             payload = _response_payload(response)
@@ -364,7 +439,7 @@ class GeminiDirectEngine:
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             raise BuilderEngineError(
                 "invalid_artifact",
-                "Gemini вернул некорректное решение по направлению",
+                "Сервис генерации вернул некорректное решение по направлению",
                 diagnostic=f"{type(exc).__name__}: {exc}",
                 usage=_usage(response),
             ) from exc
@@ -375,7 +450,7 @@ class GeminiDirectEngine:
                 getattr(response, "request_id", None)
                 or getattr(response, "response_id", None)
             ),
-            diagnostic=f"model={getattr(response, 'model_version', None) or self.model}",
+            diagnostic=_response_diagnostic(response, fallback_model=self.model),
         )
 
     async def plan_composition(
@@ -396,13 +471,14 @@ class GeminiDirectEngine:
             prompt=prompt,
             schema=COMPOSITION_PLAN_JSON_SCHEMA,
             temperature=0.25,
+            routing_deadline=self._new_routing_deadline(),
         )
         try:
             payload = _response_payload(response)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             raise BuilderEngineError(
                 "invalid_structured_output",
-                "Gemini вернул некорректный план композиции",
+                "Сервис генерации вернул некорректный план композиции",
                 diagnostic=f"{type(exc).__name__}: {exc}",
                 usage=_usage(response),
             ) from exc
@@ -413,7 +489,7 @@ class GeminiDirectEngine:
                 getattr(response, "request_id", None)
                 or getattr(response, "response_id", None)
             ),
-            diagnostic=f"model={getattr(response, 'model_version', None) or self.model}",
+            diagnostic=_response_diagnostic(response, fallback_model=self.model),
         )
 
     async def generate(
@@ -444,6 +520,7 @@ class GeminiDirectEngine:
             else request.creativity
         )
         total_usage = TokenUsage()
+        routing_deadline = self._new_routing_deadline()
         for attempt in range(2):
             attempt_prompt = prompt
             if attempt:
@@ -453,11 +530,16 @@ class GeminiDirectEngine:
                     f"{stage.value} and revision {revision}; preserve every schema field and "
                     "do not add commentary."
                 )
-            response = await self._generate_structured(
-                prompt=attempt_prompt,
-                schema=ARTIFACT_JSON_SCHEMA,
-                temperature=temperature,
-            )
+            try:
+                response = await self._generate_structured(
+                    prompt=attempt_prompt,
+                    schema=ARTIFACT_JSON_SCHEMA,
+                    temperature=temperature,
+                    routing_deadline=routing_deadline,
+                )
+            except BuilderEngineError as exc:
+                exc.usage = total_usage + exc.usage
+                raise
             total_usage = total_usage + _usage(response)
             try:
                 payload = {**_response_payload(response), "schema_version": "1.0"}
@@ -471,7 +553,7 @@ class GeminiDirectEngine:
                     continue
                 raise BuilderEngineError(
                     "invalid_artifact",
-                    "Gemini вернул некорректный формат виджета",
+                    "Сервис генерации вернул некорректный формат виджета",
                     diagnostic=f"{type(exc).__name__}: {exc}",
                     usage=total_usage,
                 ) from exc
@@ -483,9 +565,7 @@ class GeminiDirectEngine:
                     getattr(response, "request_id", None)
                     or getattr(response, "response_id", None)
                 ),
-                diagnostic=(
-                    f"model={getattr(response, 'model_version', None) or self.model}"
-                ),
+                diagnostic=_response_diagnostic(response, fallback_model=self.model),
             )
         raise AssertionError("unreachable widget artifact loop")
 

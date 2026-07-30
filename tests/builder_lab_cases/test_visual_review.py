@@ -1,8 +1,23 @@
+import asyncio
+
 import pytest
 from sqlalchemy import select
 
-from app.models.contracts import ModelRequest, ModelResponse, ModelUsage, ProviderCapabilities
-from app.models.router import ModelPolicy, ModelRouter, ProviderTarget, SqlModelCallAudit
+from app.models.contracts import (
+    ModelRequest,
+    ModelResponse,
+    ModelRouteAttempt,
+    ModelRouteExhausted,
+    ModelUsage,
+    ProviderCapabilities,
+)
+from app.models.router import (
+    InMemoryModelCallAudit,
+    ModelPolicy,
+    ModelRouter,
+    ProviderTarget,
+    SqlModelCallAudit,
+)
 from app.saas.models import ModelCall
 from builder_lab.models import TokenUsage
 from builder_lab.visual_critic import VisualCriticResult, VisualCriticRole
@@ -16,6 +31,7 @@ from builder_lab.visual_models import (
 )
 from builder_lab.visual_review import VisualJudgeError, validate_visual_judgement
 from builder_lab.visual_review import (
+    GeminiVisualJudge,
     GeminiRepairVerifier,
     RepairVerificationError,
     REPAIR_VERIFICATION_SCHEMA,
@@ -149,6 +165,158 @@ def test_judge_rejects_fabricated_source_ids():
             role_results(),
         )
     assert "unknown critic finding" in caught.value.diagnostic
+
+
+@pytest.mark.asyncio
+async def test_routed_visual_judge_reserves_time_for_fallback() -> None:
+    class HangingPrimary:
+        capabilities = ProviderCapabilities(structured_output=True)
+
+        async def generate(self, request: ModelRequest, *, model: str) -> ModelResponse:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    class SuccessfulFallback:
+        capabilities = ProviderCapabilities(structured_output=True)
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def generate(self, request: ModelRequest, *, model: str) -> ModelResponse:
+            self.calls += 1
+            return ModelResponse(
+                text="{}",
+                parsed=judgement_payload(
+                    [
+                        {"role": "conversation_ux", "finding_id": "ux-edge"},
+                        {"role": "brand_motion", "finding_id": "brand-overflow"},
+                    ]
+                ),
+                usage=ModelUsage(input_tokens=21, output_tokens=8, thinking_tokens=2),
+                request_id="fallback-judge",
+            )
+
+    fallback = SuccessfulFallback()
+    audit = InMemoryModelCallAudit()
+    router = ModelRouter(
+        providers={"primary": HangingPrimary(), "fallback": fallback},
+        policies={
+            ("visual_judge", "express"): ModelPolicy(
+                prompt_version="visual-judge-v2",
+                targets=(
+                    ProviderTarget("primary", "gpt-primary", 1, 1),
+                    ProviderTarget("fallback", "gemini-fallback", 1, 1),
+                ),
+            )
+        },
+        audit=audit,
+    )
+    judge = GeminiVisualJudge(
+        model_router=router,
+        routing_mode="express",
+        timeout_seconds=0.1,
+        routing_timeout_seconds=0.1,
+    )
+
+    result = await asyncio.wait_for(judge.judge(role_results=role_results()), timeout=0.5)
+
+    assert result.critique.verdict is VisualVerdict.REPAIR
+    assert fallback.calls == 1
+    assert [call.status for call in audit.calls] == ["failed", "completed"]
+    assert audit.calls[0].error_code == "generation_timeout"
+
+
+@pytest.mark.asyncio
+async def test_routed_visual_judge_semantic_correction_shares_one_deadline() -> None:
+    class Router:
+        def __init__(self) -> None:
+            self.timeouts: list[float] = []
+
+        async def generate(self, **kwargs) -> ModelResponse:
+            self.timeouts.append(kwargs["timeout_seconds"])
+            sources = (
+                [{"role": "conversation_ux", "finding_id": "ux-edge"}]
+                if len(self.timeouts) == 1
+                else [
+                    {"role": "conversation_ux", "finding_id": "ux-edge"},
+                    {"role": "brand_motion", "finding_id": "brand-overflow"},
+                ]
+            )
+            return ModelResponse(
+                text="{}",
+                parsed=judgement_payload(sources),
+                usage=ModelUsage(input_tokens=5, output_tokens=2),
+            )
+
+    router = Router()
+    judge = GeminiVisualJudge(
+        model_router=router,
+        routing_mode="express",
+        timeout_seconds=0.2,
+        routing_timeout_seconds=0.2,
+    )
+
+    result = await judge.judge(role_results=role_results())
+
+    assert result.critique.verdict is VisualVerdict.REPAIR
+    assert len(router.timeouts) == 2
+    assert 0 < router.timeouts[1] < router.timeouts[0] <= 0.2
+
+
+@pytest.mark.asyncio
+async def test_routed_visual_judge_preserves_terminal_route_usage_and_provenance() -> None:
+    route_error = ModelRouteExhausted(
+        attempts=(
+            ModelRouteAttempt(
+                provider="agentrouter",
+                model="gpt-5.5",
+                outcome="failed",
+                latency_ms=100,
+                usage=ModelUsage(input_tokens=12, output_tokens=5, thinking_tokens=2),
+                cost_microusd=10,
+                cost_state="reported",
+                error_code="generation_timeout",
+            ),
+            ModelRouteAttempt(
+                provider="gemini",
+                model="gemini-fallback",
+                outcome="failed",
+                latency_ms=80,
+                usage=ModelUsage(input_tokens=7, output_tokens=3, thinking_tokens=1),
+                cost_microusd=4,
+                cost_state="reported",
+                error_code="provider_unavailable",
+            ),
+        ),
+        usage=ModelUsage(input_tokens=19, output_tokens=8, thinking_tokens=3),
+    )
+
+    class Router:
+        def __init__(self) -> None:
+            self.timeout = 0.0
+
+        async def generate(self, **kwargs) -> ModelResponse:
+            self.timeout = kwargs["timeout_seconds"]
+            raise route_error
+
+    router = Router()
+    judge = GeminiVisualJudge(
+        model_router=router,
+        timeout_seconds=0.01,
+        routing_timeout_seconds=0.2,
+    )
+
+    with pytest.raises(VisualJudgeError) as caught:
+        await judge.judge(role_results=role_results())
+
+    assert caught.value.error_code == "route_exhausted"
+    assert caught.value.diagnostic == route_error.diagnostic
+    assert caught.value.usage == TokenUsage(
+        prompt_tokens=19,
+        output_tokens=5,
+        thinking_tokens=3,
+    )
+    assert router.timeout > 0.1
 
 
 def test_repair_verifier_requires_one_explicit_check_per_judge_finding():

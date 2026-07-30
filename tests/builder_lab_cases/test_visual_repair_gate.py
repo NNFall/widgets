@@ -16,6 +16,7 @@ from builder_lab.models import (
 from builder_lab.orchestrator import BuilderOrchestrator
 from builder_lab.store import RunStore, RunTerminal
 from builder_lab.browser_audit import BrowserAuditError
+from builder_lab.visual_committee import VisualCommitteeError
 from builder_lab.visual_gate import VisualRepairGate, artifact_fingerprint
 from builder_lab.visual_critic import VisualCriticRole
 from builder_lab.visual_review import (
@@ -971,6 +972,38 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
             "private model response detail",
             caught.exception.public_message,
         )
+
+    async def test_route_exhaustion_is_terminal_without_committee_retry_and_keeps_usage(self):
+        diagnostic = (
+            '{"terminal_reason":"all_generation_timeout",'
+            '"route_attempts":[{"cost_microusd":12345}]}'
+        )
+        route_error = VisualCommitteeError(
+            "route_exhausted",
+            "Сервис визуальной проверки не смог завершить запрос",
+            diagnostic=diagnostic,
+            usage=TokenUsage(prompt_tokens=100, output_tokens=20),
+        )
+        critic = FakeCritic([], error=route_error)
+
+        with self.assertRaises(BuilderEngineError) as caught:
+            await self.evaluate(FakeAuditor(), critic)
+
+        self.assertEqual(caught.exception.error_code, "route_exhausted")
+        self.assertEqual(len(critic.calls), 1)
+        self.assertEqual(
+            caught.exception.usage,
+            TokenUsage(prompt_tokens=100, output_tokens=20),
+        )
+        self.assertEqual(caught.exception.diagnostic, diagnostic)
+        events = await self.store.events_after(self.run_id, 0)
+        failed_audit = next(
+            event
+            for event in events
+            if event.event_type == "visual_audit.completed"
+            and event.status == "failed"
+        )
+        self.assertEqual(failed_audit.usage, TokenUsage())
 
     async def test_transient_visual_critic_unavailable_retries_without_model_repair(self):
         transient = BuilderEngineError(

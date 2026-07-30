@@ -12,6 +12,7 @@ from app.models.contracts import (
     ModelRequest,
     ModelResponse,
     ProviderCapabilities,
+    ProviderTimeout,
     ProviderUnavailable,
 )
 from app.models.providers import agentrouter_qwen
@@ -359,6 +360,37 @@ async def test_windows_tree_termination_uses_taskkill() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tree_termination_deadline_caps_hanging_cleanup_waits() -> None:
+    async def hang(*_args: object, **_kwargs: object) -> None:
+        await asyncio.Event().wait()
+
+    process = FakeProcess(returncode=None, pid=4242)
+    process.wait = AsyncMock(side_effect=hang)
+    taskkill = FakeProcess()
+    taskkill.communicate = AsyncMock(side_effect=hang)
+
+    with (
+        patch(
+            "app.models.providers.agentrouter_qwen._PROCESS_CLEANUP_TIMEOUT_SECONDS",
+            0.01,
+            create=True,
+        ),
+        patch(
+            "app.models.providers.agentrouter_qwen.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=taskkill),
+        ),
+    ):
+        await asyncio.wait_for(
+            agentrouter_qwen._terminate_process_tree(process, platform="nt"),
+            timeout=0.25,
+        )
+
+    taskkill.communicate.assert_awaited_once_with()
+    process.kill.assert_called_once_with()
+    process.wait.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
 async def test_posix_tree_termination_kills_process_group() -> None:
     process = FakeProcess(returncode=None, pid=4242)
 
@@ -377,7 +409,7 @@ async def test_posix_tree_termination_kills_process_group() -> None:
     ("error", "expected"),
     [
         (asyncio.CancelledError(), asyncio.CancelledError),
-        (TimeoutError("timeout"), ProviderUnavailable),
+        (TimeoutError("timeout"), ProviderTimeout),
     ],
 )
 async def test_cancellation_and_timeout_terminate_the_process_tree(
@@ -402,6 +434,40 @@ async def test_cancellation_and_timeout_terminate_the_process_tree(
         with pytest.raises(expected):
             await provider.generate(ModelRequest(prompt="Generate"), model="glm-5.2")
 
+    terminate_tree.assert_awaited_once_with(process)
+
+
+@pytest.mark.asyncio
+async def test_agentrouter_deadline_raises_provider_timeout() -> None:
+    provider = AgentRouterQwenProvider(
+        api_key="unit-test-key",
+        executable="qwen",
+        timeout_seconds=0.01,
+    )
+    process = FakeProcess(returncode=None)
+    never = asyncio.Event()
+
+    async def hang(_payload: bytes = b"") -> tuple[bytes, bytes]:
+        await never.wait()
+        raise AssertionError("unreachable")
+
+    process.communicate = AsyncMock(side_effect=hang)
+    terminate_tree = AsyncMock()
+
+    with (
+        patch(
+            "app.models.providers.agentrouter_qwen.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=process),
+        ),
+        patch(
+            "app.models.providers.agentrouter_qwen._terminate_process_tree",
+            new=terminate_tree,
+        ),
+    ):
+        with pytest.raises(ProviderTimeout) as caught:
+            await provider.generate(ModelRequest(prompt="Generate"), model="glm-5.2")
+
+    assert caught.value.error_code == "generation_timeout"
     terminate_tree.assert_awaited_once_with(process)
 
 
