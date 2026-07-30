@@ -474,6 +474,96 @@ class _PosixRootAnchor:
         finally:
             os.close(parent)
 
+    def rename_directory(
+        self,
+        source: tuple[str, ...],
+        destination: tuple[str, ...],
+    ) -> None:
+        """Atomically move one anchored directory and fsync both parents."""
+
+        self._validate_parts(source)
+        self._validate_parts(destination)
+        if not source or not destination:
+            raise ValueError("forensic rename paths must not be empty")
+        source_descriptor = self._open_directory(source)
+        os.close(source_descriptor)
+        source_parent = self._open_directory(source[:-1])
+        destination_parent = self._open_directory(destination[:-1])
+        try:
+            try:
+                os.stat(
+                    destination[-1],
+                    dir_fd=destination_parent,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                pass
+            else:
+                raise FileExistsError("forensic quarantine destination exists")
+            os.rename(
+                source[-1],
+                destination[-1],
+                src_dir_fd=source_parent,
+                dst_dir_fd=destination_parent,
+            )
+            os.fsync(source_parent)
+            os.fsync(destination_parent)
+        finally:
+            os.close(destination_parent)
+            os.close(source_parent)
+
+    def remove_tree(self, parts: tuple[str, ...]) -> None:
+        """Delete an anchored tree without following any symlink."""
+
+        self._validate_parts(parts)
+        if not parts:
+            raise ValueError("refusing to remove the forensic root")
+        pending: list[tuple[tuple[str, ...], bool]] = [(parts, False)]
+        while pending:
+            current, visited = pending.pop()
+            if visited:
+                parent = self._open_directory(current[:-1])
+                try:
+                    try:
+                        result = os.stat(
+                            current[-1],
+                            dir_fd=parent,
+                            follow_symlinks=False,
+                        )
+                    except FileNotFoundError:
+                        continue
+                    if not stat.S_ISDIR(result.st_mode):
+                        raise ValueError(
+                            "forensic cleanup directory changed during deletion"
+                        )
+                    os.rmdir(current[-1], dir_fd=parent)
+                    os.fsync(parent)
+                finally:
+                    os.close(parent)
+                continue
+
+            directory = self._open_directory(current)
+            child_directories: list[tuple[str, ...]] = []
+            try:
+                with os.scandir(directory) as entries:
+                    names = tuple(entry.name for entry in entries)
+                for name in names:
+                    self._validate_parts((name,))
+                    result = os.stat(
+                        name,
+                        dir_fd=directory,
+                        follow_symlinks=False,
+                    )
+                    if stat.S_ISDIR(result.st_mode):
+                        child_directories.append((*current, name))
+                        continue
+                    os.unlink(name, dir_fd=directory)
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+            pending.append((current, True))
+            pending.extend((child, False) for child in child_directories)
+
     def tree_size(
         self, parts: tuple[str, ...], *, maximum_entries: int
     ) -> tuple[int, int]:
@@ -749,6 +839,41 @@ class GenerationForensicStorage:
         )
 
     @classmethod
+    def open_existing(
+        cls,
+        config: GenerationForensicsConfig,
+        *,
+        writable: bool,
+    ) -> GenerationForensicStorage:
+        """Open a pre-existing marked root without bootstrapping any path."""
+
+        if not config.enabled:
+            raise ValueError("forensic cleanup requires enabled storage")
+        root = config.root.expanduser().absolute()
+        _assert_no_symlink_components(root)
+        if not root.exists():
+            raise FileNotFoundError("forensic storage root is missing")
+        if root.is_symlink() or not root.is_dir():
+            raise ValueError("forensic storage root must be a real directory")
+        marker = root / cls.ROOT_MARKER_NAME
+        if not marker.exists() or marker.is_symlink():
+            raise ValueError("forensic storage root marker is missing or unsafe")
+        if os.name == "nt":
+            cls._validate_root_marker(marker)
+        runs = root / "runs"
+        if runs.exists() or runs.is_symlink():
+            if runs.is_symlink() or not runs.is_dir():
+                raise ValueError("forensic runs path must be a real directory")
+            _assert_private_permissions(runs, directory=True)
+        _assert_private_permissions(root, directory=True)
+        _assert_private_permissions(marker, directory=False)
+        return cls(
+            config,
+            writable=writable,
+            state=_OpenState(available=True, reason=None),
+        )
+
+    @classmethod
     def _validate_root_marker(cls, marker: Path) -> None:
         value = _read_small_json(marker, maximum=_MAX_MARKER_BYTES)
         cls._validate_root_marker_value(value)
@@ -831,7 +956,15 @@ class GenerationForensicStorage:
             raise ValueError("run_id must be a UUID")
         return self.root / "runs" / run_id.hex[:2] / str(run_id)
 
-    def _validate_run_marker(self, run_dir: Path) -> dict[str, Any]:
+    def _validate_run_marker(
+        self,
+        run_dir: Path,
+        *,
+        expected_run_id: UUID | None = None,
+        expected_user_id: int | None = None,
+        expected_project_id: UUID | None = None,
+        require_canonical_location: bool = True,
+    ) -> dict[str, Any]:
         if self._path_kind(run_dir) != "directory":
             raise ValueError("forensic run path must be a real directory")
         marker_path = run_dir / self.RUN_MARKER_NAME
@@ -856,9 +989,183 @@ class GenerationForensicStorage:
             or expected["run_id"] != run_dir.name
         ):
             raise ValueError("foreign or invalid forensic run marker")
-        if run_dir.parent.name != UUID(run_dir.name).hex[:2]:
+        marker_run_id = UUID(run_dir.name)
+        if (
+            expected_run_id is not None
+            and marker_run_id != expected_run_id
+        ):
+            raise ValueError("forensic run marker has an unexpected run ID")
+        if (
+            expected_user_id is not None
+            and marker["user_id"] != expected_user_id
+        ):
+            raise ValueError("forensic run marker has an unexpected user ID")
+        if (
+            expected_project_id is not None
+            and marker["project_id"] != str(expected_project_id)
+        ):
+            raise ValueError("forensic run marker has an unexpected project ID")
+        if (
+            require_canonical_location
+            and run_dir.parent.name != marker_run_id.hex[:2]
+        ):
             raise ValueError("forensic run marker is stored in the wrong shard")
         return marker
+
+    def _cleanup_trash_dir(self) -> Path:
+        return self.root / ".trash"
+
+    def _cleanup_quarantine_dir(self, run_id: UUID) -> Path:
+        return self._cleanup_trash_dir() / str(run_id)
+
+    def _cleanup_tombstone_path(self, run_id: UUID) -> Path:
+        return self._cleanup_trash_dir() / f"{run_id}.deleted.json"
+
+    @staticmethod
+    def _cleanup_tombstone_bytes(run_id: UUID) -> bytes:
+        return _canonical_json_bytes(
+            {
+                "kind": "kaigo-generation-forensics-deletion",
+                "run_id": str(run_id),
+                "schema_version": 1,
+            }
+        )
+
+    def _validate_cleanup_tombstone(self, run_id: UUID) -> None:
+        path = self._cleanup_tombstone_path(run_id)
+        data = self._read_private(path, maximum=_MAX_MARKER_BYTES)
+        if data != self._cleanup_tombstone_bytes(run_id):
+            raise ValueError("forensic cleanup tombstone is invalid")
+
+    def cleanup_has_tombstone(self, run_id: UUID) -> bool:
+        with self._lock:
+            trash = self._cleanup_trash_dir()
+            if self._path_kind(trash) is None:
+                return False
+            kind = self._path_kind(self._cleanup_tombstone_path(run_id))
+            if kind is None:
+                return False
+            if kind != "file":
+                raise ValueError("forensic cleanup tombstone is unsafe")
+            self._validate_cleanup_tombstone(run_id)
+            return True
+
+    def cleanup_purge_run(
+        self,
+        *,
+        run_id: UUID,
+        user_id: int,
+        project_id: UUID,
+    ) -> str:
+        """Quarantine and delete one run, retaining a commit tombstone."""
+
+        self._require_write()
+        if not isinstance(run_id, UUID) or not isinstance(project_id, UUID):
+            raise ValueError("cleanup run and project IDs must be UUIDs")
+        if isinstance(user_id, bool) or not isinstance(user_id, int) or user_id < 1:
+            raise ValueError("cleanup user_id must be a positive integer")
+        with self._lock:
+            run_dir = self._run_dir(run_id)
+            trash_dir = self._cleanup_trash_dir()
+            trash_kind = self._path_kind(trash_dir)
+            if trash_kind is not None and trash_kind != "directory":
+                raise ValueError("forensic cleanup trash path is unsafe")
+            quarantine = self._cleanup_quarantine_dir(run_id)
+            tombstone = self._cleanup_tombstone_path(run_id)
+            quarantine_kind = (
+                None if trash_kind is None else self._path_kind(quarantine)
+            )
+            tombstone_kind = (
+                None if trash_kind is None else self._path_kind(tombstone)
+            )
+            if tombstone_kind is not None:
+                if tombstone_kind != "file":
+                    raise ValueError("forensic cleanup tombstone is unsafe")
+                self._validate_cleanup_tombstone(run_id)
+            run_kind = self._path_kind(run_dir)
+            if run_kind is not None and run_kind != "directory":
+                raise ValueError("forensic run path is unsafe")
+            if quarantine_kind is not None and quarantine_kind != "directory":
+                raise ValueError("forensic quarantine path is unsafe")
+            if run_kind is not None and quarantine_kind is not None:
+                raise ValueError("forensic run exists in both active and trash paths")
+            if run_kind is None and quarantine_kind is None:
+                return "already_removed" if tombstone_kind == "file" else "missing"
+
+            recovered = quarantine_kind == "directory"
+            candidate = quarantine if recovered else run_dir
+            self._validate_run_marker(
+                candidate,
+                expected_run_id=run_id,
+                expected_user_id=user_id,
+                expected_project_id=project_id,
+                require_canonical_location=not recovered,
+            )
+            if not recovered:
+                if trash_kind is None:
+                    self._ensure_private_directory(trash_dir)
+                if self._anchor is not None:
+                    self._anchor.rename_directory(
+                        self._relative_parts(run_dir),
+                        self._relative_parts(quarantine),
+                    )
+                else:
+                    os.replace(run_dir, quarantine)
+                self._validate_run_marker(
+                    quarantine,
+                    expected_run_id=run_id,
+                    expected_user_id=user_id,
+                    expected_project_id=project_id,
+                    require_canonical_location=False,
+                )
+            if tombstone_kind is None:
+                self._write_new_private(
+                    tombstone,
+                    self._cleanup_tombstone_bytes(run_id),
+                )
+            if self._anchor is not None:
+                self._anchor.remove_tree(self._relative_parts(quarantine))
+            else:
+                self._remove_tree_no_follow(quarantine)
+            return "recovered" if recovered else "removed"
+
+    def _remove_tree_no_follow(self, root: Path) -> None:
+        if root.is_symlink() or not root.is_dir():
+            raise ValueError("forensic cleanup path must be a real directory")
+        pending: list[tuple[Path, bool]] = [(root, False)]
+        while pending:
+            current, visited = pending.pop()
+            if current.is_symlink():
+                raise ValueError("forensic cleanup path must not be a symlink")
+            if visited:
+                current.rmdir()
+                continue
+            children: list[Path] = []
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    candidate = current / entry.name
+                    result = entry.stat(follow_symlinks=False)
+                    if stat.S_ISDIR(result.st_mode):
+                        children.append(candidate)
+                    else:
+                        candidate.unlink()
+            pending.append((current, True))
+            pending.extend((child, False) for child in children)
+
+    def cleanup_finalize_run(self, run_id: UUID) -> None:
+        self._require_write()
+        with self._lock:
+            trash = self._cleanup_trash_dir()
+            if self._path_kind(trash) is None:
+                return
+            tombstone = self._cleanup_tombstone_path(run_id)
+            kind = self._path_kind(tombstone)
+            if kind is None:
+                return
+            if kind != "file":
+                raise ValueError("forensic cleanup tombstone is unsafe")
+            self._validate_cleanup_tombstone(run_id)
+            self._unlink_private(tombstone)
 
     def initialize_run(
         self,

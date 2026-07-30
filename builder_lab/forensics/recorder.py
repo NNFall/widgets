@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 from collections.abc import Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from functools import partial
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
@@ -20,20 +19,24 @@ from builder_lab.generation_events import PreparedGenerationEvent
 
 from .config import GenerationForensicsConfig
 from .models import ForensicBlob, ForensicManifest, ForensicWriteResult, require_aware
+from .policy import (
+    TERMINAL_RUN_STATES,
+    canonical_storage_key,
+    process_run_lock,
+    retention_expires_at,
+    run_advisory_key,
+)
 
 if TYPE_CHECKING:
     from .storage import GenerationForensicStorage
 
 
-_TERMINAL_STATES = frozenset({"completed", "failed", "cancelled"})
+_TERMINAL_STATES = TERMINAL_RUN_STATES
 _DEGRADED_STATE = "degraded"
-_FORENSIC_RETENTION_HOURS = 120
 
 
 def forensic_storage_key(run_id: UUID) -> str:
-    if not isinstance(run_id, UUID):
-        raise ValueError("run_id must be a UUID")
-    return f"runs/{run_id.hex[:2]}/{run_id}"
+    return canonical_storage_key(run_id)
 
 
 def _aware(value: datetime, *, name: str) -> datetime:
@@ -112,7 +115,6 @@ class GenerationForensicRecorder:
         self._sessions = session_factory
         self.config = config
         self.storage = storage
-        self._locks: dict[UUID, asyncio.Lock] = {}
 
     @classmethod
     async def open(
@@ -128,12 +130,11 @@ class GenerationForensicRecorder:
         return cls(session_factory, config, storage)
 
     def _lock(self, run_id: UUID) -> asyncio.Lock:
-        return self._locks.setdefault(run_id, asyncio.Lock())
+        return process_run_lock(run_id)
 
     @staticmethod
     def _advisory_key(run_id: UUID) -> int:
-        digest = hashlib.sha256(b"kaigo-forensics-v1\x00" + run_id.bytes).digest()
-        return int.from_bytes(digest[:8], byteorder="big", signed=True)
+        return run_advisory_key(run_id)
 
     async def _advisory_lock(self, database: AsyncSession, run_id: UUID) -> None:
         if database.get_bind().dialect.name == "postgresql":
@@ -218,9 +219,8 @@ class GenerationForensicRecorder:
         if row.state not in _TERMINAL_STATES:
             row.state = terminal_state
         if row.expires_at is None:
-            terminal_time = _aware(finished_at, name="finished_at")
-            row.expires_at = terminal_time + timedelta(
-                hours=_FORENSIC_RETENTION_HOURS
+            row.expires_at = retention_expires_at(
+                _aware(finished_at, name="finished_at")
             )
 
     @staticmethod
