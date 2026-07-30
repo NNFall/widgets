@@ -29,6 +29,7 @@ class SchemaSnapshot:
     constraints: frozenset[str]
     indexes: frozenset[str] = frozenset()
     defaults: frozenset[str] = frozenset()
+    database_objects: frozenset[str] = frozenset()
     alembic_revisions: tuple[str, ...] = ()
 
     def replace(self, **changes) -> "SchemaSnapshot":
@@ -264,6 +265,8 @@ def _schema_fingerprint(snapshot: SchemaSnapshot) -> str:
         "indexes": sorted(snapshot.indexes),
         "defaults": sorted(snapshot.defaults),
     }
+    if snapshot.database_objects:
+        payload["database_objects"] = sorted(snapshot.database_objects)
     canonical = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -314,6 +317,9 @@ EXPECTED_VERSIONED_SCHEMA_FINGERPRINTS: Mapping[str, str] = MappingProxyType(
         "0013_pattern_registry": (
             "35f6022649de5319c251c1b98c6b56826ad470a6109f98d84714b61c47dd6c54"
         ),
+        "0014_generation_forensics": (
+            "f244430e3e1b92259c35e8ae2ec93d611b8a0a4a0f458623576b0b9074eb3d15"
+        ),
     }
 )
 
@@ -332,6 +338,7 @@ def classify_schema(snapshot: SchemaSnapshot) -> MigrationPlan | None:
         and not snapshot.constraints
         and not snapshot.indexes
         and not snapshot.defaults
+        and not snapshot.database_objects
     ):
         return MigrationPlan(stamp_revision=None, upgrade_revision="head")
     if _schema_fingerprint(snapshot) == _schema_fingerprint(known_legacy_snapshot()):
@@ -449,6 +456,16 @@ def _constraint_signature(
     )
 
 
+def _database_object_signature(kind: str, value: Mapping[str, object]) -> str:
+    normalized = _normalize_index_value(value)
+    return kind + ":" + json.dumps(
+        normalized,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _snapshot(connection) -> SchemaSnapshot:
     inspector = inspect(connection)
     table_names = tuple(sorted(inspector.get_table_names(schema="public")))
@@ -468,6 +485,7 @@ def _snapshot(connection) -> SchemaSnapshot:
     constraints: set[str] = set()
     indexes: set[str] = set()
     defaults: set[str] = set()
+    database_objects: set[str] = set()
     for table in table_names:
         inspected_columns = inspector.get_columns(table, schema="public")
         columns[table] = tuple(
@@ -493,11 +511,111 @@ def _snapshot(connection) -> SchemaSnapshot:
             if index.get("duplicates_constraint"):
                 continue
             indexes.add(_index_signature(table, index))
+
+    functions = connection.execute(
+        text(
+            """
+            SELECT
+                namespace.nspname AS schema_name,
+                procedure.proname AS name,
+                pg_get_function_identity_arguments(procedure.oid) AS arguments,
+                pg_get_function_result(procedure.oid) AS result,
+                language.lanname AS language,
+                procedure.prosrc AS source,
+                procedure.provolatile::text AS volatility,
+                procedure.prosecdef AS security_definer,
+                procedure.proisstrict AS strict,
+                procedure.proleakproof AS leakproof,
+                procedure.proparallel::text AS parallel,
+                procedure.proconfig AS configuration
+            FROM pg_proc AS procedure
+            JOIN pg_namespace AS namespace
+              ON namespace.oid = procedure.pronamespace
+            JOIN pg_language AS language
+              ON language.oid = procedure.prolang
+            WHERE namespace.nspname = 'public'
+              AND procedure.prokind = 'f'
+            ORDER BY procedure.proname, arguments
+            """
+        )
+    ).mappings()
+    for function in functions:
+        database_objects.add(
+            _database_object_signature(
+                "function",
+                {
+                    "schema": function["schema_name"],
+                    "name": function["name"],
+                    "arguments": function["arguments"],
+                    "result": function["result"],
+                    "language": function["language"],
+                    "source": function["source"],
+                    "volatility": function["volatility"],
+                    "security_definer": function["security_definer"],
+                    "strict": function["strict"],
+                    "leakproof": function["leakproof"],
+                    "parallel": function["parallel"],
+                    "configuration": sorted(function["configuration"] or ()),
+                },
+            )
+        )
+
+    triggers = connection.execute(
+        text(
+            """
+            SELECT
+                table_namespace.nspname AS table_schema,
+                table_class.relname AS table_name,
+                trigger.tgname AS name,
+                trigger.tgenabled::text AS enabled,
+                trigger.tgtype AS type_code,
+                trigger.tgattr::text AS update_columns,
+                function_namespace.nspname AS function_schema,
+                procedure.proname AS function_name,
+                pg_get_function_identity_arguments(procedure.oid)
+                    AS function_arguments,
+                encode(trigger.tgargs, 'hex') AS arguments,
+                pg_get_expr(trigger.tgqual, trigger.tgrelid) AS when_clause
+            FROM pg_trigger AS trigger
+            JOIN pg_class AS table_class
+              ON table_class.oid = trigger.tgrelid
+            JOIN pg_namespace AS table_namespace
+              ON table_namespace.oid = table_class.relnamespace
+            JOIN pg_proc AS procedure
+              ON procedure.oid = trigger.tgfoid
+            JOIN pg_namespace AS function_namespace
+              ON function_namespace.oid = procedure.pronamespace
+            WHERE table_namespace.nspname = 'public'
+              AND trigger.tgisinternal IS FALSE
+            ORDER BY table_class.relname, trigger.tgname
+            """
+        )
+    ).mappings()
+    for trigger in triggers:
+        database_objects.add(
+            _database_object_signature(
+                "trigger",
+                {
+                    "table_schema": trigger["table_schema"],
+                    "table_name": trigger["table_name"],
+                    "name": trigger["name"],
+                    "enabled": trigger["enabled"],
+                    "type_code": trigger["type_code"],
+                    "update_columns": trigger["update_columns"],
+                    "function_schema": trigger["function_schema"],
+                    "function_name": trigger["function_name"],
+                    "function_arguments": trigger["function_arguments"],
+                    "arguments": trigger["arguments"],
+                    "when_clause": trigger["when_clause"],
+                },
+            )
+        )
     return SchemaSnapshot(
         columns=MappingProxyType(columns),
         constraints=frozenset(constraints),
         indexes=frozenset(indexes),
         defaults=frozenset(defaults),
+        database_objects=frozenset(database_objects),
         alembic_revisions=revisions,
     )
 

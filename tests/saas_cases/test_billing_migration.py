@@ -311,7 +311,7 @@ async def test_postgres_billing_migration_and_concurrent_fulfillment(monkeypatch
             revision = await connection.run_sync(
                 lambda sync: MigrationContext.configure(sync).get_current_revision()
             )
-        assert revision == "0013_pattern_registry"
+        assert revision == "0014_generation_forensics"
 
         await asyncio.to_thread(command.downgrade, config, "0008_publication_releases")
         async with target_engine.connect() as connection:

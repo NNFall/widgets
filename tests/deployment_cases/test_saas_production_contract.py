@@ -91,9 +91,9 @@ def test_schema_auto_creation_is_explicit_and_disabled_by_default() -> None:
 def test_alembic_has_one_production_head() -> None:
     config = Config(str(ROOT / "alembic.ini"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["0013_pattern_registry"]
-    assert script.get_revision("0013_pattern_registry").down_revision == (
-        "0012_worker_service_readiness"
+    assert script.get_heads() == ["0014_generation_forensics"]
+    assert script.get_revision("0014_generation_forensics").down_revision == (
+        "0013_pattern_registry"
     )
 
 
@@ -333,6 +333,27 @@ def test_preflight_treats_column_order_as_non_semantic() -> None:
     )
 
 
+def test_preflight_fingerprint_includes_database_objects() -> None:
+    from scripts import preflight_saas_schema as preflight
+
+    legacy = preflight.known_legacy_snapshot()
+    drifted = legacy.replace(
+        database_objects=frozenset(
+            {
+                'function:{"name":"kaigo_0014_guard_legacy_model_call_insert"}',
+                'function:{"name":"kaigo_0014_reconcile_legacy_model_call_update"}',
+                'trigger:{"name":"trg_model_calls_0014_guard_legacy_insert"}',
+                'trigger:{"name":"trg_model_calls_0014_legacy_terminal_update"}',
+            }
+        )
+    )
+
+    assert preflight._schema_fingerprint(drifted) != preflight._schema_fingerprint(
+        legacy
+    )
+    assert preflight.classify_schema(drifted) is None
+
+
 def test_preflight_index_signature_captures_partial_predicate_and_identity() -> None:
     from scripts import preflight_saas_schema as preflight
 
@@ -450,6 +471,16 @@ def test_disposable_postgres_legacy_preflight_and_additive_round_trip(
         finally:
             await engine.dispose()
 
+    async def scalar(sql: str) -> str:
+        engine = create_async_engine(rendered)
+        try:
+            async with engine.connect() as connection:
+                value = await connection.scalar(text(sql))
+                assert isinstance(value, str)
+                return value
+        finally:
+            await engine.dispose()
+
     async def revision() -> str | None:
         engine = create_async_engine(rendered)
         try:
@@ -491,16 +522,148 @@ def test_disposable_postgres_legacy_preflight_and_additive_round_trip(
         assert preflight.inspect_schema(rendered).alembic_revisions == ()
 
         assert preflight.run_preflight(rendered, apply=True) == 0
-        assert asyncio.run(revision()) == "0013_pattern_registry"
+        assert asyncio.run(revision()) == "0014_generation_forensics"
 
         head_snapshot = preflight.inspect_schema(rendered)
         assert preflight.classify_schema(head_snapshot) == preflight.MigrationPlan(
             stamp_revision=None,
             upgrade_revision="head",
         )
+        assert any(
+            "kaigo_0014_guard_legacy_model_call_insert" in signature
+            for signature in head_snapshot.database_objects
+        )
+        assert any(
+            "trg_model_calls_0014_guard_legacy_insert" in signature
+            for signature in head_snapshot.database_objects
+        )
+        assert any(
+            "kaigo_0014_reconcile_legacy_model_call_update" in signature
+            for signature in head_snapshot.database_objects
+        )
+        assert any(
+            "trg_model_calls_0014_legacy_terminal_update" in signature
+            for signature in head_snapshot.database_objects
+        )
+
+        legacy_update_function = asyncio.run(
+            scalar(
+                "SELECT pg_get_functiondef("
+                "'public.kaigo_0014_reconcile_legacy_model_call_update()'"
+                "::regprocedure)"
+            )
+        )
+        legacy_insert_guard_function = asyncio.run(
+            scalar(
+                "SELECT pg_get_functiondef("
+                "'public.kaigo_0014_guard_legacy_model_call_insert()'"
+                "::regprocedure)"
+            )
+        )
+        asyncio.run(
+            execute(
+                "DROP TRIGGER trg_model_calls_0014_legacy_terminal_update "
+                "ON model_calls"
+            )
+        )
+        assert preflight.run_preflight(rendered, apply=False) == 2
+        asyncio.run(
+            execute(
+                "CREATE TRIGGER trg_model_calls_0014_legacy_terminal_update "
+                "BEFORE UPDATE ON model_calls FOR EACH ROW EXECUTE FUNCTION "
+                "kaigo_0014_reconcile_legacy_model_call_update()"
+            )
+        )
+        assert preflight.run_preflight(rendered, apply=False) == 0
+
+        asyncio.run(
+            execute(
+                "DROP TRIGGER trg_model_calls_0014_legacy_terminal_update "
+                "ON model_calls"
+            )
+        )
+        asyncio.run(
+            execute(
+                "CREATE TRIGGER trg_model_calls_0014_legacy_terminal_update "
+                "BEFORE UPDATE OF cost_state ON model_calls FOR EACH ROW "
+                "EXECUTE FUNCTION "
+                "kaigo_0014_reconcile_legacy_model_call_update()"
+            )
+        )
+        assert preflight.run_preflight(rendered, apply=False) == 2
+        asyncio.run(
+            execute(
+                "DROP TRIGGER trg_model_calls_0014_legacy_terminal_update "
+                "ON model_calls"
+            )
+        )
+        asyncio.run(
+            execute(
+                "CREATE TRIGGER trg_model_calls_0014_legacy_terminal_update "
+                "BEFORE UPDATE ON model_calls FOR EACH ROW EXECUTE FUNCTION "
+                "kaigo_0014_reconcile_legacy_model_call_update()"
+            )
+        )
+        assert preflight.run_preflight(rendered, apply=False) == 0
+
+        asyncio.run(
+            execute(
+                "CREATE OR REPLACE FUNCTION "
+                "kaigo_0014_reconcile_legacy_model_call_update() "
+                "RETURNS trigger LANGUAGE plpgsql AS $$ "
+                "BEGIN RETURN NEW; END; $$"
+            )
+        )
+        assert preflight.run_preflight(rendered, apply=False) == 2
+        asyncio.run(execute(legacy_update_function))
+        assert preflight.run_preflight(rendered, apply=False) == 0
+
+        asyncio.run(
+            execute(
+                "ALTER FUNCTION "
+                "kaigo_0014_reconcile_legacy_model_call_update() "
+                "SET search_path TO pg_catalog"
+            )
+        )
+        assert preflight.run_preflight(rendered, apply=False) == 2
+        asyncio.run(
+            execute(
+                "ALTER FUNCTION "
+                "kaigo_0014_reconcile_legacy_model_call_update() RESET ALL"
+            )
+        )
+        assert preflight.run_preflight(rendered, apply=False) == 0
+
+        asyncio.run(
+            execute(
+                "DROP TRIGGER trg_model_calls_0014_guard_legacy_insert "
+                "ON model_calls"
+            )
+        )
+        assert preflight.run_preflight(rendered, apply=False) == 2
+        asyncio.run(
+            execute(
+                "CREATE TRIGGER trg_model_calls_0014_guard_legacy_insert "
+                "BEFORE INSERT ON model_calls FOR EACH ROW "
+                "EXECUTE FUNCTION kaigo_0014_guard_legacy_model_call_insert()"
+            )
+        )
+        assert preflight.run_preflight(rendered, apply=False) == 0
+
+        asyncio.run(
+            execute(
+                "CREATE OR REPLACE FUNCTION "
+                "kaigo_0014_guard_legacy_model_call_insert() RETURNS trigger "
+                "LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$"
+            )
+        )
+        assert preflight.run_preflight(rendered, apply=False) == 2
+        asyncio.run(execute(legacy_insert_guard_function))
+        assert preflight.run_preflight(rendered, apply=False) == 0
+
         asyncio.run(execute("ALTER TABLE funnel_events ADD COLUMN unexpected TEXT"))
         assert preflight.run_preflight(rendered, apply=False) == 2
-        assert asyncio.run(revision()) == "0013_pattern_registry"
+        assert asyncio.run(revision()) == "0014_generation_forensics"
         asyncio.run(execute("ALTER TABLE funnel_events DROP COLUMN unexpected"))
 
         asyncio.run(
@@ -564,7 +727,7 @@ def test_disposable_postgres_legacy_preflight_and_additive_round_trip(
             )
         )
         command.upgrade(config, "head")
-        assert asyncio.run(revision()) == "0013_pattern_registry"
+        assert asyncio.run(revision()) == "0014_generation_forensics"
     finally:
         asyncio.run(drop_database())
 

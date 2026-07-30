@@ -17,6 +17,9 @@ EXPECTED_TABLES = {
     "generation_artifacts",
     "artifact_evidence",
     "model_calls",
+    "generation_stage_attempts",
+    "generation_forensic_manifests",
+    "generation_forensic_access_logs",
     "usage_ledger",
     "trial_entitlements",
     "subscriptions",
@@ -54,6 +57,76 @@ def test_oauth_only_users_may_have_no_password() -> None:
 def test_trial_cycles_and_model_call_mode_are_persisted() -> None:
     assert "reservation_epoch" in Base.metadata.tables["trial_entitlements"].c
     assert "mode" in Base.metadata.tables["model_calls"].c
+
+
+def test_generation_event_forensic_columns_are_additive_and_nullable() -> None:
+    events = Base.metadata.tables["generation_events"]
+    assert events.c.registry_version.nullable
+    assert events.c.public_payload.nullable
+    assert events.c.forensic_ref.nullable
+
+
+def test_generation_forensic_tables_enforce_manifest_and_access_contracts() -> None:
+    manifest = Base.metadata.tables["generation_forensic_manifests"]
+    access = Base.metadata.tables["generation_forensic_access_logs"]
+
+    assert manifest.c.run_id.nullable is False
+    assert manifest.c.storage_key.nullable is False
+    assert manifest.c.expires_at.type.timezone is True
+    assert access.c.actor_email.nullable is False
+    assert access.c.created_at.type.timezone is True
+    assert {
+        "ck_generation_forensic_manifest_state",
+        "ck_generation_forensic_manifest_schema_version_positive",
+        "ck_generation_forensic_manifest_counts_nonnegative",
+    } <= _constraint_names("generation_forensic_manifests", CheckConstraint)
+    assert "ck_generation_forensic_access_action" in _constraint_names(
+        "generation_forensic_access_logs", CheckConstraint
+    )
+
+
+def test_model_call_lineage_schema_and_cross_run_membership_are_registered() -> None:
+    calls = Base.metadata.tables["model_calls"]
+    attempts = Base.metadata.tables["generation_stage_attempts"]
+
+    assert {
+        "stage_attempt_id",
+        "logical_invocation_id",
+        "operation",
+        "semantic_attempt",
+        "candidate_id",
+        "persona",
+        "fallback_index",
+        "actual_provider",
+        "actual_model",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "cost_state",
+    } <= set(calls.c.keys())
+    assert calls.c.cost_microusd.nullable is True
+    assert {
+        "uq_generation_stage_attempt_run_stage_ordinal",
+        "uq_generation_stage_attempt_id_run",
+    } <= _constraint_names("generation_stage_attempts", UniqueConstraint)
+    assert "uq_model_call_logical_fallback" in _constraint_names(
+        "model_calls", UniqueConstraint
+    )
+    composite = next(
+        constraint
+        for constraint in calls.constraints
+        if isinstance(constraint, ForeignKeyConstraint)
+        and constraint.name == "fk_model_calls_stage_attempt_run"
+    )
+    assert tuple(element.parent.name for element in composite.elements) == (
+        "stage_attempt_id",
+        "run_id",
+    )
+    assert tuple(element.target_fullname for element in composite.elements) == (
+        "generation_stage_attempts.id",
+        "generation_stage_attempts.run_id",
+    )
+    assert attempts.c.ordinal.nullable is False
+    assert attempts.c.started_at.type.timezone is True
 
 
 def test_terminal_trial_settlement_fields_and_recovery_index_are_persisted() -> None:
