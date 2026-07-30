@@ -145,7 +145,7 @@ COMPOSITION_PLAN_JSON_SCHEMA = {
         "direction_id": {"type": "string", "minLength": 1, "maxLength": 80},
         "selections": {
             "type": "array",
-            "minItems": 5,
+            "minItems": 4,
             "maxItems": 5,
             "items": {
                 "type": "object",
@@ -175,7 +175,34 @@ COMPOSITION_PLAN_JSON_SCHEMA = {
                 },
             },
         },
-        "custom_escape": {"type": "null"},
+        "custom_escape": {
+            "anyOf": [
+                {"type": "null"},
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["slot", "reason", "constraints"],
+                    "properties": {
+                        "slot": {
+                            "type": "string",
+                            "enum": [
+                                "launcher",
+                                "shell",
+                                "messages",
+                                "composer",
+                                "motion",
+                            ],
+                        },
+                        "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+                        "constraints": {
+                            "type": "array",
+                            "maxItems": 12,
+                            "items": {"type": "string", "minLength": 1, "maxLength": 80},
+                        },
+                    },
+                },
+            ]
+        },
         "summary": {"type": "string", "minLength": 1, "maxLength": 1000},
     },
 }
@@ -369,14 +396,14 @@ def build_composition_plan_prompt(
     return f"""Ты — Composition Planner специализированного конструктора Kaigo.
 
 Выбери ровно одну активную версию для каждого из пяти слотов: launcher, shell,
-messages, composer и motion. Каталог уже отфильтрован сервером; выбирай только `runtime_source`,
-не угадывай другие ID или версии. Используй только ID и версии из публичного каталога.
+messages, composer и motion. Используй только ID и версии из публичного каталога.
 Параметры должны соответствовать parameter_schema. Не возвращай HTML, CSS,
 JavaScript, URL или исполняемый код. Не переписывай внутреннюю механику паттернов.
 
-custom_escape всегда равен null: новый source-путь не разрешает обход каталога.
-Поля reason и summary пиши по-русски, простым языком, без имён CSS, HTML и
-технических идентификаторов.
+Custom escape допустим только для одного слота, когда каталог объективно не может
+выразить выбранное направление. Тогда не выбирай паттерн для этого слота, кратко
+объясни причину и перечисли только декларативные ограничения. Во всех остальных
+случаях custom_escape равен null.
 
 direction_id должен точно равняться {selected_direction.proposal_id}.
 Верни только полный JSON по заданной схеме.
