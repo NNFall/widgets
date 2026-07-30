@@ -93,6 +93,7 @@ async def operator_runs_page(request: web.Request) -> web.Response:
         for row in rows
     )
     body = (
+        "<p><a href='/operator/funnel'>Воронка Kaigo</a></p>"
         "<h1>Запуски генератора</h1>"
         "<p>Только агрегированные технические данные без промптов, ключей и снимков.</p>"
         "<table><thead><tr><th>Запуск</th><th>Статус</th><th>Создан</th><th>Завершён</th></tr></thead>"
