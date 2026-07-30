@@ -41,6 +41,7 @@ from app.saas.models import (
     GenerationArtifact,
     GenerationRun,
     Project,
+    ProjectVersion,
     Publication,
     PublicationRelease,
     Subscription,
@@ -196,8 +197,29 @@ async def _seed(factory):
         foreign = stored(foreign_run, 1)
         database.add_all([first, same_revision_other_run, draft, foreign])
         await database.flush()
+        first_version = ProjectVersion(
+            project_id=project.id,
+            ordinal=1,
+            run_id=run.id,
+            artifact_id=first.id,
+            kind="initial",
+        )
+        database.add(first_version)
+        await database.flush()
+        second_version = ProjectVersion(
+            project_id=project.id,
+            ordinal=2,
+            run_id=second_run.id,
+            artifact_id=same_revision_other_run.id,
+            parent_version_id=first_version.id,
+            kind="refinement",
+            change_request="Use the alternate verified version",
+        )
+        database.add(second_version)
+        await database.flush()
         project.active_run_id = run.id
         project.active_revision = 1
+        project.active_version_id = first_version.id
         return {
             "project": project.id,
             "foreign_project": foreign_project.id,
@@ -205,6 +227,8 @@ async def _seed(factory):
             "same_revision_other_run": same_revision_other_run.id,
             "draft": draft.id,
             "foreign": foreign.id,
+            "first_version": first_version.id,
+            "second_version": second_version.id,
         }
 
 
@@ -259,6 +283,9 @@ async def test_publish_is_artifact_idempotent_stable_and_immutable(publication_d
         assert await database.scalar(select(func.count()).select_from(PublicationRelease)) == 2
         original = await database.get(PublicationRelease, first.release_id)
         assert original.asset_manifest == first.manifest
+        assert original.project_version_id == ids["first_version"]
+        active = await database.get(PublicationRelease, second.release_id)
+        assert active.project_version_id == ids["second_version"]
 
 
 @pytest.mark.asyncio

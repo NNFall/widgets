@@ -11,6 +11,7 @@ from app.saas.models import (
     GenerationArtifact,
     GenerationRun,
     Project,
+    ProjectVersion,
 )
 from builder_lab.models import Stage
 from builder_lab.engines.base import BuilderEngineError
@@ -72,6 +73,10 @@ async def test_final_artifact_boundary_emits_first_artifact_and_free_result_once
                 ).scalars()
             )
             count = await database.scalar(select(func.count()).select_from(FunnelEvent))
+            version = await database.scalar(
+                select(ProjectVersion).where(ProjectVersion.project_id == project_id)
+            )
+            stored_project = await database.get(Project, project_id)
 
         assert count == 2
         assert [event.event_type for event in events] == [
@@ -82,6 +87,98 @@ async def test_final_artifact_boundary_emits_first_artifact_and_free_result_once
         assert {event.project_id for event in events} == {project_id}
         assert {event.artifact_id for event in events} == {stored_artifact.id}
         assert {event.journey_id for event in events} == {journey.id}
+        assert version.kind == "initial"
+        assert version.run_id == run_id
+        assert version.artifact_id == stored_artifact.id
+        assert stored_project.active_version_id == version.id
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_completed_refinement_creates_child_version_and_makes_it_active(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    try:
+        async with factory() as database, database.begin():
+            project = await database.get(Project, project_id)
+            initial_run = GenerationRun(
+                project_id=project_id,
+                mode="express",
+                state="completed",
+                progress=100,
+                idempotency_key="initial-version-source",
+            )
+            database.add(initial_run)
+            await database.flush()
+            initial_candidate = artifact(revision=1, stage=Stage.MOTION_POLISH)
+            initial_artifact = GenerationArtifact(
+                run_id=initial_run.id,
+                revision=1,
+                stage=initial_candidate.stage.value,
+                html=initial_candidate.body_html,
+                css=initial_candidate.css,
+                javascript=initial_candidate.javascript,
+                config={"artifact": initial_candidate.to_dict()},
+                quality_status="verified",
+            )
+            database.add(initial_artifact)
+            await database.flush()
+            initial_version = ProjectVersion(
+                project_id=project_id,
+                ordinal=1,
+                run_id=initial_run.id,
+                artifact_id=initial_artifact.id,
+                kind="initial",
+            )
+            database.add(initial_version)
+            await database.flush()
+            project.active_version_id = initial_version.id
+
+            refinement = GenerationRun(
+                project_id=project_id,
+                source_version_id=initial_version.id,
+                change_request="Сделай приветствие короче",
+                mode="express",
+                state="queued",
+                progress=80,
+                last_completed_stage="conversation",
+                next_event_sequence=1,
+                idempotency_key="refinement-version-run",
+            )
+            database.add(refinement)
+            await database.flush()
+            project.active_run_id = refinement.id
+            refinement_id = refinement.id
+
+        claim = await queue.claim("refinement-worker")
+        assert claim is not None
+        candidate = artifact(revision=1, stage=Stage.MOTION_POLISH)
+        await queue.stage_result(
+            claim,
+            StageResult(public_message="Refinement ready", artifact=candidate),
+        )
+        assert await queue.finalize_stage(claim) is None
+
+        async with factory() as database:
+            versions = list(
+                (
+                    await database.execute(
+                        select(ProjectVersion)
+                        .where(ProjectVersion.project_id == project_id)
+                        .order_by(ProjectVersion.ordinal)
+                    )
+                ).scalars()
+            )
+            project = await database.get(Project, project_id)
+
+        assert [version.kind for version in versions] == ["initial", "refinement"]
+        assert versions[1].parent_version_id == versions[0].id
+        assert versions[1].run_id == refinement_id
+        assert versions[1].change_request == "Сделай приветствие короче"
+        assert project.active_version_id == versions[1].id
     finally:
         await engine.dispose()
 

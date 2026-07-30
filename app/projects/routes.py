@@ -12,7 +12,7 @@ from weakref import WeakValueDictionary
 
 from aiohttp import web
 from aiohttp_session import get_session
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.analytics.service import (
     create_funnel_journey,
@@ -33,8 +33,22 @@ from app.chat import (
     ChatContext,
     ChatServiceError,
 )
-from app.projects.serializers import serialize_artifact, serialize_event, serialize_project, serialize_run
-from app.saas.models import GenerationArtifact, GenerationEvent, GenerationRun, Project, UserIdentity
+from app.projects.serializers import (
+    serialize_artifact,
+    serialize_event,
+    serialize_project,
+    serialize_project_version,
+    serialize_run,
+)
+from app.saas.models import (
+    GenerationArtifact,
+    GenerationEvent,
+    GenerationRun,
+    Project,
+    ProjectVersion,
+    Subscription,
+    UserIdentity,
+)
 from builder_lab.models import BuilderRequest, EngineName, WidgetArtifact
 from builder_lab.forensics.config import GenerationForensicsConfig
 from builder_lab.forensics.recorder import ensure_pending_forensic_manifest
@@ -169,6 +183,10 @@ async def _enqueue_express_run(
     user_id: int,
     key: str,
     generation_forensics: GenerationForensicsConfig,
+    *,
+    source_version_id: UUID | None = None,
+    change_request: str | None = None,
+    reserve_trial: bool = True,
 ):
     if project.journey_id is None:
         journey = await create_funnel_journey(database)
@@ -186,15 +204,18 @@ async def _enqueue_express_run(
         progress=0,
         next_event_sequence=2,
         idempotency_key=key,
+        source_version_id=source_version_id,
+        change_request=change_request,
     )
     database.add(run)
     await database.flush()
-    await TrialService(factory).reserve_trial_in_session(
-        database,
-        user_id,
-        run.id,
-        request_id=key,
-    )
+    if reserve_trial:
+        await TrialService(factory).reserve_trial_in_session(
+            database,
+            user_id,
+            run.id,
+            request_id=key,
+        )
     event_values = (
         {"id": secrets.randbits(62)}
         if database.get_bind().dialect.name == "sqlite"
@@ -380,6 +401,255 @@ async def get_project(request: web.Request) -> web.Response:
         )
         payload = serialize_project(project, active_run=active_run)
     return web.json_response(payload)
+
+
+async def list_project_versions(request: web.Request) -> web.Response:
+    user_id, tenant_id = await _scope(request)
+    factory = get_session_factory(request.app)
+    async with factory() as database:
+        project = await _owned_project(
+            database,
+            _uuid(request.match_info["project_id"]),
+            user_id,
+            tenant_id,
+        )
+        versions = list(
+            (
+                await database.execute(
+                    select(ProjectVersion)
+                    .where(ProjectVersion.project_id == project.id)
+                    .order_by(ProjectVersion.ordinal.desc())
+                )
+            ).scalars()
+        )
+    return web.json_response(
+        {
+            "active_version_id": (
+                str(project.active_version_id) if project.active_version_id else None
+            ),
+            "versions": [
+                serialize_project_version(
+                    version,
+                    active_version_id=project.active_version_id,
+                )
+                for version in versions
+            ],
+        }
+    )
+
+
+async def _require_active_subscription(database, user_id: int) -> None:
+    subscription_id = await database.scalar(
+        select(Subscription.id)
+        .where(
+            Subscription.user_id == user_id,
+            Subscription.status == "active",
+            Subscription.current_period_end > datetime.now(timezone.utc),
+        )
+        .limit(1)
+    )
+    if subscription_id is None:
+        raise web.HTTPConflict(
+            text=_error("upgrade_required"),
+            content_type="application/json",
+        )
+
+
+async def create_refinement(request: web.Request) -> web.Response:
+    user_id, tenant_id = await _scope(request, verified=True)
+    await _require_csrf(request)
+    key = _idempotency_key(request)
+    try:
+        body = await request.json()
+    except Exception as error:  # noqa: BLE001
+        raise web.HTTPBadRequest(
+            text=_error("invalid_json"), content_type="application/json"
+        ) from error
+    if not isinstance(body, dict) or set(body) != {"change_request"}:
+        raise web.HTTPBadRequest(
+            text=_error("invalid_body"), content_type="application/json"
+        )
+    change_request = body.get("change_request")
+    if not isinstance(change_request, str):
+        raise web.HTTPBadRequest(
+            text=_error("invalid_body"), content_type="application/json"
+        )
+    change_request = change_request.strip()
+    if not 1 <= len(change_request) <= 2_000:
+        raise web.HTTPBadRequest(
+            text=_error("invalid_body"), content_type="application/json"
+        )
+
+    project_id = _uuid(request.match_info["project_id"])
+    factory = get_session_factory(request.app)
+    async with _project_mutation_guard(factory, project_id):
+        async with factory() as database, database.begin():
+            project = await _owned_project(
+                database,
+                project_id,
+                user_id,
+                tenant_id,
+                lock=True,
+            )
+            await _require_active_subscription(database, user_id)
+            existing = await database.scalar(
+                select(GenerationRun).where(
+                    GenerationRun.project_id == project.id,
+                    GenerationRun.idempotency_key == key,
+                )
+            )
+            if existing is not None:
+                if (
+                    existing.source_version_id is None
+                    or existing.change_request != change_request
+                ):
+                    raise web.HTTPConflict(
+                        text=_error("idempotency_conflict"),
+                        content_type="application/json",
+                    )
+                run = existing
+            else:
+                if project.active_version_id is None:
+                    raise web.HTTPConflict(
+                        text=_error("version_unavailable"),
+                        content_type="application/json",
+                    )
+                active_run = (
+                    await database.get(GenerationRun, project.active_run_id)
+                    if project.active_run_id is not None
+                    else None
+                )
+                if active_run is not None and active_run.state not in TERMINAL_STATES:
+                    raise web.HTTPConflict(
+                        text=_error("project_busy"),
+                        content_type="application/json",
+                    )
+                source = await database.scalar(
+                    select(ProjectVersion).where(
+                        ProjectVersion.id == project.active_version_id,
+                        ProjectVersion.project_id == project.id,
+                    )
+                )
+                if source is None:
+                    raise web.HTTPConflict(
+                        text=_error("version_unavailable"),
+                        content_type="application/json",
+                    )
+                run = await _enqueue_express_run(
+                    database,
+                    factory,
+                    project,
+                    user_id,
+                    key,
+                    request.app[GENERATION_FORENSICS_CONFIG_KEY],
+                    source_version_id=source.id,
+                    change_request=change_request,
+                    reserve_trial=False,
+                )
+                await record_funnel_event(
+                    database,
+                    event_type="run_queued",
+                    event_key=f"run_queued:run:{run.id}",
+                    journey_id=run.journey_id,
+                    user_id=user_id,
+                    project_id=project.id,
+                    run_id=run.id,
+                )
+    return web.json_response(serialize_run(run), status=202)
+
+
+async def restore_project_version(request: web.Request) -> web.Response:
+    user_id, tenant_id = await _scope(request, verified=True)
+    await _require_csrf(request)
+    key = _idempotency_key(request)
+    project_id = _uuid(request.match_info["project_id"])
+    target_id = _uuid(request.match_info["version_id"])
+    factory = get_session_factory(request.app)
+    async with _project_mutation_guard(factory, project_id):
+        async with factory() as database, database.begin():
+            project = await _owned_project(
+                database,
+                project_id,
+                user_id,
+                tenant_id,
+                lock=True,
+            )
+            replay = await database.scalar(
+                select(ProjectVersion).where(
+                    ProjectVersion.project_id == project.id,
+                    ProjectVersion.idempotency_key == key,
+                )
+            )
+            if replay is not None:
+                if replay.kind != "restore" or replay.parent_version_id != target_id:
+                    raise web.HTTPConflict(
+                        text=_error("idempotency_conflict"),
+                        content_type="application/json",
+                    )
+                return web.json_response(
+                    {
+                        "version": serialize_project_version(
+                            replay,
+                            active_version_id=project.active_version_id,
+                        )
+                    }
+                )
+            active_run = (
+                await database.get(GenerationRun, project.active_run_id)
+                if project.active_run_id is not None
+                else None
+            )
+            if active_run is not None and active_run.state not in TERMINAL_STATES:
+                raise web.HTTPConflict(
+                    text=_error("project_busy"), content_type="application/json"
+                )
+            target = await database.scalar(
+                select(ProjectVersion).where(
+                    ProjectVersion.id == target_id,
+                    ProjectVersion.project_id == project.id,
+                )
+            )
+            if target is None:
+                raise web.HTTPNotFound(
+                    text=_error("not_found"), content_type="application/json"
+                )
+            artifact = await database.scalar(
+                select(GenerationArtifact).where(
+                    GenerationArtifact.id == target.artifact_id,
+                    GenerationArtifact.run_id == target.run_id,
+                    GenerationArtifact.quality_status.in_(("accepted", "verified")),
+                )
+            )
+            if artifact is None:
+                raise web.HTTPConflict(
+                    text=_error("version_unavailable"),
+                    content_type="application/json",
+                )
+            last_ordinal = await database.scalar(
+                select(func.max(ProjectVersion.ordinal)).where(
+                    ProjectVersion.project_id == project.id
+                )
+            )
+            restored = ProjectVersion(
+                project_id=project.id,
+                ordinal=int(last_ordinal or 0) + 1,
+                run_id=target.run_id,
+                artifact_id=target.artifact_id,
+                parent_version_id=target.id,
+                kind="restore",
+                idempotency_key=key,
+            )
+            database.add(restored)
+            await database.flush()
+            project.active_version_id = restored.id
+            project.active_run_id = target.run_id
+            project.active_revision = artifact.revision
+            project.status = "free_result_ready"
+            payload = serialize_project_version(
+                restored,
+                active_version_id=restored.id,
+            )
+    return web.json_response({"version": payload}, status=201)
 
 
 async def create_run(request: web.Request) -> web.Response:
@@ -991,6 +1261,14 @@ def setup_project_routes(
     app.router.add_post("/api/projects", create_project)
     app.router.add_get("/api/projects/{project_id}", get_project)
     app.router.add_patch("/api/projects/{project_id}", update_project_draft)
+    app.router.add_get("/api/projects/{project_id}/versions", list_project_versions)
+    app.router.add_post(
+        "/api/projects/{project_id}/refinements", create_refinement
+    )
+    app.router.add_post(
+        "/api/projects/{project_id}/versions/{version_id}/restore",
+        restore_project_version,
+    )
     app.router.add_post("/api/projects/{project_id}/runs", create_run)
     app.router.add_get("/api/runs/{run_id}", get_run)
     app.router.add_get(

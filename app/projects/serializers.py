@@ -2,8 +2,15 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
-from app.saas.models import GenerationArtifact, GenerationEvent, GenerationRun, Project
+from app.saas.models import (
+    GenerationArtifact,
+    GenerationEvent,
+    GenerationRun,
+    Project,
+    ProjectVersion,
+)
 from builder_lab.generation_events import project_public_generation_event
 
 
@@ -95,10 +102,39 @@ def serialize_project(project: Project, *, active_run: GenerationRun | None = No
         "brief": project.brief,
         "status": project.status,
         "active_revision": project.active_revision,
+        "active_version_id": (
+            str(project.active_version_id) if project.active_version_id else None
+        ),
         "active_run": serialize_run(active_run) if active_run is not None else None,
         "created_at": _timestamp(project.created_at),
         "updated_at": _timestamp(project.updated_at),
     }
 
 
-__all__ = ["serialize_artifact", "serialize_event", "serialize_project", "serialize_run"]
+def serialize_project_version(
+    version: ProjectVersion,
+    *,
+    active_version_id: UUID | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": str(version.id),
+        "ordinal": version.ordinal,
+        "kind": version.kind,
+        "change_request": version.change_request,
+        "parent_version_id": (
+            str(version.parent_version_id) if version.parent_version_id else None
+        ),
+        "run_id": str(version.run_id),
+        "artifact_id": str(version.artifact_id),
+        "active": version.id == active_version_id,
+        "created_at": _timestamp(version.created_at),
+    }
+
+
+__all__ = [
+    "serialize_artifact",
+    "serialize_event",
+    "serialize_project",
+    "serialize_project_version",
+    "serialize_run",
+]

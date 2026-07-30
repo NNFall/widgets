@@ -25,6 +25,7 @@ from app.saas.models import (
     GenerationRun,
     ModelCall,
     Project,
+    ProjectVersion,
     WorkerServiceLease,
 )
 from builder_lab.models import BuilderRequest, TokenUsage, WidgetArtifact
@@ -1564,6 +1565,80 @@ class PostgresWorkerQueue:
             artifact_id=artifact_record.id,
         )
 
+    @staticmethod
+    async def _record_project_version(
+        database: AsyncSession,
+        run: GenerationRun,
+    ) -> ProjectVersion:
+        artifact = await database.scalar(
+            select(GenerationArtifact)
+            .where(
+                GenerationArtifact.run_id == run.id,
+                GenerationArtifact.quality_status.in_(("accepted", "verified")),
+            )
+            .order_by(GenerationArtifact.revision.desc())
+            .limit(1)
+        )
+        if artifact is None:
+            raise RuntimeError("completed run has no verified artifact")
+        project = await database.scalar(
+            select(Project)
+            .where(Project.id == run.project_id)
+            .with_for_update()
+        )
+        if project is None:
+            raise RuntimeError("completed run project is missing")
+        version = await database.scalar(
+            select(ProjectVersion).where(
+                ProjectVersion.project_id == project.id,
+                ProjectVersion.run_id == run.id,
+                ProjectVersion.artifact_id == artifact.id,
+            )
+        )
+        if version is None:
+            last_ordinal = await database.scalar(
+                select(func.max(ProjectVersion.ordinal)).where(
+                    ProjectVersion.project_id == project.id
+                )
+            )
+            if run.source_version_id is None:
+                if last_ordinal is not None:
+                    raise RuntimeError(
+                        "a new project version requires an explicit source version"
+                    )
+                kind = "initial"
+                parent_version_id = None
+                change_request = None
+            else:
+                parent = await database.scalar(
+                    select(ProjectVersion.id).where(
+                        ProjectVersion.id == run.source_version_id,
+                        ProjectVersion.project_id == project.id,
+                    )
+                )
+                if parent is None:
+                    raise RuntimeError("refinement source version is invalid")
+                change_request = (run.change_request or "").strip()
+                if not 1 <= len(change_request) <= 2_000:
+                    raise RuntimeError("refinement change request is invalid")
+                kind = "refinement"
+                parent_version_id = parent
+            version = ProjectVersion(
+                project_id=project.id,
+                ordinal=int(last_ordinal or 0) + 1,
+                run_id=run.id,
+                artifact_id=artifact.id,
+                parent_version_id=parent_version_id,
+                kind=kind,
+                change_request=change_request,
+            )
+            database.add(version)
+            await database.flush()
+        project.active_version_id = version.id
+        project.active_run_id = run.id
+        project.active_revision = artifact.revision
+        return version
+
     async def fail_claim(
         self,
         claim: RunClaim,
@@ -2104,6 +2179,7 @@ class PostgresWorkerQueue:
         )
         if next_stage is None:
             await self._record_pattern_outcomes(database, run)
+            await self._record_project_version(database, run)
             run.state = "completed"
             run.progress = 100
             run.finished_at = now

@@ -139,9 +139,27 @@ export interface SaasProject {
   brief: string | null;
   status: string;
   active_revision: number | null;
+  active_version_id: string | null;
   active_run: SaasRunSnapshot | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface SaasProjectVersion {
+  id: string;
+  ordinal: number;
+  kind: 'initial' | 'refinement' | 'restore';
+  change_request: string | null;
+  parent_version_id: string | null;
+  run_id: string;
+  artifact_id: string;
+  active: boolean;
+  created_at: string;
+}
+
+export interface SaasProjectVersionList {
+  active_version_id: string | null;
+  versions: SaasProjectVersion[];
 }
 
 export interface SaasEvent {

@@ -5,15 +5,18 @@ import {
   builderUrl,
   cancelBuilderRun,
   cancelProjectRun,
+  createProjectRefinement,
   createProjectRun,
   createBuilderRun,
   getAuthSession,
   getBuilderRun,
   getProject,
+  getProjectVersions,
   getProjectRun,
   refineBuilderRun,
   retryBuilderRun,
   retryProjectRun,
+  restoreProjectVersion,
   streamProjectRunEvents,
   updateProjectDraft,
 } from './api';
@@ -25,6 +28,7 @@ import type {
   BuilderRunStatus,
   SaasEvent,
   SaasProject,
+  SaasProjectVersion,
   SaasRunSnapshot,
   StudioError,
   TokenUsage,
@@ -128,10 +132,12 @@ export interface BuilderRunController {
   connection: 'idle' | 'streaming' | 'polling';
   isHydrating: boolean;
   mutationPending: boolean;
+  versions: SaasProjectVersion[];
   createRun: (input: BuilderRunInput) => Promise<void>;
   cancelRun: () => Promise<void>;
   retryRun: () => Promise<void>;
   refineRun: (message: string) => Promise<void>;
+  restoreVersion: (versionId: string) => Promise<void>;
   clearError: () => void;
 }
 
@@ -451,10 +457,12 @@ function useLegacyBuilderRun(enabled: boolean): BuilderRunController {
     connection,
     isHydrating,
     mutationPending,
+    versions: [],
     createRun,
     cancelRun,
     retryRun,
     refineRun,
+    restoreVersion: async () => undefined,
     clearError: () => setError(null),
   };
 }
@@ -627,6 +635,19 @@ function retryIdempotencyKey(runId: string) {
   return runKey;
 }
 
+function versionMutationKey(
+  operation: 'refine' | 'restore',
+  sourceVersionId: string,
+  value: string,
+) {
+  let hash = 0x811c9dc5;
+  for (const character of value.trim()) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `${operation}-${sourceVersionId}-${(hash >>> 0).toString(16)}`;
+}
+
 function activityFor(status: BuilderRunStatus) {
   if (status === 'queued' || status === 'created') return 'Запуск в очереди';
   if (status === 'running') return 'Генерация выполняется';
@@ -645,6 +666,7 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
   const [connection, setConnection] = useState<'idle' | 'streaming' | 'polling'>('idle');
   const [isHydrating, setIsHydrating] = useState(Boolean(projectId));
   const [mutationPending, setMutationPending] = useState(false);
+  const [versions, setVersions] = useState<SaasProjectVersion[]>([]);
   const [csrfToken, setCsrfToken] = useState<string | null>(null);
   const csrfRef = useRef<string | null>(null);
   const projectRef = useRef<SaasProject | null>(null);
@@ -715,6 +737,11 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
         } else {
           setActivityMessage('Проект готов к запуску');
         }
+        const versionList = await getProjectVersions(projectId, abort.signal)
+          .catch(() => null);
+        if (!abort.signal.aborted && versionList) {
+          setVersions(versionList.versions);
+        }
       } catch (caught) {
         if (!abort.signal.aborted) {
           setError(saasError(caught, 'Не удалось загрузить проект.'));
@@ -727,6 +754,27 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     void hydrate();
     return () => abort.abort();
   }, [applyRun, projectId]);
+
+  useEffect(() => {
+    if (!projectId || snapshot?.status !== 'completed') return;
+    const abort = new AbortController();
+    void getProjectVersions(projectId, abort.signal)
+      .then((versionList) => {
+        if (abort.signal.aborted) return;
+        setVersions(versionList.versions);
+        const owner = projectRef.current;
+        if (owner) {
+          const updated = {
+            ...owner,
+            active_version_id: versionList.active_version_id,
+          };
+          projectRef.current = updated;
+          setProject(updated);
+        }
+      })
+      .catch(() => undefined);
+    return () => abort.abort();
+  }, [projectId, snapshot?.run_id, snapshot?.status]);
 
   useEffect(() => {
     if (!projectId || !runId || TERMINAL_STATUSES.has(snapshot?.status ?? 'created')) {
@@ -920,13 +968,84 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     }
   }, [applyRun]);
 
-  const unavailable = useCallback(async () => {
-    setError({
-      message: 'Дальнейшая доработка будет доступна на тарифе.',
-      raw: 'billing_not_implemented',
-      code: 'upgrade_required',
-    });
-  }, []);
+  const refineRun: BuilderRunController['refineRun'] = useCallback(async (message) => {
+    const owner = projectRef.current;
+    const csrf = csrfRef.current;
+    const changeRequest = message.trim();
+    if (
+      !projectId
+      || !owner
+      || !owner.active_version_id
+      || !csrf
+      || !changeRequest
+      || mutationPendingRef.current
+    ) return;
+    mutationPendingRef.current = true;
+    setMutationPending(true);
+    setError(null);
+    setActivityMessage('Запускаем управляемую доработку');
+    try {
+      const run = await createProjectRefinement(
+        projectId,
+        changeRequest,
+        csrf,
+        versionMutationKey('refine', owner.active_version_id, changeRequest),
+      );
+      const updated = { ...owner, status: run.status, active_run: run };
+      projectRef.current = updated;
+      setProject(updated);
+      applyRun(updated, run);
+    } catch (caught) {
+      setError(saasError(caught, 'Не удалось запустить доработку.'));
+      setActivityMessage('Доработка не запущена');
+    } finally {
+      mutationPendingRef.current = false;
+      setMutationPending(false);
+    }
+  }, [applyRun, projectId]);
+
+  const restoreVersion: BuilderRunController['restoreVersion'] = useCallback(async (versionId) => {
+    const owner = projectRef.current;
+    const csrf = csrfRef.current;
+    if (
+      !projectId
+      || !owner
+      || !owner.active_version_id
+      || !csrf
+      || mutationPendingRef.current
+      || versionId === owner.active_version_id
+    ) return;
+    mutationPendingRef.current = true;
+    setMutationPending(true);
+    setError(null);
+    setActivityMessage('Восстанавливаем выбранную версию');
+    try {
+      await restoreProjectVersion(
+        projectId,
+        versionId,
+        csrf,
+        versionMutationKey('restore', owner.active_version_id, versionId),
+      );
+      const [updated, versionList] = await Promise.all([
+        getProject(projectId),
+        getProjectVersions(projectId),
+      ]);
+      projectRef.current = updated;
+      setProject(updated);
+      setVersions(versionList.versions);
+      if (updated.active_run) {
+        const run = await getProjectRun(updated.active_run.id);
+        applyRun(updated, run);
+      }
+      setActivityMessage('Версия восстановлена');
+    } catch (caught) {
+      setError(saasError(caught, 'Не удалось восстановить версию.'));
+      setActivityMessage('Версия не восстановлена');
+    } finally {
+      mutationPendingRef.current = false;
+      setMutationPending(false);
+    }
+  }, [applyRun, projectId]);
 
   return {
     project,
@@ -940,10 +1059,12 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     connection,
     isHydrating,
     mutationPending,
+    versions,
     createRun,
     cancelRun,
     retryRun,
-    refineRun: unavailable,
+    refineRun,
+    restoreVersion,
     clearError: () => setError(null),
   };
 }

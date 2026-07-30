@@ -9,6 +9,7 @@ import type {
   BuilderRunSnapshot,
   SaasEvent,
   SaasProject,
+  SaasProjectVersionList,
   SaasRunSnapshot,
 } from './types';
 
@@ -198,6 +199,51 @@ export function disableBillingAutoRenew(
 
 export function getProject(projectId: string) {
   return saasRequestJson<SaasProject>(`/api/projects/${encodeURIComponent(projectId)}`);
+}
+
+export function getProjectVersions(projectId: string, signal?: AbortSignal) {
+  return saasRequestJson<SaasProjectVersionList>(
+    `/api/projects/${encodeURIComponent(projectId)}/versions`,
+    { signal },
+  );
+}
+
+export function createProjectRefinement(
+  projectId: string,
+  changeRequest: string,
+  csrfToken: string,
+  idempotencyKey: string,
+) {
+  return saasRequestJson<SaasRunSnapshot>(
+    `/api/projects/${encodeURIComponent(projectId)}/refinements`,
+    {
+      method: 'POST',
+      headers: {
+        'Idempotency-Key': idempotencyKey,
+        'X-CSRF-Token': csrfToken,
+      },
+      body: JSON.stringify({ change_request: changeRequest }),
+    },
+  );
+}
+
+export function restoreProjectVersion(
+  projectId: string,
+  versionId: string,
+  csrfToken: string,
+  idempotencyKey: string,
+) {
+  return saasRequestJson<{ version: SaasProjectVersionList['versions'][number] }>(
+    `/api/projects/${encodeURIComponent(projectId)}/versions/${encodeURIComponent(versionId)}/restore`,
+    {
+      method: 'POST',
+      headers: {
+        'Idempotency-Key': idempotencyKey,
+        'X-CSRF-Token': csrfToken,
+      },
+      body: '{}',
+    },
+  );
 }
 
 export function getProjectPublication(projectId: string, signal?: AbortSignal) {

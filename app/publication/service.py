@@ -20,6 +20,7 @@ from app.saas.models import (
     GenerationArtifact,
     GenerationRun,
     Project,
+    ProjectVersion,
     Publication,
     PublicationRelease,
     Subscription,
@@ -196,6 +197,26 @@ class PublicationService:
                 )
                 return self._snapshot(publication, existing, created=False)
 
+            project_version = None
+            if project.active_version_id is not None:
+                project_version = await database.scalar(
+                    select(ProjectVersion).where(
+                        ProjectVersion.id == project.active_version_id,
+                        ProjectVersion.project_id == project.id,
+                        ProjectVersion.artifact_id == artifact.id,
+                    )
+                )
+            if project_version is None:
+                project_version = await database.scalar(
+                    select(ProjectVersion)
+                    .where(
+                        ProjectVersion.project_id == project.id,
+                        ProjectVersion.artifact_id == artifact.id,
+                    )
+                    .order_by(ProjectVersion.ordinal.desc())
+                    .limit(1)
+                )
+
             manifest = {
                 "version": 1,
                 "artifact_id": str(artifact.id),
@@ -216,6 +237,9 @@ class PublicationService:
                 id=uuid4(),
                 publication_id=publication.id,
                 artifact_id=artifact.id,
+                project_version_id=(
+                    project_version.id if project_version is not None else None
+                ),
                 previous_release_id=publication.active_release_id,
                 revision=artifact.revision,
                 asset_manifest=manifest,

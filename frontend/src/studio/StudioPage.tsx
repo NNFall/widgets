@@ -130,9 +130,9 @@ export function StudioPage() {
   const running = status === 'created' || status === 'queued' || status === 'running';
   const controlsLocked = running || controller.mutationPending;
   const progress = progressFor(controller.snapshot, controller.events.length);
-  const refinable = !controller.projectMode && status === 'completed'
-    && controller.snapshot?.request.engine === 'direct'
-    && Boolean(artifact);
+  const refinable = status === 'completed'
+    && Boolean(artifact)
+    && (controller.projectMode || controller.snapshot?.request.engine === 'direct');
 
   useEffect(() => {
     const next = controller.snapshot;
@@ -441,13 +441,7 @@ export function StudioPage() {
 
           <StudioTimeline events={controller.events} running={running} />
 
-          {controller.projectMode ? (
-            <div className="studio-refine">
-              <strong>Проверка диалога</strong>
-              <p>Чат в предпросмотре проверяет ответы виджета, но не изменяет его.</p>
-            </div>
-          ) : (
-            <form className="studio-refine" onSubmit={submitRefinement}>
+          <form className="studio-refine" onSubmit={submitRefinement}>
               <label htmlFor="studio-refinement">Что изменить в виджете?</label>
               <div>
                 <textarea
@@ -474,8 +468,43 @@ export function StudioPage() {
                   <PaperPlaneTilt aria-hidden size={19} weight="fill" />
                 </button>
               </div>
-              <p>{refinable ? 'Ctrl + Enter тоже отправляет пожелание' : 'Доработка откроется после проверенной версии'}</p>
-            </form>
+              <p>{refinable
+                ? controller.projectMode
+                  ? 'Доработка запускается на тарифе и сохраняется новой версией'
+                  : 'Ctrl + Enter тоже отправляет пожелание'
+                : 'Доработка откроется после проверенной версии'}</p>
+          </form>
+
+          {controller.projectMode && controller.versions.length > 0 && (
+            <section className="studio-versions" aria-label="История версий">
+              <header>
+                <strong>История версий</strong>
+                <span>{controller.versions.length}</span>
+              </header>
+              <div>
+                {controller.versions.map((version) => (
+                  <article key={version.id} className={version.active ? 'is-active' : undefined}>
+                    <div>
+                      <strong>Версия {version.ordinal}</strong>
+                      <span>{version.kind === 'initial'
+                        ? 'Первая версия'
+                        : version.kind === 'restore'
+                          ? 'Восстановленная версия'
+                          : 'Доработка'}</span>
+                    </div>
+                    {version.change_request && <p>{version.change_request}</p>}
+                    <button
+                      type="button"
+                      disabled={version.active || running || controller.mutationPending}
+                      onClick={() => void controller.restoreVersion(version.id)}
+                      aria-label={`Восстановить версию ${version.ordinal}`}
+                    >
+                      {version.active ? 'Активна' : 'Восстановить'}
+                    </button>
+                  </article>
+                ))}
+              </div>
+            </section>
           )}
         </motion.aside>
 

@@ -2,16 +2,82 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 import {
   createBillingCheckout,
+  createProjectRefinement,
   disableBillingAutoRenew,
   getBillingPayment,
   getPendingBillingPayment,
   getBillingSubscription,
   getProjectPublication,
+  getProjectVersions,
   publishProject,
   rollbackPublication,
+  restoreProjectVersion,
   resumeBillingPayment,
   sendPreviewChat,
 } from './api';
+
+it('lists versions and sends CSRF-protected refinement and restore requests', async () => {
+  const versions = {
+    active_version_id: 'version-2',
+    versions: [{
+      id: 'version-2',
+      ordinal: 2,
+      kind: 'refinement',
+      change_request: 'Сделай приветствие короче',
+      parent_version_id: 'version-1',
+      run_id: 'run-2',
+      artifact_id: 'artifact-2',
+      active: true,
+      created_at: '2026-07-30T08:00:00Z',
+    }],
+  };
+  const run = { id: 'run-3', project_id: 'project/123', status: 'queued' };
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify(versions), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    .mockResolvedValueOnce(new Response(JSON.stringify(run), {
+      status: 202,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ version: versions.versions[0] }), {
+      status: 201,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+  vi.stubGlobal('fetch', fetchMock);
+
+  await expect(getProjectVersions('project/123')).resolves.toEqual(versions);
+  await expect(createProjectRefinement(
+    'project/123',
+    'Сделай приветствие короче',
+    'csrf-version',
+    'refine-key',
+  )).resolves.toMatchObject({ id: 'run-3' });
+  await expect(restoreProjectVersion(
+    'project/123',
+    'version/2',
+    'csrf-version',
+    'restore-key',
+  )).resolves.toEqual({ version: versions.versions[0] });
+
+  const [listUrl, listInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+  expect(listUrl).toBe('/api/projects/project%2F123/versions');
+  expect(listInit.credentials).toBe('include');
+
+  const [refineUrl, refineInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+  expect(refineUrl).toBe('/api/projects/project%2F123/refinements');
+  expect(new Headers(refineInit.headers).get('X-CSRF-Token')).toBe('csrf-version');
+  expect(new Headers(refineInit.headers).get('Idempotency-Key')).toBe('refine-key');
+  expect(JSON.parse(String(refineInit.body))).toEqual({
+    change_request: 'Сделай приветствие короче',
+  });
+
+  const [restoreUrl, restoreInit] = fetchMock.mock.calls[2] as [string, RequestInit];
+  expect(restoreUrl).toBe('/api/projects/project%2F123/versions/version%2F2/restore');
+  expect(new Headers(restoreInit.headers).get('X-CSRF-Token')).toBe('csrf-version');
+  expect(new Headers(restoreInit.headers).get('Idempotency-Key')).toBe('restore-key');
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();

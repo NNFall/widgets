@@ -35,6 +35,7 @@ function project(activeRun: Record<string, unknown> | null = null) {
     brief: 'Спокойный консультант по услугам',
     status: activeRun ? activeRun.status : 'draft',
     active_revision: null,
+    active_version_id: activeRun?.status === 'completed' ? 'version-1' : null,
     active_run: activeRun,
     created_at: '2026-07-28T10:00:00+00:00',
     updated_at: '2026-07-28T10:00:00+00:00',
@@ -668,9 +669,9 @@ describe('durable SaaS Studio flow', () => {
     expect((await screen.findAllByText('Готово')).length).toBeGreaterThanOrEqual(1);
     expect(await screen.findByText('Бесплатный результат готов')).toBeVisible();
     expect(await screen.findByRole('button', { name: 'Опубликовать и подключить' })).toBeEnabled();
-    expect(screen.queryByLabelText('Что изменить в виджете?')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Что изменить в виджете?')).toBeVisible();
     expect(screen.getByText(
-      'Чат в предпросмотре проверяет ответы виджета, но не изменяет его.',
+      'Доработка запускается на тарифе и сохраняется новой версией',
     )).toBeVisible();
   });
 
@@ -729,5 +730,185 @@ describe('durable SaaS Studio flow', () => {
       brief: 'Новое пожелание',
     });
     expect(new Headers(requests[updateIndex].init?.headers).get('X-CSRF-Token')).toBe('csrf-for-studio');
+  });
+
+  it('starts a paid project refinement and renders version history', async () => {
+    const completed = run({
+      status: 'completed',
+      state: 'completed',
+      progress: 100,
+      preview: {
+        id: 'artifact-version-1',
+        revision: 1,
+        body_html: '<main>Ready</main>',
+        css: '',
+        javascript: '',
+        quality_status: 'verified',
+        source: 'accepted_artifact',
+      },
+    });
+    const refinement = run({
+      id: 'run-refinement-2',
+      status: 'queued',
+      state: 'queued',
+      latest_sequence: 0,
+      preview: null,
+    });
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(completed));
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(completed);
+      if (url === `/api/projects/${PROJECT_ID}/versions`) {
+        return jsonResponse({
+          active_version_id: 'version-1',
+          versions: [{
+            id: 'version-1',
+            ordinal: 1,
+            kind: 'initial',
+            change_request: null,
+            parent_version_id: null,
+            run_id: RUN_ID,
+            artifact_id: 'artifact-version-1',
+            active: true,
+            created_at: '2026-07-30T08:00:00Z',
+          }],
+        });
+      }
+      if (url === `/api/projects/${PROJECT_ID}/refinements`) {
+        return jsonResponse(refinement, 202);
+      }
+      if (url === '/api/runs/run-refinement-2/events') return emptyEventStream();
+      if (url === '/api/runs/run-refinement-2') return jsonResponse(refinement);
+      if (url === '/api/billing/subscription') return jsonResponse({ subscription: null });
+      if (url === '/api/billing/payments/pending') {
+        return jsonResponse({ payment: null, checkout_url: null });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    const user = userEvent.setup();
+
+    render(<StudioPage />);
+
+    expect(await screen.findByRole('region', { name: 'История версий' })).toBeVisible();
+    await user.type(
+      screen.getByLabelText('Что изменить в виджете?'),
+      'Сделай приветствие короче',
+    );
+    await user.click(screen.getByRole('button', { name: 'Применить изменение' }));
+
+    await waitFor(() => expect(requests.some(
+      ({ url }) => url === `/api/projects/${PROJECT_ID}/refinements`,
+    )).toBe(true));
+    const request = requests.find(
+      ({ url }) => url === `/api/projects/${PROJECT_ID}/refinements`,
+    )!;
+    expect(JSON.parse(String(request.init?.body))).toEqual({
+      change_request: 'Сделай приветствие короче',
+    });
+    expect(new Headers(request.init?.headers).get('X-CSRF-Token')).toBe('csrf-for-studio');
+    expect(new Headers(request.init?.headers).get('Idempotency-Key')).toMatch(/^refine-version-1-/);
+  });
+
+  it('restores an earlier verified project version', async () => {
+    const current = run({
+      status: 'completed',
+      state: 'completed',
+      progress: 100,
+      preview: {
+        id: 'artifact-version-2',
+        revision: 2,
+        body_html: '<main>Version 2</main>',
+        css: '',
+        javascript: '',
+        quality_status: 'verified',
+        source: 'accepted_artifact',
+      },
+    });
+    const oldRun = run({
+      id: 'run-version-1',
+      status: 'completed',
+      state: 'completed',
+      progress: 100,
+      preview: {
+        id: 'artifact-version-1',
+        revision: 1,
+        body_html: '<main>Version 1</main>',
+        css: '',
+        javascript: '',
+        quality_status: 'verified',
+        source: 'accepted_artifact',
+      },
+    });
+    let restored = false;
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) {
+        return jsonResponse({
+          ...project(restored ? oldRun : current),
+          active_version_id: restored ? 'version-3' : 'version-2',
+        });
+      }
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(current);
+      if (url === '/api/runs/run-version-1') return jsonResponse(oldRun);
+      if (url === `/api/projects/${PROJECT_ID}/versions`) {
+        const base = [
+          {
+            id: 'version-2', ordinal: 2, kind: 'refinement',
+            change_request: 'Добавь ответы', parent_version_id: 'version-1',
+            run_id: RUN_ID, artifact_id: 'artifact-version-2',
+            active: !restored, created_at: '2026-07-30T09:00:00Z',
+          },
+          {
+            id: 'version-1', ordinal: 1, kind: 'initial',
+            change_request: null, parent_version_id: null,
+            run_id: 'run-version-1', artifact_id: 'artifact-version-1',
+            active: false, created_at: '2026-07-30T08:00:00Z',
+          },
+        ];
+        return jsonResponse({
+          active_version_id: restored ? 'version-3' : 'version-2',
+          versions: restored
+            ? [{
+                id: 'version-3', ordinal: 3, kind: 'restore',
+                change_request: null, parent_version_id: 'version-1',
+                run_id: 'run-version-1', artifact_id: 'artifact-version-1',
+                active: true, created_at: '2026-07-30T10:00:00Z',
+              }, ...base]
+            : base,
+        });
+      }
+      if (url === `/api/projects/${PROJECT_ID}/versions/version-1/restore`) {
+        restored = true;
+        return jsonResponse({ version: { id: 'version-3' } }, 201);
+      }
+      if (url === '/api/billing/subscription') return jsonResponse({ subscription: null });
+      if (url === '/api/billing/payments/pending') {
+        return jsonResponse({ payment: null, checkout_url: null });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    const user = userEvent.setup();
+
+    render(<StudioPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Восстановить версию 1' }));
+
+    await waitFor(() => expect(restored).toBe(true));
+    await waitFor(() => expect(
+      screen.getAllByText('Версия восстановлена').length,
+    ).toBeGreaterThan(0));
+    const request = requests.find(
+      ({ url }) => url === `/api/projects/${PROJECT_ID}/versions/version-1/restore`,
+    )!;
+    expect(new Headers(request.init?.headers).get('Idempotency-Key')).toMatch(
+      /^restore-version-2-/,
+    );
+    expect(JSON.parse(String(request.init?.body))).toEqual({});
   });
 });
