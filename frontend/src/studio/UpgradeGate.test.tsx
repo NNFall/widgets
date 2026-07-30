@@ -82,7 +82,7 @@ describe('UpgradeGate', () => {
       created: true,
     });
 
-    render(<UpgradeGate csrfToken="csrf-billing" />);
+    render(<UpgradeGate csrfToken="csrf-billing" projectId="project-123" />);
     await act(async () => {
       await Promise.resolve();
     });
@@ -95,6 +95,7 @@ describe('UpgradeGate', () => {
       'starter_monthly',
       'csrf-billing',
       'checkout-request-123',
+      'project-123',
       false,
     );
     expect(open).toHaveBeenCalledWith('about:blank', '_blank');
@@ -112,7 +113,7 @@ describe('UpgradeGate', () => {
       created: true,
     });
 
-    render(<UpgradeGate csrfToken="csrf-billing" />);
+    render(<UpgradeGate csrfToken="csrf-billing" projectId="project-123" />);
     await act(async () => {
       await Promise.resolve();
     });
@@ -129,6 +130,7 @@ describe('UpgradeGate', () => {
       'starter_monthly',
       'csrf-billing',
       'checkout-request-123',
+      'project-123',
       true,
     );
   });
@@ -143,7 +145,7 @@ describe('UpgradeGate', () => {
         created: false,
       });
 
-    render(<UpgradeGate csrfToken="csrf-billing" />);
+    render(<UpgradeGate csrfToken="csrf-billing" projectId="project-123" />);
     await act(async () => {
       await Promise.resolve();
     });
@@ -163,6 +165,7 @@ describe('UpgradeGate', () => {
       'starter_monthly',
       'csrf-billing',
       'checkout-request-123',
+      'project-123',
       false,
     );
     expect(api.createBillingCheckout).toHaveBeenNthCalledWith(
@@ -170,6 +173,7 @@ describe('UpgradeGate', () => {
       'starter_monthly',
       'csrf-billing',
       'checkout-request-123',
+      'project-123',
       false,
     );
   });
@@ -191,7 +195,13 @@ describe('UpgradeGate', () => {
         subscription: activeSubscription,
       });
 
-    render(<UpgradeGate csrfToken="csrf-billing" pollIntervalMs={100} />);
+    render(
+      <UpgradeGate
+        csrfToken="csrf-billing"
+        projectId="project-123"
+        pollIntervalMs={100}
+      />,
+    );
     await act(async () => {
       await Promise.resolve();
     });
@@ -309,7 +319,13 @@ describe('UpgradeGate', () => {
       payment: { ...payment, status: 'cancelled' },
     });
 
-    render(<UpgradeGate csrfToken="csrf-billing" pollIntervalMs={100} />);
+    render(
+      <UpgradeGate
+        csrfToken="csrf-billing"
+        projectId="project-123"
+        pollIntervalMs={100}
+      />,
+    );
     await act(async () => {
       await Promise.resolve();
     });
@@ -328,6 +344,7 @@ describe('UpgradeGate', () => {
       'starter_monthly',
       'csrf-billing',
       '00000000-0000-4000-8000-000000000001',
+      'project-123',
       false,
     );
     expect(api.createBillingCheckout).toHaveBeenNthCalledWith(
@@ -335,6 +352,7 @@ describe('UpgradeGate', () => {
       'starter_monthly',
       'csrf-billing',
       '00000000-0000-4000-8000-000000000002',
+      'project-123',
       false,
     );
   });

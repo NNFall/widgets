@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from urllib.parse import parse_qs, urlsplit
+from uuid import UUID
 
 import pytest
 from aiohttp import web
@@ -13,7 +14,14 @@ from app.auth.routes import OAUTH_PROVIDERS_KEY, setup_auth_routes
 from app.auth.session_storage import DatabaseSessionStorage
 from app.db.base import Base
 from app.db.session import SESSION_FACTORY_KEY
-from app.saas.models import FunnelEvent, OAuthState, Project
+from app.saas.models import (
+    AnonymousDraft,
+    FunnelEvent,
+    FunnelJourney,
+    GenerationRun,
+    OAuthState,
+    Project,
+)
 from tests.saas_cases.test_auth_routes import FakeProvider
 from tests.saas_cases.test_project_routes import _project_app
 
@@ -75,8 +83,10 @@ async def test_draft_and_oauth_boundaries_emit_only_server_owned_funnel_events()
         assert completed.status == 302
 
         async with factory() as database:
+            stored_draft = await database.get(AnonymousDraft, UUID(draft["id"]))
             state = await database.scalar(select(OAuthState))
             project = await database.scalar(select(Project))
+            journeys = list((await database.execute(select(FunnelJourney))).scalars())
             events = list((await database.execute(select(FunnelEvent))).scalars())
 
         by_type = {event.event_type: event for event in events}
@@ -85,6 +95,12 @@ async def test_draft_and_oauth_boundaries_emit_only_server_owned_funnel_events()
             "auth_started",
             "auth_completed",
         }
+        assert len(journeys) == 1
+        journey = journeys[0]
+        assert stored_draft.journey_id == journey.id
+        assert state.journey_id == journey.id
+        assert project.journey_id == journey.id
+        assert {event.journey_id for event in events} == {journey.id}
         composed = by_type["composer_submitted"]
         started_event = by_type["auth_started"]
         completed_event = by_type["auth_completed"]
@@ -148,6 +164,8 @@ async def test_run_queue_replay_emits_one_run_queued_event(tmp_path) -> None:
         replay_payload = await replay.json()
 
         async with factory() as database:
+            project = await database.get(Project, project_id)
+            run = await database.get(GenerationRun, UUID(first_payload["id"]))
             events = list((await database.execute(select(FunnelEvent))).scalars())
             count = await database.scalar(select(func.count()).select_from(FunnelEvent))
 
@@ -155,6 +173,9 @@ async def test_run_queue_replay_emits_one_run_queued_event(tmp_path) -> None:
         assert replay_payload["id"] == first_payload["id"]
         assert count == 1
         assert events[0].event_type == "run_queued"
+        assert project.journey_id is not None
+        assert run.journey_id == project.journey_id
+        assert events[0].journey_id == project.journey_id
         assert events[0].event_key == f"run_queued:run:{first_payload['id']}"
         assert events[0].user_id == 10
         assert events[0].project_id == project_id

@@ -157,6 +157,7 @@ class PublicationService:
             if publication is None:
                 publication = Publication(
                     project_id=project.id,
+                    journey_id=project.journey_id,
                     stable_key=secrets.token_urlsafe(24),
                     allowed_domains=list(domains),
                     state="draft",
@@ -165,6 +166,8 @@ class PublicationService:
                 await database.flush()
             else:
                 publication.allowed_domains = list(domains)
+                if publication.journey_id is None:
+                    publication.journey_id = project.journey_id
 
             existing = await database.scalar(
                 select(PublicationRelease).where(
@@ -184,6 +187,7 @@ class PublicationService:
                     database,
                     event_type="published",
                     event_key=f"published:publication:{publication.id}",
+                    journey_id=publication.journey_id,
                     user_id=actor_user_id,
                     project_id=project.id,
                     run_id=artifact.run_id,
@@ -229,6 +233,7 @@ class PublicationService:
                 database,
                 event_type="published",
                 event_key=f"published:publication:{publication.id}",
+                journey_id=publication.journey_id,
                 user_id=actor_user_id,
                 project_id=project.id,
                 run_id=artifact.run_id,

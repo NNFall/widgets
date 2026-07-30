@@ -135,6 +135,7 @@ export function createBillingCheckout(
   planCode: string,
   csrfToken: string,
   idempotencyKey: string,
+  projectId: string,
   autoRenew = false,
 ) {
   return saasRequestJson<BillingCheckout>('/api/billing/checkout', {
@@ -143,7 +144,11 @@ export function createBillingCheckout(
       'Idempotency-Key': idempotencyKey,
       'X-CSRF-Token': csrfToken,
     },
-    body: JSON.stringify({ plan_code: planCode, auto_renew: autoRenew }),
+    body: JSON.stringify({
+      plan_code: planCode,
+      project_id: projectId,
+      auto_renew: autoRenew,
+    }),
   });
 }
 

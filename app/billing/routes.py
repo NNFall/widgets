@@ -103,7 +103,7 @@ async def create_checkout(request: web.Request) -> web.Response:
         ) from error
     if (
         not isinstance(payload, dict)
-        or not set(payload).issubset({"plan_code", "auto_renew"})
+        or not set(payload).issubset({"plan_code", "project_id", "auto_renew"})
         or "plan_code" not in payload
     ):
         return web.json_response(
@@ -114,15 +114,25 @@ async def create_checkout(request: web.Request) -> web.Response:
             status=400,
         )
     plan_code = payload.get("plan_code")
+    raw_project_id = payload.get("project_id")
     auto_renew = payload.get("auto_renew", False)
     idempotency_key = request.headers.get("Idempotency-Key", "")
-    if not isinstance(plan_code, str) or not isinstance(auto_renew, bool):
+    if (
+        not isinstance(plan_code, str)
+        or not isinstance(auto_renew, bool)
+        or (raw_project_id is not None and not isinstance(raw_project_id, str))
+    ):
         return web.json_response(_error("invalid_plan", "Тариф не выбран"), status=400)
+    try:
+        project_id = UUID(raw_project_id) if isinstance(raw_project_id, str) else None
+    except ValueError:
+        return web.json_response(_error("invalid_request", "invalid project"), status=400)
     try:
         result = await _service(request).create_checkout(
             user_id,
             plan_code,
             idempotency_key,
+            project_id=project_id,
             auto_renew=auto_renew,
         )
     except (UnknownPlan, ValueError):

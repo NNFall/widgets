@@ -5,7 +5,13 @@ from datetime import datetime, timezone
 import pytest
 from sqlalchemy import func, select
 
-from app.saas.models import FunnelEvent, GenerationArtifact, GenerationRun
+from app.saas.models import (
+    FunnelEvent,
+    FunnelJourney,
+    GenerationArtifact,
+    GenerationRun,
+    Project,
+)
 from builder_lab.models import Stage
 from builder_lab.engines.base import BuilderEngineError
 from builder_lab.worker import PostgresWorkerQueue, StageResult
@@ -21,8 +27,14 @@ async def test_final_artifact_boundary_emits_first_artifact_and_free_result_once
     queue = PostgresWorkerQueue(factory, lease_seconds=30)
     try:
         async with factory() as database, database.begin():
+            journey = FunnelJourney(campaign_source="telegram")
+            database.add(journey)
+            await database.flush()
+            project = await database.get(Project, project_id)
+            project.journey_id = journey.id
             run = GenerationRun(
                 project_id=project_id,
+                journey_id=journey.id,
                 mode="express",
                 state="queued",
                 progress=80,
@@ -69,6 +81,7 @@ async def test_final_artifact_boundary_emits_first_artifact_and_free_result_once
         assert {event.run_id for event in events} == {run_id}
         assert {event.project_id for event in events} == {project_id}
         assert {event.artifact_id for event in events} == {stored_artifact.id}
+        assert {event.journey_id for event in events} == {journey.id}
     finally:
         await engine.dispose()
 
@@ -82,8 +95,12 @@ async def test_terminal_failure_emits_free_result_when_verified_artifact_survive
     try:
         candidate = artifact(revision=1, stage=Stage.CONVERSATION)
         async with factory() as database, database.begin():
+            journey = FunnelJourney(campaign_source="telegram")
+            database.add(journey)
+            await database.flush()
             run = GenerationRun(
                 project_id=project_id,
+                journey_id=journey.id,
                 mode="express",
                 state="queued",
                 progress=80,
@@ -129,5 +146,6 @@ async def test_terminal_failure_emits_free_result_when_verified_artifact_survive
         assert event is not None
         assert event.artifact_id == artifact_id
         assert event.project_id == project_id
+        assert event.journey_id == journey.id
     finally:
         await engine.dispose()

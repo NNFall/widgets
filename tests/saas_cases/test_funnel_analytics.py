@@ -125,6 +125,7 @@ def test_funnel_event_schema_has_no_generic_or_pii_storage_columns() -> None:
         "id",
         "event_key",
         "event_type",
+        "journey_id",
         "anonymous_draft_id",
         "oauth_state_id",
         "user_id",
@@ -154,6 +155,51 @@ def test_funnel_event_schema_has_no_generic_or_pii_storage_columns() -> None:
             "raw_ip",
         }
     )
+
+
+@pytest.mark.asyncio
+async def test_funnel_journey_owns_sanitized_first_touch_and_links_events(
+    funnel_database,
+) -> None:
+    from app.analytics.service import create_funnel_journey, record_funnel_event
+    from app.saas.models import FunnelEvent, FunnelJourney
+
+    _, factory = funnel_database
+    draft_id = uuid4()
+    async with factory() as database, database.begin():
+        journey = await create_funnel_journey(
+            database,
+            campaign={
+                "utm_source": " Telegram ",
+                "utm_medium": "SOCIAL",
+                "utm_campaign": "launch",
+                "email": "must-not-store@example.com",
+            },
+        )
+        await record_funnel_event(
+            database,
+            event_type="composer_submitted",
+            event_key=f"composer_submitted:draft:{draft_id}",
+            journey_id=journey.id,
+            anonymous_draft_id=draft_id,
+        )
+
+    async with factory() as database:
+        stored_journey = await database.get(FunnelJourney, journey.id)
+        stored_event = await database.scalar(select(FunnelEvent))
+
+    assert stored_journey.campaign_source == "telegram"
+    assert stored_journey.campaign_medium == "social"
+    assert stored_journey.campaign_name == "launch"
+    assert stored_journey.campaign_term is None
+    assert stored_journey.campaign_content is None
+    assert stored_event.journey_id == stored_journey.id
+    serialized_values = " ".join(
+        str(value)
+        for value in stored_journey.__dict__.values()
+        if value is not None
+    )
+    assert "must-not-store@example.com" not in serialized_values
 
 
 @pytest.mark.asyncio

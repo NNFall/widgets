@@ -27,6 +27,7 @@ from app.saas.models import (
     BillingPaymentMethod,
     PaymentAttempt,
     PaymentWebhookEvent,
+    Project,
     Subscription,
     UsageLedger,
 )
@@ -241,6 +242,7 @@ class BillingService:
         user_id: int,
         idempotency_key: str,
         plan_fingerprint: str,
+        project_id: UUID | None,
         auto_renew: bool,
     ) -> CheckoutResult:
         for _attempt in range(200):
@@ -259,6 +261,10 @@ class BillingService:
                     raise CheckoutIdempotencyConflict(
                         "idempotency key is already used for another plan"
                     )
+                if row.project_id != project_id:
+                    raise CheckoutIdempotencyConflict(
+                        "idempotency key is already used for another project"
+                    )
                 if row.auto_renew_requested is not auto_renew:
                     raise CheckoutIdempotencyConflict(
                         "idempotency key is already used for another renewal intent"
@@ -275,6 +281,7 @@ class BillingService:
         plan_code: str,
         idempotency_key: str,
         *,
+        project_id: UUID | None = None,
         auto_renew: bool = False,
     ) -> CheckoutResult:
         if not isinstance(auto_renew, bool):
@@ -284,6 +291,7 @@ class BillingService:
             user_id,
             plan,
             idempotency_key,
+            project_id=project_id,
             auto_renew=auto_renew,
         )
 
@@ -293,6 +301,7 @@ class BillingService:
         plan: BillingPlan,
         idempotency_key: str,
         *,
+        project_id: UUID | None,
         auto_renew: bool,
     ) -> CheckoutResult:
         if not _IDEMPOTENCY_PATTERN.fullmatch(idempotency_key):
@@ -317,6 +326,18 @@ class BillingService:
                     )
                     if user is None:
                         raise PaymentNotFound("user not found")
+                    project = None
+                    if project_id is not None:
+                        project = await database.scalar(
+                            select(Project)
+                            .where(
+                                Project.id == project_id,
+                                Project.owner_user_id == user_id,
+                            )
+                            .with_for_update()
+                        )
+                        if project is None:
+                            raise ValueError("project is not owned by user")
                     cutover_blocker = await database.scalar(
                         select(PaymentAttempt)
                         .where(
@@ -381,6 +402,10 @@ class BillingService:
                             raise CheckoutIdempotencyConflict(
                                 "idempotency key is already used for another plan"
                             )
+                        if attempt.project_id != project_id:
+                            raise CheckoutIdempotencyConflict(
+                                "idempotency key is already used for another project"
+                            )
                         if attempt.auto_renew_requested is not auto_renew:
                             raise CheckoutIdempotencyConflict(
                                 "idempotency key is already used for another renewal intent"
@@ -392,7 +417,9 @@ class BillingService:
                                 event_key=(
                                     f"upgrade_started:payment_attempt:{attempt.id}"
                                 ),
+                                journey_id=attempt.journey_id,
                                 user_id=attempt.user_id,
+                                project_id=attempt.project_id,
                                 payment_attempt_id=attempt.id,
                             )
                             return self._checkout_result(attempt, created=False)
@@ -434,6 +461,10 @@ class BillingService:
                     else:
                         attempt = PaymentAttempt(
                             user_id=user_id,
+                            project_id=project_id,
+                            journey_id=(
+                                project.journey_id if project is not None else None
+                            ),
                             provider=self._provider.name,
                             merchant_account_fingerprint=(
                                 self._merchant_account_fingerprint
@@ -480,7 +511,9 @@ class BillingService:
                         database,
                         event_type="upgrade_started",
                         event_key=f"upgrade_started:payment_attempt:{attempt.id}",
+                        journey_id=attempt.journey_id,
                         user_id=attempt.user_id,
+                        project_id=attempt.project_id,
                         payment_attempt_id=attempt.id,
                     )
                     attempt_id = attempt.id
@@ -503,6 +536,10 @@ class BillingService:
                         raise CheckoutIdempotencyConflict(
                             "idempotency key is already used for another plan"
                         )
+                    if attempt.project_id != project_id:
+                        raise CheckoutIdempotencyConflict(
+                            "idempotency key is already used for another project"
+                        )
                     if attempt.auto_renew_requested is not auto_renew:
                         raise CheckoutIdempotencyConflict(
                             "idempotency key is already used for another renewal intent"
@@ -517,6 +554,7 @@ class BillingService:
                     user_id=user_id,
                     idempotency_key=idempotency_key,
                     plan_fingerprint=plan.fingerprint(),
+                    project_id=project_id,
                     auto_renew=auto_renew,
                 )
 
@@ -592,6 +630,7 @@ class BillingService:
                     user_id=user_id,
                     idempotency_key=idempotency_key,
                     plan_fingerprint=plan.fingerprint(),
+                    project_id=project_id,
                     auto_renew=auto_renew,
                 )
             if result is None:  # pragma: no cover - guarded by lost_lease
@@ -626,6 +665,7 @@ class BillingService:
             user_id,
             plan,
             idempotency_key,
+            project_id=attempt.project_id,
             auto_renew=attempt.auto_renew_requested,
         )
 
@@ -921,7 +961,9 @@ class BillingService:
                 database,
                 event_type="payment_completed",
                 event_key=f"payment_completed:payment_attempt:{attempt.id}",
+                journey_id=attempt.journey_id,
                 user_id=user_id,
+                project_id=attempt.project_id,
                 payment_attempt_id=attempt.id,
             )
             database.add(

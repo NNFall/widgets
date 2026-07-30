@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.saas.models import FunnelEvent
+from app.saas.models import FunnelEvent, FunnelJourney
 
 
 FUNNEL_EVENT_TYPES = frozenset(
@@ -75,6 +75,17 @@ class FunnelEventResult:
     created: bool
 
 
+async def create_funnel_journey(
+    database: AsyncSession,
+    *,
+    campaign: Mapping[str, object] | None = None,
+) -> FunnelJourney:
+    journey = FunnelJourney(**_campaign_values(campaign))
+    database.add(journey)
+    await database.flush()
+    return journey
+
+
 def sanitize_campaign(campaign: Mapping[str, object] | None) -> dict[str, str]:
     if campaign is None:
         return {}
@@ -127,6 +138,7 @@ async def record_funnel_event(
     *,
     event_type: str,
     event_key: str,
+    journey_id: UUID | None = None,
     anonymous_draft_id: UUID | None = None,
     oauth_state_id: UUID | None = None,
     user_id: int | None = None,
@@ -152,6 +164,7 @@ async def record_funnel_event(
     event = FunnelEvent(
         event_key=normalized_key,
         event_type=event_type,
+        journey_id=journey_id,
         anonymous_draft_id=anonymous_draft_id,
         oauth_state_id=oauth_state_id,
         user_id=user_id,
@@ -182,6 +195,7 @@ async def record_funnel_event(
 __all__ = [
     "FUNNEL_EVENT_TYPES",
     "FunnelEventResult",
+    "create_funnel_journey",
     "record_funnel_event",
     "sanitize_campaign",
 ]

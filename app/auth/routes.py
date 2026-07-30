@@ -18,7 +18,11 @@ from aiohttp import web
 from aiohttp_session import STORAGE_KEY, get_session, new_session
 from sqlalchemy import delete, or_, select, update
 
-from app.analytics.service import record_funnel_event, sanitize_campaign
+from app.analytics.service import (
+    create_funnel_journey,
+    record_funnel_event,
+    sanitize_campaign,
+)
 from app.auth.oauth import (
     GoogleOAuthProvider,
     OAuthCallback,
@@ -190,12 +194,15 @@ async def create_draft(request: web.Request) -> web.Response:
     )
     async with session_scope(request.app) as database:
         await _cleanup_expired_auth_records(database, datetime.now(UTC))
+        journey = await create_funnel_journey(database, campaign=campaign)
+        draft.journey_id = journey.id
         database.add(draft)
         await database.flush()
         await record_funnel_event(
             database,
             event_type="composer_submitted",
             event_key=f"composer_submitted:draft:{draft.id}",
+            journey_id=journey.id,
             anonymous_draft_id=draft.id,
             campaign=campaign,
         )
@@ -280,6 +287,7 @@ async def claim_draft(request: web.Request) -> web.Response:
                 id=project_id,
                 tenant_id=tenant_id,
                 owner_user_id=user_id,
+                journey_id=draft.journey_id,
                 source_url=draft.source_url,
                 brief=draft.brief,
                 status="draft",
@@ -289,6 +297,8 @@ async def claim_draft(request: web.Request) -> web.Response:
             draft.claimed_at = datetime.now(UTC)
             await database.flush()
             created = True
+        if project.journey_id is None and draft.journey_id is not None:
+            project.journey_id = draft.journey_id
         payload = {
             "project": {
                 "id": str(project.id),
@@ -359,6 +369,7 @@ async def auth_start(request: web.Request) -> web.StreamResponse:
             nonce=nonce,
             return_path="/studio",
             draft_id=draft_id,
+            journey_id=draft.journey_id if draft is not None else None,
             expires_at=datetime.now(UTC) + timedelta(minutes=10),
         )
         database.add(oauth_state)
@@ -368,6 +379,7 @@ async def auth_start(request: web.Request) -> web.StreamResponse:
             database,
             event_type="auth_started",
             event_key=f"auth_started:oauth_state:{oauth_state.id}",
+            journey_id=oauth_state.journey_id,
             anonymous_draft_id=oauth_state.draft_id,
             oauth_state_id=oauth_state.id,
             campaign=draft.campaign if draft is not None else None,
@@ -427,6 +439,7 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
                         OAuthState.nonce,
                         OAuthState.return_path,
                         OAuthState.draft_id,
+                        OAuthState.journey_id,
                     )
                 )
             ).mappings().one_or_none()
@@ -509,6 +522,7 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
             database,
             event_type="auth_completed",
             event_key=f"auth_completed:oauth_state:{claimed_state_id}",
+            journey_id=claimed["journey_id"],
             anonymous_draft_id=claimed["draft_id"],
             oauth_state_id=claimed_state_id,
             user_id=user.id,

@@ -93,6 +93,7 @@ async def link_identity_and_claim_draft(
             project = Project(
                 tenant_id=user.tenant_id,
                 owner_user_id=user.id,
+                journey_id=draft.journey_id,
                 source_url=draft.source_url,
                 brief=draft.brief,
                 status="draft",

@@ -85,6 +85,7 @@ it('creates a billing checkout with session credentials, CSRF and idempotency', 
     'starter_monthly',
     'csrf-billing',
     'checkout-stable-key',
+    'project-123',
     true,
   )).resolves.toMatchObject({
     payment: { id: 'payment-123', status: 'pending' },
@@ -100,6 +101,7 @@ it('creates a billing checkout with session credentials, CSRF and idempotency', 
   expect(new Headers(init.headers).get('Idempotency-Key')).toBe('checkout-stable-key');
   expect(JSON.parse(String(init.body))).toEqual({
     plan_code: 'starter_monthly',
+    project_id: 'project-123',
     auto_renew: true,
   });
 });

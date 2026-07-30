@@ -283,6 +283,7 @@ export function UpgradeGate({
         DEFAULT_PLAN_CODE,
         csrfToken,
         idempotencyKey,
+        projectId,
         autoRenewIntent,
       );
       const safeUrl = safeCheckoutUrl(checkout.checkout_url);

@@ -14,7 +14,11 @@ from aiohttp import web
 from aiohttp_session import get_session
 from sqlalchemy import select
 
-from app.analytics.service import record_funnel_event, sanitize_campaign
+from app.analytics.service import (
+    create_funnel_journey,
+    record_funnel_event,
+    sanitize_campaign,
+)
 from app.auth.routes import _canonical_public_https_url
 from app.billing.service import (
     TrialService,
@@ -166,6 +170,9 @@ async def _enqueue_express_run(
     key: str,
     generation_forensics: GenerationForensicsConfig,
 ):
+    if project.journey_id is None:
+        journey = await create_funnel_journey(database)
+        project.journey_id = journey.id
     builder_request = BuilderRequest(
         engine=EngineName.DIRECT,
         brief=project.brief or "Create a useful website assistant",
@@ -173,6 +180,7 @@ async def _enqueue_express_run(
     )
     run = GenerationRun(
         project_id=project.id,
+        journey_id=project.journey_id,
         mode="express",
         state="queued",
         progress=0,
@@ -276,9 +284,11 @@ async def create_project(request: web.Request) -> web.Response:
             text=_error("invalid_source_url"), content_type="application/json"
         )
     async with get_session_factory(request.app)() as database, database.begin():
+        journey = await create_funnel_journey(database, campaign=campaign)
         project = Project(
             tenant_id=tenant_id,
             owner_user_id=user_id,
+            journey_id=journey.id,
             source_url=source_url,
             brief=brief,
             status="draft",
@@ -289,6 +299,7 @@ async def create_project(request: web.Request) -> web.Response:
             database,
             event_type="composer_submitted",
             event_key=f"composer_submitted:project:{project.id}",
+            journey_id=journey.id,
             user_id=user_id,
             project_id=project.id,
             campaign=campaign,
@@ -406,6 +417,7 @@ async def create_run(request: web.Request) -> web.Response:
                 database,
                 event_type="run_queued",
                 event_key=f"run_queued:run:{run.id}",
+                journey_id=run.journey_id,
                 user_id=user_id,
                 project_id=project.id,
                 run_id=run.id,
@@ -567,6 +579,7 @@ async def retry_run(request: web.Request) -> web.Response:
                         database,
                         event_type="run_queued",
                         event_key=f"run_queued:run:{run.id}",
+                        journey_id=run.journey_id,
                         user_id=user_id,
                         project_id=project.id,
                         run_id=run.id,
