@@ -23,6 +23,7 @@ from app.billing.service import (
     UnverifiedTrialUser,
 )
 from app.db.session import get_session_factory
+from app.generation_timeline import load_owner_timeline_summary
 from app.chat import (
     CHAT_SERVICE_KEY,
     ChatContext,
@@ -670,6 +671,24 @@ async def get_run(request: web.Request) -> web.Response:
     return web.json_response(payload)
 
 
+async def get_timeline_summary(request: web.Request) -> web.Response:
+    user_id, tenant_id = await _scope(request)
+    run_id = _uuid(request.match_info["run_id"])
+    factory = get_session_factory(request.app)
+    async with factory() as database:
+        summary = await load_owner_timeline_summary(
+            database,
+            run_id=run_id,
+            owner_user_id=user_id,
+            tenant_id=tenant_id,
+        )
+    if summary is None:
+        raise web.HTTPNotFound(
+            text=_error("not_found"), content_type="application/json"
+        )
+    return web.json_response(summary)
+
+
 async def get_preview(request: web.Request) -> web.Response:
     user_id, tenant_id = await _scope(request)
     factory = get_session_factory(request.app)
@@ -961,6 +980,9 @@ def setup_project_routes(
     app.router.add_patch("/api/projects/{project_id}", update_project_draft)
     app.router.add_post("/api/projects/{project_id}/runs", create_run)
     app.router.add_get("/api/runs/{run_id}", get_run)
+    app.router.add_get(
+        "/api/runs/{run_id}/timeline-summary", get_timeline_summary
+    )
     app.router.add_post("/api/runs/{run_id}/cancel", cancel_run)
     app.router.add_post("/api/runs/{run_id}/retry", retry_run)
     app.router.add_get("/api/runs/{run_id}/preview", get_preview)
