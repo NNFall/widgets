@@ -7,6 +7,13 @@ from html.parser import HTMLParser
 from typing import Iterable
 from urllib.parse import urlsplit
 
+from .css_contract import (
+    contains_unquoted_css_escape,
+    is_safe_svg_paint,
+    parse_css_rules,
+    selector_is_scoped,
+    strip_css_comments,
+)
 from .models import ValidationIssue, WidgetArtifact
 
 
@@ -29,6 +36,7 @@ ALLOWED_ELEMENTS = frozenset(
         "main",
         "footer",
         "aside",
+        "article",
         "nav",
         "button",
         "span",
@@ -124,6 +132,7 @@ COMMON_ATTRIBUTES = frozenset(
     }
 )
 URL_ATTRIBUTES = frozenset({"href", "src", "action", "formaction", "poster", "xlink:href"})
+SVG_PAINT_ATTRIBUTES = frozenset({"fill", "stroke", "stop-color"})
 _HTML_TAG = re.compile(r"<[^>]+>")
 _RESERVED_RUNTIME_ATTRIBUTE = re.compile(
     r"""(?ix)
@@ -213,6 +222,14 @@ class _ArtifactHTMLParser(HTMLParser):
                 self._add(_issue("forbidden_attribute", "body_html", f"Attribute {name} is not allowed"))
             if name in URL_ATTRIBUTES:
                 self._validate_url(name, value)
+            if name in SVG_PAINT_ATTRIBUTES and not is_safe_svg_paint(value):
+                self._add(
+                    _issue(
+                        "unsafe_svg_paint",
+                        "body_html",
+                        "SVG paint must be a color without URL references",
+                    )
+                )
         if tag == "path":
             path_data = attributes.get("d", "").strip()
             if (
@@ -269,115 +286,6 @@ class _ArtifactHTMLParser(HTMLParser):
             self._add(_issue("external_url", "body_html", "External and relative resource URLs are not allowed"))
 
 
-def _matching_brace(css: str, opening: int) -> int | None:
-    depth = 0
-    quote: str | None = None
-    escaped = False
-    for index in range(opening, len(css)):
-        character = css[index]
-        if escaped:
-            escaped = False
-            continue
-        if character == "\\":
-            escaped = True
-            continue
-        if quote:
-            if character == quote:
-                quote = None
-            continue
-        if character in {"'", '"'}:
-            quote = character
-        elif character == "{":
-            depth += 1
-        elif character == "}":
-            depth -= 1
-            if depth == 0:
-                return index
-    return None
-
-
-def _css_rules(css: str) -> tuple[list[str], list[str], bool]:
-    selectors: list[str] = []
-    at_rules: list[str] = []
-    malformed = False
-
-    def walk(segment: str) -> None:
-        nonlocal malformed
-        cursor = 0
-        while cursor < len(segment):
-            while cursor < len(segment) and (segment[cursor].isspace() or segment[cursor] == ";"):
-                cursor += 1
-            if cursor >= len(segment):
-                return
-            opening = segment.find("{", cursor)
-            if opening < 0:
-                if segment[cursor:].strip():
-                    malformed = True
-                return
-            prelude = segment[cursor:opening].strip()
-            closing = _matching_brace(segment, opening)
-            if closing is None:
-                malformed = True
-                return
-            content = segment[opening + 1 : closing]
-            lower = prelude.lower()
-            if lower.startswith("@"):
-                name = lower.split(None, 1)[0]
-                at_rules.append(name)
-                if name in {"@media", "@supports", "@container"}:
-                    walk(content)
-            else:
-                selectors.extend(part.strip() for part in prelude.split(",") if part.strip())
-            cursor = closing + 1
-
-    walk(css)
-    return selectors, at_rules, malformed
-
-
-def _selector_is_scoped(selector: str) -> bool:
-    candidate = selector.strip()
-    root = re.match(
-        r"^\.kaigo-widget(?:(?:__|--)[A-Za-z0-9_-]+)?(?![-_A-Za-z0-9])",
-        candidate,
-    )
-    if root is None:
-        return False
-    depth = 0
-    quote: str | None = None
-    escaped = False
-    cursor = root.end()
-    while cursor < len(candidate):
-        character = candidate[cursor]
-        if escaped:
-            escaped = False
-        elif character == "\\":
-            escaped = True
-        elif quote:
-            if character == quote:
-                quote = None
-        elif character in {"'", '"'}:
-            quote = character
-        elif character in "([":
-            depth += 1
-        elif character in ")]" and depth:
-            depth -= 1
-        elif depth == 0 and character in "+~":
-            remainder = candidate[cursor + 1 :].lstrip()
-            return bool(remainder) and _selector_is_scoped(remainder)
-        elif depth == 0 and character == ">":
-            return True
-        elif depth == 0 and character.isspace():
-            remainder = candidate[cursor:].lstrip()
-            if not remainder:
-                return True
-            if remainder[0] in "+~":
-                sibling = remainder[1:].lstrip()
-                return bool(sibling) and _selector_is_scoped(sibling)
-            return True
-        cursor += 1
-    return True
-
-
 def _validate_css(css: str) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
 
@@ -388,8 +296,10 @@ def _validate_css(css: str) -> list[ValidationIssue]:
 
     if len(css.encode("utf-8")) > MAX_CSS_BYTES:
         add("css_too_large", "Stylesheet exceeds the size limit")
-    normalized = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    normalized, comment_malformed = strip_css_comments(css)
     lower = normalized.lower()
+    if comment_malformed:
+        add("malformed_css", "CSS comments are not balanced")
     for declaration_block in re.findall(r"\{([^{}]*)\}", lower, flags=re.DOTALL):
         all_unset = list(
             re.finditer(
@@ -416,19 +326,21 @@ def _validate_css(css: str) -> list[ValidationIssue]:
         add("unsafe_css_at_rule", "CSS @import is not allowed")
     if re.search(r"url\s*\(", lower):
         add("external_css_resource", "CSS url() resources are not allowed")
+    if contains_unquoted_css_escape(normalized):
+        add("unsafe_css_value", "CSS identifier escapes are not allowed")
     if re.search(r"expression\s*\(|javascript\s*:", lower) or re.search(
         r"(?:^|[;{])\s*behavior\s*:", lower
     ):
         add("unsafe_css_value", "Unsafe CSS value is not allowed")
 
-    selectors, at_rules, malformed = _css_rules(normalized)
+    selectors, at_rules, malformed = parse_css_rules(normalized)
     if malformed:
         add("malformed_css", "CSS blocks are not balanced")
     for at_rule in at_rules:
         if at_rule not in {"@media", "@supports", "@container", "@keyframes", "@-webkit-keyframes"}:
             add("unsafe_css_at_rule", f"CSS at-rule {at_rule} is not allowed")
     for selector in selectors:
-        if not _selector_is_scoped(selector) or re.search(
+        if not selector_is_scoped(selector) or re.search(
             r"(^|[\s>+~])(html|body|:root)([\s>+~.#:]|$)", selector, re.I
         ):
             excerpt = re.sub(r"\s+", " ", selector).strip()[:240]

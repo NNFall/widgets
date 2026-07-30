@@ -1,0 +1,209 @@
+.kaigo-widget,
+.kaigo-widget * {
+  box-sizing: border-box;
+}
+
+.kaigo-widget {
+  --kaigo-widget-edge: 20px;
+  --kaigo-widget-panel-width: min(400px, calc(100vw - 40px));
+  --kaigo-widget-panel-height: min(620px, calc(100dvh - 40px));
+  position: fixed;
+  inset: 0;
+  z-index: 2147482000;
+  color: #17212b;
+  font-family: Inter, Arial, sans-serif;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+.kaigo-widget [data-region="launcher"] {
+  position: fixed;
+  right: var(--kaigo-widget-edge);
+  bottom: var(--kaigo-widget-edge);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.kaigo-widget [data-region="panel"] {
+  position: fixed;
+  right: var(--kaigo-widget-edge);
+  bottom: var(--kaigo-widget-edge);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  width: var(--kaigo-widget-panel-width);
+  max-width: calc(100vw - 40px);
+  height: auto;
+  max-height: var(--kaigo-widget-panel-height);
+  overflow: hidden;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.kaigo-widget.kaigo-preview-open [data-region="panel"],
+.kaigo-widget [data-region="panel"][data-open] {
+  pointer-events: auto;
+  visibility: visible;
+}
+
+.kaigo-widget [data-region="header"] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 56px;
+  padding: 10px 12px;
+}
+
+.kaigo-widget [data-region="header"] > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.kaigo-widget [data-region="header"] strong,
+.kaigo-widget [data-region="header"] span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kaigo-widget [data-action="close"],
+.kaigo-widget [data-action="send"],
+.kaigo-widget [data-kaigo-runtime-retry] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  flex: 0 0 44px;
+  cursor: pointer;
+}
+
+.kaigo-widget [data-region="messages"] {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+  padding: 12px;
+  scrollbar-width: none;
+}
+
+.kaigo-widget [data-region="messages"]::-webkit-scrollbar,
+.kaigo-widget [data-kaigo-runtime-input]::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.kaigo-widget .kaigo-widget__message,
+.kaigo-widget [data-kaigo-runtime-message] {
+  display: grid;
+  gap: 4px;
+  width: fit-content;
+  max-width: 84%;
+}
+
+.kaigo-widget .kaigo-widget__message--assistant,
+.kaigo-widget [data-kaigo-runtime-message="assistant"] {
+  align-self: flex-start;
+}
+
+.kaigo-widget .kaigo-widget__message--user,
+.kaigo-widget [data-kaigo-runtime-message="user"] {
+  align-self: flex-end;
+}
+
+.kaigo-widget .kaigo-widget__message-label,
+.kaigo-widget [data-kaigo-runtime-label] {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.kaigo-widget .kaigo-widget__message p,
+.kaigo-widget [data-kaigo-runtime-content] {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.kaigo-widget [data-region="suggestions"] {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 10px;
+}
+
+.kaigo-widget [data-region="suggestions"] button {
+  min-height: 44px;
+  flex: 1 1 0;
+  cursor: pointer;
+}
+
+.kaigo-widget [data-region="composer"] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  gap: 8px;
+  align-items: end;
+  padding: 10px 12px 12px;
+}
+
+.kaigo-widget [data-region="composer"] textarea {
+  width: 100%;
+  min-height: 44px;
+  max-height: 96px;
+  margin: 0;
+  resize: none;
+}
+
+.kaigo-widget .kaigo-widget__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.kaigo-widget [data-kaigo-runtime-status] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.kaigo-widget [aria-busy="true"] [data-action="send"],
+.kaigo-widget [data-action="send"]:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.kaigo-widget [hidden] {
+  display: none !important;
+}
+
+@media (max-width: 600px) {
+  .kaigo-widget {
+    --kaigo-widget-edge: 12px;
+    --kaigo-widget-panel-width: calc(100vw - 24px);
+    --kaigo-widget-panel-height: min(78dvh, calc(100dvh - 24px));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kaigo-widget,
+  .kaigo-widget * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
+}
