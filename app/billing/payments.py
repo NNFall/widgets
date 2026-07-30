@@ -4,6 +4,7 @@ import asyncio
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 from uuid import UUID, uuid4
 from weakref import WeakValueDictionary
 
@@ -18,6 +19,7 @@ from app.billing.contracts import (
     Money,
     PaymentProvider,
     PaymentStatus,
+    ProviderPayment,
     validate_provider_idempotency_key,
 )
 from app.db.models import User
@@ -70,7 +72,6 @@ class FulfillmentResult:
 
 _IDEMPOTENCY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
 _MERCHANT_ACCOUNT_FINGERPRINT_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-_LEGACY_UNKNOWN_MERCHANT_ACCOUNT = "!" * 64
 _CHECKOUT_CREATION_LEASE = timedelta(seconds=30)
 _PROVIDER_IDEMPOTENCY_WINDOW = timedelta(hours=24)
 _PROVIDER_DISPATCH_SAFETY_MARGIN = timedelta(minutes=5)
@@ -99,6 +100,13 @@ class BillingService:
 
     async def close(self) -> None:
         await self._provider.aclose()
+
+    def uses_provider(self, provider: PaymentProvider) -> bool:
+        return self._provider is provider
+
+    @property
+    def merchant_account_fingerprint(self) -> str:
+        return self._merchant_account_fingerprint
 
     @staticmethod
     def _plan(code: str) -> BillingPlan:
@@ -155,12 +163,8 @@ class BillingService:
             raise BillingError("payment attempt requires manual recovery") from error
         if key != cls._provider_idempotency_key(attempt.id):
             raise BillingError("payment attempt requires manual recovery")
-        first_dispatched_at = cls._payload_timestamp(
-            payload, "first_dispatched_at"
-        )
-        expires_at = cls._payload_timestamp(
-            payload, "provider_idempotency_expires_at"
-        )
+        first_dispatched_at = cls._payload_timestamp(payload, "first_dispatched_at")
+        expires_at = cls._payload_timestamp(payload, "provider_idempotency_expires_at")
         if expires_at != first_dispatched_at + _PROVIDER_IDEMPOTENCY_WINDOW:
             raise BillingError("payment attempt requires manual recovery")
         if now >= expires_at - _PROVIDER_DISPATCH_SAFETY_MARGIN:
@@ -179,16 +183,6 @@ class BillingService:
             and attempt.merchant_account_fingerprint
             == self._merchant_account_fingerprint
         )
-
-    def _assert_verifiable_merchant_account(
-        self,
-        attempt: PaymentAttempt,
-    ) -> None:
-        if (
-            attempt.merchant_account_fingerprint
-            != _LEGACY_UNKNOWN_MERCHANT_ACCOUNT
-        ):
-            self._assert_merchant_account(attempt)
 
     @staticmethod
     def _stored_plan(attempt: PaymentAttempt) -> BillingPlan:
@@ -266,7 +260,9 @@ class BillingService:
     ) -> CheckoutResult:
         if not _IDEMPOTENCY_PATTERN.fullmatch(idempotency_key):
             raise ValueError("invalid checkout idempotency key")
-        lock = self._checkout_locks.setdefault((user_id, idempotency_key), asyncio.Lock())
+        lock = self._checkout_locks.setdefault(
+            (user_id, idempotency_key), asyncio.Lock()
+        )
         async with lock:
             created = False
             dispatch = False
@@ -497,7 +493,9 @@ class BillingService:
                     or checkout.status is not PaymentStatus.PENDING
                     or checkout.paid
                 ):
-                    raise BillingError("provider checkout response does not match command")
+                    raise BillingError(
+                        "provider checkout response does not match command"
+                    )
             except Exception:
                 async with self._sessions() as database, database.begin():
                     failed = await database.scalar(
@@ -529,6 +527,7 @@ class BillingService:
                     attempt.provider_payment_id = checkout.provider_payment_id
                     attempt.checkout_url = checkout.checkout_url
                     attempt.status = checkout.status.value
+                    attempt.next_reconcile_at = datetime.now(UTC)
                     attempt.payload = {"test_mode": checkout.test_mode}
                     await database.flush()
                     result = self._checkout_result(attempt, created=created)
@@ -574,15 +573,16 @@ class BillingService:
             attempt = await database.scalar(
                 select(PaymentAttempt).where(
                     PaymentAttempt.provider == self._provider.name,
-                    PaymentAttempt.provider_payment_id == notification.provider_payment_id,
+                    PaymentAttempt.provider_payment_id
+                    == notification.provider_payment_id,
                 )
             )
             if attempt is None:
                 raise PaymentNotFound("payment attempt not found")
-            self._assert_verifiable_merchant_account(attempt)
+            self._assert_merchant_account(attempt)
             expected_amount = Money(attempt.amount_minor, attempt.currency)
             expected_metadata = self._metadata(attempt)
-            user_id = attempt.user_id
+            attempt_id = attempt.id
 
         payment = await self._provider.verify_notification(
             notification,
@@ -604,56 +604,66 @@ class BillingService:
             or dict(payment.metadata) != expected_metadata
         ):
             raise BillingError("verified payment does not match payment attempt")
+        return await self.apply_verified_payment(
+            attempt_id,
+            payment,
+            source="webhook",
+        )
 
-        if notification.event == "payment.canceled":
-            lock = self._fulfillment_locks.setdefault(user_id, asyncio.Lock())
-            async with lock, self._sessions() as database, database.begin():
-                user = await database.scalar(
-                    select(User).where(User.id == user_id).with_for_update()
-                )
-                if user is None:
-                    raise PaymentNotFound("payment user not found")
-                attempt = await database.scalar(
-                    select(PaymentAttempt)
-                    .where(
-                        PaymentAttempt.provider == self._provider.name,
-                        PaymentAttempt.provider_payment_id
-                        == payment.provider_payment_id,
-                    )
-                    .with_for_update()
-                )
-                if attempt is None:
-                    raise PaymentNotFound("payment attempt not found")
-                event_key = f"payment.canceled:{payment.provider_payment_id}"
-                existing_event = await database.scalar(
-                    select(PaymentWebhookEvent)
-                    .where(
-                        PaymentWebhookEvent.provider == self._provider.name,
-                        PaymentWebhookEvent.provider_event_id == event_key,
-                    )
-                    .with_for_update()
-                )
-                if existing_event is not None:
-                    return FulfillmentResult(attempt.id, None, False)
-                attempt.status = "cancelled"
-                database.add(
-                    PaymentWebhookEvent(
-                        provider=self._provider.name,
-                        provider_event_id=event_key,
-                        payment_attempt_id=attempt.id,
-                        payload={
-                            "provider_payment_id": payment.provider_payment_id,
-                            "status": "canceled",
-                            "paid": payment.paid,
-                            "amount_minor": payment.amount.amount_minor,
-                            "currency": payment.amount.currency,
-                            "test_mode": payment.test_mode,
-                        },
-                        processed_at=datetime.now(UTC),
-                    )
-                )
-                await database.flush()
-                return FulfillmentResult(attempt.id, None, True)
+    def verification_expectations(
+        self,
+        attempt: PaymentAttempt,
+    ) -> tuple[Money, dict[str, str]]:
+        self._assert_merchant_account(attempt)
+        return Money(attempt.amount_minor, attempt.currency), self._metadata(attempt)
+
+    def _validate_verified_payment(
+        self,
+        attempt: PaymentAttempt,
+        payment: ProviderPayment,
+    ) -> None:
+        self._assert_merchant_account(attempt)
+        expected_amount = Money(attempt.amount_minor, attempt.currency)
+        expected_metadata = self._metadata(attempt)
+        expected_test_mode = attempt.payload.get("test_mode")
+        if (
+            attempt.provider_payment_id is None
+            or payment.provider_payment_id != attempt.provider_payment_id
+            or payment.amount != expected_amount
+            or dict(payment.metadata) != expected_metadata
+            or (
+                isinstance(expected_test_mode, bool)
+                and payment.test_mode is not expected_test_mode
+            )
+            or (payment.status is PaymentStatus.SUCCEEDED and payment.paid is not True)
+            or (payment.status is PaymentStatus.CANCELLED and payment.paid is not False)
+            or payment.status not in {PaymentStatus.SUCCEEDED, PaymentStatus.CANCELLED}
+        ):
+            raise BillingError("verified payment does not match payment attempt")
+
+    @staticmethod
+    def _event_name(payment: ProviderPayment) -> str:
+        if payment.status is PaymentStatus.SUCCEEDED:
+            return "payment.succeeded"
+        if payment.status is PaymentStatus.CANCELLED:
+            return "payment.canceled"
+        raise BillingError("verified payment is not terminal")
+
+    async def apply_verified_payment(
+        self,
+        attempt_id: UUID,
+        payment: ProviderPayment,
+        *,
+        source: Literal["webhook", "reconciliation", "dispatch"],
+    ) -> FulfillmentResult:
+        if source not in {"webhook", "reconciliation", "dispatch"}:
+            raise ValueError("verified payment source is invalid")
+        async with self._sessions() as database:
+            attempt = await database.get(PaymentAttempt, attempt_id)
+            if attempt is None:
+                raise PaymentNotFound("payment attempt not found")
+            self._validate_verified_payment(attempt, payment)
+            user_id = attempt.user_id
 
         lock = self._fulfillment_locks.setdefault(user_id, asyncio.Lock())
         async with lock, self._sessions() as database, database.begin():
@@ -666,20 +676,19 @@ class BillingService:
                 raise PaymentNotFound("payment user not found")
             attempt = await database.scalar(
                 select(PaymentAttempt)
-                .where(
-                    PaymentAttempt.provider == self._provider.name,
-                    PaymentAttempt.provider_payment_id == payment.provider_payment_id,
-                )
+                .where(PaymentAttempt.id == attempt_id)
                 .with_for_update()
             )
             if attempt is None:
                 raise PaymentNotFound("payment attempt not found")
+            self._validate_verified_payment(attempt, payment)
             subscription = await database.scalar(
                 select(Subscription)
                 .where(Subscription.user_id == user_id, Subscription.status == "active")
                 .with_for_update()
             )
-            event_key = f"payment.succeeded:{payment.provider_payment_id}"
+            event_name = self._event_name(payment)
+            event_key = f"{event_name}:{payment.provider_payment_id}"
             existing_event = await database.scalar(
                 select(PaymentWebhookEvent)
                 .where(
@@ -695,8 +704,38 @@ class BillingService:
                     False,
                 )
 
-            plan = self._stored_plan(attempt)
             now = datetime.now(UTC)
+            event_payload = {
+                "provider_payment_id": payment.provider_payment_id,
+                "status": (
+                    "canceled"
+                    if payment.status is PaymentStatus.CANCELLED
+                    else payment.status.value
+                ),
+                "paid": payment.paid,
+                "amount_minor": payment.amount.amount_minor,
+                "currency": payment.amount.currency,
+                "test_mode": payment.test_mode,
+                "source": source,
+            }
+            if payment.status is PaymentStatus.CANCELLED:
+                attempt.status = "cancelled"
+                database.add(
+                    PaymentWebhookEvent(
+                        provider=self._provider.name,
+                        provider_event_id=event_key,
+                        merchant_account_fingerprint=(
+                            attempt.merchant_account_fingerprint
+                        ),
+                        payment_attempt_id=attempt.id,
+                        payload=event_payload,
+                        processed_at=now,
+                    )
+                )
+                await database.flush()
+                return FulfillmentResult(attempt.id, None, True)
+
+            plan = self._stored_plan(attempt)
             if subscription is None:
                 subscription = Subscription(
                     user_id=user_id,
@@ -722,23 +761,20 @@ class BillingService:
                 subscription.plan_snapshot = attempt.plan_snapshot
                 subscription.plan_fingerprint = attempt.plan_fingerprint
                 subscription.current_period_start = now
-                subscription.current_period_end = start + timedelta(days=plan.period_days)
+                subscription.current_period_end = start + timedelta(
+                    days=plan.period_days
+                )
 
-            webhook = PaymentWebhookEvent(
-                provider=self._provider.name,
-                provider_event_id=event_key,
-                payment_attempt_id=attempt.id,
-                payload={
-                    "provider_payment_id": payment.provider_payment_id,
-                    "status": payment.status.value,
-                    "paid": payment.paid,
-                    "amount_minor": payment.amount.amount_minor,
-                    "currency": payment.amount.currency,
-                    "test_mode": payment.test_mode,
-                },
-                processed_at=now,
+            database.add(
+                PaymentWebhookEvent(
+                    provider=self._provider.name,
+                    provider_event_id=event_key,
+                    merchant_account_fingerprint=(attempt.merchant_account_fingerprint),
+                    payment_attempt_id=attempt.id,
+                    payload=event_payload,
+                    processed_at=now,
+                )
             )
-            database.add(webhook)
             await database.flush()
             await record_funnel_event(
                 database,

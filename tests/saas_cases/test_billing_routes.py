@@ -24,7 +24,9 @@ from tests.saas_cases.test_billing_service import FakeProvider
 
 
 async def _billing_app(tmp_path):
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'billing-routes.db'}")
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'billing-routes.db'}"
+    )
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -105,7 +107,7 @@ async def test_checkout_requires_auth_csrf_and_server_plan(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_payment_status_is_owner_scoped_and_webhook_activates(tmp_path) -> None:
-    engine, factory, _provider, client = await _billing_app(tmp_path)
+    engine, factory, provider, client = await _billing_app(tmp_path)
     try:
         await client.post("/test/login/10")
         checkout = await client.post(
@@ -127,15 +129,24 @@ async def test_payment_status_is_owner_scoped_and_webhook_activates(tmp_path) ->
         assert (await webhook.json()) == {"accepted": True, "processed": True}
 
         await client.post("/test/login/10")
+        provider_calls_before_poll = len(provider.verify_calls) + len(
+            provider.get_calls
+        )
         status = await client.get(f"/api/billing/payments/{payment_uuid}")
         assert status.status == 200
         assert (await status.json())["payment"]["status"] == "succeeded"
+        assert len(provider.verify_calls) + len(provider.get_calls) == (
+            provider_calls_before_poll
+        )
         subscription = await client.get("/api/billing/subscription")
         data = await subscription.json()
         assert data["subscription"]["plan_code"] == "starter_monthly"
         assert data["subscription"]["status"] == "active"
         async with factory() as database:
-            assert await database.scalar(select(func.count()).select_from(Subscription)) == 1
+            assert (
+                await database.scalar(select(func.count()).select_from(Subscription))
+                == 1
+            )
     finally:
         await client.close()
         await engine.dispose()
@@ -153,15 +164,23 @@ async def test_unknown_webhook_and_success_redirect_never_fulfill(tmp_path) -> N
         assert redirect.status == 200
         assert 'href="/studio"' in await redirect.text()
         async with factory() as database:
-            assert await database.scalar(select(func.count()).select_from(Subscription)) == 0
-            assert await database.scalar(select(func.count()).select_from(PaymentAttempt)) == 0
+            assert (
+                await database.scalar(select(func.count()).select_from(Subscription))
+                == 0
+            )
+            assert (
+                await database.scalar(select(func.count()).select_from(PaymentAttempt))
+                == 0
+            )
     finally:
         await client.close()
         await engine.dispose()
 
 
 @pytest.mark.asyncio
-async def test_subscription_hides_expired_and_pending_payment_recovers(tmp_path) -> None:
+async def test_subscription_hides_expired_and_pending_payment_recovers(
+    tmp_path,
+) -> None:
     engine, factory, provider, client = await _billing_app(tmp_path)
     try:
         async with factory() as database, database.begin():
@@ -195,9 +214,7 @@ async def test_subscription_hides_expired_and_pending_payment_recovers(tmp_path)
 
         plan = PLAN_CATALOG["starter_monthly"]
         async with factory() as database, database.begin():
-            prior = await database.get(
-                PaymentAttempt, UUID(created["payment"]["id"])
-            )
+            prior = await database.get(PaymentAttempt, UUID(created["payment"]["id"]))
             assert prior is not None
             prior.status = "cancelled"
             stuck = PaymentAttempt(
