@@ -12,10 +12,17 @@ def _timestamp(value: datetime | None) -> str | None:
 
 
 def serialize_event(event: GenerationEvent) -> dict[str, Any]:
+    payload = (
+        event.public_payload
+        if event.registry_version == 1 and isinstance(event.public_payload, dict)
+        else {}
+        if event.registry_version == 1
+        else event.payload
+    )
     projected = project_public_generation_event(
         event_type=event.event_type,
         public_message=event.public_message,
-        payload=event.payload,
+        payload=payload,
     )
     return {
         "sequence": event.sequence,

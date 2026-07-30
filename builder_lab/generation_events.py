@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -59,6 +61,22 @@ class PublicGenerationEvent:
     event_type: str
     message: str | None
     payload: dict[str, JsonValue]
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedGenerationEvent:
+    event_type: GenerationEventType
+    public_message: str | None
+    operational_payload: dict[str, JsonValue]
+    public_payload: dict[str, JsonValue]
+    forensic_payload: dict[str, JsonValue]
+
+
+REGISTRY_VERSION = 1
+_PRIVATE_OPERATIONAL_FIELDS = frozenset(
+    {"diagnostic", "forensic_payload", "forensic_blobs", "screenshots"}
+)
+_MAX_PREPARED_PAYLOAD_BYTES = 1_000_000
 
 
 def _spec(*fields: str, stage_result_allowed: bool = False) -> GenerationEventSpec:
@@ -216,6 +234,7 @@ _OPTIONAL_FIELDS = frozenset(
 )
 _COUNTER_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _OPAQUE_OUTPUT_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$")
+_SHA256_CHECKSUM = re.compile(r"^[0-9a-fA-F]{64}$")
 _ALLOWED_OUTPUT_REF_COLON_PREFIXES = frozenset({"model-call", "provider-call"})
 _ISSUE_FIELDS = ("code", "field", "message", "severity")
 _MAX_PUBLIC_INTEGER = (1 << 63) - 1
@@ -287,6 +306,8 @@ def _public_output_refs(value: object) -> list[JsonValue] | None:
     result: list[JsonValue] = []
     for candidate in value[:32]:
         if not isinstance(candidate, str) or not _OPAQUE_OUTPUT_REF.fullmatch(candidate):
+            continue
+        if _SHA256_CHECKSUM.fullmatch(candidate):
             continue
         if ":" in candidate and candidate.split(":", 1)[0] not in _ALLOWED_OUTPUT_REF_COLON_PREFIXES:
             continue
@@ -394,10 +415,167 @@ def project_public_generation_event(
     )
 
 
+def _prepared_mapping(value: object, *, field_name: str) -> dict[str, JsonValue]:
+    sanitized = redact_private_data(value)
+    if not isinstance(sanitized, dict):
+        raise ValueError(f"{field_name} must be a bounded JSON object")
+    try:
+        encoded = json.dumps(
+            sanitized,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (UnicodeEncodeError, ValueError, OverflowError) as error:
+        raise ValueError(f"{field_name} must be JSON encodable") from error
+    if len(encoded) > _MAX_PREPARED_PAYLOAD_BYTES:
+        raise ValueError(f"{field_name} exceeds the safe JSON byte limit")
+    return sanitized
+
+
+def _operational_mapping(value: object) -> dict[str, JsonValue]:
+    """Bound and clone durable recovery JSON without changing its strings."""
+
+    active: set[int] = set()
+    item_count = 0
+
+    def clone(candidate: object, depth: int) -> JsonValue:
+        nonlocal item_count
+        if depth > 32:
+            raise ValueError("operational_payload exceeds the nesting limit")
+        if candidate is None or isinstance(candidate, (bool, int)):
+            if (
+                isinstance(candidate, int)
+                and not isinstance(candidate, bool)
+                and abs(candidate) > (1 << 63) - 1
+            ):
+                raise ValueError("operational_payload integer is out of range")
+            return candidate
+        if isinstance(candidate, float):
+            if not math.isfinite(candidate):
+                raise ValueError("operational_payload contains a non-finite number")
+            return candidate
+        if isinstance(candidate, str):
+            return str.__str__(candidate)
+        if not isinstance(candidate, (Mapping, list, tuple)):
+            raise ValueError("operational_payload contains a non-JSON value")
+        identity = id(candidate)
+        if identity in active:
+            raise ValueError("operational_payload contains a cycle")
+        active.add(identity)
+        try:
+            if isinstance(candidate, Mapping):
+                result: dict[str, JsonValue] = {}
+                for raw_key, raw_value in candidate.items():
+                    item_count += 1
+                    if item_count > 100_000:
+                        raise ValueError("operational_payload has too many items")
+                    if not isinstance(raw_key, str):
+                        raise ValueError("operational_payload keys must be strings")
+                    result[str.__str__(raw_key)] = clone(raw_value, depth + 1)
+                return result
+            items: list[JsonValue] = []
+            for raw_value in candidate:
+                item_count += 1
+                if item_count > 100_000:
+                    raise ValueError("operational_payload has too many items")
+                items.append(clone(raw_value, depth + 1))
+            return items
+        except ValueError:
+            raise
+        except Exception as error:
+            raise ValueError(
+                "operational_payload could not be inspected safely"
+            ) from error
+        finally:
+            active.remove(identity)
+
+    cloned = clone(value, 0)
+    if not isinstance(cloned, dict):
+        raise ValueError("operational_payload must be a bounded JSON object")
+    try:
+        encoded = json.dumps(
+            cloned,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    except (UnicodeEncodeError, ValueError, OverflowError) as error:
+        raise ValueError("operational_payload must be JSON encodable") from error
+    if len(encoded) > _MAX_PREPARED_PAYLOAD_BYTES:
+        raise ValueError("operational_payload exceeds the safe JSON byte limit")
+    return cloned
+
+
+def prepare_generation_event(
+    *,
+    event_type: object,
+    public_message: object,
+    operational_payload: Mapping[str, object],
+    forensic_payload: Mapping[str, object] | None = None,
+) -> PreparedGenerationEvent:
+    """Validate and split one new event before any persistence boundary."""
+
+    try:
+        typed_event = GenerationEventType(event_type)
+    except Exception as error:
+        raise ValueError("unknown generation event type") from error
+    if not isinstance(operational_payload, Mapping):
+        raise ValueError("operational_payload must be a mapping")
+
+    operational_candidate: dict[str, object] = {}
+    extracted_private: dict[str, object] = {}
+    try:
+        for raw_key, raw_value in operational_payload.items():
+            if not isinstance(raw_key, str):
+                raise ValueError("operational payload keys must be strings")
+            key = str.__str__(raw_key)
+            if key in _PRIVATE_OPERATIONAL_FIELDS:
+                extracted_private[key] = raw_value
+            else:
+                operational_candidate[key] = raw_value
+    except ValueError:
+        raise
+    except Exception as error:
+        raise ValueError("operational payload could not be inspected safely") from error
+
+    private_candidate: dict[str, object] = dict(extracted_private)
+    if forensic_payload is not None:
+        if not isinstance(forensic_payload, Mapping):
+            raise ValueError("forensic_payload must be a mapping")
+        try:
+            for raw_key, raw_value in forensic_payload.items():
+                if not isinstance(raw_key, str):
+                    raise ValueError("forensic payload keys must be strings")
+                private_candidate[str.__str__(raw_key)] = raw_value
+        except ValueError:
+            raise
+        except Exception as error:
+            raise ValueError("forensic payload could not be inspected safely") from error
+
+    operational = _operational_mapping(operational_candidate)
+    private = _prepared_mapping(private_candidate, field_name="forensic_payload")
+    projected = project_public_generation_event(
+        event_type=typed_event,
+        public_message=public_message,
+        payload=operational,
+    )
+    return PreparedGenerationEvent(
+        event_type=typed_event,
+        public_message=projected.message,
+        operational_payload=operational,
+        public_payload=projected.payload,
+        forensic_payload=private,
+    )
+
+
 __all__ = [
     "EVENT_REGISTRY",
     "GenerationEventSpec",
     "GenerationEventType",
+    "PreparedGenerationEvent",
     "PublicGenerationEvent",
+    "REGISTRY_VERSION",
+    "prepare_generation_event",
     "project_public_generation_event",
 ]

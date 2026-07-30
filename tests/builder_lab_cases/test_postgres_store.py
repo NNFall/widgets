@@ -1,7 +1,10 @@
 import asyncio
 import gc
+import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from time import monotonic
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import event, select
@@ -9,7 +12,19 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db.base import Base
 from app.db.models import Tenant, User
-from app.saas.models import GenerationArtifact, GenerationEvent, Project
+from app.saas.models import (
+    GenerationArtifact,
+    GenerationEvent,
+    GenerationForensicManifest,
+    GenerationRun,
+    Project,
+)
+from builder_lab.forensics.config import GenerationForensicsConfig
+from builder_lab.forensics.recorder import (
+    GenerationForensicRecorder,
+    ensure_pending_forensic_manifest,
+)
+from builder_lab.generation_events import prepare_generation_event
 from builder_lab.models import BuilderRequest, EngineName, RunStatus, Stage, TokenUsage
 from builder_lab import postgres_store as postgres_store_module
 from builder_lab.postgres_store import PostgresRunStore
@@ -38,6 +53,735 @@ async def _database(tmp_path):
     return engine, factory, project_id
 
 
+async def _forensic_recorder(tmp_path: Path, factory) -> GenerationForensicRecorder:
+    return await GenerationForensicRecorder.open(
+        factory,
+        GenerationForensicsConfig(
+            enabled=True,
+            root=tmp_path / "generation-forensics",
+            ttl_hours=120,
+            max_bytes=32 * 1024 * 1024,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_user_id", (True, "10", 0, -1))
+async def test_pending_forensic_manifest_requires_exact_positive_integer_user_id(
+    tmp_path,
+    invalid_user_id,
+) -> None:
+    engine, factory, _project_id = await _database(tmp_path)
+    recorder = await _forensic_recorder(tmp_path, factory)
+
+    try:
+        async with factory() as database, database.begin():
+            with pytest.raises(ValueError, match="user_id"):
+                await ensure_pending_forensic_manifest(
+                    database,
+                    config=recorder.config,
+                    user_id=invalid_user_id,
+                    project_id=uuid4(),
+                    run_id=uuid4(),
+                    created_at=datetime.now(timezone.utc),
+                )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_prepares_public_and_forensic_event_payloads(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    recorder = await _forensic_recorder(tmp_path, factory)
+    store = PostgresRunStore(
+        factory,
+        project_id=project_id,
+        forensic_recorder=recorder,
+    )
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+        event = await store.append_event(
+            run.run_id,
+            event_type="stage.started",
+            stage=Stage.FOUNDATION,
+            status="running",
+            message="Этап начат",
+            diagnostic="Authorization: Bearer private-token-value",
+            forensic_payload={
+                "critic": {"email": "private@example.com", "finding": "spacing"},
+                "worker_id": "worker-1",
+            },
+        )
+
+        async with factory() as database:
+            row = await database.scalar(
+                select(GenerationEvent).where(
+                    GenerationEvent.run_id == UUID(run.run_id),
+                    GenerationEvent.sequence == event.sequence,
+                )
+            )
+            manifest = await database.scalar(
+                select(GenerationForensicManifest).where(
+                    GenerationForensicManifest.run_id == UUID(run.run_id)
+                )
+            )
+
+        assert row is not None
+        assert row.registry_version == 1
+        assert row.public_payload == {
+            "status": "running",
+            "stage": "foundation",
+        }
+        assert row.payload["status"] == "running"
+        assert row.payload["stage"] == "foundation"
+        assert "diagnostic" not in row.payload
+        assert "forensic_payload" not in row.payload
+        assert row.forensic_ref == (
+            f"events/{event.sequence:08d}-stage.started.json"
+        )
+        assert manifest is not None
+        assert manifest.state == "active"
+        assert manifest.last_event_sequence == event.sequence
+        assert manifest.entry_count >= 2
+        assert manifest.manifest_sha256
+
+        evidence_path = (
+            tmp_path
+            / "generation-forensics"
+            / "runs"
+            / UUID(run.run_id).hex[:2]
+            / run.run_id
+            / row.forensic_ref
+        )
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        serialized = json.dumps(evidence, ensure_ascii=False)
+        assert "private-token-value" not in serialized
+        assert "private@example.com" not in serialized
+        assert evidence["payload"]["worker_id"] == "worker-1"
+        assert evidence["payload"]["critic"]["finding"] == "spacing"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_recorder_fails_closed_on_existing_manifest_identity_mismatch(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    recorder = await _forensic_recorder(tmp_path, factory)
+    store = PostgresRunStore(
+        factory,
+        project_id=project_id,
+        forensic_recorder=recorder,
+    )
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+        async with factory() as database, database.begin():
+            database.add(User(id=11, tenant_id=1, email="other@example.com"))
+            manifest = await database.scalar(
+                select(GenerationForensicManifest).where(
+                    GenerationForensicManifest.run_id == UUID(run.run_id)
+                )
+            )
+            assert manifest is not None
+            manifest.user_id = 11
+
+        event = await store.append_event(
+            run.run_id,
+            event_type="stage.started",
+            stage=Stage.FOUNDATION,
+            status="running",
+            message="must persist only in the core timeline",
+            forensic_payload={"critic": {"finding": "private"}},
+        )
+
+        async with factory() as database:
+            row = await database.scalar(
+                select(GenerationEvent).where(
+                    GenerationEvent.run_id == UUID(run.run_id),
+                    GenerationEvent.sequence == event.sequence,
+                )
+            )
+            manifest = await database.scalar(
+                select(GenerationForensicManifest).where(
+                    GenerationForensicManifest.run_id == UUID(run.run_id)
+                )
+            )
+
+        assert row is not None and row.forensic_ref is None
+        assert manifest is not None and manifest.user_id == 11
+        assert manifest.state == "degraded"
+        assert manifest.metadata_json == {
+            "degraded": True,
+            "failure_code": "manifest_identity_invalid",
+        }
+        assert manifest.last_event_sequence == event.sequence - 1
+        run_dir = (
+            recorder.config.root
+            / "runs"
+            / UUID(run.run_id).hex[:2]
+            / run.run_id
+        )
+        assert not (
+            run_dir / f"events/{event.sequence:08d}-stage.started.json"
+        ).exists()
+
+        await store.mark_terminal(run.run_id, RunStatus.FAILED)
+        async with factory() as database:
+            durable_run = await database.get(GenerationRun, UUID(run.run_id))
+            terminal_manifest = await database.scalar(
+                select(GenerationForensicManifest).where(
+                    GenerationForensicManifest.run_id == UUID(run.run_id)
+                )
+            )
+
+        assert durable_run is not None and durable_run.finished_at is not None
+        assert terminal_manifest is not None
+        assert terminal_manifest.state == "failed"
+        assert terminal_manifest.metadata_json["degraded"] is True
+        assert terminal_manifest.expires_at == (
+            durable_run.finished_at + timedelta(hours=120)
+        )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_postgres_store_rejects_unknown_new_event_type(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    store = PostgresRunStore(factory, project_id=project_id)
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+        with pytest.raises(ValueError, match="unknown generation event type"):
+            await store.append_event(
+                run.run_id,
+                event_type="legacy.private_event",
+                stage=None,
+                status="running",
+                message="must not persist",
+            )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_forensic_write_failure_keeps_core_event_and_degrades_manifest(
+    tmp_path,
+    monkeypatch,
+    caplog,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    recorder = await _forensic_recorder(tmp_path, factory)
+    store = PostgresRunStore(
+        factory,
+        project_id=project_id,
+        forensic_recorder=recorder,
+    )
+    private_value = "private-forensic-value-must-not-leak"
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+
+        def fail_write_event(**_kwargs):
+            raise OSError(private_value)
+
+        monkeypatch.setattr(recorder.storage, "write_event", fail_write_event)
+        event = await store.append_event(
+            run.run_id,
+            event_type="stage.started",
+            stage=Stage.FOUNDATION,
+            status="running",
+            message="Этап начат",
+            forensic_payload={"diagnostic": private_value},
+        )
+
+        async with factory() as database:
+            row = await database.scalar(
+                select(GenerationEvent).where(
+                    GenerationEvent.run_id == UUID(run.run_id),
+                    GenerationEvent.sequence == event.sequence,
+                )
+            )
+            manifest = await database.scalar(
+                select(GenerationForensicManifest).where(
+                    GenerationForensicManifest.run_id == UUID(run.run_id)
+                )
+            )
+
+        assert row is not None and row.forensic_ref is None
+        assert manifest is not None and manifest.state == "degraded"
+        assert manifest.last_event_sequence == event.sequence - 1
+        assert manifest.metadata_json["failure_code"] == "storage_write_failed"
+        assert private_value not in caplog.text
+        assert private_value not in json.dumps(row.payload, ensure_ascii=False)
+        assert private_value not in json.dumps(manifest.metadata_json, ensure_ascii=False)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_forensic_events_reconcile_complete_manifest(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    recorder = await _forensic_recorder(tmp_path, factory)
+    first = PostgresRunStore(
+        factory,
+        project_id=project_id,
+        forensic_recorder=recorder,
+    )
+    second = PostgresRunStore(
+        factory,
+        project_id=project_id,
+        forensic_recorder=recorder,
+    )
+
+    try:
+        run = await first.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+        await asyncio.gather(
+            *(
+                (first if index % 2 == 0 else second).append_event(
+                    run.run_id,
+                    event_type="stage.started",
+                    stage=Stage.FOUNDATION,
+                    status="running",
+                    message=f"attempt {index}",
+                    forensic_payload={"attempt": index, "worker_id": f"worker-{index}"},
+                )
+                for index in range(20)
+            )
+        )
+
+        reopened = await GenerationForensicRecorder.open(
+            factory,
+            recorder.config,
+        )
+        file_manifest = await reopened.load_manifest(UUID(run.run_id))
+        async with factory() as database:
+            sql_manifest = await database.scalar(
+                select(GenerationForensicManifest).where(
+                    GenerationForensicManifest.run_id == UUID(run.run_id)
+                )
+            )
+
+        assert sql_manifest is not None
+        assert len(file_manifest.entries) == 21
+        assert len({item.relative_path for item in file_manifest.entries}) == 21
+        assert sql_manifest.entry_count == 21
+        assert sql_manifest.byte_count == sum(
+            item.byte_count for item in file_manifest.entries
+        )
+        assert sql_manifest.last_event_sequence == 21
+        assert sql_manifest.manifest_sha256 == await reopened.manifest_digest(
+            UUID(run.run_id)
+        )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_retry_reconciles_forensic_event_left_by_rolled_back_transaction(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    recorder = await _forensic_recorder(tmp_path, factory)
+    store = PostgresRunStore(
+        factory,
+        project_id=project_id,
+        forensic_recorder=recorder,
+    )
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+        run_id = UUID(run.run_id)
+        orphan_created_at = datetime.now(timezone.utc)
+        async with factory() as database:
+            transaction = await database.begin()
+            durable_run = await database.get(GenerationRun, run_id)
+            assert durable_run is not None
+            orphan = await recorder.record_event(
+                database,
+                durable_run,
+                sequence=2,
+                prepared=prepare_generation_event(
+                    event_type="stage.started",
+                    public_message="orphaned attempt",
+                    operational_payload={
+                        "status": "running",
+                        "stage": "foundation",
+                    },
+                    forensic_payload={"attempt_id": "rolled-back-attempt"},
+                ),
+                created_at=orphan_created_at,
+            )
+            assert orphan is not None and orphan.written
+            await transaction.rollback()
+
+        async with factory() as database:
+            stale_manifest = await database.scalar(
+                select(GenerationForensicManifest).where(
+                    GenerationForensicManifest.run_id == run_id
+                )
+            )
+        assert stale_manifest is not None
+        assert stale_manifest.last_event_sequence == 1
+
+        retried = await store.append_event(
+            run.run_id,
+            event_type="stage.started",
+            stage=Stage.FOUNDATION,
+            status="running",
+            message="retried attempt",
+            forensic_payload={"attempt_id": "rolled-back-attempt"},
+        )
+
+        async with factory() as database:
+            row = await database.scalar(
+                select(GenerationEvent).where(
+                    GenerationEvent.run_id == run_id,
+                    GenerationEvent.sequence == retried.sequence,
+                )
+            )
+            sql_manifest = await database.scalar(
+                select(GenerationForensicManifest).where(
+                    GenerationForensicManifest.run_id == run_id
+                )
+            )
+        file_manifest = await recorder.load_manifest(run_id)
+
+        assert row is not None
+        assert row.forensic_ref == "events/00000002-stage.started.json"
+        assert sql_manifest is not None
+        assert sql_manifest.state == "active"
+        assert sql_manifest.last_event_sequence == 2
+        assert sql_manifest.entry_count == len(file_manifest.entries)
+        assert sql_manifest.byte_count == sum(
+            entry.byte_count for entry in file_manifest.entries
+        )
+        assert sql_manifest.manifest_sha256 == await recorder.manifest_digest(run_id)
+        assert sql_manifest.metadata_json["reconciled_existing_event"] is True
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_retry_does_not_reuse_conflicting_orphan_forensic_event(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    recorder = await _forensic_recorder(tmp_path, factory)
+    store = PostgresRunStore(
+        factory,
+        project_id=project_id,
+        forensic_recorder=recorder,
+    )
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+        run_id = UUID(run.run_id)
+        async with factory() as database:
+            transaction = await database.begin()
+            durable_run = await database.get(GenerationRun, run_id)
+            assert durable_run is not None
+            orphan = await recorder.record_event(
+                database,
+                durable_run,
+                sequence=2,
+                prepared=prepare_generation_event(
+                    event_type="stage.started",
+                    public_message="orphaned attempt",
+                    operational_payload={
+                        "status": "running",
+                        "stage": "foundation",
+                    },
+                    forensic_payload={
+                        "attempt_id": "rolled-back-attempt",
+                        "diagnostic": "first private failure",
+                    },
+                ),
+                created_at=datetime.now(timezone.utc),
+            )
+            assert orphan is not None and orphan.written
+            await transaction.rollback()
+
+        retried = await store.append_event(
+            run.run_id,
+            event_type="stage.started",
+            stage=Stage.FOUNDATION,
+            status="running",
+            message="retried attempt",
+            forensic_payload={
+                "attempt_id": "different-attempt",
+                "diagnostic": "different private failure",
+            },
+        )
+
+        async with factory() as database:
+            row = await database.scalar(
+                select(GenerationEvent).where(
+                    GenerationEvent.run_id == run_id,
+                    GenerationEvent.sequence == retried.sequence,
+                )
+            )
+            sql_manifest = await database.scalar(
+                select(GenerationForensicManifest).where(
+                    GenerationForensicManifest.run_id == run_id
+                )
+            )
+
+        assert row is not None
+        assert row.forensic_ref is None
+        assert sql_manifest is not None
+        assert sql_manifest.state == "degraded"
+        assert sql_manifest.last_event_sequence == 2
+        assert sql_manifest.metadata_json["failure_code"] == "orphan_event_conflict"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_retry_rejects_other_event_type_at_orphaned_sequence(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    recorder = await _forensic_recorder(tmp_path, factory)
+    store = PostgresRunStore(
+        factory,
+        project_id=project_id,
+        forensic_recorder=recorder,
+    )
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+        run_id = UUID(run.run_id)
+        async with factory() as database:
+            transaction = await database.begin()
+            durable_run = await database.get(GenerationRun, run_id)
+            assert durable_run is not None
+            orphan = await recorder.record_event(
+                database,
+                durable_run,
+                sequence=2,
+                prepared=prepare_generation_event(
+                    event_type="stage.started",
+                    public_message="orphaned start",
+                    operational_payload={
+                        "status": "running",
+                        "stage": "foundation",
+                    },
+                    forensic_payload={"attempt_id": "rolled-back-attempt"},
+                ),
+                created_at=datetime.now(timezone.utc),
+            )
+            assert orphan is not None and orphan.written
+            await transaction.rollback()
+
+        retried = await store.append_event(
+            run.run_id,
+            event_type="stage.completed",
+            stage=Stage.FOUNDATION,
+            status="completed",
+            message="different event at reused sequence",
+            forensic_payload={"attempt_id": "different-attempt"},
+        )
+
+        async with factory() as database:
+            row = await database.scalar(
+                select(GenerationEvent).where(
+                    GenerationEvent.run_id == run_id,
+                    GenerationEvent.sequence == retried.sequence,
+                )
+            )
+            sql_manifest = await database.scalar(
+                select(GenerationForensicManifest).where(
+                    GenerationForensicManifest.run_id == run_id
+                )
+            )
+        file_manifest = await recorder.load_manifest(run_id)
+
+        assert row is not None and row.forensic_ref is None
+        assert sql_manifest is not None
+        assert sql_manifest.state == "degraded"
+        assert sql_manifest.metadata_json["failure_code"] == "orphan_event_conflict"
+        assert [
+            entry.relative_path
+            for entry in file_manifest.entries
+            if entry.kind == "event" and entry.relative_path.startswith("events/00000002-")
+        ] == ["events/00000002-stage.started.json"]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status",
+    (RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED),
+)
+async def test_terminal_forensic_manifest_has_exact_five_day_expiry(
+    tmp_path,
+    status: RunStatus,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    recorder = await _forensic_recorder(tmp_path, factory)
+    store = PostgresRunStore(
+        factory,
+        project_id=project_id,
+        forensic_recorder=recorder,
+    )
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+        await store.mark_terminal(run.run_id, status)
+
+        async with factory() as database:
+            durable_run = await database.get(GenerationRun, UUID(run.run_id))
+            manifest = await database.scalar(
+                select(GenerationForensicManifest).where(
+                    GenerationForensicManifest.run_id == UUID(run.run_id)
+                )
+            )
+
+        assert durable_run is not None and durable_run.finished_at is not None
+        assert manifest is not None and manifest.expires_at is not None
+        assert manifest.state == status.value
+        assert manifest.expires_at == durable_run.finished_at + timedelta(hours=120)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_repeated_terminal_forensic_write_does_not_shift_expiry(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    recorder = await _forensic_recorder(tmp_path, factory)
+    store = PostgresRunStore(
+        factory,
+        project_id=project_id,
+        forensic_recorder=recorder,
+    )
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+        await store.mark_terminal(run.run_id, RunStatus.FAILED)
+
+        async with factory() as database, database.begin():
+            durable_run = await database.get(GenerationRun, UUID(run.run_id))
+            terminal_event = await database.scalar(
+                select(GenerationEvent).where(
+                    GenerationEvent.run_id == UUID(run.run_id),
+                    GenerationEvent.event_type == "run.terminal_marked",
+                )
+            )
+            manifest = await database.scalar(
+                select(GenerationForensicManifest)
+                .where(GenerationForensicManifest.run_id == UUID(run.run_id))
+                .with_for_update()
+            )
+            assert durable_run is not None and durable_run.finished_at is not None
+            assert terminal_event is not None and terminal_event.created_at is not None
+            assert manifest is not None and manifest.expires_at is not None
+            original_expiry = manifest.expires_at
+            created_at = terminal_event.created_at
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            later_finished_at = durable_run.finished_at
+            if later_finished_at.tzinfo is None:
+                later_finished_at = later_finished_at.replace(tzinfo=timezone.utc)
+            later_finished_at += timedelta(hours=12)
+
+            result = await recorder.record_event(
+                database,
+                durable_run,
+                sequence=terminal_event.sequence,
+                prepared=prepare_generation_event(
+                    event_type="run.terminal_marked",
+                    public_message=terminal_event.public_message,
+                    operational_payload=terminal_event.payload,
+                ),
+                created_at=created_at,
+                terminal_state="failed",
+                finished_at=later_finished_at,
+            )
+
+            assert result is not None and result.degraded is False
+            assert result.entry is not None
+            assert result.entry.relative_path == (
+                f"events/{terminal_event.sequence:08d}-run.terminal_marked.json"
+            )
+            assert manifest.expires_at == original_expiry
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_terminal_storage_failure_keeps_terminal_state_and_exact_expiry(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    recorder = await _forensic_recorder(tmp_path, factory)
+    store = PostgresRunStore(
+        factory,
+        project_id=project_id,
+        forensic_recorder=recorder,
+    )
+
+    try:
+        run = await store.create(
+            BuilderRequest(engine=EngineName.DIRECT, brief="Premium widget")
+        )
+
+        def fail_write_event(**_kwargs):
+            raise OSError("private terminal storage failure")
+
+        monkeypatch.setattr(recorder.storage, "write_event", fail_write_event)
+        await store.mark_terminal(run.run_id, RunStatus.FAILED)
+
+        async with factory() as database:
+            durable_run = await database.get(GenerationRun, UUID(run.run_id))
+            manifest = await database.scalar(
+                select(GenerationForensicManifest).where(
+                    GenerationForensicManifest.run_id == UUID(run.run_id)
+                )
+            )
+
+        assert durable_run is not None and durable_run.finished_at is not None
+        assert manifest is not None and manifest.expires_at is not None
+        assert manifest.state == "failed"
+        assert manifest.metadata_json == {
+            "degraded": True,
+            "failure_code": "storage_write_failed",
+        }
+        assert manifest.last_event_sequence == 1
+        assert manifest.expires_at == durable_run.finished_at + timedelta(hours=120)
+    finally:
+        await engine.dispose()
+
+
 @pytest.mark.asyncio
 async def test_concurrent_appends_reserve_monotonic_sequences_and_restore(tmp_path) -> None:
     engine, factory, project_id = await _database(tmp_path)
@@ -53,7 +797,7 @@ async def test_concurrent_appends_reserve_monotonic_sequences_and_restore(tmp_pa
             *(
                 (first if index % 2 == 0 else second).append_event(
                     created.run_id,
-                    event_type="stage.progress",
+                    event_type="stage.started",
                     stage=Stage.FOUNDATION,
                     status="running",
                     message=f"step {index}",
@@ -378,7 +1122,7 @@ async def test_snapshot_uses_only_bounded_event_queries(tmp_path) -> None:
         for index in range(12):
             await store.append_event(
                 run.run_id,
-                event_type="stage.progress",
+                event_type="stage.started",
                 stage=Stage.FOUNDATION,
                 status="running",
                 message=f"step {index}",
@@ -427,7 +1171,7 @@ async def test_events_after_returns_bounded_pages(tmp_path) -> None:
         for index in range(105):
             await store.append_event(
                 run.run_id,
-                event_type="stage.progress",
+                event_type="stage.started",
                 stage=Stage.FOUNDATION,
                 status="running",
                 message=f"step {index}",
@@ -534,7 +1278,7 @@ async def test_run_locks_are_evicted_after_operations(tmp_path) -> None:
         )
         await store.append_event(
             run.run_id,
-            event_type="stage.progress",
+            event_type="stage.started",
             stage=Stage.FOUNDATION,
             status="running",
             message="step",

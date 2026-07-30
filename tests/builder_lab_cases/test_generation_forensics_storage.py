@@ -31,8 +31,8 @@ def _config(root: Path, *, enabled: bool = True) -> GenerationForensicsConfig:
     )
 
 
-def _ids() -> tuple[UUID, UUID, UUID]:
-    return uuid4(), uuid4(), uuid4()
+def _ids() -> tuple[int, UUID, UUID]:
+    return 37, uuid4(), uuid4()
 
 
 def _jpeg_bytes(color: str = "red") -> bytes:
@@ -300,7 +300,7 @@ def test_run_layout_entries_manifest_digest_and_restart_proof(tmp_path: Path) ->
         "project_id": str(project_id),
         "run_id": str(run_id),
         "schema_version": 1,
-        "user_id": str(user_id),
+        "user_id": user_id,
     }
     assert initial.run_id == run_id
     assert result.written is True
@@ -1042,7 +1042,7 @@ def test_manifest_value_objects_reject_coerced_boolean_and_string_numbers() -> N
         ForensicEntry.from_dict(entry)
 
     manifest = {
-        "user_id": str(uuid4()),
+        "user_id": 999,
         "project_id": str(uuid4()),
         "run_id": str(uuid4()),
         "created_at": "2026-07-30T00:00:00+00:00",
@@ -1052,6 +1052,44 @@ def test_manifest_value_objects_reject_coerced_boolean_and_string_numbers() -> N
     }
     with pytest.raises(ValueError, match="schema_version"):
         ForensicManifest.from_dict(manifest)
+
+    manifest["schema_version"] = 1
+    for invalid_user_id in (True, "999", 0, -1):
+        manifest["user_id"] = invalid_user_id
+        with pytest.raises(ValueError, match="user_id"):
+            ForensicManifest.from_dict(manifest)
+
+
+def test_restart_rejects_boolean_user_id_in_marker_only_run(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    storage = GenerationForensicStorage.open(_config(root), writable=True)
+    user_id, project_id, run_id = _ids()
+    storage.initialize_run(
+        user_id=user_id,
+        project_id=project_id,
+        run_id=run_id,
+    )
+    run_dir = root / "runs" / run_id.hex[:2] / str(run_id)
+    marker_path = run_dir / GenerationForensicStorage.RUN_MARKER_NAME
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker["user_id"] = True
+    marker_path.write_text(
+        json.dumps(
+            marker,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "manifest.json").unlink()
+
+    with pytest.raises(ValueError, match="marker"):
+        storage.initialize_run(
+            user_id=1,
+            project_id=project_id,
+            run_id=run_id,
+        )
 
 
 def test_event_sequence_is_bounded_to_the_eight_digit_path_contract(

@@ -6,6 +6,7 @@ import json
 import re
 import secrets
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from uuid import UUID
 from weakref import WeakValueDictionary
 
@@ -30,6 +31,9 @@ from app.chat import (
 from app.projects.serializers import serialize_artifact, serialize_event, serialize_project, serialize_run
 from app.saas.models import GenerationArtifact, GenerationEvent, GenerationRun, Project, UserIdentity
 from builder_lab.models import BuilderRequest, EngineName, WidgetArtifact
+from builder_lab.forensics.config import GenerationForensicsConfig
+from builder_lab.forensics.recorder import ensure_pending_forensic_manifest
+from builder_lab.generation_events import REGISTRY_VERSION, prepare_generation_event
 from builder_lab.preview import PREVIEW_CSP, build_trusted_runtime_document
 from builder_lab.validation import validate_artifact
 from builder_lab.worker import PostgresWorkerQueue
@@ -42,6 +46,10 @@ CHAT_REQUEST_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{7,95}$")
 PROJECT_CHAT_SESSION_KEY = "project_chat_session_id"
 _SQLITE_PROJECT_LOCKS: WeakValueDictionary[tuple[int, UUID], asyncio.Lock] = (
     WeakValueDictionary()
+)
+GENERATION_FORENSICS_CONFIG_KEY = web.AppKey(
+    "generation_forensics_config",
+    GenerationForensicsConfig,
 )
 
 
@@ -149,7 +157,14 @@ def _idempotency_key(request: web.Request) -> str:
     return key
 
 
-async def _enqueue_express_run(database, factory, project: Project, user_id: int, key: str):
+async def _enqueue_express_run(
+    database,
+    factory,
+    project: Project,
+    user_id: int,
+    key: str,
+    generation_forensics: GenerationForensicsConfig,
+):
     builder_request = BuilderRequest(
         engine=EngineName.DIRECT,
         brief=project.brief or "Create a useful website assistant",
@@ -176,15 +191,38 @@ async def _enqueue_express_run(database, factory, project: Project, user_id: int
         if database.get_bind().dialect.name == "sqlite"
         else {}
     )
+    operational_payload = {
+        "status": "queued",
+        "request": builder_request.to_dict(),
+    }
+    prepared = prepare_generation_event(
+        event_type="run.created",
+        public_message="Generation queued",
+        operational_payload=operational_payload,
+    )
     database.add(
         GenerationEvent(
             **event_values,
             run_id=run.id,
             sequence=1,
-            event_type="run.created",
-            public_message="Generation queued",
-            payload={"status": "queued", "request": builder_request.to_dict()},
+            event_type=prepared.event_type.value,
+            public_message=prepared.public_message,
+            payload=prepared.operational_payload,
+            registry_version=REGISTRY_VERSION,
+            public_payload=prepared.public_payload,
+            forensic_ref=None,
         )
+    )
+    created_at = run.created_at or datetime.now(timezone.utc)
+    if created_at.tzinfo is None or created_at.utcoffset() is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    await ensure_pending_forensic_manifest(
+        database,
+        config=generation_forensics,
+        user_id=user_id,
+        project_id=project.id,
+        run_id=run.id,
+        created_at=created_at,
     )
     project.active_run_id = run.id
     project.active_revision = None
@@ -361,6 +399,7 @@ async def create_run(request: web.Request) -> web.Response:
                     project,
                     user_id,
                     key,
+                    request.app[GENERATION_FORENSICS_CONFIG_KEY],
                 )
             await record_funnel_event(
                 database,
@@ -521,6 +560,7 @@ async def retry_run(request: web.Request) -> web.Response:
                         project,
                         user_id,
                         key,
+                        request.app[GENERATION_FORENSICS_CONFIG_KEY],
                     )
                     await record_funnel_event(
                         database,
@@ -907,7 +947,14 @@ async def stream_events(request: web.Request) -> web.StreamResponse:
     return response
 
 
-def setup_project_routes(app: web.Application) -> None:
+def setup_project_routes(
+    app: web.Application,
+    *,
+    generation_forensics: GenerationForensicsConfig | None = None,
+) -> None:
+    app[GENERATION_FORENSICS_CONFIG_KEY] = (
+        generation_forensics or GenerationForensicsConfig.disabled()
+    )
     app.router.add_get("/api/projects", list_projects)
     app.router.add_post("/api/projects", create_project)
     app.router.add_get("/api/projects/{project_id}", get_project)

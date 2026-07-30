@@ -1,5 +1,7 @@
 import asyncio
+import hashlib
 import importlib
+import json
 import os
 import signal
 import shutil
@@ -8,10 +10,12 @@ import sys
 from types import SimpleNamespace
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
+from PIL import Image
 from sqlalchemy import func, select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -22,6 +26,7 @@ from app.models.providers.agentrouter_qwen import AgentRouterQwenProvider
 from app.saas.models import (
     GenerationArtifact,
     GenerationEvent,
+    GenerationForensicManifest,
     GenerationRun,
     ModelCall,
     Project,
@@ -31,6 +36,9 @@ from builder_lab.engines.base import (
     CompositionPlanResult,
     EngineResult,
 )
+from builder_lab.forensics.config import GenerationForensicsConfig
+from builder_lab.forensics.models import ForensicBlob
+from builder_lab.forensics.recorder import GenerationForensicRecorder
 from builder_lab.models import (
     BuilderRequest,
     DirectionProposal,
@@ -41,6 +49,7 @@ from builder_lab.models import (
 )
 from builder_lab.postgres_store import PostgresRunStore
 from builder_lab.patterns.models import PatternCategory
+from builder_lab.store import RunStore
 from builder_lab.worker import (
     BuilderWorker,
     DurableVisualStore,
@@ -316,6 +325,7 @@ async def test_worker_run_closes_router_and_engine_when_shutdown_raises(
         reference_timeout_seconds=60,
         direct_model="builder",
         builder_thinking_level="high",
+        generation_forensics=GenerationForensicsConfig.disabled(),
     )
     monkeypatch.setattr(run_builder_worker, "_database_url", lambda: "postgresql+asyncpg://test")
     monkeypatch.setattr(run_builder_worker, "create_async_engine", lambda *args, **kwargs: engine)
@@ -852,6 +862,30 @@ async def _database(tmp_path):
     return engine, factory, project_id
 
 
+async def _forensic_recorder(tmp_path, factory) -> GenerationForensicRecorder:
+    return await GenerationForensicRecorder.open(
+        factory,
+        GenerationForensicsConfig(
+            enabled=True,
+            root=tmp_path / "generation-forensics",
+            ttl_hours=120,
+            max_bytes=32 * 1024 * 1024,
+        ),
+    )
+
+
+def _jpeg_blob() -> ForensicBlob:
+    output = BytesIO()
+    Image.new("RGB", (2, 2), color=(240, 120, 60)).save(output, format="JPEG")
+    data = output.getvalue()
+    return ForensicBlob(
+        data=data,
+        mime_type="image/jpeg",
+        byte_count=len(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+
+
 async def _queued_run(factory, project_id, *, mode="direct", state="queued") -> UUID:
     async with factory() as database, database.begin():
         run = GenerationRun(
@@ -865,6 +899,220 @@ async def _queued_run(factory, project_id, *, mode="direct", state="queued") -> 
         database.add(run)
         await database.flush()
         return run.id
+
+
+@pytest.mark.asyncio
+async def test_worker_materializes_forensics_before_stage_handler(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    recorder = await _forensic_recorder(tmp_path, factory)
+    queue = PostgresWorkerQueue(
+        factory,
+        lease_seconds=30,
+        forensic_recorder=recorder,
+    )
+    run_id = await _queued_run(factory, project_id)
+    claim = await queue.claim("forensic-worker")
+    assert isinstance(claim, RunClaim)
+    handler_observed_active = False
+
+    async def handle(_claim: RunClaim) -> StageResult:
+        nonlocal handler_observed_active
+        async with factory() as database:
+            manifest = await database.scalar(
+                select(GenerationForensicManifest).where(
+                    GenerationForensicManifest.run_id == run_id
+                )
+            )
+        run_dir = (
+            recorder.config.root / "runs" / run_id.hex[:2] / str(run_id)
+        )
+        handler_observed_active = bool(
+            manifest is not None
+            and manifest.state == "active"
+            and manifest.expires_at is None
+            and (run_dir / ".kaigo-generation-run.json").is_file()
+            and (run_dir / "manifest.json").is_file()
+        )
+        return StageResult(public_message="reference ready")
+
+    worker = BuilderWorker(
+        queue=queue,
+        worker_id="forensic-worker",
+        stage_handler=handle,
+        heartbeat_interval=1,
+    )
+    try:
+        assert await worker._run_claim(claim) == "art_direction"
+        assert handler_observed_active
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_worker_persists_screenshot_bytes_only_in_forensic_volume(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    recorder = await _forensic_recorder(tmp_path, factory)
+    queue = PostgresWorkerQueue(
+        factory,
+        lease_seconds=30,
+        forensic_recorder=recorder,
+    )
+    run_id = await _queued_run(factory, project_id)
+    claim = await queue.claim("forensic-worker")
+    assert isinstance(claim, RunClaim)
+    blob = _jpeg_blob()
+    output_ref = "desktop-open-initial"
+    private_diagnostic = (
+        "Authorization: Bearer private-token screenshot@example.com"
+    )
+
+    try:
+        await queue.append_attempt_event(
+            claim,
+            event_type="screenshot.captured",
+            stage=Stage.MOTION_POLISH,
+            status="completed",
+            message="screenshot captured",
+            revision=5,
+            diagnostic=private_diagnostic,
+            output_refs=(output_ref,),
+            forensic_payload={
+                "screenshot": {
+                    "screenshot_id": "desktop_open_initial",
+                    "sha256": blob.sha256,
+                    "byte_count": blob.byte_count,
+                },
+                "critic": {"finding": "composer is too narrow"},
+            },
+            forensic_blobs=(blob,),
+        )
+        await queue.append_attempt_event(
+            claim,
+            event_type="screenshot.captured",
+            stage=Stage.MOTION_POLISH,
+            status="completed",
+            message="same screenshot bytes captured again",
+            revision=5,
+            output_refs=(output_ref,),
+            forensic_payload={
+                "screenshot": {
+                    "screenshot_id": "desktop_after_turn_1",
+                    "sha256": blob.sha256,
+                    "byte_count": blob.byte_count,
+                },
+            },
+            forensic_blobs=(blob,),
+        )
+
+        async with factory() as database:
+            events = (
+                await database.execute(
+                    select(GenerationEvent)
+                    .where(
+                        GenerationEvent.run_id == run_id,
+                        GenerationEvent.event_type == "screenshot.captured",
+                    )
+                    .order_by(GenerationEvent.sequence)
+                )
+            ).scalars().all()
+            manifest = await database.scalar(
+                select(GenerationForensicManifest).where(
+                    GenerationForensicManifest.run_id == run_id
+                )
+            )
+
+        assert len(events) == 2
+        assert all(event.forensic_ref is not None for event in events)
+        event = events[0]
+        assert event.public_payload == {
+            "output_refs": [output_ref],
+            "revision": 5,
+            "stage": "motion_polish",
+            "status": "completed",
+        }
+        assert event.payload["output_refs"] == [output_ref]
+        assert blob.sha256 not in json.dumps(event.public_payload)
+        assert "diagnostic" not in event.payload
+        assert blob.data not in json.dumps(event.payload).encode("utf-8")
+        assert manifest is not None and manifest.state == "active"
+
+        run_dir = recorder.config.root / "runs" / run_id.hex[:2] / str(run_id)
+        assert (run_dir / "blobs" / f"{blob.sha256}.jpg").read_bytes() == blob.data
+        evidence = json.loads(
+            (run_dir / event.forensic_ref).read_text(encoding="utf-8")
+        )
+        serialized_evidence = json.dumps(evidence, ensure_ascii=False)
+        assert "private-token" not in serialized_evidence
+        assert "screenshot@example.com" not in serialized_evidence
+        assert evidence["payload"]["critic"]["finding"] == (
+            "composer is too narrow"
+        )
+        assert evidence["payload"]["blob_refs"] == [
+            f"blobs/{blob.sha256}.jpg"
+        ]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_worker_rejects_unknown_event_without_consuming_sequence(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id)
+    claim = await queue.claim("worker")
+    assert isinstance(claim, RunClaim)
+
+    try:
+        async with factory() as database:
+            before = await database.get(GenerationRun, run_id)
+            assert before is not None
+            next_sequence = before.next_event_sequence
+        with pytest.raises(ValueError, match="unknown generation event type"):
+            await queue.append_attempt_event(
+                claim,
+                event_type="legacy.private_event",
+                stage=None,
+                status="running",
+                message="must not persist",
+            )
+        async with factory() as database:
+            after = await database.get(GenerationRun, run_id)
+            assert after is not None
+            assert after.next_event_sequence == next_sequence
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_in_memory_store_discards_forensic_payload_and_blob_bytes() -> None:
+    store = RunStore()
+    run = await store.create(
+        BuilderRequest(engine=EngineName.DIRECT, brief="memory-only")
+    )
+    blob = _jpeg_blob()
+
+    event = await store.append_event(
+        run.run_id,
+        event_type="screenshot.captured",
+        stage=Stage.MOTION_POLISH,
+        status="completed",
+        message="screenshot captured",
+        revision=1,
+        output_refs=(blob.sha256,),
+        forensic_payload={"secret": "private-memory-value"},
+        forensic_blobs=(blob,),
+    )
+
+    serialized_event = json.dumps(event.to_dict(), ensure_ascii=False)
+    serialized_store = repr(store._runs)
+    assert blob.sha256 not in serialized_event
+    assert "private-memory-value" not in serialized_event
+    assert "private-memory-value" not in serialized_store
+    assert blob.data.hex() not in serialized_store
 
 
 @pytest.mark.asyncio
@@ -1693,7 +1941,7 @@ async def test_route_exhaustion_fails_once_and_persists_aggregate_usage(
             "thinking_tokens": 4,
             "total_tokens": 47,
         }
-        assert failed.payload["diagnostic"] == diagnostic
+        assert "diagnostic" not in failed.payload
         assert "usage" not in run_failed.payload
         assert tuple(int(value) for value in usage_row) == (31, 12, 4)
     finally:

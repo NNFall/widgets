@@ -29,9 +29,11 @@ from app.models.router import (
 )
 from app.chat import CHAT_SERVICE_KEY, RoutedChatService
 from app.projects.routes import setup_project_routes
+from app.projects.serializers import serialize_event
 from app.saas.models import (
     GenerationArtifact,
     GenerationEvent,
+    GenerationForensicManifest,
     GenerationRun,
     FunnelEvent,
     ModelCall,
@@ -40,10 +42,61 @@ from app.saas.models import (
     UsageLedger,
     UserIdentity,
 )
+from builder_lab.forensics.config import GenerationForensicsConfig
 from builder_lab.preview import PREVIEW_CSP
 from tests.builder_lab_cases.test_validation import artifact
 
 POSTGRES_URL = os.getenv("KAIGO_TEST_POSTGRES_URL")
+
+
+def test_registry_v1_event_reprojects_stored_public_candidate_fail_closed() -> None:
+    event = GenerationEvent(
+        id=9001,
+        run_id=UUID("00000000-0000-0000-0000-000000000001"),
+        sequence=1,
+        event_type="stage.started",
+        public_message="Started",
+        payload={"status": "raw", "stage": "foundation"},
+        registry_version=1,
+        public_payload={
+            "status": "stored",
+            "stage": "foundation",
+            "diagnostic": "never-public",
+            "token": "never-public-token",
+        },
+    )
+
+    serialized = serialize_event(event)
+
+    assert serialized["payload"] == {
+        "status": "stored",
+        "stage": "foundation",
+    }
+    assert "never-public" not in json.dumps(serialized)
+
+
+def test_owner_event_serializer_never_exposes_screenshot_checksum() -> None:
+    checksum = "a" * 64
+    event = GenerationEvent(
+        id=9002,
+        run_id=UUID("00000000-0000-0000-0000-000000000001"),
+        sequence=2,
+        event_type="screenshot.captured",
+        public_message="Screenshot captured",
+        payload={},
+        registry_version=1,
+        public_payload={
+            "status": "completed",
+            "stage": "motion_polish",
+            "revision": 5,
+            "output_refs": [checksum, "desktop-open-initial"],
+        },
+    )
+
+    serialized = serialize_event(event)
+
+    assert serialized["payload"]["output_refs"] == ["desktop-open-initial"]
+    assert checksum not in json.dumps(serialized)
 
 
 async def _wait_until(predicate) -> None:
@@ -51,7 +104,12 @@ async def _wait_until(predicate) -> None:
         await asyncio.sleep(0.01)
 
 
-async def _project_app(tmp_path, *, configure_app=None):
+async def _project_app(
+    tmp_path,
+    *,
+    configure_app=None,
+    generation_forensics: GenerationForensicsConfig | None = None,
+):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'routes.db'}")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
@@ -115,7 +173,7 @@ async def _project_app(tmp_path, *, configure_app=None):
         return web.json_response({"csrf_token": "test-csrf"})
 
     app.router.add_post("/test/login/{user_id}", login)
-    setup_project_routes(app)
+    setup_project_routes(app, generation_forensics=generation_forensics)
     if configure_app is not None:
         configure_app(app, factory)
     client = TestClient(TestServer(app))
@@ -368,6 +426,9 @@ async def test_create_run_is_202_idempotent_and_never_calls_engine_inline(
                 )
             ).scalar_one()
             assert event.event_type == "run.created"
+            assert event.registry_version == 1
+            assert event.public_payload == {"status": "queued"}
+            assert event.forensic_ref is None
             assert event.run_id == run.id
             assert project.active_run_id == run.id
             assert entitlement.state == "reserved"
@@ -379,6 +440,50 @@ async def test_create_run_is_202_idempotent_and_never_calls_engine_inline(
                 )
                 == 2
             )
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_enabled_enqueue_creates_only_pending_forensic_sql_manifest(
+    tmp_path,
+) -> None:
+    root = tmp_path / "private-generation-forensics"
+    config = GenerationForensicsConfig(
+        enabled=True,
+        root=root,
+        ttl_hours=120,
+        max_bytes=32 * 1024 * 1024,
+    )
+    engine, factory, client, project_id, _ = await _project_app(
+        tmp_path,
+        generation_forensics=config,
+    )
+    try:
+        await client.post("/test/login/10")
+        response = await client.post(
+            f"/api/projects/{project_id}/runs",
+            json={"mode": "express"},
+            headers={
+                "Idempotency-Key": "forensic-pending",
+                "X-CSRF-Token": "test-csrf",
+            },
+        )
+        assert response.status == 202
+        run_id = UUID((await response.json())["id"])
+
+        async with factory() as database:
+            manifest = await database.scalar(
+                select(GenerationForensicManifest).where(
+                    GenerationForensicManifest.run_id == run_id
+                )
+            )
+        assert manifest is not None
+        assert manifest.state == "pending"
+        assert manifest.storage_key == f"runs/{run_id.hex[:2]}/{run_id}"
+        assert manifest.expires_at is None
+        assert not root.exists()
     finally:
         await client.close()
         await engine.dispose()

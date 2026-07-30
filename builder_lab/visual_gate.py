@@ -10,6 +10,7 @@ from dataclasses import replace
 from typing import Any, Protocol
 
 from .engines.base import BuilderEngineError, DirectBuilderEngine
+from .forensics.models import ForensicBlob
 from .models import (
     BuilderRequest,
     DirectionProposal,
@@ -45,6 +46,77 @@ _CRITIC_ROLE_LABELS = {
 def _critic_role_label(role: Any) -> str:
     value = getattr(role, "value", str(role))
     return _CRITIC_ROLE_LABELS.get(value, value)
+
+
+def _critic_role_value(role: Any) -> str:
+    return str(getattr(role, "value", role))
+
+
+def _critic_forensic_evidence(role: Any, role_result: Any) -> dict[str, Any]:
+    critique = getattr(role_result, "critique", None)
+    critique_payload = (
+        critique.to_dict()
+        if critique is not None and callable(getattr(critique, "to_dict", None))
+        else {}
+    )
+    observations = []
+    for observation in tuple(getattr(role_result, "observations", ())):
+        observations.append(
+            {
+                "screenshot_id": getattr(observation, "screenshot_id", None),
+                "observation": getattr(observation, "observation", None),
+                "pixel_facts": dict(getattr(observation, "pixel_facts", {})),
+            }
+        )
+    pixel_proof = getattr(role_result, "pixel_proof", None)
+    proof_payload = None
+    if pixel_proof is not None:
+        proof_payload = {
+            "code": getattr(pixel_proof, "code", None),
+            "screenshot_id": getattr(pixel_proof, "screenshot_id", None),
+            "source_sha256": getattr(pixel_proof, "source_sha256", None),
+            "transmitted_sha256": getattr(
+                pixel_proof,
+                "transmitted_sha256",
+                None,
+            ),
+        }
+    usage = getattr(role_result, "usage", TokenUsage())
+    return {
+        "role": _critic_role_value(role),
+        "critique": critique_payload,
+        "observations": observations,
+        "pixel_proof": proof_payload,
+        "usage": usage.to_dict() if isinstance(usage, TokenUsage) else {},
+    }
+
+
+def _judge_forensic_evidence(
+    critique: Any,
+    supporting_roles: dict[str, tuple[Any, ...]],
+) -> dict[str, Any]:
+    return {
+        "critique": (
+            critique.to_dict()
+            if callable(getattr(critique, "to_dict", None))
+            else {}
+        ),
+        "supporting_roles": {
+            finding_id: [_critic_role_value(role) for role in roles]
+            for finding_id, roles in supporting_roles.items()
+        },
+    }
+
+
+def _failure_forensic_evidence(kind: str, error: BaseException) -> dict[str, Any]:
+    return {
+        kind: {
+            "error_code": getattr(error, "error_code", type(error).__name__),
+            "message": str(error),
+            "diagnostic": getattr(error, "diagnostic", None),
+            "failures": list(getattr(error, "failures", ())),
+        }
+    }
 
 
 class BrowserAuditor(Protocol):
@@ -335,6 +407,13 @@ class VisualRepairGate:
             message="Независимо проверяем, что код отвечает замечаниям судьи.",
             revision=after.revision,
             issues=visual_finding_issues(findings),
+            forensic_payload={
+                "repair_verifier": {
+                    "findings": [finding.to_dict() for finding in findings],
+                    "before_revision": before.revision,
+                    "after_revision": after.revision,
+                }
+            },
         )
         verifier: RepairVerifier | None = None
         try:
@@ -358,6 +437,18 @@ class VisualRepairGate:
                 ),
                 revision=after.revision,
                 usage=getattr(exc, "usage", TokenUsage()),
+                forensic_payload={
+                    "repair_verifier": {
+                        "failure": {
+                            "error_code": getattr(
+                                exc,
+                                "error_code",
+                                type(exc).__name__,
+                            ),
+                            "diagnostic": getattr(exc, "diagnostic", None),
+                        }
+                    }
+                },
             )
             return
         finally:
@@ -387,6 +478,19 @@ class VisualRepairGate:
             revision=after.revision,
             usage=result.usage,
             issues=issues,
+            forensic_payload={
+                "repair_verifier": {
+                    "summary": result.summary,
+                    "checks": [
+                        {
+                            "finding_id": check.finding_id,
+                            "status": check.status,
+                            "evidence": check.evidence,
+                        }
+                        for check in result.checks.values()
+                    ],
+                }
+            },
         )
 
     async def _record_validation(
@@ -500,11 +604,10 @@ class VisualRepairGate:
                     raise
                 except BrowserAuditError as exc:
                     LOGGER.warning(
-                        "visual browser audit failed run_id=%s attempt=%s error_code=%s diagnostic=%s",
+                        "visual browser audit failed run_id=%s attempt=%s error_code=%s",
                         run_id,
                         browser_attempt,
                         exc.error_code,
-                        exc.diagnostic or type(exc).__name__,
                     )
                     await self._store.append_event(
                         run_id,
@@ -513,6 +616,10 @@ class VisualRepairGate:
                         status="failed",
                         message=str(exc)[:1_000],
                         revision=candidate.revision,
+                        forensic_payload=_failure_forensic_evidence(
+                            "browser_audit",
+                            exc,
+                        ),
                     )
                     repair_issues = browser_repair_issues(
                         exc,
@@ -534,14 +641,9 @@ class VisualRepairGate:
                     )
                     if fingerprint in seen:
                         LOGGER.warning(
-                            "visual browser candidate exhausted run_id=%s candidate=%s",
+                            "visual browser candidate exhausted run_id=%s fingerprint=%s",
                             run_id,
-                            json.dumps(
-                                candidate.to_dict(),
-                                ensure_ascii=True,
-                                sort_keys=True,
-                                separators=(",", ":"),
-                            )[:32_000],
+                            artifact_fingerprint(candidate),
                         )
                         raise self._quality_error(
                             "repeated_browser_gate_fingerprint"
@@ -549,14 +651,9 @@ class VisualRepairGate:
                     seen.add(fingerprint)
                     if browser_repair_count >= MAX_BROWSER_REPAIRS:
                         LOGGER.warning(
-                            "visual browser candidate exhausted run_id=%s candidate=%s",
+                            "visual browser candidate exhausted run_id=%s fingerprint=%s",
                             run_id,
-                            json.dumps(
-                                candidate.to_dict(),
-                                ensure_ascii=True,
-                                sort_keys=True,
-                                separators=(",", ":"),
-                            )[:32_000],
+                            artifact_fingerprint(candidate),
                         )
                         raise self._quality_error(
                             "browser_gate_repair_exhausted"
@@ -592,14 +689,10 @@ class VisualRepairGate:
                     except Exception as repair_exc:
                         usage = getattr(repair_exc, "usage", TokenUsage())
                         LOGGER.warning(
-                            "browser gate repair failed run_id=%s attempt=%s error_code=%s diagnostic=%s",
+                            "browser gate repair failed run_id=%s attempt=%s error_code=%s",
                             run_id,
                             browser_repair_count,
                             getattr(repair_exc, "error_code", type(repair_exc).__name__),
-                            str(
-                                getattr(repair_exc, "diagnostic", None)
-                                or str(repair_exc)
-                            )[:2_000],
                         )
                         await self._store.append_event(
                             run_id,
@@ -612,6 +705,10 @@ class VisualRepairGate:
                             ),
                             revision=candidate.revision,
                             usage=usage,
+                            forensic_payload=_failure_forensic_evidence(
+                                "browser_repair",
+                                repair_exc,
+                            ),
                         )
                         raise self._quality_error(
                             "browser_gate_repair_error: "
@@ -713,6 +810,10 @@ class VisualRepairGate:
                                 ),
                                 revision=candidate.revision,
                                 usage=usage,
+                                forensic_payload=_failure_forensic_evidence(
+                                    "validation_repair",
+                                    repair_exc,
+                                ),
                             )
                             raise self._quality_error(
                                 "browser_validation_repair_error: "
@@ -776,6 +877,10 @@ class VisualRepairGate:
                         message="Визуальная проверка завершилась ошибкой",
                         revision=candidate.revision,
                         usage=usage,
+                        forensic_payload=_failure_forensic_evidence(
+                            "visual_critic",
+                            exc,
+                        ),
                     )
                     raise self._quality_error(
                         f"{getattr(exc, 'error_code', type(exc).__name__)}: "
@@ -786,6 +891,12 @@ class VisualRepairGate:
                 try:
                     if not screenshots_recorded:
                         for screenshot in audit.screenshots:
+                            screenshot_blob = ForensicBlob(
+                                data=screenshot.data,
+                                mime_type="image/jpeg",
+                                byte_count=screenshot.evidence.byte_count,
+                                sha256=screenshot.evidence.sha256,
+                            )
                             await self._store.append_event(
                                 run_id,
                                 event_type="screenshot.captured",
@@ -797,6 +908,11 @@ class VisualRepairGate:
                                     f"({screenshot.evidence.byte_count} bytes)"
                                 ),
                                 revision=candidate.revision,
+                                output_refs=(screenshot.evidence.screenshot_id,),
+                                forensic_payload={
+                                    "screenshot": screenshot.evidence.to_dict()
+                                },
+                                forensic_blobs=(screenshot_blob,),
                             )
                         screenshots_recorded = True
                     ai_review_attempt += 1
@@ -815,11 +931,10 @@ class VisualRepairGate:
                         "invalid_response",
                     }
                     LOGGER.warning(
-                        "visual critic failed run_id=%s attempt=%s error_code=%s diagnostic=%s",
+                        "visual critic failed run_id=%s attempt=%s error_code=%s",
                         run_id,
                         ai_review_attempt,
                         getattr(exc, "error_code", type(exc).__name__),
-                        str(getattr(exc, "diagnostic", None) or str(exc))[:2_000],
                     )
                     await self._store.append_event(
                         run_id,
@@ -831,6 +946,10 @@ class VisualRepairGate:
                         # Terminal usage is persisted by worker stage.failed.
                         # Keeping it here too would double the run aggregate.
                         usage=TokenUsage() if terminal_route_error else usage,
+                        forensic_payload=_failure_forensic_evidence(
+                            "visual_critic",
+                            exc,
+                        ),
                     )
                     if terminal_route_error:
                         raise BuilderEngineError(
@@ -892,6 +1011,12 @@ class VisualRepairGate:
                             ),
                             revision=candidate.revision,
                             issues=visual_finding_issues(role_findings),
+                            forensic_payload={
+                                "critic": _critic_forensic_evidence(
+                                    role,
+                                    role_result,
+                                )
+                            },
                         )
                 if isinstance(role_failures, dict):
                     for role, error_code in role_failures.items():
@@ -907,6 +1032,14 @@ class VisualRepairGate:
                             ),
                             revision=candidate.revision,
                             diagnostic=str(error_code)[:160],
+                            forensic_payload={
+                                "critic": {
+                                    "role": _critic_role_value(role),
+                                    "failure": {
+                                        "error_code": str(error_code)[:160]
+                                    },
+                                }
+                            },
                         )
                 supporting_roles = getattr(result, "supporting_roles", {})
                 normalized_support = (
@@ -926,6 +1059,12 @@ class VisualRepairGate:
                         findings,
                         supporting_roles=normalized_support,
                     ),
+                    forensic_payload={
+                        "judge": _judge_forensic_evidence(
+                            result.critique,
+                            normalized_support,
+                        )
+                    },
                 )
                 await self._store.append_event(
                     run_id,
@@ -965,6 +1104,20 @@ class VisualRepairGate:
                         findings,
                         supporting_roles=normalized_support,
                     ),
+                    forensic_payload={
+                        "repair_plan": {
+                            "kind": "visual",
+                            "findings": [
+                                finding.to_dict() for finding in findings
+                            ],
+                            "supporting_roles": {
+                                finding_id: [
+                                    _critic_role_value(role) for role in roles
+                                ]
+                                for finding_id, roles in normalized_support.items()
+                            },
+                        }
+                    },
                 )
                 if any(
                     "art_direction" in finding.artifact_fields
@@ -1015,6 +1168,21 @@ class VisualRepairGate:
                         findings,
                         supporting_roles=normalized_support,
                     ),
+                    forensic_payload={
+                        "repair": {
+                            "kind": "visual",
+                            "attempt": visual_repair_count,
+                            "findings": [
+                                finding.to_dict() for finding in findings
+                            ],
+                            "supporting_roles": {
+                                finding_id: [
+                                    _critic_role_value(role) for role in roles
+                                ]
+                                for finding_id, roles in normalized_support.items()
+                            },
+                        }
+                    },
                 )
                 repair_input_candidate = candidate
                 try:
@@ -1043,6 +1211,24 @@ class VisualRepairGate:
                         ),
                         revision=candidate.revision,
                         usage=usage,
+                        forensic_payload={
+                            "repair": {
+                                "kind": "visual",
+                                "attempt": visual_repair_count,
+                                "failure": {
+                                    "error_code": getattr(
+                                        exc,
+                                        "error_code",
+                                        type(exc).__name__,
+                                    ),
+                                    "diagnostic": getattr(
+                                        exc,
+                                        "diagnostic",
+                                        None,
+                                    ),
+                                },
+                            }
+                        },
                     )
                     raise self._quality_error(
                         f"visual_repair_error: "
@@ -1063,6 +1249,14 @@ class VisualRepairGate:
                     revision=repaired_candidate.revision,
                     usage=repair.usage,
                     diagnostic=repair.diagnostic,
+                    forensic_payload={
+                        "repair": {
+                            "kind": "visual",
+                            "attempt": visual_repair_count,
+                            "provider_request_id": repair.provider_request_id,
+                            "change_summary": repaired_candidate.change_summary,
+                        }
+                    },
                 )
                 await self._checkpoint(run_id)
                 forbidden = forbidden_repair_fields(
@@ -1134,6 +1328,10 @@ class VisualRepairGate:
                             ),
                             revision=candidate.revision,
                             usage=usage,
+                            forensic_payload=_failure_forensic_evidence(
+                                "validation_repair",
+                                repair_exc,
+                            ),
                         )
                         raise self._quality_error(
                             "visual_validation_repair_error: "

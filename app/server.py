@@ -395,7 +395,7 @@ async def create_app(
         entry_max_body_bytes=cfg.entry_max_body_bytes,
         trusted_proxy_cidrs=cfg.publication_chat_trusted_proxy_cidrs,
     )
-    setup_project_routes(app)
+    setup_project_routes(app, generation_forensics=cfg.generation_forensics)
     setup_publication_routes(app)
     setup_billing_routes(app)
     return app

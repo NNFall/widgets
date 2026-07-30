@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import secrets
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timezone
 from time import monotonic
@@ -13,6 +14,10 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.saas.models import GenerationArtifact, GenerationEvent, GenerationRun, Project
+
+from .forensics.models import ForensicBlob
+from .forensics.recorder import GenerationForensicRecorder
+from .generation_events import REGISTRY_VERSION, prepare_generation_event
 
 from .models import (
     BuilderEvent,
@@ -66,11 +71,13 @@ class PostgresRunStore:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         project_id: UUID,
+        forensic_recorder: GenerationForensicRecorder | None = None,
     ) -> None:
         self._sessions = session_factory
         self._project_id = project_id
         self._namespace = id(session_factory.kw.get("bind"))
         self._visual_candidates: dict[UUID, WidgetArtifact] = {}
+        self._forensic_recorder = forensic_recorder
 
     def _run_uuid(self, run_id: str) -> UUID:
         try:
@@ -198,7 +205,7 @@ class PostgresRunStore:
         )
         return result.first() is not None
 
-    def _append_record(
+    async def _append_record(
         self,
         database: AsyncSession,
         run: GenerationRun,
@@ -214,9 +221,12 @@ class PostgresRunStore:
         error_code: str | None = None,
         diagnostic: str | None = None,
         payload_extra: dict | None = None,
+        forensic_payload: Mapping[str, object] | None = None,
+        forensic_blobs: tuple[ForensicBlob, ...] = (),
+        terminal_state: str | None = None,
+        finished_at: datetime | None = None,
     ) -> BuilderEvent:
         sequence = run.next_event_sequence
-        run.next_event_sequence += 1
         event = BuilderEvent.create(
             run_id=str(run.id),
             sequence=sequence,
@@ -236,12 +246,39 @@ class PostgresRunStore:
             payload["diagnostic"] = diagnostic
         if payload_extra:
             payload.update(_json_copy(payload_extra))
+        private_payload = dict(forensic_payload or {})
+        if diagnostic is not None:
+            private_payload["diagnostic"] = diagnostic
+        prepared = prepare_generation_event(
+            event_type=event_type,
+            public_message=message,
+            operational_payload=payload,
+            forensic_payload=private_payload,
+        )
+        run.next_event_sequence += 1
+        forensic_ref = None
+        if self._forensic_recorder is not None:
+            result = await self._forensic_recorder.record_event(
+                database,
+                run,
+                sequence=sequence,
+                prepared=prepared,
+                forensic_blobs=forensic_blobs,
+                created_at=event.timestamp,
+                terminal_state=terminal_state,
+                finished_at=finished_at,
+            )
+            if result is not None and not result.degraded and result.entry is not None:
+                forensic_ref = result.entry.relative_path
         values = {
             "run_id": run.id,
             "sequence": sequence,
-            "event_type": event_type,
-            "public_message": message,
-            "payload": payload,
+            "event_type": prepared.event_type.value,
+            "public_message": prepared.public_message,
+            "payload": prepared.operational_payload,
+            "registry_version": REGISTRY_VERSION,
+            "public_payload": prepared.public_payload,
+            "forensic_ref": forensic_ref,
             "created_at": event.timestamp,
         }
         if database.get_bind().dialect.name == "sqlite":
@@ -252,7 +289,12 @@ class PostgresRunStore:
             run.current_stage = stage.value
             if status == "completed":
                 run.last_completed_stage = stage.value
-        return event
+        return replace(
+            event,
+            event_type=prepared.event_type.value,
+            message=prepared.public_message or "",
+            diagnostic=None,
+        )
 
     async def _create(
         self,
@@ -275,7 +317,7 @@ class PostgresRunStore:
             )
             database.add(run)
             await database.flush()
-            self._append_record(
+            await self._append_record(
                 database,
                 run,
                 event_type="run.created",
@@ -288,7 +330,7 @@ class PostgresRunStore:
                 database.add(
                     self._new_artifact_record(run.id, seed, quality_status="verified")
                 )
-                self._append_record(
+                await self._append_record(
                     database,
                     run,
                     event_type="artifact.seeded",
@@ -449,13 +491,16 @@ class PostgresRunStore:
         changes: tuple[str, ...] = (),
         error_code: str | None = None,
         diagnostic: str | None = None,
+        output_refs: tuple[str, ...] = (),
+        forensic_payload: Mapping[str, object] | None = None,
+        forensic_blobs: tuple[ForensicBlob, ...] = (),
     ) -> BuilderEvent:
         run_uuid = self._run_uuid(run_id)
         async with self._lock(run_uuid):
             async with self._sessions() as database, database.begin():
                 run = await self._locked_run(database, run_uuid)
                 self._ensure_mutable(run)
-                return self._append_record(
+                return await self._append_record(
                     database,
                     run,
                     event_type=event_type,
@@ -468,6 +513,9 @@ class PostgresRunStore:
                     changes=changes,
                     error_code=error_code,
                     diagnostic=diagnostic,
+                    payload_extra={"output_refs": list(output_refs)},
+                    forensic_payload=forensic_payload,
+                    forensic_blobs=forensic_blobs,
                 )
 
     async def set_running(self, run_id: str) -> None:
@@ -612,7 +660,7 @@ class PostgresRunStore:
                 previous_draft = await self._latest_draft_event(
                     database, run_uuid
                 )
-                self._append_record(
+                await self._append_record(
                     database,
                     run,
                     event_type=_DRAFT_STAGED_EVENT,
@@ -675,7 +723,7 @@ class PostgresRunStore:
                         )
                     else:
                         persisted.quality_status = "verified"
-                    self._append_record(
+                    await self._append_record(
                         database,
                         run,
                         event_type="artifact.committed",
@@ -807,7 +855,7 @@ class PostgresRunStore:
                 ):
                     requested = False
                 else:
-                    self._append_record(
+                    await self._append_record(
                         database,
                         run,
                         event_type="run.cancel_requested",
@@ -831,6 +879,8 @@ class PostgresRunStore:
         error_code: str | None = None,
         diagnostic: str | None = None,
         elapsed_seconds: float = 0.0,
+        forensic_payload: Mapping[str, object] | None = None,
+        forensic_blobs: tuple[ForensicBlob, ...] = (),
     ) -> BuilderEvent:
         if status not in TERMINAL_STATUSES:
             raise ValueError("terminal status is required")
@@ -839,7 +889,8 @@ class PostgresRunStore:
             async with self._sessions() as database, database.begin():
                 run = await self._locked_run(database, run_uuid)
                 self._ensure_mutable(run)
-                event = self._append_record(
+                finished_at = datetime.now(timezone.utc)
+                event = await self._append_record(
                     database,
                     run,
                     event_type=event_type,
@@ -850,10 +901,14 @@ class PostgresRunStore:
                     error_code=error_code,
                     diagnostic=diagnostic,
                     payload_extra={"elapsed_seconds": max(0.0, elapsed_seconds)},
+                    forensic_payload=forensic_payload,
+                    forensic_blobs=forensic_blobs,
+                    terminal_state=status.value,
+                    finished_at=finished_at,
                 )
                 run.state = status.value
                 run.error_code = error_code
-                run.finished_at = event.timestamp
+                run.finished_at = finished_at
                 run.progress = 100 if status is RunStatus.COMPLETED else run.progress
                 project_values = {"status": status.value}
                 if revision is not None:
@@ -879,7 +934,8 @@ class PostgresRunStore:
             async with self._sessions() as database, database.begin():
                 run = await self._locked_run(database, run_uuid)
                 self._ensure_mutable(run)
-                event = self._append_record(
+                finished_at = datetime.now(timezone.utc)
+                await self._append_record(
                     database,
                     run,
                     event_type="run.terminal_marked",
@@ -890,10 +946,12 @@ class PostgresRunStore:
                     payload_extra={
                         "elapsed_seconds": max(0.0, elapsed_seconds)
                     },
+                    terminal_state=status.value,
+                    finished_at=finished_at,
                 )
                 run.state = status.value
                 run.error_code = error_code
-                run.finished_at = event.timestamp
+                run.finished_at = finished_at
                 run.progress = 100 if status is RunStatus.COMPLETED else run.progress
                 await self._update_active_project(
                     database, run, status=status.value

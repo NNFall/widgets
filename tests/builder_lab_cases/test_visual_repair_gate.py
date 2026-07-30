@@ -1,7 +1,11 @@
 import asyncio
+import hashlib
 import types
 import unittest
 from dataclasses import replace
+from io import BytesIO
+
+from PIL import Image
 
 from builder_lab.engines.base import BuilderEngineError, EngineResult
 from builder_lab.models import (
@@ -15,7 +19,7 @@ from builder_lab.models import (
 )
 from builder_lab.orchestrator import BuilderOrchestrator
 from builder_lab.store import RunStore, RunTerminal
-from builder_lab.browser_audit import BrowserAuditError
+from builder_lab.browser_audit import BrowserAuditError, CapturedScreenshot
 from builder_lab.visual_committee import VisualCommitteeError
 from builder_lab.visual_gate import VisualRepairGate, artifact_fingerprint
 from builder_lab.visual_critic import VisualCriticRole
@@ -25,6 +29,8 @@ from builder_lab.visual_review import (
 )
 from builder_lab.visual_models import (
     NormalizedRegion,
+    ScreenshotEvidence,
+    ScreenshotState,
     VisualCategory,
     VisualCritique,
     VisualFinding,
@@ -81,14 +87,30 @@ class FakeAuditor:
             raise self.error
         if self.blocker is not None:
             await self.blocker.wait()
-        screenshots = tuple(
-            types.SimpleNamespace(
-                evidence=types.SimpleNamespace(
-                    screenshot_id=f"shot-{index}", byte_count=100 + index
+        states = tuple(ScreenshotState)
+        screenshots = []
+        for index, state in enumerate(states):
+            stream = BytesIO()
+            Image.new("RGB", (4, 3), (index * 20, 40, 80)).save(
+                stream,
+                format="JPEG",
+            )
+            data = stream.getvalue()
+            screenshots.append(
+                CapturedScreenshot(
+                    evidence=ScreenshotEvidence(
+                        screenshot_id=f"shot-{index}",
+                        state=state,
+                        sha256=hashlib.sha256(data).hexdigest(),
+                        mime_type="image/jpeg",
+                        byte_count=len(data),
+                        width=4,
+                        height=3,
+                    ),
+                    data=data,
                 )
             )
-            for index in range(6)
-        )
+        screenshots = tuple(screenshots)
         return types.SimpleNamespace(screenshots=screenshots)
 
 
@@ -244,6 +266,18 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("minor-ignored-report", completed.diagnostic)
 
     async def test_committee_role_statuses_are_recorded_without_double_counting_usage(self):
+        forensic_payloads = []
+        append_event = self.store.append_event
+
+        async def capture_forensic_payload(run_id, **kwargs):
+            if kwargs.get("forensic_payload") is not None:
+                forensic_payloads.append(
+                    (kwargs["event_type"], kwargs["forensic_payload"])
+                )
+            return await append_event(run_id, **kwargs)
+
+        self.store.append_event = capture_forensic_payload
+
         class CommitteeCritic(FakeCritic):
             async def critique(self, **kwargs):
                 self.calls.append(kwargs)
@@ -307,6 +341,34 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
             ),
             12,
         )
+        critic_evidence = [
+            payload["critic"]
+            for event_type, payload in forensic_payloads
+            if event_type == "visual_critic.completed"
+            and "critic" in payload
+        ]
+        self.assertEqual(len(critic_evidence), 3)
+        completed_evidence = next(
+            item for item in critic_evidence if "critique" in item
+        )
+        self.assertEqual(
+            completed_evidence["critique"]["findings"][0]["finding_id"],
+            "role-detail",
+        )
+        failed_evidence = next(
+            item for item in critic_evidence if "failure" in item
+        )
+        self.assertEqual(
+            failed_evidence["failure"]["error_code"],
+            "visual_critic_unavailable",
+        )
+        judge_evidence = next(
+            payload["judge"]
+            for event_type, payload in forensic_payloads
+            if event_type == "visual_judge.completed"
+        )
+        self.assertEqual(judge_evidence["critique"]["verdict"], "pass")
+        self.assertEqual(judge_evidence["supporting_roles"], {})
 
     async def test_accepts_a_consecutive_refinement_revision_after_revision_five(self):
         accepted = self.candidate
@@ -504,7 +566,8 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
                     FakeCritic([critique()]),
                     FakeEngine([self.candidate]),
                 )
-        self.assertTrue(any("candidate=" in message for message in logs.output))
+        self.assertTrue(any("fingerprint=" in message for message in logs.output))
+        self.assertFalse(any("candidate=" in message for message in logs.output))
 
     async def test_browser_repair_error_logs_private_diagnostic_for_operator(self):
         gate_error = BrowserAuditError(
@@ -533,7 +596,7 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
             if event.event_type == "visual_repair.completed"
         ]
         self.assertNotIn("private browser repair diagnostic", failed[0].message)
-        self.assertTrue(
+        self.assertFalse(
             any("private browser repair diagnostic" in message for message in logs.output)
         )
 
@@ -780,7 +843,7 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         events = await self.store.events_after(self.run_id, 0)
         completed = [event for event in events if event.event_type == "visual_audit.completed"]
         self.assertNotIn("private critic diagnostic", completed[0].message)
-        self.assertTrue(
+        self.assertFalse(
             any("private critic diagnostic" in message for message in logs.output)
         )
 
@@ -812,11 +875,20 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         completed = [event for event in events if event.event_type == "visual_audit.completed"]
         self.assertIn("desktop panel width must be 372px", completed[0].message)
         self.assertNotIn("private internal browser diagnostic", completed[0].message)
-        self.assertTrue(
+        self.assertFalse(
             any("private internal browser diagnostic" in message for message in logs.output)
         )
 
     async def test_unstructured_browser_gate_failure_retries_without_model_repair(self):
+        forensic_payloads = []
+        append_event = self.store.append_event
+
+        async def capture_forensic_payload(run_id, **kwargs):
+            if kwargs.get("forensic_payload") is not None:
+                forensic_payloads.append(kwargs["forensic_payload"])
+            return await append_event(run_id, **kwargs)
+
+        self.store.append_event = capture_forensic_payload
         transient = BrowserAuditError(
             "browser_gate_failed",
             "Виджет не прошёл детерминированную браузерную проверку",
@@ -845,6 +917,15 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(completed), 2)
         self.assertEqual(completed[0].status, "failed")
         self.assertNotIn("private Playwright timeout detail", completed[0].message)
+        browser_failure = next(
+            payload["browser_audit"]
+            for payload in forensic_payloads
+            if "browser_audit" in payload
+        )
+        self.assertEqual(
+            browser_failure["diagnostic"],
+            "private Playwright timeout detail",
+        )
 
     async def test_repeated_unstructured_browser_timeout_triggers_model_repair(self):
         timeout = BrowserAuditError(
@@ -1006,6 +1087,15 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failed_audit.usage, TokenUsage())
 
     async def test_transient_visual_critic_unavailable_retries_without_model_repair(self):
+        forensic_payloads = []
+        append_event = self.store.append_event
+
+        async def capture_forensic_payload(run_id, **kwargs):
+            if kwargs.get("forensic_payload") is not None:
+                forensic_payloads.append(kwargs["forensic_payload"])
+            return await append_event(run_id, **kwargs)
+
+        self.store.append_event = capture_forensic_payload
         transient = BuilderEngineError(
             "visual_critic_unavailable",
             "visual critic is temporarily unavailable",
@@ -1043,6 +1133,15 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed[0].status, "failed")
         self.assertEqual(completed[0].usage.total_tokens, 18)
         self.assertNotIn("high demand", completed[0].message)
+        critic_failure = next(
+            payload["visual_critic"]
+            for payload in forensic_payloads
+            if "visual_critic" in payload
+        )
+        self.assertEqual(
+            critic_failure["diagnostic"],
+            "503 UNAVAILABLE: model is currently experiencing high demand",
+        )
 
     async def test_critic_factory_failure_is_sanitized_as_visual_failure(self):
         gate = VisualRepairGate(

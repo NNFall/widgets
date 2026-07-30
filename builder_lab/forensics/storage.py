@@ -846,9 +846,15 @@ class GenerationForensicStorage:
             "project_id": str(UUID(str(marker.get("project_id")))),
             "run_id": str(UUID(str(marker.get("run_id")))),
             "schema_version": 1,
-            "user_id": str(UUID(str(marker.get("user_id")))),
+            "user_id": marker.get("user_id"),
         }
-        if marker != expected or expected["run_id"] != run_dir.name:
+        if (
+            isinstance(expected["user_id"], bool)
+            or not isinstance(expected["user_id"], int)
+            or expected["user_id"] < 1
+            or marker != expected
+            or expected["run_id"] != run_dir.name
+        ):
             raise ValueError("foreign or invalid forensic run marker")
         if run_dir.parent.name != UUID(run_dir.name).hex[:2]:
             raise ValueError("forensic run marker is stored in the wrong shard")
@@ -857,14 +863,16 @@ class GenerationForensicStorage:
     def initialize_run(
         self,
         *,
-        user_id: UUID,
+        user_id: int,
         project_id: UUID,
         run_id: UUID,
         created_at: datetime | None = None,
     ) -> ForensicManifest:
         self._require_write()
-        if not all(isinstance(value, UUID) for value in (user_id, project_id, run_id)):
-            raise ValueError("user_id, project_id, and run_id must be UUIDs")
+        if isinstance(user_id, bool) or not isinstance(user_id, int) or user_id < 1:
+            raise ValueError("user_id must be a positive integer")
+        if not all(isinstance(value, UUID) for value in (project_id, run_id)):
+            raise ValueError("project_id and run_id must be UUIDs")
         created_at = require_aware(created_at or utc_now(), name="created_at")
         with self._lock:
             run_dir = self._run_dir(run_id)
@@ -881,12 +889,10 @@ class GenerationForensicStorage:
                 "project_id": str(project_id),
                 "run_id": str(run_id),
                 "schema_version": 1,
-                "user_id": str(user_id),
+                "user_id": user_id,
             }
             if self._path_kind(marker_path) is not None:
-                marker = _decode_small_json(
-                    self._read_private(marker_path, maximum=_MAX_MARKER_BYTES)
-                )
+                marker = self._validate_run_marker(run_dir)
                 if marker != expected_marker:
                     raise ValueError("foreign or conflicting forensic run marker")
             else:
@@ -934,6 +940,62 @@ class GenerationForensicStorage:
             payload=payload,
             created_at=created_at,
         )
+
+    def event_payload_matches(
+        self,
+        *,
+        run_id: UUID,
+        sequence: int,
+        event_type: str,
+        payload: Mapping[str, object],
+    ) -> bool:
+        """Compare immutable event evidence while ignoring its write timestamp."""
+
+        if isinstance(sequence, bool) or not 1 <= sequence <= 99_999_999:
+            raise ValueError("event sequence must be a positive integer")
+        if _EVENT_TYPE.fullmatch(event_type) is None:
+            raise ValueError("event type is unsafe for a forensic path")
+        relative_path = f"events/{sequence:08d}-{event_type}.json"
+        expected_payload = redact_private_data(payload)
+        with self._lock:
+            manifest = self.load_manifest(run_id)
+            entry = next(
+                (
+                    item
+                    for item in manifest.entries
+                    if item.kind == "event" and item.relative_path == relative_path
+                ),
+                None,
+            )
+            if entry is None:
+                return False
+            data = self._read_private(
+                self._run_dir(run_id).joinpath(*relative_path.split("/")),
+                maximum=MAX_FORENSIC_ENTRY_BYTES,
+            )
+            if len(data) != entry.byte_count or _digest(data) != entry.sha256:
+                raise ValueError("forensic event checksum mismatch")
+            try:
+                value = json.loads(data.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise ValueError("forensic event is invalid JSON") from error
+            if not isinstance(value, dict) or _canonical_json_bytes(value) != data:
+                raise ValueError("forensic event is not canonical JSON")
+            if set(value) != {"created_at", "kind", "payload", "schema_version"}:
+                return False
+            try:
+                require_aware(
+                    datetime.fromisoformat(str(value["created_at"])),
+                    name="created_at",
+                )
+            except ValueError:
+                return False
+            return (
+                value["kind"] == "event"
+                and type(value["schema_version"]) is int
+                and value["schema_version"] == 1
+                and value["payload"] == expected_payload
+            )
 
     def write_model_call(
         self,
@@ -1133,7 +1195,7 @@ class GenerationForensicStorage:
             raise ValueError("forensic manifest kind or path is invalid") from error
         if (
             manifest.run_id != run_id
-            or str(manifest.user_id) != marker["user_id"]
+            or manifest.user_id != marker["user_id"]
             or str(manifest.project_id) != marker["project_id"]
         ):
             raise ValueError("forensic manifest identity does not match run marker")

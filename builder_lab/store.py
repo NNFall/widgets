@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
+from .forensics.models import ForensicBlob
 from .models import (
     BuilderEvent,
     BuilderRequest,
@@ -265,7 +267,11 @@ class RunStore:
         changes: tuple[str, ...] = (),
         error_code: str | None = None,
         diagnostic: str | None = None,
+        output_refs: tuple[str, ...] = (),
+        forensic_payload: Mapping[str, object] | None = None,
+        forensic_blobs: tuple[ForensicBlob, ...] = (),
     ) -> BuilderEvent:
+        del output_refs, forensic_payload, forensic_blobs
         async with self._changed:
             record = self._record(run_id)
             if record.status in TERMINAL_STATUSES:
@@ -453,7 +459,10 @@ class RunStore:
         error_code: str | None = None,
         diagnostic: str | None = None,
         elapsed_seconds: float = 0.0,
+        forensic_payload: Mapping[str, object] | None = None,
+        forensic_blobs: tuple[ForensicBlob, ...] = (),
     ) -> BuilderEvent:
+        del forensic_payload, forensic_blobs
         if status not in TERMINAL_STATUSES:
             raise ValueError("terminal status is required")
         async with self._changed:

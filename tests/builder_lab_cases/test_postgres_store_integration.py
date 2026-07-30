@@ -66,7 +66,7 @@ async def test_postgres_15_concurrency_and_snapshot_consistency() -> None:
             *(
                 (first if index % 2 == 0 else second).append_event(
                     stale_run.run_id,
-                    event_type="probe.sequence",
+                    event_type="stage.started",
                     stage=Stage.FOUNDATION,
                     status="running",
                     message=f"sequence {index}",
@@ -104,10 +104,10 @@ async def test_postgres_15_concurrency_and_snapshot_consistency() -> None:
                     )
                 ).scalar_one()
                 run.state = RunStatus.RUNNING.value
-                second._append_record(
+                await second._append_record(
                     database,
                     run,
-                    event_type="probe.snapshot",
+                    event_type="stage.started",
                     stage=Stage.FOUNDATION,
                     status="running",
                     message="coherent state",

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Protocol
 
+from .forensics.models import ForensicBlob
 from .models import (
     BuilderEvent,
     BuilderRequest,
@@ -41,6 +43,9 @@ class RunStoreProtocol(Protocol):
         changes: tuple[str, ...] = (),
         error_code: str | None = None,
         diagnostic: str | None = None,
+        output_refs: tuple[str, ...] = (),
+        forensic_payload: Mapping[str, object] | None = None,
+        forensic_blobs: tuple[ForensicBlob, ...] = (),
     ) -> BuilderEvent: ...
 
     async def set_running(self, run_id: str) -> None: ...
@@ -71,6 +76,8 @@ class RunStoreProtocol(Protocol):
         error_code: str | None = None,
         diagnostic: str | None = None,
         elapsed_seconds: float = 0.0,
+        forensic_payload: Mapping[str, object] | None = None,
+        forensic_blobs: tuple[ForensicBlob, ...] = (),
     ) -> BuilderEvent: ...
 
 __all__ = ["RunStoreProtocol"]

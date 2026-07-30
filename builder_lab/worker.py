@@ -5,7 +5,7 @@ import json
 import logging
 import math
 import secrets
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -28,6 +28,9 @@ from app.saas.models import (
     WorkerServiceLease,
 )
 from builder_lab.models import BuilderRequest, TokenUsage, WidgetArtifact
+from builder_lab.forensics.models import ForensicBlob
+from builder_lab.forensics.recorder import GenerationForensicRecorder
+from builder_lab.generation_events import REGISTRY_VERSION, prepare_generation_event
 from builder_lab.directions import run_direction_board
 from builder_lab.engines.base import (
     BuilderEngine,
@@ -707,12 +710,14 @@ class PostgresWorkerQueue:
         *,
         lease_seconds: float = 60.0,
         retry_backoff_seconds: float = 5.0,
+        forensic_recorder: GenerationForensicRecorder | None = None,
     ) -> None:
         if lease_seconds <= 0 or retry_backoff_seconds <= 0:
             raise ValueError("worker timing values must be positive")
         self._sessions = session_factory
         self.lease_seconds = float(lease_seconds)
         self.retry_backoff_seconds = float(retry_backoff_seconds)
+        self._forensic_recorder = forensic_recorder
         bind = session_factory.kw.get("bind")
         self._dialect_name = bind.dialect.name if bind is not None else ""
         namespace = id(bind)
@@ -797,6 +802,22 @@ class PostgresWorkerQueue:
             lease.started_at = started_at
             lease.heartbeat_at = now
 
+    async def activate_forensics(self, claim: RunClaim) -> bool:
+        """Materialize private evidence before any stage/provider work begins."""
+
+        if self._forensic_recorder is None:
+            return False
+        async with self._sessions() as database, database.begin():
+            run = await database.scalar(
+                select(GenerationRun)
+                .where(GenerationRun.id == claim.run_id)
+                .with_for_update()
+            )
+            if run is None:
+                raise LeaseLostError(f"run {claim.run_id} no longer exists")
+            await self._assert_claim(database, run, claim, self._now())
+            return await self._forensic_recorder.activate(database, run)
+
     @staticmethod
     def stage_sequence(mode: str) -> tuple[str, ...]:
         return get_mode_policy(mode).stage_sequence
@@ -862,8 +883,8 @@ class PostgresWorkerQueue:
         )
         return result.first() is not None
 
-    @staticmethod
-    def _append_event(
+    async def _append_event(
+        self,
         database: AsyncSession,
         run: GenerationRun,
         *,
@@ -871,22 +892,84 @@ class PostgresWorkerQueue:
         message: str,
         now: datetime,
         payload: dict,
+        forensic_payload: Mapping[str, object] | None = None,
+        forensic_blobs: tuple[ForensicBlob, ...] = (),
+        terminal_state: str | None = None,
+        finished_at: datetime | None = None,
     ) -> None:
+        inferred_terminal = {
+            "run.completed": "completed",
+            "run.failed": "failed",
+            "run.cancelled": "cancelled",
+        }.get(event_type)
+        if inferred_terminal is not None:
+            if terminal_state is not None and terminal_state != inferred_terminal:
+                raise ValueError("terminal event state conflicts with its type")
+            terminal_state = inferred_terminal
+            finished_at = finished_at or run.finished_at
+            if finished_at is None:
+                raise ValueError("terminal event requires persisted finished_at")
+            finished_at = self._utc(finished_at)
+        elif event_type == "run.terminal_marked" and terminal_state is None:
+            raise ValueError("run.terminal_marked requires terminal state")
         sequence = run.next_event_sequence
+        operational_payload = {
+            "run_id": str(run.id),
+            "sequence": sequence,
+            "timestamp": now.isoformat(),
+            "type": event_type,
+            "message": message,
+            **payload,
+        }
+        visual_score, score_source = _visual_score_from_event(operational_payload)
+        if visual_score is not None:
+            operational_payload["visual_score_normalized"] = visual_score
+            operational_payload["visual_score_source"] = score_source
+        private_payload = dict(forensic_payload or {})
+        for private_field in (
+            "stage",
+            "worker_id",
+            "attempt_id",
+            "attempt",
+            "max_executions",
+            "provider",
+            "provider_dispatch_count",
+        ):
+            if private_field in operational_payload:
+                private_payload.setdefault(
+                    private_field,
+                    operational_payload[private_field],
+                )
+        prepared = prepare_generation_event(
+            event_type=event_type,
+            public_message=message,
+            operational_payload=operational_payload,
+            forensic_payload=private_payload,
+        )
         run.next_event_sequence += 1
+        forensic_ref = None
+        if self._forensic_recorder is not None:
+            result = await self._forensic_recorder.record_event(
+                database,
+                run,
+                sequence=sequence,
+                prepared=prepared,
+                forensic_blobs=forensic_blobs,
+                created_at=now,
+                terminal_state=terminal_state,
+                finished_at=finished_at,
+            )
+            if result is not None and not result.degraded and result.entry is not None:
+                forensic_ref = result.entry.relative_path
         values = {
             "run_id": run.id,
             "sequence": sequence,
-            "event_type": event_type,
-            "public_message": message,
-            "payload": {
-                "run_id": str(run.id),
-                "sequence": sequence,
-                "timestamp": now.isoformat(),
-                "type": event_type,
-                "message": message,
-                **payload,
-            },
+            "event_type": prepared.event_type.value,
+            "public_message": prepared.public_message,
+            "payload": prepared.operational_payload,
+            "registry_version": REGISTRY_VERSION,
+            "public_payload": prepared.public_payload,
+            "forensic_ref": forensic_ref,
             "created_at": now,
         }
         if database.get_bind().dialect.name == "sqlite":
@@ -1072,7 +1155,7 @@ class PostgresWorkerQueue:
                 for record in receipt_records
             ):
                 return
-            self._append_event(
+            await self._append_event(
                 database,
                 run,
                 event_type="provider.dispatch_armed",
@@ -1126,7 +1209,17 @@ class PostgresWorkerQueue:
                     run.finished_at = run.finished_at or now
                     run.lease_owner = None
                     run.lease_expires_at = None
-                    return None
+                    await self._append_event(
+                        database,
+                        run,
+                        event_type="run.terminal_marked",
+                        message="Генерация завершена по сохранённому checkpoint",
+                        now=now,
+                        payload={"status": "completed"},
+                        terminal_state="completed",
+                        finished_at=self._utc(run.finished_at),
+                    )
+                    return _TerminalRun(run_id=run.id)
                 expired_attempt = (
                     run.lease_owner is not None
                     and run.lease_expires_at is not None
@@ -1171,7 +1264,7 @@ class PostgresWorkerQueue:
                     database,
                     run.id,
                 )
-                self._append_event(
+                await self._append_event(
                     database,
                     run,
                     event_type="stage.started",
@@ -1238,7 +1331,7 @@ class PostgresWorkerQueue:
                 database,
                 run.id,
             )
-            self._append_event(
+            await self._append_event(
                 database,
                 run,
                 event_type="stage.started",
@@ -1275,7 +1368,7 @@ class PostgresWorkerQueue:
                 return False
             if await self._cancel_requested(database, run_id):
                 return False
-            self._append_event(
+            await self._append_event(
                 database,
                 run,
                 event_type="run.cancel_requested",
@@ -1306,13 +1399,15 @@ class PostgresWorkerQueue:
             run.heartbeat_at = now
             run.lease_owner = None
             run.lease_expires_at = None
-            self._append_event(
+            await self._append_event(
                 database,
                 run,
                 event_type="run.cancelled",
                 message="Генерация отменена",
                 now=now,
                 payload={"status": "cancelled", "worker_id": worker_id},
+                terminal_state="cancelled",
+                finished_at=now,
             )
             await database.execute(
                 update(Project)
@@ -1372,7 +1467,7 @@ class PostgresWorkerQueue:
             run.heartbeat_at = now
             run.lease_owner = None
             run.lease_expires_at = None
-            self._append_event(
+            await self._append_event(
                 database,
                 run,
                 event_type="stage.interrupted",
@@ -1403,7 +1498,7 @@ class PostgresWorkerQueue:
         run.failure_category = failure_category_for_error(error).value
         run.lease_owner = None
         run.lease_expires_at = None
-        self._append_event(
+        await self._append_event(
             database,
             run,
             event_type="stage.failed",
@@ -1419,7 +1514,7 @@ class PostgresWorkerQueue:
                 "usage": error.usage.to_dict(),
             },
         )
-        self._append_event(
+        await self._append_event(
             database,
             run,
             event_type="run.failed",
@@ -1430,6 +1525,8 @@ class PostgresWorkerQueue:
                 "status": "failed",
                 "error_code": error.error_code,
             },
+            terminal_state="failed",
+            finished_at=now,
         )
         await database.execute(
             update(Project)
@@ -1514,7 +1611,7 @@ class PostgresWorkerQueue:
             run.heartbeat_at = now
             run.lease_owner = None
             run.lease_expires_at = None
-            self._append_event(
+            await self._append_event(
                 database,
                 run,
                 event_type="stage.retry_scheduled",
@@ -1661,6 +1758,9 @@ class PostgresWorkerQueue:
         changes: tuple[str, ...] = (),
         error_code: str | None = None,
         diagnostic: str | None = None,
+        output_refs: tuple[str, ...] = (),
+        forensic_payload: Mapping[str, object] | None = None,
+        forensic_blobs: tuple[ForensicBlob, ...] = (),
     ) -> None:
         async with self._sessions() as database, database.begin():
             now = self._now()
@@ -1674,7 +1774,7 @@ class PostgresWorkerQueue:
             if run is None:
                 raise LeaseLostError(f"run {claim.run_id} no longer exists")
             await self._assert_claim(database, run, claim, now)
-            self._append_event(
+            await self._append_event(
                 database,
                 run,
                 event_type=event_type,
@@ -1688,10 +1788,13 @@ class PostgresWorkerQueue:
                     "issues": [issue.to_dict() for issue in issues],
                     "changes": list(changes),
                     "error_code": error_code,
+                    "output_refs": list(output_refs),
                     "diagnostic": diagnostic,
                     "worker_id": claim.worker_id,
                     "attempt_id": str(claim.attempt_id),
                 },
+                forensic_payload=forensic_payload,
+                forensic_blobs=forensic_blobs,
             )
 
     async def stage_visual_draft(
@@ -1722,7 +1825,7 @@ class PostgresWorkerQueue:
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            self._append_event(
+            await self._append_event(
                 database,
                 run,
                 event_type="artifact.draft_staged",
@@ -1768,7 +1871,7 @@ class PostgresWorkerQueue:
                 claim=claim,
                 result=result,
             )
-            self._append_event(
+            await self._append_event(
                 database,
                 run,
                 event_type="stage.result_staged",
@@ -1934,7 +2037,7 @@ class PostgresWorkerQueue:
             message = str(event.get("message", "")).strip()
             if not event_type or not message:
                 raise ValueError("stage result event is invalid")
-            self._append_event(
+            await self._append_event(
                 database,
                 run,
                 event_type=event_type,
@@ -1976,7 +2079,7 @@ class PostgresWorkerQueue:
         run.error_message = None
         run.progress = int(((stage_index + 1) * 100) / len(stages))
         run.heartbeat_at = now
-        self._append_event(
+        await self._append_event(
             database,
             run,
             event_type="stage.completed",
@@ -2004,13 +2107,15 @@ class PostgresWorkerQueue:
             run.finished_at = now
             run.lease_owner = None
             run.lease_expires_at = None
-            self._append_event(
+            await self._append_event(
                 database,
                 run,
                 event_type="run.completed",
                 message="Виджет готов",
                 now=now,
                 payload={"status": "completed", "worker_id": worker_id},
+                terminal_state="completed",
+                finished_at=now,
             )
             project_status = "free_result_ready"
             await self._record_free_result_if_available(database, run)
@@ -2238,6 +2343,7 @@ class BuilderWorker:
         if self._stop.is_set():
             await self.queue.release_claim(claim)
             return None
+        await self.queue.activate_forensics(claim)
         if await self.queue.cancellation_requested(claim.run_id):
             await self.queue.cancel_claim(claim.run_id, worker_id=self.worker_id)
             return None

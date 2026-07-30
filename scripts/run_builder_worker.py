@@ -33,6 +33,8 @@ from app.billing.service import TrialSettlementReconciler
 
 from builder_lab.config import BuilderLabConfig
 from builder_lab.browser_audit import BrowserAudit
+from builder_lab.forensics.config import GenerationForensicsConfig
+from builder_lab.forensics.recorder import GenerationForensicRecorder
 from builder_lab.reference_pipeline import GeminiReferencePipeline
 from builder_lab.engines.gemini_direct import GeminiDirectEngine
 from builder_lab.modes import get_mode_policy
@@ -397,15 +399,31 @@ async def run() -> None:
         )
         boot_id, deployment_id, image_identity = worker_service_identity()
         worker_started_at = datetime.now(UTC)
-        queue = PostgresWorkerQueue(factory, lease_seconds=lease_seconds)
-        trial_settlements = TrialSettlementReconciler(factory)
         configured_handler = (
             os.getenv("KAIGO_BUILDER_STAGE_HANDLER", "").strip()
             or BUILTIN_STAGE_HANDLER
         )
         default_handler = None
+        config: BuilderLabConfig | None = None
         if configured_handler == BUILTIN_STAGE_HANDLER:
             config = BuilderLabConfig.from_env()
+            forensic_config = config.generation_forensics
+        else:
+            forensic_config = GenerationForensicsConfig.from_env(
+                environment=os.getenv("KAIGO_ENVIRONMENT", "development")
+            )
+        forensic_recorder = await GenerationForensicRecorder.open(
+            factory,
+            forensic_config,
+        )
+        queue = PostgresWorkerQueue(
+            factory,
+            lease_seconds=lease_seconds,
+            forensic_recorder=forensic_recorder,
+        )
+        trial_settlements = TrialSettlementReconciler(factory)
+        if configured_handler == BUILTIN_STAGE_HANDLER:
+            assert config is not None
             model_router = make_runtime_model_router(config, factory)
             engine_factories = make_engine_factories(config)
             if not engine_factories:

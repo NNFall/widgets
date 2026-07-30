@@ -140,7 +140,7 @@ class ForensicEntry:
 
 @dataclass(frozen=True, slots=True)
 class ForensicManifest:
-    user_id: UUID
+    user_id: int
     project_id: UUID
     run_id: UUID
     created_at: datetime
@@ -149,7 +149,11 @@ class ForensicManifest:
     schema_version: int = 1
 
     def __post_init__(self) -> None:
-        for name in ("user_id", "project_id", "run_id"):
+        if isinstance(self.user_id, bool) or not isinstance(self.user_id, int):
+            raise ValueError("user_id must be a positive integer")
+        if self.user_id < 1:
+            raise ValueError("user_id must be a positive integer")
+        for name in ("project_id", "run_id"):
             if not isinstance(getattr(self, name), UUID):
                 raise ValueError(f"{name} must be a UUID")
         if self.kind != "kaigo-generation-forensics-manifest":
@@ -185,7 +189,7 @@ class ForensicManifest:
             "project_id": str(self.project_id),
             "run_id": str(self.run_id),
             "schema_version": self.schema_version,
-            "user_id": str(self.user_id),
+            "user_id": self.user_id,
         }
 
     @classmethod
@@ -197,7 +201,7 @@ class ForensicManifest:
         if type(schema_version) is not int:
             raise ValueError("forensic manifest schema_version must be an integer")
         return cls(
-            user_id=UUID(str(value["user_id"])),
+            user_id=value["user_id"],
             project_id=UUID(str(value["project_id"])),
             run_id=UUID(str(value["run_id"])),
             created_at=datetime.fromisoformat(str(value["created_at"])),
