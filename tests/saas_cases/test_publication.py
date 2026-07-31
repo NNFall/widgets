@@ -845,7 +845,15 @@ async def test_rollback_is_atomic_and_resolve_fails_closed_on_corruption(publica
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("invalid_version", "versioned"),
-    [(True, False), (1.0, False), (2.0, True)],
+    [
+        (True, False),
+        (1.0, False),
+        (2.0, True),
+        ("1", False),
+        ("", False),
+        (None, False),
+        (None, True),
+    ],
 )
 async def test_resolve_rejects_non_integer_manifest_versions(
     publication_db,
