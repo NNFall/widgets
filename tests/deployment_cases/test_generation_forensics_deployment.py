@@ -61,6 +61,10 @@ def test_forensics_cleanup_timer_and_installer_are_bounded() -> None:
     assert "kaigo-generation-forensics-cleanup.service" in timer
     assert '[[ "${EUID}" -eq 0 ]]' in installer
     assert "install -d -o 10001 -g 10001 -m 0700" in installer
+    assert "GenerationForensicStorage.open" in installer
+    assert installer.index("GenerationForensicStorage.open") < installer.index(
+        "cleanup_generation_forensics.py --dry-run"
+    )
     assert "cleanup_generation_forensics.py --dry-run" in installer
     assert "systemctl enable --now kaigo-generation-forensics-cleanup.timer" in installer
 

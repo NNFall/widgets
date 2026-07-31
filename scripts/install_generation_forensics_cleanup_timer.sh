@@ -23,6 +23,8 @@ export COMPOSE_PROJECT_NAME=kaigo
 export KAIGO_GENERATION_FORENSICS_HOST_DIR="${FORENSIC_ROOT}"
 docker compose --profile operations config --quiet
 docker compose --profile operations run --rm --no-deps generation-forensics-cleanup \
+  python -c 'import os; from builder_lab.forensics.config import GenerationForensicsConfig; from builder_lab.forensics.storage import GenerationForensicStorage; config = GenerationForensicsConfig.from_env(environment=os.environ.get("KAIGO_ENVIRONMENT", "production")); GenerationForensicStorage.open(config, writable=True); print("Kaigo forensic storage initialized")'
+docker compose --profile operations run --rm --no-deps generation-forensics-cleanup \
   python scripts/cleanup_generation_forensics.py --dry-run
 
 systemctl daemon-reload
