@@ -1,0 +1,8 @@
+.kaigo-widget.kaigo-pattern-composer-stacked-compose .kaigo-widget__composer { grid-template-columns: minmax(0, 1fr); gap: 7px; border-top: 1px solid rgb(28 54 72 / 10%); background: #ffffff; }
+.kaigo-widget.kaigo-pattern-composer-stacked-compose .kaigo-widget__composer textarea { min-width: 0; min-height: 48px; max-height: 82px; border: 1px solid rgb(28 54 72 / 14%); border-radius: 12px; padding: 11px 12px; color: #1c3648; background: #f8faf9; outline: 0; }
+.kaigo-widget.kaigo-pattern-composer-stacked-compose .kaigo-widget__composer button { min-width: 44px; min-height: 44px; width: 100%; border: 0; border-radius: 12px; color: #ffffff; background: #315f7b; }
+.kaigo-widget.kaigo-pattern-composer-stacked-compose .kaigo-widget__composer:focus-within { outline: 2px solid #6f9db7; outline-offset: -2px; }
+.kaigo-widget.kaigo-pattern-composer-stacked-compose .kaigo-widget__composer button:focus-visible { outline: 3px solid #183b55; outline-offset: 2px; }
+.kaigo-widget.kaigo-pattern-composer-stacked-compose .kaigo-widget__composer button:disabled { cursor: wait; opacity: .55; }
+.kaigo-widget.kaigo-pattern-composer-stacked-compose[data-state="pending"] .kaigo-widget__composer button { opacity: .6; }
+.kaigo-widget.kaigo-pattern-composer-stacked-compose .kp-stacked-label { color: #607685; font: 750 10px/1 system-ui; letter-spacing: .05em; text-transform: uppercase; }

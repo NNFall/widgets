@@ -1,0 +1,19 @@
+{
+  "schema_version": 2,
+  "pattern_id": "fade-settle",
+  "version": 1,
+  "category": "motion",
+  "status": "active",
+  "description": "Fade с небольшим settle displacement без blur и private state.",
+  "parameter_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+  "incompatible_with": [],
+  "implementation_sha256": "3c1b1f34273c4536f4c73d0dbe9d52f94e65f7bfecedd2202f3ba89eba8944c7",
+  "source_contract": {
+    "runtime_contract_id": "chat-v1",
+    "runtime_contract_version": 1,
+    "fragment_role": "motion-none",
+    "root_class": "kaigo-pattern-motion-fade-settle",
+    "parameter_bindings": {}
+  },
+  "provenance": {"origin": "kaigo-owned", "review_state": "verified", "source_revision": 1, "supersedes": null}
+}

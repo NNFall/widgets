@@ -1,0 +1,19 @@
+{
+  "schema_version": 2,
+  "pattern_id": "avatar-thread",
+  "version": 1,
+  "category": "messages",
+  "status": "active",
+  "description": "Диалог с декоративной avatar-меткой AI и текстовыми author labels.",
+  "parameter_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+  "incompatible_with": [],
+  "implementation_sha256": "9fde119b55c81dc0e70acc6e89b12bfe83401251bd1cb30636009844c6949cd6",
+  "source_contract": {
+    "runtime_contract_id": "chat-v1",
+    "runtime_contract_version": 1,
+    "fragment_role": "message-decoration",
+    "root_class": "kaigo-pattern-messages-avatar-thread",
+    "parameter_bindings": {}
+  },
+  "provenance": {"origin": "kaigo-owned", "review_state": "verified", "source_revision": 1, "supersedes": null}
+}

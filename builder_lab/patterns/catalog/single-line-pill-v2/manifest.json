@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "pattern_id": "single-line-pill",
+  "version": 2,
+  "category": "composer",
+  "status": "active",
+  "description": "Компактная однострочная composer-surface вокруг runtime textarea и send.",
+  "parameter_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+  "incompatible_with": [],
+  "implementation_sha256": "a042ae5d048dea9e5a43355dd9b328cfc20da8036f993420b091c5bdee707539",
+  "source_contract": {
+    "runtime_contract_id": "chat-v1",
+    "runtime_contract_version": 1,
+    "fragment_role": "composer-decoration",
+    "root_class": "kaigo-pattern-composer-single-line-pill",
+    "parameter_bindings": {}
+  },
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "verified",
+    "source_revision": 1,
+    "supersedes": {"pattern_id": "single-line-pill", "version": 1}
+  }
+}

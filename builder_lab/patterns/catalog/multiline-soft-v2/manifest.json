@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "pattern_id": "multiline-soft",
+  "version": 2,
+  "category": "composer",
+  "status": "active",
+  "description": "Мягкая многострочная composer-surface без собственной form или submit-логики.",
+  "parameter_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+  "incompatible_with": [],
+  "implementation_sha256": "c2a6dd4d227f7638461fbeccf355243e31eb67762868cd89ae7f61c05b06090a",
+  "source_contract": {
+    "runtime_contract_id": "chat-v1",
+    "runtime_contract_version": 1,
+    "fragment_role": "composer-decoration",
+    "root_class": "kaigo-pattern-composer-multiline-soft",
+    "parameter_bindings": {}
+  },
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "verified",
+    "source_revision": 1,
+    "supersedes": {"pattern_id": "multiline-soft", "version": 1}
+  }
+}

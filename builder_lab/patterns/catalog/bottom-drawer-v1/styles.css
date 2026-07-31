@@ -1,0 +1,20 @@
+.kaigo-widget.kaigo-pattern-shell-bottom-drawer [data-region="panel"] {
+  right: 12px;
+  bottom: 12px;
+  width: min(440px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  max-height: min(78dvh, calc(100dvh - 24px));
+  border: 1px solid rgb(24 49 67 / 13%);
+  border-radius: 26px 26px 18px 18px;
+  color: #183143;
+  background: #ffffff;
+  box-shadow: 0 28px 84px rgb(24 49 67 / 23%);
+}
+.kaigo-widget.kaigo-pattern-shell-bottom-drawer [data-region="header"] { padding-top: 22px; border-bottom: 1px solid rgb(24 49 67 / 9%); }
+.kaigo-widget.kaigo-pattern-shell-bottom-drawer [data-region="messages"] { background: #fcfdfd; }
+.kaigo-widget.kaigo-pattern-shell-bottom-drawer [data-region="composer"] { border-top: 1px solid rgb(24 49 67 / 9%); }
+.kaigo-widget.kaigo-pattern-shell-bottom-drawer .kp-drawer-handle { position: absolute; top: 7px; left: 50%; transform: translateX(-50%); }
+.kaigo-widget.kaigo-pattern-shell-bottom-drawer .kp-drawer-handle span { display: block; width: 46px; height: 4px; border-radius: 999px; background: #cbd4d8; }
+@media (max-width: 600px) {
+  .kaigo-widget.kaigo-pattern-shell-bottom-drawer [data-region="panel"] { width: calc(100vw - 24px); max-width: calc(100vw - 24px); max-height: min(78dvh, calc(100dvh - 24px)); }
+}

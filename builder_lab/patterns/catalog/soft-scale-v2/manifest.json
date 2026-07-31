@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "pattern_id": "soft-scale",
+  "version": 2,
+  "category": "motion",
+  "status": "active",
+  "description": "Спокойное scale-проявление панели с немедленным reduced-motion состоянием.",
+  "parameter_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+  "incompatible_with": [],
+  "implementation_sha256": "462037df6a766a0671955dfd4ba43135eae42f28eb1683fbb8b8955cf6f1a37c",
+  "source_contract": {
+    "runtime_contract_id": "chat-v1",
+    "runtime_contract_version": 1,
+    "fragment_role": "motion-none",
+    "root_class": "kaigo-pattern-motion-soft-scale",
+    "parameter_bindings": {}
+  },
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "verified",
+    "source_revision": 1,
+    "supersedes": {"pattern_id": "soft-scale", "version": 1}
+  }
+}

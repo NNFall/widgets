@@ -1,0 +1,8 @@
+.kaigo-widget.kaigo-pattern-composer-single-line-pill .kaigo-widget__composer { border: 1px solid rgb(24 52 70 / 14%); border-radius: 999px; background: #ffffff; }
+.kaigo-widget.kaigo-pattern-composer-single-line-pill .kaigo-widget__composer textarea { min-width: 0; min-height: 44px; max-height: 52px; border: 0; border-radius: 999px; padding: 11px 10px; color: #183446; background: transparent; outline: 0; }
+.kaigo-widget.kaigo-pattern-composer-single-line-pill .kaigo-widget__composer button { min-width: 44px; min-height: 44px; border: 0; border-radius: 50%; color: #ffffff; background: #2d806b; }
+.kaigo-widget.kaigo-pattern-composer-single-line-pill .kaigo-widget__composer:focus-within { outline: 2px solid #68a997; outline-offset: 2px; }
+.kaigo-widget.kaigo-pattern-composer-single-line-pill .kaigo-widget__composer button:focus-visible { outline: 3px solid #173f52; outline-offset: 2px; }
+.kaigo-widget.kaigo-pattern-composer-single-line-pill .kaigo-widget__composer button:disabled { cursor: wait; opacity: .55; }
+.kaigo-widget.kaigo-pattern-composer-single-line-pill[data-state="pending"] .kaigo-widget__composer button { opacity: .6; }
+.kaigo-widget.kaigo-pattern-composer-single-line-pill .kp-pill-decoration { align-self: center; color: #2d806b; font-size: 12px; }

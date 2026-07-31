@@ -1,0 +1,5 @@
+.kaigo-widget.kaigo-pattern-motion-soft-scale [data-region="panel"] { opacity: 0; transform: translateY(8px) scale(.97); transform-origin: right bottom; transition: opacity 300ms ease, transform 360ms cubic-bezier(.2,.75,.25,1); }
+.kaigo-widget.kaigo-pattern-motion-soft-scale.kaigo-preview-open [data-region="panel"] { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .kaigo-widget.kaigo-pattern-motion-soft-scale [data-region="panel"] { opacity: 1; transform: none; transition: none; }
+}

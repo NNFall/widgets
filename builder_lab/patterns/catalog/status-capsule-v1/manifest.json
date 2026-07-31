@@ -1,0 +1,19 @@
+{
+  "schema_version": 2,
+  "pattern_id": "status-capsule",
+  "version": 1,
+  "category": "launcher",
+  "status": "active",
+  "description": "Компактная статусная капсула «AI на связи» с мягким конечным pulse.",
+  "parameter_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+  "incompatible_with": [],
+  "implementation_sha256": "e8fcfa1acd5681a32d7d541736e151a8050eb03f49c0f73a5e422ae097affa7c",
+  "source_contract": {
+    "runtime_contract_id": "chat-v1",
+    "runtime_contract_version": 1,
+    "fragment_role": "launcher-content",
+    "root_class": "kaigo-pattern-launcher-status-capsule",
+    "parameter_bindings": {}
+  },
+  "provenance": {"origin": "kaigo-owned", "review_state": "verified", "source_revision": 1, "supersedes": null}
+}

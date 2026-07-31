@@ -1,0 +1,22 @@
+.kaigo-widget.kaigo-pattern-launcher-peek-tab [data-region="launcher"] {
+  min-width: 132px;
+  min-height: 48px;
+  padding: 0 16px;
+  border: 1px solid rgb(19 92 78 / 22%);
+  border-radius: 18px;
+  color: #173b34;
+  background: #f5fbf8;
+  box-shadow: 0 12px 30px rgb(23 59 52 / 14%);
+}
+.kaigo-widget.kaigo-pattern-launcher-peek-tab .kp-peek { display: inline-flex; align-items: center; gap: 9px; white-space: nowrap; }
+.kaigo-widget.kaigo-pattern-launcher-peek-tab .kp-peek strong { font: 700 13px/1 system-ui; }
+.kaigo-widget.kaigo-pattern-launcher-peek-tab .kp-peek-dot { width: 9px; height: 9px; border-radius: 50%; background: #2d967e; }
+.kaigo-widget.kaigo-pattern-launcher-peek-tab.kaigo-preview-attention [data-region="launcher"] {
+  animation: kaigo-pattern-peek-tab-attention 1.1s cubic-bezier(.2,.8,.2,1) 2;
+}
+@keyframes kaigo-pattern-peek-tab-attention {
+  50% { transform: translateX(-9px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kaigo-widget.kaigo-pattern-launcher-peek-tab [data-region="launcher"] { animation: none; }
+}

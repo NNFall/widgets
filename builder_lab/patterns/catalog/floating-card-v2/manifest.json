@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "pattern_id": "floating-card",
+  "version": 2,
+  "category": "shell",
+  "status": "active",
+  "description": "Воздушная карточка с мягкой глубиной и фиксированной runtime-анатомией.",
+  "parameter_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+  "incompatible_with": [],
+  "implementation_sha256": "8e31ee760dc5356cadcbeb1f1ff452fcd3903903b59129b378c90c0c94c1b352",
+  "source_contract": {
+    "runtime_contract_id": "chat-v1",
+    "runtime_contract_version": 1,
+    "fragment_role": "shell-decoration",
+    "root_class": "kaigo-pattern-shell-floating-card",
+    "parameter_bindings": {}
+  },
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "verified",
+    "source_revision": 1,
+    "supersedes": {"pattern_id": "floating-card", "version": 1}
+  }
+}

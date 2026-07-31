@@ -1,0 +1,5 @@
+.kaigo-widget.kaigo-pattern-motion-side-glide [data-region="panel"] { opacity: 0; transform: translateX(24px); transition: opacity 220ms ease, transform 340ms cubic-bezier(.2,.8,.2,1); }
+.kaigo-widget.kaigo-pattern-motion-side-glide.kaigo-preview-open [data-region="panel"] { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .kaigo-widget.kaigo-pattern-motion-side-glide [data-region="panel"] { opacity: 1; transform: none; transition: none; }
+}

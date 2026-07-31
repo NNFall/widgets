@@ -1,0 +1,19 @@
+{
+  "schema_version": 2,
+  "pattern_id": "bottom-drawer",
+  "version": 1,
+  "category": "shell",
+  "status": "active",
+  "description": "Нижняя панель до 78dvh с обязательным внешним контекстом страницы.",
+  "parameter_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+  "incompatible_with": [],
+  "implementation_sha256": "f55f862f931f5485e2dfe3a6d4dc4e08ac7278f8a1c2e6d8021ab9ffc633ea8c",
+  "source_contract": {
+    "runtime_contract_id": "chat-v1",
+    "runtime_contract_version": 1,
+    "fragment_role": "shell-decoration",
+    "root_class": "kaigo-pattern-shell-bottom-drawer",
+    "parameter_bindings": {}
+  },
+  "provenance": {"origin": "kaigo-owned", "review_state": "verified", "source_revision": 1, "supersedes": null}
+}

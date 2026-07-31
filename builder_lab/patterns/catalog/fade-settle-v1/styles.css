@@ -1,0 +1,5 @@
+.kaigo-widget.kaigo-pattern-motion-fade-settle [data-region="panel"] { opacity: 0; transform: translateY(10px); transition: opacity 240ms ease, transform 300ms cubic-bezier(.22,.7,.25,1); }
+.kaigo-widget.kaigo-pattern-motion-fade-settle.kaigo-preview-open [data-region="panel"] { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .kaigo-widget.kaigo-pattern-motion-fade-settle [data-region="panel"] { opacity: 1; transform: none; transition: none; }
+}

@@ -137,7 +137,9 @@ _SVG_PAINT_ATTRIBUTES = frozenset({"fill", "stroke", "stop-color"})
 _URL_ATTRIBUTES = frozenset(
     {"action", "formaction", "href", "poster", "src", "xlink:href"}
 )
-_CUSTOM_PROPERTY_RE = re.compile(r"--[A-Za-z_][A-Za-z0-9_-]*")
+_CUSTOM_PROPERTY_RE = re.compile(
+    r"(?:var\(\s*|[;{]\s*)(--[A-Za-z_][A-Za-z0-9_-]*)"
+)
 _SAFE_CUSTOM_PROPERTY_RE = re.compile(r"^--kaigo-pattern-[a-z][a-z0-9-]*$")
 _KEYFRAME_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 _ALLOWED_AT_RULES = frozenset(
@@ -352,6 +354,88 @@ def _at_rule_name(prelude: str) -> str:
     return match.group(1) if match else ""
 
 
+def _require_category_css_contract(
+    definition: PatternDefinition,
+    normalized: str,
+    *,
+    selectors: tuple[str, ...],
+) -> None:
+    lower = normalized.lower()
+    selector_text = "\n".join(selector.lower() for selector in selectors)
+    category = definition.category
+    required: tuple[str, ...]
+    declarations: tuple[str, ...]
+
+    if category is PatternCategory.LAUNCHER:
+        required = ('[data-region="launcher"]',)
+        declarations = ("min-width", "min-height")
+    elif category is PatternCategory.SHELL:
+        required = tuple(
+            f'[data-region="{region}"]'
+            for region in ("panel", "header", "messages", "composer")
+        )
+        declarations = ("max-width", "max-height")
+    elif category is PatternCategory.MESSAGES:
+        required = (
+            ".kaigo-widget__message--assistant",
+            '[data-kaigo-runtime-message="assistant"]',
+            '[data-kaigo-runtime-message="user"]',
+            "[data-kaigo-runtime-label]",
+            "[data-kaigo-runtime-content]",
+        )
+        declarations = ("max-width",)
+    elif category is PatternCategory.COMPOSER:
+        required = (
+            ".kaigo-widget__composer textarea",
+            ".kaigo-widget__composer button",
+            ":disabled",
+            '[data-state="pending"]',
+        )
+        declarations = ("min-width", "min-height")
+        if (
+            ":focus-visible" not in selector_text
+            and ":focus-within" not in selector_text
+        ):
+            raise PatternSourceError(
+                "composer source CSS is missing its focus contract"
+            )
+    else:
+        required = ('[data-region="panel"]',)
+        declarations = ()
+        if (
+            ".kaigo-preview-open" not in selector_text
+            and "[data-open]" not in selector_text
+        ):
+            raise PatternSourceError(
+                "motion source CSS is missing its trusted open state"
+            )
+        if not re.search(
+            r"@media\s*\(\s*prefers-reduced-motion\s*:\s*reduce\s*\)",
+            lower,
+        ):
+            raise PatternSourceError(
+                "motion source CSS is missing its reduced motion contract"
+            )
+
+    missing = next(
+        (marker for marker in required if marker not in selector_text),
+        None,
+    )
+    if missing is not None:
+        raise PatternSourceError(
+            f"{category.value} source CSS is missing required selector: {missing}"
+        )
+    missing_declaration = next(
+        (name for name in declarations if f"{name}:" not in lower),
+        None,
+    )
+    if missing_declaration is not None:
+        raise PatternSourceError(
+            f"{category.value} source CSS is missing required declaration: "
+            f"{missing_declaration}"
+        )
+
+
 def validate_source_css(definition: PatternDefinition, css: str) -> None:
     _require_runtime_source(definition)
     if not isinstance(css, str) or len(css.encode("utf-8")) > _MAX_SOURCE_CSS_BYTES:
@@ -439,6 +523,12 @@ def validate_source_css(definition: PatternDefinition, css: str) -> None:
         lower,
     ):
         raise PatternSourceError("runtime source CSS requires a reduced motion override")
+
+    _require_category_css_contract(
+        definition,
+        normalized,
+        selectors=parsed.selectors,
+    )
 
 
 __all__ = [

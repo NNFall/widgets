@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "pattern_id": "peek-tab",
+  "version": 2,
+  "category": "launcher",
+  "status": "active",
+  "description": "Боковая вкладка AI, полностью остающаяся внутри мобильного viewport.",
+  "parameter_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+  "incompatible_with": [],
+  "implementation_sha256": "507efa4ce81c34ffe1de08cf68151381c973baa158860ee71cb2126324df2f4d",
+  "source_contract": {
+    "runtime_contract_id": "chat-v1",
+    "runtime_contract_version": 1,
+    "fragment_role": "launcher-content",
+    "root_class": "kaigo-pattern-launcher-peek-tab",
+    "parameter_bindings": {}
+  },
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "verified",
+    "source_revision": 1,
+    "supersedes": {"pattern_id": "peek-tab", "version": 1}
+  }
+}

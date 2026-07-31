@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -21,12 +22,108 @@ def source_definition(
     category: PatternCategory = PatternCategory.LAUNCHER,
 ):
     pattern_id = f"quality-{category.value}"
+    root = f"kaigo-pattern-{category.value}-{pattern_id}"
     write_source_pattern(
         tmp_path / f"{pattern_id}-v1",
         pattern_id=pattern_id,
         category=category,
+        root_class=root,
+        css=_valid_category_css(category, root),
     )
     return PatternRegistry.load(tmp_path).resolve(pattern_id, 1)
+
+
+def _valid_category_css(category: PatternCategory, root: str) -> str:
+    prefix = f".kaigo-widget.{root}"
+    if category is PatternCategory.LAUNCHER:
+        return (
+            f'{prefix} [data-region="launcher"] '
+            "{ min-width:44px; min-height:44px; }\n"
+        )
+    if category is PatternCategory.SHELL:
+        return (
+            f'{prefix} [data-region="panel"] '
+            "{ max-width:440px; max-height:78dvh; }\n"
+            f'{prefix} [data-region="header"] {{ display:flex; }}\n'
+            f'{prefix} [data-region="messages"] {{ display:flex; }}\n'
+            f'{prefix} [data-region="composer"] {{ display:grid; }}\n'
+        )
+    if category is PatternCategory.MESSAGES:
+        return (
+            f"{prefix} .kaigo-widget__message--assistant,\n"
+            f'{prefix} [data-kaigo-runtime-message="assistant"] '
+            "{ max-width:82%; }\n"
+            f'{prefix} [data-kaigo-runtime-message="user"] '
+            "{ max-width:82%; }\n"
+            f"{prefix} [data-kaigo-runtime-label] {{ display:block; }}\n"
+            f"{prefix} [data-kaigo-runtime-content] {{ display:block; }}\n"
+        )
+    if category is PatternCategory.COMPOSER:
+        return (
+            f"{prefix} .kaigo-widget__composer textarea "
+            "{ min-width:0; min-height:44px; }\n"
+            f"{prefix} .kaigo-widget__composer button "
+            "{ min-width:44px; min-height:44px; }\n"
+            f"{prefix} .kaigo-widget__composer:focus-within {{ outline:2px solid; }}\n"
+            f"{prefix} .kaigo-widget__composer button:focus-visible {{ outline:2px solid; }}\n"
+            f"{prefix} .kaigo-widget__composer button:disabled {{ opacity:.5; }}\n"
+            f'{prefix}[data-state="pending"] .kaigo-widget__composer button '
+            "{ opacity:.6; }\n"
+        )
+    return (
+        f'{prefix} [data-region="panel"] {{ opacity:0; transition:opacity 180ms ease; }}\n'
+        f'{prefix}.kaigo-preview-open [data-region="panel"] {{ opacity:1; }}\n'
+        "@media (prefers-reduced-motion: reduce) {\n"
+        f'  {prefix} [data-region="panel"] {{ transition:none; }}\n'
+        "}\n"
+    )
+
+
+@pytest.mark.parametrize("category", list(PatternCategory))
+def test_runtime_source_css_requires_category_contract(
+    tmp_path: Path,
+    category: PatternCategory,
+) -> None:
+    base = source_definition(tmp_path)
+    definition = replace(base, category=category)
+    root = definition.source_contract.root_class
+
+    with pytest.raises(PatternSourceError, match=category.value):
+        validate_source_css(
+            definition,
+            f".kaigo-widget.{root} {{ display:block; }}",
+        )
+
+
+@pytest.mark.parametrize("category", list(PatternCategory))
+def test_runtime_source_css_accepts_complete_category_contract(
+    tmp_path: Path,
+    category: PatternCategory,
+) -> None:
+    base = source_definition(tmp_path)
+    definition = replace(base, category=category)
+    root = definition.source_contract.root_class
+
+    validate_source_css(definition, _valid_category_css(category, root))
+
+
+def test_category_contract_ignores_selector_names_inside_css_strings(
+    tmp_path: Path,
+) -> None:
+    base = source_definition(tmp_path)
+    definition = replace(base, category=PatternCategory.MESSAGES)
+    root = definition.source_contract.root_class
+    fake_contract = (
+        f'.kaigo-widget.{root}::before {{ '
+        "content: '.kaigo-widget__message--assistant "
+        '[data-kaigo-runtime-message="assistant"] '
+        '[data-kaigo-runtime-message="user"] '
+        "[data-kaigo-runtime-label] [data-kaigo-runtime-content]'; "
+        "max-width:82%; }"
+    )
+
+    with pytest.raises(PatternSourceError, match="messages"):
+        validate_source_css(definition, fake_contract)
 
 
 @pytest.mark.parametrize(
@@ -254,7 +351,8 @@ def test_runtime_source_css_parser_ignores_brace_inside_quoted_selector_value(
 
     validate_source_css(
         definition,
-        f'.kaigo-widget.{root}[data-open="{{"] {{ opacity: 1; }}',
+        _valid_category_css(PatternCategory.LAUNCHER, root)
+        + f'.kaigo-widget.{root}[data-open="{{"] {{ opacity: 1; }}',
     )
 
 
@@ -277,7 +375,8 @@ def test_runtime_source_css_accepts_quoted_brace_in_ordinary_declaration(
 
     validate_source_css(
         definition,
-        f'.kaigo-widget.{root}::before {{ content: "{{"; display: block; }}',
+        _valid_category_css(PatternCategory.LAUNCHER, root)
+        + f'.kaigo-widget.{root}::before {{ content: "{{"; display: block; }}',
     )
 
 

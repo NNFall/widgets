@@ -1,0 +1,19 @@
+{
+  "schema_version": 2,
+  "pattern_id": "docked-rail",
+  "version": 1,
+  "category": "shell",
+  "status": "active",
+  "description": "Панель с аккуратной визуальной рейкой у края без выхода за viewport.",
+  "parameter_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+  "incompatible_with": [],
+  "implementation_sha256": "4e5060e012194652f0e00d03b041bbf902a675af6372f29e1be3b2fb43d3a834",
+  "source_contract": {
+    "runtime_contract_id": "chat-v1",
+    "runtime_contract_version": 1,
+    "fragment_role": "shell-decoration",
+    "root_class": "kaigo-pattern-shell-docked-rail",
+    "parameter_bindings": {}
+  },
+  "provenance": {"origin": "kaigo-owned", "review_state": "verified", "source_revision": 1, "supersedes": null}
+}

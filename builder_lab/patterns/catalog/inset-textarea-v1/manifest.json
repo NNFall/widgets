@@ -1,0 +1,19 @@
+{
+  "schema_version": 2,
+  "pattern_id": "inset-textarea",
+  "version": 1,
+  "category": "composer",
+  "status": "active",
+  "description": "Утопленное поле сообщения и заметный runtime send target 44×44.",
+  "parameter_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+  "incompatible_with": [],
+  "implementation_sha256": "7d5c11a3e5212b0305d602eac0072ade4eb45a5dae2c771745765b422090b62f",
+  "source_contract": {
+    "runtime_contract_id": "chat-v1",
+    "runtime_contract_version": 1,
+    "fragment_role": "composer-decoration",
+    "root_class": "kaigo-pattern-composer-inset-textarea",
+    "parameter_bindings": {}
+  },
+  "provenance": {"origin": "kaigo-owned", "review_state": "verified", "source_revision": 1, "supersedes": null}
+}

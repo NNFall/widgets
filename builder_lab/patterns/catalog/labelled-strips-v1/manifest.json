@@ -1,0 +1,19 @@
+{
+  "schema_version": 2,
+  "pattern_id": "labelled-strips",
+  "version": 1,
+  "category": "messages",
+  "status": "active",
+  "description": "Строчные surfaces с явными подписями автора и различимыми сторонами диалога.",
+  "parameter_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+  "incompatible_with": [],
+  "implementation_sha256": "711edfb61932afac6eb08d16f93a7cee2ec230d0bbbe0c4b497f66f9bed60e51",
+  "source_contract": {
+    "runtime_contract_id": "chat-v1",
+    "runtime_contract_version": 1,
+    "fragment_role": "message-decoration",
+    "root_class": "kaigo-pattern-messages-labelled-strips",
+    "parameter_bindings": {}
+  },
+  "provenance": {"origin": "kaigo-owned", "review_state": "verified", "source_revision": 1, "supersedes": null}
+}

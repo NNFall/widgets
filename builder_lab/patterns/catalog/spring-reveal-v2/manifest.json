@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "pattern_id": "spring-reveal",
+  "version": 2,
+  "category": "motion",
+  "status": "active",
+  "description": "Выразительное раскрытие панели от trusted open-state без private timers.",
+  "parameter_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+  "incompatible_with": [],
+  "implementation_sha256": "7384dcec842cb8a113f0920ea59fb1b1a605806320feaf1d8507cbdb9383d83d",
+  "source_contract": {
+    "runtime_contract_id": "chat-v1",
+    "runtime_contract_version": 1,
+    "fragment_role": "motion-none",
+    "root_class": "kaigo-pattern-motion-spring-reveal",
+    "parameter_bindings": {}
+  },
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "verified",
+    "source_revision": 1,
+    "supersedes": {"pattern_id": "spring-reveal", "version": 1}
+  }
+}

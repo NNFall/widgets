@@ -1,0 +1,26 @@
+.kaigo-widget.kaigo-pattern-launcher-orb-pulse [data-region="launcher"] {
+  min-width: 56px;
+  min-height: 56px;
+  border-radius: 999px;
+  color: #ffffff;
+  background: #ff6038;
+  box-shadow: 0 14px 34px rgb(255 96 56 / 28%);
+}
+.kaigo-widget.kaigo-pattern-launcher-orb-pulse .kp-orb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+}
+.kaigo-widget.kaigo-pattern-launcher-orb-pulse .kp-orb strong { font: 750 14px/1 system-ui; }
+.kaigo-widget.kaigo-pattern-launcher-orb-pulse .kp-orb-spark { position: absolute; top: 8px; left: 10px; font-size: 10px; }
+.kaigo-widget.kaigo-pattern-launcher-orb-pulse.kaigo-preview-attention [data-region="launcher"] {
+  animation: kaigo-pattern-orb-pulse-attention 1.35s ease-in-out 2;
+}
+@keyframes kaigo-pattern-orb-pulse-attention {
+  45% { transform: translateY(-5px) scale(1.06); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kaigo-widget.kaigo-pattern-launcher-orb-pulse [data-region="launcher"] { animation: none; }
+}

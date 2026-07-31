@@ -1,0 +1,21 @@
+.kaigo-widget.kaigo-pattern-messages-paired-bubbles .kaigo-widget__message--assistant,
+.kaigo-widget.kaigo-pattern-messages-paired-bubbles [data-kaigo-runtime-message="assistant"] {
+  align-self: flex-start;
+  max-width: 82%;
+  padding: 11px 14px;
+  border-radius: 18px 18px 18px 6px;
+  color: #183248;
+  background: #eef4f2;
+}
+.kaigo-widget.kaigo-pattern-messages-paired-bubbles [data-kaigo-runtime-message="user"] {
+  align-self: flex-end;
+  max-width: 82%;
+  padding: 11px 14px;
+  border-radius: 18px 18px 6px;
+  color: #ffffff;
+  background: #2d806b;
+}
+.kaigo-widget.kaigo-pattern-messages-paired-bubbles [data-kaigo-runtime-label],
+.kaigo-widget.kaigo-pattern-messages-paired-bubbles .kaigo-widget__message-label { display: block; font-size: 11px; font-weight: 750; opacity: .7; }
+.kaigo-widget.kaigo-pattern-messages-paired-bubbles [data-kaigo-runtime-content] { display: block; overflow-wrap: anywhere; }
+.kaigo-widget.kaigo-pattern-messages-paired-bubbles .kp-bubble-mark { margin-right: 5px; color: #2d806b; }

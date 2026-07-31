@@ -1,0 +1,19 @@
+{
+  "schema_version": 2,
+  "pattern_id": "stacked-compose",
+  "version": 1,
+  "category": "composer",
+  "status": "active",
+  "description": "Поле над отдельной send row без fullscreen-поведения и собственной логики.",
+  "parameter_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+  "incompatible_with": [],
+  "implementation_sha256": "6f606296efb170b7438f2a85a4f6610d443ac237ba42b9120b2bc95b74e8ab21",
+  "source_contract": {
+    "runtime_contract_id": "chat-v1",
+    "runtime_contract_version": 1,
+    "fragment_role": "composer-decoration",
+    "root_class": "kaigo-pattern-composer-stacked-compose",
+    "parameter_bindings": {}
+  },
+  "provenance": {"origin": "kaigo-owned", "review_state": "verified", "source_revision": 1, "supersedes": null}
+}

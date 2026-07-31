@@ -1,0 +1,10 @@
+.kaigo-widget.kaigo-pattern-motion-spring-reveal [data-region="panel"] { opacity: 0; transform: translateY(22px) scale(.94); transform-origin: right bottom; }
+.kaigo-widget.kaigo-pattern-motion-spring-reveal.kaigo-preview-open [data-region="panel"] { animation: kaigo-pattern-spring-reveal-open 560ms cubic-bezier(.18,1.28,.3,1) both; }
+@keyframes kaigo-pattern-spring-reveal-open {
+  0% { opacity: 0; transform: translateY(22px) scale(.94); }
+  72% { opacity: 1; transform: translateY(-3px) scale(1.01); }
+  100% { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kaigo-widget.kaigo-pattern-motion-spring-reveal [data-region="panel"] { animation: none; opacity: 1; transform: none; }
+}

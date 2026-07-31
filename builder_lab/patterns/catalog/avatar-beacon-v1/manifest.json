@@ -1,0 +1,19 @@
+{
+  "schema_version": 2,
+  "pattern_id": "avatar-beacon",
+  "version": 1,
+  "category": "launcher",
+  "status": "active",
+  "description": "Читаемый AI-avatar с отдельным online badge без удалённых изображений.",
+  "parameter_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+  "incompatible_with": [],
+  "implementation_sha256": "ed3e4e42f0a8a9afd1411d272289c59ff06bfef66091572511b23dc77394b470",
+  "source_contract": {
+    "runtime_contract_id": "chat-v1",
+    "runtime_contract_version": 1,
+    "fragment_role": "launcher-content",
+    "root_class": "kaigo-pattern-launcher-avatar-beacon",
+    "parameter_bindings": {}
+  },
+  "provenance": {"origin": "kaigo-owned", "review_state": "verified", "source_revision": 1, "supersedes": null}
+}

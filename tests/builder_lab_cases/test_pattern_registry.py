@@ -111,9 +111,9 @@ def test_registry_rejects_unexpected_asset(tmp_path: Path) -> None:
 def test_builtin_catalog_has_two_patterns_per_category() -> None:
     registry = load_builtin_registry()
 
-    assert len(registry.definitions) == 10
+    assert len(registry.definitions) == 30
     for category in PatternCategory:
-        assert len(registry.active_for(category)) >= 2
+        assert len(registry.active_for(category)) == 6
 
 
 def test_public_catalog_excludes_implementation_assets() -> None:
@@ -131,7 +131,7 @@ def test_v1_is_loaded_for_history_but_not_selectable() -> None:
 
     assert legacy.integration_mode is PatternIntegrationMode.LEGACY_REFERENCE
     assert legacy not in registry.selectable_for(PatternCategory.LAUNCHER)
-    assert registry.planner_catalog() == ()
+    assert len(registry.planner_catalog()) == 20
     assert len(registry.public_catalog()) == 10
 
 

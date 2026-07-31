@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "pattern_id": "advisor-cards",
+  "version": 2,
+  "category": "messages",
+  "status": "active",
+  "description": "Экспертные карточки реплик с единым языком initial и runtime сообщений.",
+  "parameter_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+  "incompatible_with": [],
+  "implementation_sha256": "31ae7195132e331076c6dab9275226454755a086d484a85ac25da2559fe0d33f",
+  "source_contract": {
+    "runtime_contract_id": "chat-v1",
+    "runtime_contract_version": 1,
+    "fragment_role": "message-decoration",
+    "root_class": "kaigo-pattern-messages-advisor-cards",
+    "parameter_bindings": {}
+  },
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "verified",
+    "source_revision": 1,
+    "supersedes": {"pattern_id": "advisor-cards", "version": 1}
+  }
+}

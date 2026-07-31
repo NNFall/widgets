@@ -1,0 +1,21 @@
+.kaigo-widget.kaigo-pattern-launcher-status-capsule [data-region="launcher"] {
+  min-width: 142px;
+  min-height: 48px;
+  padding: 0 17px;
+  border-radius: 999px;
+  color: #153c33;
+  background: #eff9f5;
+  box-shadow: 0 12px 32px rgb(21 60 51 / 16%);
+}
+.kaigo-widget.kaigo-pattern-launcher-status-capsule .kp-status { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }
+.kaigo-widget.kaigo-pattern-launcher-status-capsule .kp-status strong { font: 720 13px/1 system-ui; }
+.kaigo-widget.kaigo-pattern-launcher-status-capsule .kp-status-dot { width: 9px; height: 9px; border-radius: 50%; background: #2d967e; box-shadow: 0 0 0 5px rgb(45 150 126 / 12%); }
+.kaigo-widget.kaigo-pattern-launcher-status-capsule.kaigo-preview-attention [data-region="launcher"] {
+  animation: kaigo-pattern-status-capsule-attention 1.4s ease-in-out 2;
+}
+@keyframes kaigo-pattern-status-capsule-attention {
+  50% { transform: translateY(-3px); box-shadow: 0 17px 38px rgb(21 60 51 / 22%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kaigo-widget.kaigo-pattern-launcher-status-capsule [data-region="launcher"] { animation: none; }
+}

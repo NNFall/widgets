@@ -21,6 +21,65 @@ _FRAGMENT_ROLES = {
 }
 
 
+def _category_css(
+    category: PatternCategory,
+    *,
+    root_class: str,
+    decoration_class: str,
+) -> str:
+    prefix = f".kaigo-widget.{root_class}"
+    decoration = (
+        f"{prefix} .{decoration_class} {{ display: inline-flex; }}\n"
+    )
+    if category is PatternCategory.LAUNCHER:
+        return (
+            f'{prefix} [data-region="launcher"] '
+            "{ min-width:44px; min-height:44px; }\n"
+            + decoration
+        )
+    if category is PatternCategory.SHELL:
+        return (
+            f'{prefix} [data-region="panel"] '
+            "{ max-width:440px; max-height:78dvh; }\n"
+            f'{prefix} [data-region="header"] {{ display:flex; }}\n'
+            f'{prefix} [data-region="messages"] {{ display:flex; }}\n'
+            f'{prefix} [data-region="composer"] {{ display:grid; }}\n'
+            + decoration
+        )
+    if category is PatternCategory.MESSAGES:
+        return (
+            f"{prefix} .kaigo-widget__message--assistant,\n"
+            f'{prefix} [data-kaigo-runtime-message="assistant"] '
+            "{ max-width:82%; }\n"
+            f'{prefix} [data-kaigo-runtime-message="user"] '
+            "{ max-width:82%; }\n"
+            f"{prefix} [data-kaigo-runtime-label] {{ display:block; }}\n"
+            f"{prefix} [data-kaigo-runtime-content] {{ display:block; }}\n"
+            + decoration
+        )
+    if category is PatternCategory.COMPOSER:
+        return (
+            f"{prefix} .kaigo-widget__composer textarea "
+            "{ min-width:0; min-height:44px; }\n"
+            f"{prefix} .kaigo-widget__composer button "
+            "{ min-width:44px; min-height:44px; }\n"
+            f"{prefix} .kaigo-widget__composer:focus-within {{ outline:2px solid; }}\n"
+            f"{prefix} .kaigo-widget__composer button:disabled {{ opacity:.5; }}\n"
+            f'{prefix}[data-state="pending"] .kaigo-widget__composer button '
+            "{ opacity:.6; }\n"
+            + decoration
+        )
+    return (
+        f'{prefix} [data-region="panel"] '
+        "{ opacity:0; transition:opacity 180ms ease; }\n"
+        f'{prefix}.kaigo-preview-open [data-region="panel"] {{ opacity:1; }}\n'
+        "@media (prefers-reduced-motion: reduce) {\n"
+        f'  {prefix} [data-region="panel"] {{ transition:none; }}\n'
+        "}\n"
+        + decoration
+    )
+
+
 def _source_hash(
     manifest: dict[str, object],
     *,
@@ -87,9 +146,10 @@ def write_source_pattern(
             "css_variable": css_variable,
             "unit": "px",
         }
-    css = css or (
-        f".kaigo-widget.{root_class} .{decoration_class} "
-        "{ display: inline-flex; }\n"
+    css = css or _category_css(
+        category,
+        root_class=root_class,
+        decoration_class=decoration_class,
     )
     manifest: dict[str, object] = {
         "schema_version": 2,

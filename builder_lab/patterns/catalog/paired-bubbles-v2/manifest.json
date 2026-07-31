@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "pattern_id": "paired-bubbles",
+  "version": 2,
+  "category": "messages",
+  "status": "active",
+  "description": "Читаемый диалог: AI слева, клиент справа, подписи видимы в каждом turn.",
+  "parameter_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+  "incompatible_with": [],
+  "implementation_sha256": "ba3b5d19356751d9cd70bc0295c196806da680f18f23e69adc4e32369da25d51",
+  "source_contract": {
+    "runtime_contract_id": "chat-v1",
+    "runtime_contract_version": 1,
+    "fragment_role": "message-decoration",
+    "root_class": "kaigo-pattern-messages-paired-bubbles",
+    "parameter_bindings": {}
+  },
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "verified",
+    "source_revision": 1,
+    "supersedes": {"pattern_id": "paired-bubbles", "version": 1}
+  }
+}

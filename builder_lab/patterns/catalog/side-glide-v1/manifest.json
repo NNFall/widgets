@@ -1,0 +1,19 @@
+{
+  "schema_version": 2,
+  "pattern_id": "side-glide",
+  "version": 1,
+  "category": "motion",
+  "status": "active",
+  "description": "Короткое боковое раскрытие панели без auto-open и бесконечного движения.",
+  "parameter_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+  "incompatible_with": [],
+  "implementation_sha256": "ff87681f9b9a44f6c15d0feffe3cae52b6c98f40dc0fd7a1cf8b799b96d13c56",
+  "source_contract": {
+    "runtime_contract_id": "chat-v1",
+    "runtime_contract_version": 1,
+    "fragment_role": "motion-none",
+    "root_class": "kaigo-pattern-motion-side-glide",
+    "parameter_bindings": {}
+  },
+  "provenance": {"origin": "kaigo-owned", "review_state": "verified", "source_revision": 1, "supersedes": null}
+}

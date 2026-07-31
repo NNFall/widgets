@@ -1,0 +1,24 @@
+.kaigo-widget.kaigo-pattern-messages-avatar-thread .kaigo-widget__message--assistant,
+.kaigo-widget.kaigo-pattern-messages-avatar-thread [data-kaigo-runtime-message="assistant"] {
+  position: relative;
+  align-self: flex-start;
+  max-width: 84%;
+  margin-left: 30px;
+  padding: 11px 14px;
+  border-radius: 16px;
+  color: #213747;
+  background: #f1f5f4;
+}
+.kaigo-widget.kaigo-pattern-messages-avatar-thread [data-kaigo-runtime-message="user"] {
+  align-self: flex-end;
+  max-width: 82%;
+  padding: 11px 14px;
+  border-radius: 16px 16px 6px;
+  color: #ffffff;
+  background: #315f7b;
+}
+.kaigo-widget.kaigo-pattern-messages-avatar-thread [data-kaigo-runtime-label],
+.kaigo-widget.kaigo-pattern-messages-avatar-thread .kaigo-widget__message-label { display: block; font-size: 11px; font-weight: 780; opacity: .68; }
+.kaigo-widget.kaigo-pattern-messages-avatar-thread [data-kaigo-runtime-content] { display: block; overflow-wrap: anywhere; }
+.kaigo-widget.kaigo-pattern-messages-avatar-thread .kp-thread-avatar { display: inline-grid; place-items: center; width: 25px; height: 25px; border-radius: 50%; color: #ffffff; background: #3f927c; }
+.kaigo-widget.kaigo-pattern-messages-avatar-thread .kp-thread-avatar strong { font: 760 8px/1 system-ui; }
