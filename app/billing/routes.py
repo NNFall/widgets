@@ -15,6 +15,7 @@ from app.billing.payments import (
     PaymentNotFound,
     UnknownPlan,
 )
+from app.billing.service import GenerationCreditService
 from app.billing.yookassa import YooKassaError, YooKassaVerificationError
 from app.db.session import get_session_factory
 from app.projects.routes import _require_csrf, _scope
@@ -50,7 +51,11 @@ def _payment(attempt: PaymentAttempt) -> dict[str, object]:
     }
 
 
-def _subscription(row: Subscription) -> dict[str, object]:
+def _subscription(
+    row: Subscription,
+    *,
+    generation_tokens_remaining: int | None = None,
+) -> dict[str, object]:
     return {
         "id": str(row.id),
         "plan_code": row.plan_code,
@@ -59,6 +64,7 @@ def _subscription(row: Subscription) -> dict[str, object]:
         "current_period_end": _time(row.current_period_end),
         "auto_renew": row.auto_renew,
         "next_renewal_at": _time(row.next_renewal_at),
+        "generation_tokens_remaining": generation_tokens_remaining,
     }
 
 
@@ -322,8 +328,22 @@ async def subscription_status(request: web.Request) -> web.Response:
             .order_by(Subscription.created_at.desc())
             .limit(1)
         )
+        remaining = (
+            await GenerationCreditService.available_for_subscription_in_session(
+                database,
+                row,
+            )
+            if row is not None
+            else None
+        )
         return web.json_response(
-            {"subscription": _subscription(row) if row is not None else None}
+            {
+                "subscription": (
+                    _subscription(row, generation_tokens_remaining=remaining)
+                    if row is not None
+                    else None
+                )
+            }
         )
 
 
@@ -341,7 +361,17 @@ async def disable_auto_renew(request: web.Request) -> web.Response:
         )
     except PaymentNotFound:
         raise web.HTTPNotFound() from None
-    return web.json_response({"subscription": _subscription(subscription)})
+    remaining = await GenerationCreditService(
+        get_session_factory(request.app)
+    ).available_tokens(user_id)
+    return web.json_response(
+        {
+            "subscription": _subscription(
+                subscription,
+                generation_tokens_remaining=remaining,
+            )
+        }
+    )
 
 
 async def yookassa_webhook(request: web.Request) -> web.Response:

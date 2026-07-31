@@ -447,6 +447,13 @@ export function UpgradeGate({
                 ? 'Автопродление включено.'
                 : `Автопродление выключено. Доступ сохранится до ${subscriptionEndLabel(subscription?.current_period_end)}.`}
             </p>
+            {typeof subscription?.generation_tokens_remaining === 'number' && (
+              <p className="studio-upgrade__renewal-status">
+                Осталось токенов генерации: {new Intl.NumberFormat('ru-RU').format(
+                  Math.max(0, subscription.generation_tokens_remaining),
+                )}
+              </p>
+            )}
             <label htmlFor="studio-publication-domains">Разрешённые домены</label>
             <textarea
               id="studio-publication-domains"

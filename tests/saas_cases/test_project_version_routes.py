@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from app.saas.models import (
     GenerationArtifact,
     GenerationRun,
+    PaymentAttempt,
     Project,
     ProjectVersion,
     Subscription,
@@ -19,8 +20,9 @@ from tests.builder_lab_cases.test_validation import artifact
 from tests.saas_cases.test_project_routes import _project_app
 
 
-async def _seed_versions(factory, project_id):
+async def _seed_versions(factory, project_id, *, credit_tokens: int = 1_000_000):
     async with factory() as database, database.begin():
+        now = datetime.now(UTC)
         project = await database.get(Project, project_id)
         run = GenerationRun(
             project_id=project.id,
@@ -59,16 +61,44 @@ async def _seed_versions(factory, project_id):
         project.active_revision = stored.revision
         project.active_version_id = version.id
         project.status = "free_result_ready"
+        payment_attempt = PaymentAttempt(
+            user_id=10,
+            project_id=project.id,
+            provider="test",
+            merchant_account_fingerprint="a" * 64,
+            idempotency_key=f"test-payment:{project.id}",
+            plan_code="starter_monthly",
+            plan_snapshot={},
+            plan_fingerprint="test",
+            amount_minor=100,
+            currency="RUB",
+            status="succeeded",
+            payload={},
+        )
+        database.add(payment_attempt)
+        await database.flush()
+        subscription = Subscription(
+            user_id=10,
+            provider="test",
+            payment_attempt_id=payment_attempt.id,
+            plan_code="starter_monthly",
+            plan_snapshot={},
+            plan_fingerprint="test",
+            status="active",
+            current_period_start=now,
+            current_period_end=now + timedelta(days=30),
+        )
+        database.add(subscription)
         database.add(
-            Subscription(
+            UsageLedger(
                 user_id=10,
-                provider="test",
-                plan_code="starter_monthly",
-                plan_snapshot={},
-                plan_fingerprint="test",
-                status="active",
-                current_period_start=datetime.now(UTC),
-                current_period_end=datetime.now(UTC) + timedelta(days=30),
+                project_id=project.id,
+                payment_attempt_id=payment_attempt.id,
+                bucket="generation_tokens",
+                entry_type="subscription.credit",
+                amount=credit_tokens,
+                idempotency_key=f"test-credit:{project.id}",
+                payload={},
             )
         )
         return version.id, run.id, stored.id
@@ -133,9 +163,116 @@ async def test_owner_lists_versions_and_starts_idempotent_paid_refinement(tmp_pa
                 .select_from(UsageLedger)
                 .where(UsageLedger.entry_type == "trial.reserve")
             )
+            generation_reservations = list(
+                (
+                    await database.execute(
+                        select(UsageLedger).where(
+                            UsageLedger.entry_type == "generation.reserve"
+                        )
+                    )
+                ).scalars()
+            )
         assert run.source_version_id == version_id
         assert run.change_request == "Сделай приветствие короче"
         assert trial_reservations == 0
+        assert [(entry.bucket, entry.amount) for entry in generation_reservations] == [
+            ("generation_tokens", -500_000)
+        ]
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_paid_refinement_rejects_insufficient_generation_credits(tmp_path) -> None:
+    engine, factory, client, project_id, _foreign_id = await _project_app(tmp_path)
+    try:
+        await _seed_versions(factory, project_id, credit_tokens=100_000)
+        await client.post("/test/login/10")
+
+        response = await client.post(
+            f"/api/projects/{project_id}/refinements",
+            json={"change_request": "Сделай карточку компактнее"},
+            headers={
+                "X-CSRF-Token": "test-csrf",
+                "Idempotency-Key": "insufficient-credit-refinement",
+            },
+        )
+
+        assert response.status == 409
+        assert (await response.json())["error"]["code"] == (
+            "generation_credits_unavailable"
+        )
+        async with factory() as database:
+            reservations = await database.scalar(
+                select(func.count())
+                .select_from(UsageLedger)
+                .where(UsageLedger.entry_type == "generation.reserve")
+            )
+        assert reservations == 0
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_failed_paid_refinement_retries_with_a_new_period_bound_reservation(
+    tmp_path,
+) -> None:
+    engine, factory, client, project_id, _foreign_id = await _project_app(tmp_path)
+    try:
+        version_id, _run_id, _artifact_id = await _seed_versions(factory, project_id)
+        await client.post("/test/login/10")
+        first = await client.post(
+            f"/api/projects/{project_id}/refinements",
+            json={"change_request": "Сделай карточку компактнее"},
+            headers={
+                "X-CSRF-Token": "test-csrf",
+                "Idempotency-Key": "paid-refinement-first",
+            },
+        )
+        assert first.status == 202
+        source_id = UUID((await first.json())["id"])
+        async with factory() as database, database.begin():
+            source = await database.get(GenerationRun, source_id)
+            source.state = "failed"
+
+        retry_headers = {
+            "X-CSRF-Token": "test-csrf",
+            "Idempotency-Key": "paid-refinement-retry",
+        }
+        retried = await client.post(
+            f"/api/runs/{source_id}/retry",
+            headers=retry_headers,
+        )
+        replay = await client.post(
+            f"/api/runs/{source_id}/retry",
+            headers=retry_headers,
+        )
+
+        assert retried.status == replay.status == 202
+        replacement_id = UUID((await retried.json())["id"])
+        assert UUID((await replay.json())["id"]) == replacement_id
+        async with factory() as database:
+            source = await database.get(GenerationRun, source_id)
+            replacement = await database.get(GenerationRun, replacement_id)
+            reservations = list(
+                (
+                    await database.execute(
+                        select(UsageLedger)
+                        .where(UsageLedger.entry_type == "generation.reserve")
+                        .order_by(UsageLedger.created_at, UsageLedger.id)
+                    )
+                ).scalars()
+            )
+        assert source.trial_settlement == "paid"
+        assert replacement.source_version_id == version_id
+        assert replacement.change_request == "Сделай карточку компактнее"
+        assert len(reservations) == 2
+        assert reservations[0].payment_attempt_id is not None
+        assert {
+            reservation.payment_attempt_id for reservation in reservations
+        } == {reservations[0].payment_attempt_id}
     finally:
         await client.close()
         await engine.dispose()

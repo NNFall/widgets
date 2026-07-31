@@ -11,7 +11,7 @@ from typing import AsyncIterator
 from uuid import UUID
 from weakref import WeakValueDictionary
 
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import NoResultFound
@@ -23,6 +23,7 @@ from app.saas.models import (
     GenerationRun,
     ModelCall,
     Project,
+    Subscription,
     TrialEntitlement,
     UsageLedger,
     UserIdentity,
@@ -50,6 +51,10 @@ class TrialSettlementInconsistency(RuntimeError):
     """Persisted trial data cannot be reconciled deterministically."""
 
 
+class GenerationCreditsUnavailable(RuntimeError):
+    """The active subscription has too few unreserved generation tokens."""
+
+
 class TrialFailureKind(str, Enum):
     PLATFORM = "platform"
     INFRASTRUCTURE = "infrastructure"
@@ -75,6 +80,143 @@ class TrialReservation:
     user_id: int
     run_id: UUID
     key: str
+
+
+GENERATION_RUN_RESERVATION_TOKENS = 500_000
+
+
+class GenerationCreditService:
+    """Reserve subscription tokens before a paid generation starts."""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = session_factory
+
+    @staticmethod
+    async def available_for_subscription_in_session(
+        database: AsyncSession,
+        subscription: Subscription,
+    ) -> int:
+        period_id = subscription.payment_attempt_id
+        if period_id is None:
+            return 0
+        credit_exists = await database.scalar(
+            select(
+                exists().where(
+                    UsageLedger.user_id == subscription.user_id,
+                    UsageLedger.payment_attempt_id == period_id,
+                    UsageLedger.bucket == "generation_tokens",
+                    UsageLedger.entry_type == "subscription.credit",
+                )
+            )
+        )
+        if not credit_exists:
+            return 0
+        available = await database.scalar(
+            select(func.coalesce(func.sum(UsageLedger.amount), 0)).where(
+                UsageLedger.user_id == subscription.user_id,
+                UsageLedger.payment_attempt_id == period_id,
+                UsageLedger.bucket == "generation_tokens",
+            )
+        )
+        return int(available or 0)
+
+    async def available_tokens(self, user_id: int) -> int | None:
+        now = datetime.now(UTC)
+        async with self._sessions() as database:
+            subscription = await database.scalar(
+                select(Subscription)
+                .where(
+                    Subscription.user_id == user_id,
+                    Subscription.status == "active",
+                    Subscription.current_period_start <= now,
+                    Subscription.current_period_end > now,
+                )
+                .order_by(Subscription.created_at.desc())
+                .limit(1)
+            )
+            if subscription is None:
+                return None
+            return await self.available_for_subscription_in_session(
+                database,
+                subscription,
+            )
+
+    async def reserve_in_session(
+        self,
+        database: AsyncSession,
+        *,
+        user_id: int,
+        project_id: UUID,
+        run_id: UUID,
+        amount: int = GENERATION_RUN_RESERVATION_TOKENS,
+    ) -> UsageLedger:
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0:
+            raise ValueError("generation token reservation must be positive")
+        existing = await database.scalar(
+            select(UsageLedger).where(
+                UsageLedger.run_id == run_id,
+                UsageLedger.entry_type == "generation.reserve",
+            )
+        )
+        if existing is not None:
+            if (
+                existing.user_id != user_id
+                or existing.project_id != project_id
+                or existing.bucket != "generation_tokens"
+                or existing.amount != -amount
+                or existing.payment_attempt_id is None
+            ):
+                raise GenerationCreditsUnavailable(
+                    "generation reservation is inconsistent"
+                )
+            return existing
+
+        now = datetime.now(UTC)
+        subscription = await database.scalar(
+            select(Subscription)
+            .where(
+                Subscription.user_id == user_id,
+                Subscription.status == "active",
+                Subscription.current_period_start <= now,
+                Subscription.current_period_end > now,
+            )
+            .with_for_update()
+        )
+        if subscription is None:
+            raise GenerationCreditsUnavailable("active subscription is required")
+        if subscription.payment_attempt_id is None:
+            raise GenerationCreditsUnavailable(
+                "subscription billing period is unavailable"
+            )
+        available = await self.available_for_subscription_in_session(
+            database,
+            subscription,
+        )
+        if available <= 0:
+            raise GenerationCreditsUnavailable(
+                "subscription generation credit is missing"
+            )
+        if available < amount:
+            raise GenerationCreditsUnavailable(
+                "generation token balance is insufficient"
+            )
+        reservation = UsageLedger(
+            user_id=user_id,
+            project_id=project_id,
+            run_id=run_id,
+            payment_attempt_id=subscription.payment_attempt_id,
+            bucket="generation_tokens",
+            entry_type="generation.reserve",
+            amount=-amount,
+            idempotency_key=f"generation:{run_id}:reserve",
+            payload={
+                "reserved_tokens": amount,
+                "subscription_id": str(subscription.id),
+            },
+        )
+        database.add(reservation)
+        await database.flush()
+        return reservation
 
 
 _SQLITE_TRIAL_LOCKS: WeakValueDictionary[tuple[int, int], asyncio.Lock] = (
@@ -595,7 +737,14 @@ class TrialService:
         self,
         user_id: int,
         model_call_id: UUID,
+        *,
+        token_bucket: str = "tokens",
+        payment_attempt_id: UUID | None = None,
     ) -> tuple[UsageLedger, ...]:
+        if token_bucket not in {"tokens", "generation_tokens"}:
+            raise ValueError("model usage token bucket is invalid")
+        if (token_bucket == "generation_tokens") != (payment_attempt_id is not None):
+            raise ValueError("paid model usage billing period is invalid")
         async with self._model_guard(model_call_id):
             async with self._sessions() as database, database.begin():
                 row = (
@@ -627,7 +776,7 @@ class TrialService:
                 }
                 definitions = []
                 if billable_tokens > 0:
-                    definitions.append(("tokens", -billable_tokens))
+                    definitions.append((token_bucket, -billable_tokens))
                 if call.cost_microusd > 0:
                     definitions.append(("cost_microusd", -call.cost_microusd))
                 entries = []
@@ -638,6 +787,7 @@ class TrialService:
                         "project_id": project_id,
                         "run_id": call.run_id,
                         "model_call_id": call.id,
+                        "payment_attempt_id": payment_attempt_id,
                         "bucket": bucket,
                         "entry_type": "model.usage",
                         "amount": amount,
@@ -710,7 +860,14 @@ class TrialSettlementReconciler:
             key=transition_key.removesuffix(":reserve"),
         )
 
-    async def _record_model_usage(self, run_id: UUID, user_id: int) -> bool:
+    async def _record_model_usage(
+        self,
+        run_id: UUID,
+        user_id: int,
+        *,
+        token_bucket: str = "tokens",
+        payment_attempt_id: UUID | None = None,
+    ) -> bool:
         async with self._sessions() as database:
             calls = list(
                 (
@@ -728,12 +885,81 @@ class TrialSettlementReconciler:
             ):
                 spent = True
             try:
-                await self._trials.record_model_call_usage(user_id, call.id)
+                await self._trials.record_model_call_usage(
+                    user_id,
+                    call.id,
+                    token_bucket=token_bucket,
+                    payment_attempt_id=payment_attempt_id,
+                )
             except ValueError as error:
                 raise TrialSettlementInconsistency(
                     f"run {run_id} model call ownership is inconsistent"
                 ) from error
         return spent
+
+    async def _paid_reservation(self, run_id: UUID) -> UsageLedger | None:
+        async with self._sessions() as database:
+            reservation = await database.scalar(
+                select(UsageLedger)
+                .where(
+                    UsageLedger.run_id == run_id,
+                    UsageLedger.entry_type == "generation.reserve",
+                )
+                .order_by(UsageLedger.created_at, UsageLedger.id)
+                .limit(1)
+            )
+        if reservation is None:
+            return None
+        if (
+            reservation.bucket != "generation_tokens"
+            or reservation.amount >= 0
+            or reservation.payment_attempt_id is None
+        ):
+            raise TrialSettlementInconsistency(
+                f"run {run_id} has an invalid generation reservation ledger"
+            )
+        return reservation
+
+    async def _release_paid_reservation(self, reservation: UsageLedger) -> None:
+        idempotency_key = f"generation:{reservation.run_id}:release"
+        values = {
+            "user_id": reservation.user_id,
+            "project_id": reservation.project_id,
+            "run_id": reservation.run_id,
+            "payment_attempt_id": reservation.payment_attempt_id,
+            "bucket": "generation_tokens",
+            "entry_type": "generation.release",
+            "amount": -reservation.amount,
+            "idempotency_key": idempotency_key,
+            "payload": {
+                "reserved_tokens": -reservation.amount,
+                "reservation_id": str(reservation.id),
+            },
+        }
+        async with self._sessions() as database, database.begin():
+            dialect = database.get_bind().dialect.name
+            if dialect == "postgresql":
+                statement = postgresql_insert(UsageLedger).values(**values)
+                await database.execute(
+                    statement.on_conflict_do_nothing(
+                        index_elements=["idempotency_key"]
+                    )
+                )
+            elif dialect == "sqlite":
+                statement = sqlite_insert(UsageLedger).values(**values)
+                await database.execute(
+                    statement.on_conflict_do_nothing(
+                        index_elements=["idempotency_key"]
+                    )
+                )
+            else:
+                existing = await database.scalar(
+                    select(UsageLedger.id).where(
+                        UsageLedger.idempotency_key == idempotency_key
+                    )
+                )
+                if existing is None:
+                    database.add(UsageLedger(**values))
 
     async def settle_run(self, run_id: UUID) -> str | None:
         async with self._sessions() as database:
@@ -750,9 +976,37 @@ class TrialSettlementReconciler:
             logger.exception("quarantining invalid trial reservation for run %s", run_id)
             return await self._mark_settlement(run_id, "quarantined")
         if reservation is None:
-            return await self._mark_settlement(run_id, "not_applicable")
+            try:
+                paid_reservation = await self._paid_reservation(run_id)
+            except TrialSettlementInconsistency:
+                logger.exception(
+                    "quarantining invalid generation reservation for run %s",
+                    run_id,
+                )
+                return await self._mark_settlement(run_id, "quarantined")
+            if paid_reservation is None:
+                return await self._mark_settlement(run_id, "not_applicable")
+            try:
+                await self._record_model_usage(
+                    run_id,
+                    paid_reservation.user_id,
+                    token_bucket="generation_tokens",
+                    payment_attempt_id=paid_reservation.payment_attempt_id,
+                )
+                await self._release_paid_reservation(paid_reservation)
+            except TrialSettlementInconsistency:
+                logger.exception(
+                    "quarantining inconsistent paid usage for run %s",
+                    run_id,
+                )
+                return await self._mark_settlement(run_id, "quarantined")
+            return await self._mark_settlement(run_id, "paid")
         try:
-            model_spent = await self._record_model_usage(run_id, reservation.user_id)
+            model_spent = await self._record_model_usage(
+                run_id,
+                reservation.user_id,
+                token_bucket="tokens",
+            )
             if state == "completed":
                 await self._trials.consume_trial(reservation, reason="completed")
                 outcome = "consumed"
@@ -819,7 +1073,9 @@ class TrialSettlementReconciler:
                             GenerationRun.trial_settled_at.is_(None),
                             exists().where(
                                 UsageLedger.run_id == GenerationRun.id,
-                                UsageLedger.entry_type == "trial.reserve",
+                                UsageLedger.entry_type.in_(
+                                    ("trial.reserve", "generation.reserve")
+                                ),
                             ),
                         )
                         .order_by(GenerationRun.created_at, GenerationRun.id)
@@ -840,6 +1096,9 @@ class TrialSettlementReconciler:
 
 
 __all__ = [
+    "GENERATION_RUN_RESERVATION_TOKENS",
+    "GenerationCreditService",
+    "GenerationCreditsUnavailable",
     "TrialCompensationDenied",
     "TrialFailureKind",
     "TrialReservation",

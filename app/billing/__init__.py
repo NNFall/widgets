@@ -1,4 +1,7 @@
 from .service import (
+    GENERATION_RUN_RESERVATION_TOKENS,
+    GenerationCreditService,
+    GenerationCreditsUnavailable,
     TrialCompensationDenied,
     TrialFailureKind,
     TrialReservation,
@@ -9,6 +12,9 @@ from .service import (
 )
 
 __all__ = [
+    "GENERATION_RUN_RESERVATION_TOKENS",
+    "GenerationCreditService",
+    "GenerationCreditsUnavailable",
     "TrialCompensationDenied",
     "TrialFailureKind",
     "TrialReservation",

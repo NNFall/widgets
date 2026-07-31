@@ -7,6 +7,7 @@ describe('Studio provider errors', () => {
     ['provider_unavailable', 'Сервис генерации сейчас недоступен. Запуск можно повторить позже.'],
     ['model_unavailable', 'Выбранная модель сейчас недоступна.'],
     ['quota_exceeded', 'Лимит сервиса генерации временно исчерпан. Попробуйте позже.'],
+    ['generation_credits_unavailable', 'На тарифе недостаточно токенов для новой доработки.'],
     ['route_exhausted', 'Ни один доступный сервис генерации не смог завершить запрос. Попробуйте позже.'],
   ])('uses a provider-neutral message for %s', (code, expected) => {
     const message = STUDIO_ERROR_MESSAGES[code];

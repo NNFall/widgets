@@ -297,6 +297,7 @@ async def test_payment_status_is_owner_scoped_and_webhook_activates(tmp_path) ->
         data = await subscription.json()
         assert data["subscription"]["plan_code"] == "starter_monthly"
         assert data["subscription"]["status"] == "active"
+        assert data["subscription"]["generation_tokens_remaining"] == 1_000_000
         async with factory() as database:
             assert (
                 await database.scalar(select(func.count()).select_from(Subscription))

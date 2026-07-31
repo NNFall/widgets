@@ -129,6 +129,7 @@ export interface BillingSubscription {
   current_period_end: string;
   auto_renew: boolean;
   next_renewal_at: string | null;
+  generation_tokens_remaining?: number | null;
 }
 
 export interface SaasProject {

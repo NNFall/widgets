@@ -44,6 +44,7 @@ const activeSubscription = {
   current_period_end: '2026-08-28T12:00:00Z',
   auto_renew: true,
   next_renewal_at: '2026-08-28T12:00:00Z',
+  generation_tokens_remaining: 750_000,
 };
 
 describe('UpgradeGate', () => {
@@ -227,6 +228,7 @@ describe('UpgradeGate', () => {
     });
     expect(api.getBillingSubscription).toHaveBeenCalledTimes(2);
     expect(screen.getByText(/тариф активирован/i)).toBeVisible();
+    expect(screen.getByText(/Осталось токенов генерации: 750[\s ]000/)).toBeVisible();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);

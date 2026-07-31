@@ -21,6 +21,8 @@ from app.analytics.service import (
 )
 from app.auth.routes import _canonical_public_https_url
 from app.billing.service import (
+    GenerationCreditService,
+    GenerationCreditsUnavailable,
     TrialService,
     TrialSettlementReconciler,
     TrialUnavailable,
@@ -546,6 +548,18 @@ async def create_refinement(request: web.Request) -> web.Response:
                     change_request=change_request,
                     reserve_trial=False,
                 )
+                try:
+                    await GenerationCreditService(factory).reserve_in_session(
+                        database,
+                        user_id=user_id,
+                        project_id=project.id,
+                        run_id=run.id,
+                    )
+                except GenerationCreditsUnavailable as error:
+                    raise web.HTTPConflict(
+                        text=_error("generation_credits_unavailable"),
+                        content_type="application/json",
+                    ) from error
                 await record_funnel_event(
                     database,
                     event_type="run_queued",
@@ -788,7 +802,8 @@ async def retry_run(request: web.Request) -> web.Response:
         raise web.HTTPConflict(
             text=_error("trial_consumed"), content_type="application/json"
         )
-    if outcome != "compensated":
+    paid_retry = outcome == "paid"
+    if not paid_retry and outcome != "compensated":
         raise web.HTTPConflict(
             text=_error("trial_retry_unavailable"), content_type="application/json"
         )
@@ -829,14 +844,17 @@ async def retry_run(request: web.Request) -> web.Response:
                             text=_error("run_is_not_active"),
                             content_type="application/json",
                         )
+                    expected_settlement = "paid" if paid_retry else "compensated"
                     if (
                         source.state not in {"failed", "cancelled"}
-                        or source.trial_settlement != "compensated"
+                        or source.trial_settlement != expected_settlement
                     ):
                         raise web.HTTPConflict(
                             text=_error("trial_retry_unavailable"),
                             content_type="application/json",
                         )
+                    if paid_retry:
+                        await _require_active_subscription(database, user_id)
                     run = await _enqueue_express_run(
                         database,
                         factory,
@@ -844,7 +862,17 @@ async def retry_run(request: web.Request) -> web.Response:
                         user_id,
                         key,
                         request.app[GENERATION_FORENSICS_CONFIG_KEY],
+                        source_version_id=source.source_version_id,
+                        change_request=source.change_request,
+                        reserve_trial=not paid_retry,
                     )
+                    if paid_retry:
+                        await GenerationCreditService(factory).reserve_in_session(
+                            database,
+                            user_id=user_id,
+                            project_id=project.id,
+                            run_id=run.id,
+                        )
                     await record_funnel_event(
                         database,
                         event_type="run_queued",
@@ -859,6 +887,16 @@ async def retry_run(request: web.Request) -> web.Response:
             {
                 "error": {
                     "code": "trial_retry_unavailable",
+                    "message": str(error),
+                }
+            },
+            status=409,
+        )
+    except GenerationCreditsUnavailable as error:
+        return web.json_response(
+            {
+                "error": {
+                    "code": "generation_credits_unavailable",
                     "message": str(error),
                 }
             },

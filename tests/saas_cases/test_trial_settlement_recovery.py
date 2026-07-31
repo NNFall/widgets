@@ -9,7 +9,12 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.billing.service import TrialFailureKind, TrialService, TrialSettlementReconciler
+from app.billing.service import (
+    GenerationCreditService,
+    TrialFailureKind,
+    TrialService,
+    TrialSettlementReconciler,
+)
 from app.db.base import Base
 from app.db.models import Tenant, User
 from app.models.contracts import ModelRequest, ProviderCapabilities
@@ -18,7 +23,9 @@ from app.saas.models import (
     GenerationEvent,
     GenerationRun,
     ModelCall,
+    PaymentAttempt,
     Project,
+    Subscription,
     TrialEntitlement,
     UsageLedger,
     UserIdentity,
@@ -139,6 +146,268 @@ async def test_terminal_success_settles_trial_and_model_usage_exactly_once(tmp_p
             assert run.trial_settled_at is not None
             assert entitlement.state == "consumed"
             assert model_entries == 2
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_terminal_paid_run_releases_reservation_and_debits_actual_tokens_once(
+    tmp_path,
+) -> None:
+    engine, factory, run_ids = await _settlement_database(tmp_path)
+    try:
+        now = datetime.now(UTC)
+        async with factory() as database, database.begin():
+            run = await database.get(GenerationRun, run_ids[0])
+            run.state = "completed"
+            attempt = PaymentAttempt(
+                user_id=10,
+                project_id=run.project_id,
+                provider="test",
+                merchant_account_fingerprint="a" * 64,
+                idempotency_key="paid-test-attempt",
+                plan_code="starter_monthly",
+                plan_snapshot={},
+                plan_fingerprint="test",
+                amount_minor=100,
+                currency="RUB",
+                status="succeeded",
+                payload={},
+            )
+            database.add(attempt)
+            await database.flush()
+            database.add(
+                Subscription(
+                    user_id=10,
+                    provider="test",
+                    payment_attempt_id=attempt.id,
+                    plan_code="starter_monthly",
+                    plan_snapshot={},
+                    plan_fingerprint="test",
+                    status="active",
+                    current_period_start=now,
+                    current_period_end=now + timedelta(days=30),
+                )
+            )
+            database.add_all(
+                [
+                    UsageLedger(
+                        user_id=10,
+                        project_id=run.project_id,
+                        payment_attempt_id=attempt.id,
+                        bucket="generation_tokens",
+                        entry_type="subscription.credit",
+                        amount=1_000_000,
+                        idempotency_key="paid-test-credit",
+                        payload={},
+                    ),
+                    UsageLedger(
+                        user_id=10,
+                        project_id=run.project_id,
+                        run_id=run.id,
+                        payment_attempt_id=attempt.id,
+                        bucket="generation_tokens",
+                        entry_type="generation.reserve",
+                        amount=-500_000,
+                        idempotency_key=f"generation:{run.id}:reserve",
+                        payload={"reserved_tokens": 500_000},
+                    ),
+                    ModelCall(
+                        run_id=run.id,
+                        provider="agentrouter",
+                        model="gpt-5.5",
+                        role="widget_generator",
+                        mode="express",
+                        prompt_version="builder-v1",
+                        input_tokens=20,
+                        output_tokens=10,
+                        thinking_tokens=2,
+                        latency_ms=100,
+                        status="completed",
+                        cost_microusd=90,
+                    ),
+                ]
+            )
+
+        reconciler = TrialSettlementReconciler(factory)
+        assert await reconciler.settle_run(run_ids[0]) == "paid"
+        assert await reconciler.settle_run(run_ids[0]) == "paid"
+
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_ids[0])
+            entries = list(
+                (
+                    await database.execute(
+                        select(UsageLedger).where(UsageLedger.user_id == 10)
+                    )
+                ).scalars()
+            )
+        assert run.trial_settlement == "paid"
+        assert sum(
+            entry.amount
+            for entry in entries
+            if entry.bucket == "generation_tokens"
+        ) == 999_970
+        assert [
+            (entry.bucket, entry.amount)
+            for entry in entries
+            if entry.entry_type == "model.usage"
+        ] == [("generation_tokens", -30), ("cost_microusd", -90)]
+        assert [
+            entry.amount
+            for entry in entries
+            if entry.entry_type == "generation.release"
+        ] == [500_000]
+        assert all(
+            entry.payment_attempt_id == attempt.id
+            for entry in entries
+            if entry.bucket == "generation_tokens"
+        )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_paid_run_settlement_stays_bound_to_its_original_billing_period(
+    tmp_path,
+) -> None:
+    engine, factory, run_ids = await _settlement_database(tmp_path)
+    try:
+        now = datetime.now(UTC)
+        async with factory() as database, database.begin():
+            run = await database.get(GenerationRun, run_ids[0])
+            run.state = "completed"
+            first_attempt = PaymentAttempt(
+                user_id=10,
+                project_id=run.project_id,
+                provider="test",
+                merchant_account_fingerprint="a" * 64,
+                idempotency_key="period-one-attempt",
+                plan_code="starter_monthly",
+                plan_snapshot={},
+                plan_fingerprint="test",
+                amount_minor=100,
+                currency="RUB",
+                status="succeeded",
+                payload={},
+            )
+            database.add(first_attempt)
+            await database.flush()
+            subscription = Subscription(
+                user_id=10,
+                provider="test",
+                payment_attempt_id=first_attempt.id,
+                plan_code="starter_monthly",
+                plan_snapshot={},
+                plan_fingerprint="test",
+                status="active",
+                current_period_start=now,
+                current_period_end=now + timedelta(days=30),
+            )
+            database.add(subscription)
+            database.add_all(
+                [
+                    UsageLedger(
+                        user_id=10,
+                        project_id=run.project_id,
+                        payment_attempt_id=first_attempt.id,
+                        bucket="generation_tokens",
+                        entry_type="subscription.credit",
+                        amount=1_000_000,
+                        idempotency_key="period-one-credit",
+                        payload={},
+                    ),
+                    UsageLedger(
+                        user_id=10,
+                        project_id=run.project_id,
+                        run_id=run.id,
+                        payment_attempt_id=first_attempt.id,
+                        bucket="generation_tokens",
+                        entry_type="generation.reserve",
+                        amount=-500_000,
+                        idempotency_key=f"generation:{run.id}:reserve",
+                        payload={"reserved_tokens": 500_000},
+                    ),
+                    ModelCall(
+                        run_id=run.id,
+                        provider="agentrouter",
+                        model="gpt-5.5",
+                        role="widget_generator",
+                        mode="express",
+                        prompt_version="builder-v1",
+                        input_tokens=20,
+                        output_tokens=10,
+                        thinking_tokens=2,
+                        latency_ms=100,
+                        status="completed",
+                        cost_microusd=90,
+                    ),
+                ]
+            )
+            await database.flush()
+            second_attempt = PaymentAttempt(
+                user_id=10,
+                project_id=run.project_id,
+                provider="test",
+                merchant_account_fingerprint="a" * 64,
+                idempotency_key="period-two-attempt",
+                plan_code="starter_monthly",
+                plan_snapshot={},
+                plan_fingerprint="test",
+                amount_minor=100,
+                currency="RUB",
+                status="succeeded",
+                payload={},
+            )
+            database.add(second_attempt)
+            await database.flush()
+            subscription.payment_attempt_id = second_attempt.id
+            subscription.current_period_start = now + timedelta(days=30)
+            subscription.current_period_end = now + timedelta(days=60)
+            database.add(
+                UsageLedger(
+                    user_id=10,
+                    project_id=run.project_id,
+                    payment_attempt_id=second_attempt.id,
+                    bucket="generation_tokens",
+                    entry_type="subscription.credit",
+                    amount=1_000_000,
+                    idempotency_key="period-two-credit",
+                    payload={},
+                )
+            )
+
+        reconciler = TrialSettlementReconciler(factory)
+        assert await reconciler.settle_run(run_ids[0]) == "paid"
+
+        async with factory() as database:
+            subscription = await database.scalar(select(Subscription))
+            current_balance = (
+                await GenerationCreditService.available_for_subscription_in_session(
+                    database,
+                    subscription,
+                )
+            )
+            period_entries = list(
+                (
+                    await database.execute(
+                        select(UsageLedger).where(
+                            UsageLedger.bucket == "generation_tokens"
+                        )
+                    )
+                ).scalars()
+            )
+        assert current_balance == 1_000_000
+        assert sum(
+            entry.amount
+            for entry in period_entries
+            if entry.payment_attempt_id == first_attempt.id
+        ) == 999_970
+        assert sum(
+            entry.amount
+            for entry in period_entries
+            if entry.payment_attempt_id == second_attempt.id
+        ) == 1_000_000
     finally:
         await engine.dispose()
 
