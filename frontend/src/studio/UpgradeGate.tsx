@@ -1,5 +1,5 @@
 import { ArrowRight, CheckCircle, Clock, Sparkle } from '@phosphor-icons/react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   BuilderApiError,
@@ -10,11 +10,13 @@ import {
   getBillingSubscription,
   getProjectPublication,
   publishProject,
+  rollbackLegacyPublication,
   rollbackPublication,
   resumeBillingPayment,
   type PublicationRelease,
+  type ProjectPublicationState,
 } from './api';
-import type { BillingSubscription } from './types';
+import type { BillingSubscription, SaasProjectVersion } from './types';
 
 const DEFAULT_PLAN_CODE = 'starter_monthly';
 const DEFAULT_POLL_INTERVAL_MS = 3_000;
@@ -32,13 +34,17 @@ type UpgradeState =
 interface UpgradeGateProps {
   csrfToken: string | null;
   projectId?: string;
+  versionsEnabled?: boolean;
+  projectVersionId?: string;
+  projectVersionOrdinal?: number;
+  projectVersions?: Array<Pick<SaasProjectVersion, 'id' | 'ordinal'>>;
   artifactId?: string;
   revision?: number;
   pollIntervalMs?: number;
   maxPollAttempts?: number;
 }
 
-type RollbackRelease = Pick<PublicationRelease, 'release_id' | 'revision'>;
+type RollbackRelease = Pick<PublicationRelease, 'release_id' | 'revision' | 'project_version_id'>;
 
 function safeCheckoutUrl(value: string) {
   try {
@@ -72,6 +78,10 @@ function subscriptionEndLabel(value: string | undefined) {
 export function UpgradeGate({
   csrfToken,
   projectId = '',
+  versionsEnabled = false,
+  projectVersionId = '',
+  projectVersionOrdinal,
+  projectVersions = [],
   artifactId = '',
   revision = 0,
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
@@ -93,6 +103,49 @@ export function UpgradeGate({
   const [publicationError, setPublicationError] = useState<string | null>(null);
   const idempotencyKeyRef = useRef<string | null>(null);
   const autoRenewIntentRef = useRef<boolean | null>(null);
+
+  const applyPublicationState = useCallback((restored: ProjectPublicationState | null) => {
+    if (restored === null) {
+      setPublication(null);
+      setPriorReleases([]);
+      return;
+    }
+    const activeRelease = restored.active_release;
+    setPublication({
+      publication_id: restored.publication_id,
+      release_id: activeRelease.release_id,
+      artifact_id: activeRelease.artifact_id,
+      project_version_id: activeRelease.project_version_id ?? null,
+      stable_key: restored.stable_key,
+      revision: activeRelease.revision,
+      allowed_domains: restored.allowed_domains,
+      checksum: activeRelease.checksum,
+      embed_url: restored.embed_url,
+      runtime_url: restored.runtime_url,
+    });
+    setAllowedDomains(restored.allowed_domains.join('\n'));
+    const directPrevious = restored.releases.find(
+      ({ release_id }) => release_id === activeRelease.previous_release_id,
+    );
+    setPriorReleases([
+      ...restored.releases.filter(({ release_id }) => (
+        release_id !== activeRelease.release_id
+        && release_id !== directPrevious?.release_id
+      )),
+      ...(directPrevious ? [directPrevious] : []),
+    ]);
+  }, []);
+
+  const reloadPublicationAfterConflict = useCallback(async () => {
+    if (!projectId) return false;
+    try {
+      const { publication: restored } = await getProjectPublication(projectId);
+      applyPublicationState(restored);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [applyPublicationState, projectId]);
 
   useEffect(() => {
     if (!csrfToken) {
@@ -226,34 +279,7 @@ export function UpgradeGate({
     void getProjectPublication(projectId, abort.signal)
       .then(({ publication: restored }) => {
         if (abort.signal.aborted) return;
-        if (restored === null) {
-          setPublication(null);
-          setPriorReleases([]);
-          return;
-        }
-        const activeRelease = restored.active_release;
-        setPublication({
-          publication_id: restored.publication_id,
-          release_id: activeRelease.release_id,
-          artifact_id: activeRelease.artifact_id,
-          stable_key: restored.stable_key,
-          revision: activeRelease.revision,
-          allowed_domains: restored.allowed_domains,
-          checksum: activeRelease.checksum,
-          embed_url: restored.embed_url,
-          runtime_url: restored.runtime_url,
-        });
-        setAllowedDomains(restored.allowed_domains.join('\n'));
-        const directPrevious = restored.releases.find(
-          ({ release_id }) => release_id === activeRelease.previous_release_id,
-        );
-        setPriorReleases([
-          ...restored.releases.filter(({ release_id }) => (
-            release_id !== activeRelease.release_id
-            && release_id !== directPrevious?.release_id
-          )),
-          ...(directPrevious ? [directPrevious] : []),
-        ]);
+        applyPublicationState(restored);
       })
       .catch(() => {
         if (!abort.signal.aborted) {
@@ -264,7 +290,7 @@ export function UpgradeGate({
         if (!abort.signal.aborted) setPublicationPending(false);
       });
     return () => abort.abort();
-  }, [projectId, state]);
+  }, [applyPublicationState, projectId, state]);
 
   const startCheckout = async () => {
     if (!csrfToken || state === 'creating' || state === 'pending' || state === 'active') return;
@@ -326,7 +352,10 @@ export function UpgradeGate({
   };
 
   const publish = async () => {
-    if (!csrfToken || !projectId || !artifactId || revision < 1 || publicationPending) return;
+    const targetAvailable = versionsEnabled
+      ? Boolean(projectVersionId)
+      : Boolean(artifactId) && revision >= 1;
+    if (!csrfToken || !projectId || !targetAvailable || publicationPending) return;
     const domains = [...new Set(
       allowedDomains
         .split(/[\s,]+/)
@@ -338,11 +367,17 @@ export function UpgradeGate({
     try {
       const next = await publishProject(
         projectId,
-        {
-          artifact_id: artifactId,
-          revision,
-          ...(domains.length > 0 ? { allowed_domains: domains } : {}),
-        },
+        versionsEnabled
+          ? {
+              project_version_id: projectVersionId,
+              expected_active_release_id: publication?.release_id ?? null,
+              ...(domains.length > 0 ? { allowed_domains: domains } : {}),
+            }
+          : {
+              artifact_id: artifactId,
+              revision,
+              ...(domains.length > 0 ? { allowed_domains: domains } : {}),
+            },
         csrfToken,
       );
       if (publication && publication.release_id !== next.release_id) {
@@ -353,33 +388,69 @@ export function UpgradeGate({
       }
       setPublication(next);
       setAllowedDomains(next.allowed_domains.join('\n'));
-    } catch {
-      setPublicationError('Не удалось опубликовать виджет. Проверьте домены и попробуйте ещё раз.');
+    } catch (caught) {
+      if (
+        caught instanceof BuilderApiError
+        && caught.status === 409
+        && caught.code === 'publication_conflict'
+      ) {
+        const reloaded = await reloadPublicationAfterConflict();
+        setPublicationError(reloaded
+          ? 'Публикация изменилась в другой сессии. Данные обновлены — проверьте их и повторите действие.'
+          : 'Публикация изменилась в другой сессии, но не удалось обновить её состояние. Повторите проверку.');
+      } else {
+        setPublicationError('Не удалось опубликовать виджет. Проверьте домены и попробуйте ещё раз.');
+      }
     } finally {
       setPublicationPending(false);
     }
   };
 
   const rollbackTarget = priorReleases.at(-1) ?? null;
+  const versionOrdinal = (versionId: string | null | undefined) => {
+    if (!versionId) return undefined;
+    return projectVersions.find(({ id }) => id === versionId)?.ordinal
+      ?? (versionId === projectVersionId ? projectVersionOrdinal : undefined);
+  };
+  const publishedVersionOrdinal = versionOrdinal(publication?.project_version_id);
+  const rollbackVersionOrdinal = versionOrdinal(rollbackTarget?.project_version_id);
   const rollback = async () => {
     if (!csrfToken || !publication || !rollbackTarget || publicationPending) return;
     setPublicationPending(true);
     setPublicationError(null);
     try {
       const current = publication;
-      const restored = await rollbackPublication(
-        publication.publication_id,
-        rollbackTarget.release_id,
-        csrfToken,
-      );
+      const restored = versionsEnabled
+        ? await rollbackPublication(
+            publication.publication_id,
+            rollbackTarget.release_id,
+            publication.release_id,
+            csrfToken,
+          )
+        : await rollbackLegacyPublication(
+            publication.publication_id,
+            rollbackTarget.release_id,
+            csrfToken,
+          );
       setPriorReleases((known) => [
         ...known.filter(({ release_id }) => release_id !== rollbackTarget.release_id),
         current,
       ]);
       setPublication(restored);
       setAllowedDomains(restored.allowed_domains.join('\n'));
-    } catch {
-      setPublicationError('Не удалось откатить публикацию. Попробуйте ещё раз.');
+    } catch (caught) {
+      if (
+        caught instanceof BuilderApiError
+        && caught.status === 409
+        && caught.code === 'publication_conflict'
+      ) {
+        const reloaded = await reloadPublicationAfterConflict();
+        setPublicationError(reloaded
+          ? 'Публикация изменилась в другой сессии. Данные обновлены — проверьте их и повторите действие.'
+          : 'Публикация изменилась в другой сессии. Обновите страницу перед повтором.');
+      } else {
+        setPublicationError('Не удалось откатить публикацию. Попробуйте ещё раз.');
+      }
     } finally {
       setPublicationPending(false);
     }
@@ -466,7 +537,12 @@ export function UpgradeGate({
             {publicationError && <p className="studio-upgrade__error" role="alert">{publicationError}</p>}
             {embedSnippet && publication && (
               <>
-                <p role="status">Ревизия {publication.revision} опубликована. Stable embed URL не меняется при обновлениях.</p>
+                <p role="status">
+                  {versionsEnabled && publishedVersionOrdinal
+                    ? `Версия проекта ${publishedVersionOrdinal}, ревизия артефакта ${publication.revision} опубликована.`
+                    : `Ревизия ${publication.revision} опубликована.`}
+                  {' '}Stable embed URL не меняется при обновлениях.
+                </p>
                 <code>{embedSnippet}</code>
               </>
             )}
@@ -481,7 +557,9 @@ export function UpgradeGate({
           </button>
           {rollbackTarget && (
             <button type="button" onClick={() => void rollback()} disabled={publicationPending}>
-              Откатить к ревизии {rollbackTarget.revision}
+              {versionsEnabled && rollbackVersionOrdinal
+                ? `Откатить к версии проекта ${rollbackVersionOrdinal}, ревизии артефакта ${rollbackTarget.revision}`
+                : `Откатить к ревизии ${rollbackTarget.revision}`}
             </button>
           )}
           {subscription?.auto_renew && (

@@ -10,6 +10,7 @@ import type {
   SaasEvent,
   SaasProject,
   SaasProjectVersionList,
+  SaasPreviewArtifact,
   SaasRunSnapshot,
 } from './types';
 
@@ -41,6 +42,7 @@ export interface PublicationRelease {
   publication_id: string;
   release_id: string;
   artifact_id: string;
+  project_version_id: string | null;
   stable_key: string;
   revision: number;
   allowed_domains: string[];
@@ -49,15 +51,24 @@ export interface PublicationRelease {
   runtime_url: string;
 }
 
-export interface PublishProjectInput {
+export interface LegacyPublishProjectInput {
   artifact_id: string;
   revision?: number;
   allowed_domains?: string[];
 }
 
+export interface VersionedPublishProjectInput {
+  project_version_id: string;
+  expected_active_release_id: string | null;
+  allowed_domains?: string[];
+}
+
+export type PublishProjectInput = LegacyPublishProjectInput | VersionedPublishProjectInput;
+
 export interface PublicationHistoryRelease {
   release_id: string;
   artifact_id: string;
+  project_version_id: string | null;
   previous_release_id: string | null;
   revision: number;
   checksum: string;
@@ -208,21 +219,33 @@ export function getProjectVersions(projectId: string, signal?: AbortSignal) {
   );
 }
 
-export function createProjectRefinement(
+export function getProjectArtifact(artifactId: string, signal?: AbortSignal) {
+  return saasRequestJson<SaasPreviewArtifact>(
+    `/api/artifacts/${encodeURIComponent(artifactId)}`,
+    { signal },
+  );
+}
+
+export function refineProjectVersion(
   projectId: string,
+  versionId: string,
   changeRequest: string,
+  expectedActiveVersionId: string,
   csrfToken: string,
   idempotencyKey: string,
 ) {
   return saasRequestJson<SaasRunSnapshot>(
-    `/api/projects/${encodeURIComponent(projectId)}/refinements`,
+    `/api/projects/${encodeURIComponent(projectId)}/versions/${encodeURIComponent(versionId)}/refine`,
     {
       method: 'POST',
       headers: {
         'Idempotency-Key': idempotencyKey,
         'X-CSRF-Token': csrfToken,
       },
-      body: JSON.stringify({ change_request: changeRequest }),
+      body: JSON.stringify({
+        change_request: changeRequest,
+        expected_active_version_id: expectedActiveVersionId,
+      }),
     },
   );
 }
@@ -230,6 +253,7 @@ export function createProjectRefinement(
 export function restoreProjectVersion(
   projectId: string,
   versionId: string,
+  expectedActiveVersionId: string,
   csrfToken: string,
   idempotencyKey: string,
 ) {
@@ -241,7 +265,7 @@ export function restoreProjectVersion(
         'Idempotency-Key': idempotencyKey,
         'X-CSRF-Token': csrfToken,
       },
-      body: '{}',
+      body: JSON.stringify({ expected_active_version_id: expectedActiveVersionId }),
     },
   );
 }
@@ -269,6 +293,25 @@ export function publishProject(
 }
 
 export function rollbackPublication(
+  publicationId: string,
+  targetReleaseId: string,
+  expectedActiveReleaseId: string,
+  csrfToken: string,
+) {
+  return saasRequestJson<PublicationRelease>(
+    `/api/publications/${encodeURIComponent(publicationId)}/rollback`,
+    {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify({
+        target_release_id: targetReleaseId,
+        expected_active_release_id: expectedActiveReleaseId,
+      }),
+    },
+  );
+}
+
+export function rollbackLegacyPublication(
   publicationId: string,
   targetReleaseId: string,
   csrfToken: string,

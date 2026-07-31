@@ -3110,16 +3110,27 @@ a {
   box-shadow: inset 3px 0 0 var(--sage);
 }
 
+.studio-versions article.is-selected:not(.is-active) {
+  border-color: rgba(255, 91, 48, .42);
+  box-shadow: inset 3px 0 0 var(--coral);
+}
+
 .studio-versions article > div {
   display: grid;
   gap: 2px;
 }
 
 .studio-versions article span,
-.studio-versions article p {
+.studio-versions article p,
+.studio-versions article time {
   color: #71808a;
   font-size: 10px;
   line-height: 1.4;
+}
+
+.studio-versions article .studio-versions__active {
+  color: #2f7461;
+  font-weight: 800;
 }
 
 .studio-versions article p {

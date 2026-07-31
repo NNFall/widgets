@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as api from './api';
@@ -32,6 +32,9 @@ const payment = {
 const gateProps = {
   csrfToken: 'csrf-billing',
   projectId: 'project-123',
+  versionsEnabled: true,
+  projectVersionId: 'version-4',
+  projectVersionOrdinal: 4,
   artifactId: 'artifact-123',
   revision: 4,
 };
@@ -414,6 +417,7 @@ describe('UpgradeGate', () => {
         publication_id: 'publication-123',
         release_id: 'release-4',
         artifact_id: 'artifact-123',
+        project_version_id: 'version-4',
         stable_key: 'stable-widget',
         revision: 4,
         allowed_domains: ['https://example.com'],
@@ -425,6 +429,7 @@ describe('UpgradeGate', () => {
         publication_id: 'publication-123',
         release_id: 'release-5',
         artifact_id: 'artifact-456',
+        project_version_id: 'version-5',
         stable_key: 'stable-widget',
         revision: 5,
         allowed_domains: ['https://example.com', 'https://shop.example.com'],
@@ -436,6 +441,7 @@ describe('UpgradeGate', () => {
       publication_id: 'publication-123',
       release_id: 'release-4',
       artifact_id: 'artifact-123',
+      project_version_id: 'version-4',
       stable_key: 'stable-widget',
       revision: 4,
       allowed_domains: ['https://example.com', 'https://shop.example.com'],
@@ -460,8 +466,8 @@ describe('UpgradeGate', () => {
       1,
       'project-123',
       {
-        artifact_id: 'artifact-123',
-        revision: 4,
+        project_version_id: 'version-4',
+        expected_active_release_id: null,
         allowed_domains: ['https://example.com'],
       },
       'csrf-billing',
@@ -477,6 +483,8 @@ describe('UpgradeGate', () => {
     view.rerender(
       <UpgradeGate
         {...gateProps}
+        projectVersionId="version-5"
+        projectVersionOrdinal={5}
         artifactId="artifact-456"
         revision={5}
       />,
@@ -492,8 +500,8 @@ describe('UpgradeGate', () => {
       2,
       'project-123',
       {
-        artifact_id: 'artifact-456',
-        revision: 5,
+        project_version_id: 'version-5',
+        expected_active_release_id: 'release-4',
         allowed_domains: ['https://example.com', 'https://shop.example.com'],
       },
       'csrf-billing',
@@ -506,6 +514,7 @@ describe('UpgradeGate', () => {
     expect(api.rollbackPublication).toHaveBeenCalledWith(
       'publication-123',
       'release-4',
+      'release-5',
       'csrf-billing',
     );
   });
@@ -526,8 +535,9 @@ describe('UpgradeGate', () => {
         active_release: {
           release_id: 'release-5',
           artifact_id: 'artifact-456',
+          project_version_id: 'version-5',
           previous_release_id: 'release-4',
-          revision: 5,
+          revision: 7,
           checksum: 'checksum-5',
           created_at: '2026-07-28T13:00:00Z',
         },
@@ -535,16 +545,18 @@ describe('UpgradeGate', () => {
           {
             release_id: 'release-4',
             artifact_id: 'artifact-123',
+            project_version_id: 'version-4',
             previous_release_id: null,
-            revision: 4,
+            revision: 7,
             checksum: 'checksum-4',
             created_at: '2026-07-28T12:00:00Z',
           },
           {
             release_id: 'release-5',
             artifact_id: 'artifact-456',
+            project_version_id: 'version-5',
             previous_release_id: 'release-4',
-            revision: 5,
+            revision: 7,
             checksum: 'checksum-5',
             created_at: '2026-07-28T13:00:00Z',
           },
@@ -555,15 +567,24 @@ describe('UpgradeGate', () => {
       publication_id: 'publication-123',
       release_id: 'release-4',
       artifact_id: 'artifact-123',
+      project_version_id: 'version-4',
       stable_key: 'stable-widget',
-      revision: 4,
+      revision: 7,
       allowed_domains: ['https://example.com', 'https://shop.example.com'],
       checksum: 'checksum-4',
       embed_url: 'https://widgets.kaigo.space/embed/stable-widget.js',
       runtime_url: 'https://widgets.kaigo.space/runtime/stable-widget',
     });
 
-    render(<UpgradeGate {...gateProps} />);
+    render(
+      <UpgradeGate
+        {...gateProps}
+        projectVersions={[
+          { id: 'version-5', ordinal: 5 },
+          { id: 'version-4', ordinal: 4 },
+        ]}
+      />,
+    );
     expect(await screen.findByText(
       '<script src="https://widgets.kaigo.space/embed/stable-widget.js" async></script>',
     )).toBeVisible();
@@ -571,15 +592,113 @@ describe('UpgradeGate', () => {
       'https://example.com\nhttps://shop.example.com',
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Откатить к ревизии 4' }));
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Версия проекта 5, ревизия артефакта 7 опубликована.',
+    );
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Откатить к версии проекта 4, ревизии артефакта 7',
+    }));
     await act(async () => {
       await Promise.resolve();
     });
     expect(api.rollbackPublication).toHaveBeenCalledWith(
       'publication-123',
       'release-4',
+      'release-5',
       'csrf-billing',
     );
+  });
+
+  it('reloads authoritative publication state after a CAS conflict without retrying', async () => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
+    vi.mocked(api.getProjectPublication)
+      .mockResolvedValueOnce({ publication: null })
+      .mockResolvedValueOnce({
+        publication: {
+          publication_id: 'publication-123',
+          stable_key: 'stable-widget',
+          state: 'published',
+          allowed_domains: ['https://other.example.com'],
+          embed_url: 'https://widgets.kaigo.space/embed/stable-widget.js',
+          runtime_url: 'https://widgets.kaigo.space/runtime/stable-widget',
+          active_release: {
+            release_id: 'release-other',
+            artifact_id: 'artifact-other',
+            project_version_id: 'version-other',
+            previous_release_id: null,
+            revision: 7,
+            checksum: 'checksum-other',
+            created_at: '2026-07-30T12:00:00Z',
+          },
+          releases: [],
+        },
+      });
+    vi.mocked(api.publishProject).mockRejectedValue(new api.BuilderApiError(
+      'Publication changed; reload before retrying',
+      {
+        status: 409,
+        code: 'publication_conflict',
+        raw: 'Publication changed; reload before retrying',
+      },
+    ));
+
+    render(<UpgradeGate {...gateProps} />);
+    const domains = await screen.findByLabelText('Разрешённые домены');
+    await waitFor(() => expect(api.getProjectPublication).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Опубликовать виджет' })).toBeEnabled());
+    fireEvent.change(domains, { target: { value: 'https://example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Опубликовать виджет' }));
+
+    await waitFor(() => expect(api.getProjectPublication).toHaveBeenCalledTimes(2));
+    expect(api.publishProject).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Публикация изменилась в другой сессии. Данные обновлены — проверьте их и повторите действие.',
+    );
+    expect(screen.getByText(
+      '<script src="https://widgets.kaigo.space/embed/stable-widget.js" async></script>',
+    )).toBeVisible();
+    expect(domains).toHaveValue('https://other.example.com');
+  });
+
+  it('keeps the artifact publication contract only when project versions are unavailable', async () => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
+    vi.mocked(api.publishProject).mockResolvedValue({
+      publication_id: 'publication-legacy',
+      release_id: 'release-legacy',
+      artifact_id: 'artifact-123',
+      project_version_id: null,
+      stable_key: 'stable-legacy',
+      revision: 4,
+      allowed_domains: ['https://example.com'],
+      checksum: 'checksum-legacy',
+      embed_url: 'https://widgets.kaigo.space/embed/stable-legacy.js',
+      runtime_url: 'https://widgets.kaigo.space/runtime/stable-legacy',
+    });
+
+    render(
+      <UpgradeGate
+        {...gateProps}
+        versionsEnabled={false}
+        projectVersionId={undefined}
+        projectVersionOrdinal={undefined}
+      />,
+    );
+    const domains = await screen.findByLabelText('Разрешённые домены');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Опубликовать виджет' })).toBeEnabled());
+    fireEvent.change(domains, { target: { value: 'https://example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Опубликовать виджет' }));
+
+    await waitFor(() => expect(api.publishProject).toHaveBeenCalledWith(
+      'project-123',
+      {
+        artifact_id: 'artifact-123',
+        revision: 4,
+        allowed_domains: ['https://example.com'],
+      },
+      'csrf-billing',
+    ));
   });
 
   it('fails closed when initial billing recovery fails and retries the check explicitly', async () => {

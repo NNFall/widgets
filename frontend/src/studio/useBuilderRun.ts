@@ -5,14 +5,15 @@ import {
   builderUrl,
   cancelBuilderRun,
   cancelProjectRun,
-  createProjectRefinement,
   createProjectRun,
   createBuilderRun,
   getAuthSession,
   getBuilderRun,
+  getProjectArtifact,
   getProject,
   getProjectVersions,
   getProjectRun,
+  refineProjectVersion,
   refineBuilderRun,
   retryBuilderRun,
   retryProjectRun,
@@ -132,7 +133,13 @@ export interface BuilderRunController {
   connection: 'idle' | 'streaming' | 'polling';
   isHydrating: boolean;
   mutationPending: boolean;
+  versionsAvailable: boolean;
+  activeVersionId: string | null;
   versions: SaasProjectVersion[];
+  selectedVersion: SaasProjectVersion | null;
+  previewRunId: string | null;
+  selectedArtifact: WidgetArtifact | null;
+  selectVersion: (versionId: string) => Promise<void>;
   createRun: (input: BuilderRunInput) => Promise<void>;
   cancelRun: () => Promise<void>;
   retryRun: () => Promise<void>;
@@ -457,11 +464,17 @@ function useLegacyBuilderRun(enabled: boolean): BuilderRunController {
     connection,
     isHydrating,
     mutationPending,
+    versionsAvailable: false,
+    activeVersionId: null,
     versions: [],
+    selectedVersion: null,
+    previewRunId: runId,
+    selectedArtifact: snapshot?.artifact ?? snapshot?.draft_artifact ?? null,
     createRun,
     cancelRun,
     retryRun,
     refineRun,
+    selectVersion: async () => undefined,
     restoreVersion: async () => undefined,
     clearError: () => setError(null),
   };
@@ -600,6 +613,12 @@ function saasError(error: unknown, fallback: string): StudioError {
   };
 }
 
+function isVersionsUnavailable(error: unknown): error is BuilderApiError {
+  return error instanceof BuilderApiError
+    && error.status === 404
+    && error.code === 'not_found';
+}
+
 function isNonRetryableClientError(error: unknown): error is BuilderApiError {
   return error instanceof BuilderApiError
     && error.status >= 400
@@ -666,13 +685,83 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
   const [connection, setConnection] = useState<'idle' | 'streaming' | 'polling'>('idle');
   const [isHydrating, setIsHydrating] = useState(Boolean(projectId));
   const [mutationPending, setMutationPending] = useState(false);
+  const [versionsAvailable, setVersionsAvailable] = useState(Boolean(projectId));
+  const [activeVersionId, setActiveVersionId] = useState<string | null>(null);
   const [versions, setVersions] = useState<SaasProjectVersion[]>([]);
+  const [selectedVersion, setSelectedVersion] = useState<SaasProjectVersion | null>(null);
+  const [versionArtifact, setVersionArtifact] = useState<WidgetArtifact | null>(null);
   const [csrfToken, setCsrfToken] = useState<string | null>(null);
   const csrfRef = useRef<string | null>(null);
   const projectRef = useRef<SaasProject | null>(null);
   const runRef = useRef<SaasRunSnapshot | null>(null);
   const lastSequenceRef = useRef(0);
   const mutationPendingRef = useRef(false);
+  const selectedVersionRef = useRef<SaasProjectVersion | null>(null);
+  const selectionEpochRef = useRef(0);
+
+  const loadSelectedVersion = useCallback(async (
+    version: SaasProjectVersion,
+    signal?: AbortSignal,
+  ) => {
+    const epoch = selectionEpochRef.current + 1;
+    selectionEpochRef.current = epoch;
+    selectedVersionRef.current = version;
+    setSelectedVersion(version);
+    setVersionArtifact(null);
+    try {
+      const preview = await getProjectArtifact(version.artifact_id, signal);
+      if (signal?.aborted || selectionEpochRef.current !== epoch) return;
+      if (
+        preview.id !== version.artifact_id
+        || preview.revision !== version.artifact_revision
+      ) {
+        throw new Error('Версия и артефакт не совпадают');
+      }
+      const artifact = adaptPreview(preview);
+      if (!artifact) throw new Error('Артефакт выбранной версии пуст');
+      setVersionArtifact(artifact);
+    } catch (caught) {
+      if (signal?.aborted || selectionEpochRef.current !== epoch) return;
+      setError(saasError(caught, 'Не удалось загрузить выбранную версию проекта.'));
+      setActivityMessage('Выбранная версия не загружена');
+    }
+  }, []);
+
+  const applyVersionList = useCallback(async (
+    versionList: { active_version_id: string | null; versions: SaasProjectVersion[] },
+    options: { selectActive: boolean; signal?: AbortSignal },
+  ) => {
+    if (options.signal?.aborted) return;
+    setVersionsAvailable(true);
+    setActiveVersionId(versionList.active_version_id);
+    setVersions(versionList.versions);
+    const currentId = selectedVersionRef.current?.id ?? null;
+    const preferredId = options.selectActive
+      ? versionList.active_version_id
+      : currentId;
+    const next = versionList.versions.find(({ id }) => id === preferredId)
+      ?? versionList.versions.find(({ id }) => id === versionList.active_version_id)
+      ?? versionList.versions[0]
+      ?? null;
+    if (next) {
+      await loadSelectedVersion(next, options.signal);
+    } else {
+      selectionEpochRef.current += 1;
+      selectedVersionRef.current = null;
+      setSelectedVersion(null);
+      setVersionArtifact(null);
+    }
+  }, [loadSelectedVersion]);
+
+  const disableVersions = useCallback(() => {
+    selectionEpochRef.current += 1;
+    selectedVersionRef.current = null;
+    setVersionsAvailable(false);
+    setActiveVersionId(null);
+    setVersions([]);
+    setSelectedVersion(null);
+    setVersionArtifact(null);
+  }, []);
 
   const applyRun = useCallback((owner: SaasProject, run: SaasRunSnapshot) => {
     if (run.project_id !== owner.id) return;
@@ -715,6 +804,13 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     csrfRef.current = null;
     setCsrfToken(null);
     setIsHydrating(true);
+    selectionEpochRef.current += 1;
+    selectedVersionRef.current = null;
+    setVersionsAvailable(true);
+    setActiveVersionId(null);
+    setVersions([]);
+    setSelectedVersion(null);
+    setVersionArtifact(null);
     const hydrate = async () => {
       try {
         const session = await getAuthSession();
@@ -737,10 +833,17 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
         } else {
           setActivityMessage('Проект готов к запуску');
         }
-        const versionList = await getProjectVersions(projectId, abort.signal)
-          .catch(() => null);
-        if (!abort.signal.aborted && versionList) {
-          setVersions(versionList.versions);
+        try {
+          const versionList = await getProjectVersions(projectId, abort.signal);
+          await applyVersionList(versionList, { selectActive: true, signal: abort.signal });
+        } catch (caught) {
+          if (abort.signal.aborted) return;
+          if (isVersionsUnavailable(caught)) {
+            disableVersions();
+          } else {
+            setError(saasError(caught, 'Не удалось загрузить версии проекта.'));
+            setActivityMessage('Версии проекта не загружены');
+          }
         }
       } catch (caught) {
         if (!abort.signal.aborted) {
@@ -753,15 +856,15 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     };
     void hydrate();
     return () => abort.abort();
-  }, [applyRun, projectId]);
+  }, [applyRun, applyVersionList, disableVersions, projectId]);
 
   useEffect(() => {
     if (!projectId || snapshot?.status !== 'completed') return;
     const abort = new AbortController();
     void getProjectVersions(projectId, abort.signal)
-      .then((versionList) => {
+      .then(async (versionList) => {
         if (abort.signal.aborted) return;
-        setVersions(versionList.versions);
+        await applyVersionList(versionList, { selectActive: true, signal: abort.signal });
         const owner = projectRef.current;
         if (owner) {
           const updated = {
@@ -772,9 +875,17 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
           setProject(updated);
         }
       })
-      .catch(() => undefined);
+      .catch((caught) => {
+        if (abort.signal.aborted) return;
+        if (isVersionsUnavailable(caught)) {
+          disableVersions();
+          return;
+        }
+        setError(saasError(caught, 'Не удалось обновить версии проекта.'));
+        setActivityMessage('Версии проекта не обновлены');
+      });
     return () => abort.abort();
-  }, [projectId, snapshot?.run_id, snapshot?.status]);
+  }, [applyVersionList, disableVersions, projectId, snapshot?.run_id, snapshot?.status]);
 
   useEffect(() => {
     if (!projectId || !runId || TERMINAL_STATUSES.has(snapshot?.status ?? 'created')) {
@@ -968,14 +1079,31 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     }
   }, [applyRun]);
 
+  const selectVersion: BuilderRunController['selectVersion'] = useCallback(async (versionId) => {
+    const version = versions.find(({ id }) => id === versionId);
+    if (!versionsAvailable || !version) {
+      setError({
+        message: 'Выбранная версия проекта больше недоступна. Обновите историю.',
+        raw: versionId,
+        code: 'project_version_not_found',
+      });
+      return;
+    }
+    await loadSelectedVersion(version);
+  }, [loadSelectedVersion, versions, versionsAvailable]);
+
   const refineRun: BuilderRunController['refineRun'] = useCallback(async (message) => {
     const owner = projectRef.current;
+    const sourceVersion = selectedVersionRef.current;
     const csrf = csrfRef.current;
     const changeRequest = message.trim();
     if (
       !projectId
       || !owner
       || !owner.active_version_id
+      || !sourceVersion
+      || sourceVersion.id !== owner.active_version_id
+      || sourceVersion.refinable === false
       || !csrf
       || !changeRequest
       || mutationPendingRef.current
@@ -985,24 +1113,47 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     setError(null);
     setActivityMessage('Запускаем управляемую доработку');
     try {
-      const run = await createProjectRefinement(
+      const sourceVersionId = sourceVersion.id;
+      const run = await refineProjectVersion(
         projectId,
+        sourceVersionId,
         changeRequest,
+        sourceVersionId,
         csrf,
-        versionMutationKey('refine', owner.active_version_id, changeRequest),
+        versionMutationKey('refine', sourceVersionId, changeRequest),
       );
       const updated = { ...owner, status: run.status, active_run: run };
       projectRef.current = updated;
       setProject(updated);
       applyRun(updated, run);
     } catch (caught) {
-      setError(saasError(caught, 'Не удалось запустить доработку.'));
-      setActivityMessage('Доработка не запущена');
+      if (caught instanceof BuilderApiError && caught.code === 'project_version_conflict') {
+        try {
+          const [updated, versionList] = await Promise.all([
+            getProject(projectId),
+            getProjectVersions(projectId),
+          ]);
+          projectRef.current = updated;
+          setProject(updated);
+          await applyVersionList(versionList, { selectActive: true });
+        } catch {
+          // Keep the original conflict visible even if the recovery read fails.
+        }
+        setError({
+          message: 'Версия проекта изменилась в другой вкладке. Данные обновлены — проверьте их и повторите доработку.',
+          raw: caught.raw,
+          code: caught.code,
+        });
+        setActivityMessage('Версии проекта обновлены');
+      } else {
+        setError(saasError(caught, 'Не удалось запустить доработку.'));
+        setActivityMessage('Доработка не запущена');
+      }
     } finally {
       mutationPendingRef.current = false;
       setMutationPending(false);
     }
-  }, [applyRun, projectId]);
+  }, [applyRun, applyVersionList, projectId]);
 
   const restoreVersion: BuilderRunController['restoreVersion'] = useCallback(async (versionId) => {
     const owner = projectRef.current;
@@ -1023,6 +1174,7 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
       await restoreProjectVersion(
         projectId,
         versionId,
+        owner.active_version_id,
         csrf,
         versionMutationKey('restore', owner.active_version_id, versionId),
       );
@@ -1032,7 +1184,7 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
       ]);
       projectRef.current = updated;
       setProject(updated);
-      setVersions(versionList.versions);
+      await applyVersionList(versionList, { selectActive: true });
       if (updated.active_run) {
         const run = await getProjectRun(updated.active_run.id);
         applyRun(updated, run);
@@ -1045,7 +1197,7 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
       mutationPendingRef.current = false;
       setMutationPending(false);
     }
-  }, [applyRun, projectId]);
+  }, [applyRun, applyVersionList, projectId]);
 
   return {
     project,
@@ -1059,11 +1211,19 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     connection,
     isHydrating,
     mutationPending,
+    versionsAvailable,
+    activeVersionId,
     versions,
+    selectedVersion,
+    previewRunId: selectedVersion?.run_id ?? runId,
+    selectedArtifact: selectedVersion
+      ? versionArtifact
+      : snapshot?.artifact ?? snapshot?.draft_artifact ?? null,
     createRun,
     cancelRun,
     retryRun,
     refineRun,
+    selectVersion,
     restoreVersion,
     clearError: () => setError(null),
   };

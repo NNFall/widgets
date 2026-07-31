@@ -64,6 +64,29 @@ function run(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function versionArtifact(
+  id: string,
+  revision: number,
+  artDirection = `Концепция ${id}`,
+) {
+  return {
+    id,
+    schema_version: '1',
+    revision,
+    stage: 'validation',
+    art_direction: artDirection,
+    body_html: `<main>${id}</main>`,
+    css: '',
+    javascript: '',
+    theme_tokens: {},
+    suggested_actions: [],
+    change_summary: '',
+    layout_contract: {},
+    quality_status: 'verified',
+    source: 'artifact',
+  };
+}
+
 function emptyEventStream() {
   return new Response(new ReadableStream({
     start(controller) {
@@ -153,6 +176,9 @@ describe('durable SaaS Studio flow', () => {
       if (url === '/api/auth/session') return sessionResponse();
       if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(queued));
       if (url === `/api/runs/${RUN_ID}`) return jsonResponse(queued);
+      if (url === `/api/projects/${PROJECT_ID}/versions`) {
+        return jsonResponse({ active_version_id: null, versions: [] });
+      }
       if (url === `/api/runs/${RUN_ID}/events`) return emptyEventStream();
       throw new Error(`unexpected request: ${url}`);
     });
@@ -476,6 +502,96 @@ describe('durable SaaS Studio flow', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(message);
   });
 
+  it.each([
+    [401, 'authentication_required'],
+    [403, 'csrf_failed'],
+    [500, 'internal_error'],
+  ])('fails closed when the version endpoint returns HTTP %s', async (status, code) => {
+    const completed = run({
+      status: 'completed',
+      state: 'completed',
+      progress: 100,
+      preview: { ...versionArtifact('artifact-version-1', 1), source: 'accepted_artifact' },
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(completed));
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(completed);
+      if (url === `/api/projects/${PROJECT_ID}/versions`) {
+        return jsonResponse({ error: { code, message: `version endpoint ${status}` } }, status);
+      }
+      if (url === '/api/billing/subscription') return jsonResponse({ subscription: null });
+      if (url === '/api/billing/payments/pending') {
+        return jsonResponse({ payment: null, checkout_url: null });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+
+    render(<StudioPage />);
+
+    expect(await screen.findByRole('alert')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Опубликовать и подключить' })).not.toBeInTheDocument();
+  });
+
+  it('fails closed when the version endpoint has a network failure', async () => {
+    const completed = run({
+      status: 'completed',
+      state: 'completed',
+      progress: 100,
+      preview: { ...versionArtifact('artifact-version-1', 1), source: 'accepted_artifact' },
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(completed));
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(completed);
+      if (url === `/api/projects/${PROJECT_ID}/versions`) {
+        throw new TypeError('version endpoint disconnected');
+      }
+      if (url === '/api/billing/subscription') return jsonResponse({ subscription: null });
+      if (url === '/api/billing/payments/pending') {
+        return jsonResponse({ payment: null, checkout_url: null });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+
+    render(<StudioPage />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/версии проекта/i);
+    expect(screen.queryByRole('button', { name: 'Опубликовать и подключить' })).not.toBeInTheDocument();
+  });
+
+  it('uses legacy artifact publication for a privacy-safe 404 after project hydration', async () => {
+    const completed = run({
+      status: 'completed',
+      state: 'completed',
+      progress: 100,
+      preview: { ...versionArtifact('artifact-version-1', 1), source: 'accepted_artifact' },
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(completed));
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(completed);
+      if (url === `/api/projects/${PROJECT_ID}/versions`) {
+        return jsonResponse({
+          error: { code: 'not_found', message: 'Project versions unavailable' },
+        }, 404);
+      }
+      if (url === '/api/billing/subscription') return jsonResponse({ subscription: null });
+      if (url === '/api/billing/payments/pending') {
+        return jsonResponse({ payment: null, checkout_url: null });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+
+    render(<StudioPage />);
+
+    expect(await screen.findByRole('button', { name: 'Опубликовать и подключить' })).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('falls back to polling when the authenticated SSE fetch fails', async () => {
     const running = run({ status: 'running', state: 'running' });
     const completed = run({ status: 'completed', state: 'completed', progress: 100 });
@@ -657,6 +773,31 @@ describe('durable SaaS Studio flow', () => {
       if (url === '/api/auth/session') return sessionResponse();
       if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(completed));
       if (url === `/api/runs/${RUN_ID}`) return jsonResponse(completed);
+      if (url === `/api/projects/${PROJECT_ID}/versions`) {
+        return jsonResponse({
+          active_version_id: 'version-1',
+          versions: [{
+            id: 'version-1',
+            project_id: PROJECT_ID,
+            ordinal: 1,
+            kind: 'initial',
+            change_request: null,
+            parent_version_id: null,
+            run_id: RUN_ID,
+            artifact_id: 'artifact-ready-3',
+            artifact_revision: 3,
+            refinable: true,
+            created_at: '2026-07-28T10:00:00Z',
+          }],
+        });
+      }
+      if (url === '/api/artifacts/artifact-ready-3') {
+        return jsonResponse(versionArtifact(
+          'artifact-ready-3',
+          3,
+          'Проверенная активная концепция',
+        ));
+      }
       if (url === '/api/billing/subscription') return jsonResponse({ subscription: null });
       if (url === '/api/billing/payments/pending') {
         return jsonResponse({ payment: null, checkout_url: null });
@@ -666,7 +807,7 @@ describe('durable SaaS Studio flow', () => {
 
     render(<StudioPage />);
 
-    expect((await screen.findAllByText('Готово')).length).toBeGreaterThanOrEqual(1);
+    expect((await screen.findAllByText('Проверено')).length).toBeGreaterThanOrEqual(1);
     expect(await screen.findByText('Бесплатный результат готов')).toBeVisible();
     expect(await screen.findByRole('button', { name: 'Опубликовать и подключить' })).toBeEnabled();
     expect(screen.getByLabelText('Что изменить в виджете?')).toBeVisible();
@@ -766,18 +907,27 @@ describe('durable SaaS Studio flow', () => {
           active_version_id: 'version-1',
           versions: [{
             id: 'version-1',
+            project_id: PROJECT_ID,
             ordinal: 1,
             kind: 'initial',
             change_request: null,
             parent_version_id: null,
             run_id: RUN_ID,
             artifact_id: 'artifact-version-1',
-            active: true,
+            artifact_revision: 1,
+            refinable: true,
             created_at: '2026-07-30T08:00:00Z',
           }],
         });
       }
-      if (url === `/api/projects/${PROJECT_ID}/refinements`) {
+      if (url === '/api/artifacts/artifact-version-1') {
+        return jsonResponse(versionArtifact(
+          'artifact-version-1',
+          1,
+          'Проверенная активная концепция',
+        ));
+      }
+      if (url === `/api/projects/${PROJECT_ID}/versions/version-1/refine`) {
         return jsonResponse(refinement, 202);
       }
       if (url === '/api/runs/run-refinement-2/events') return emptyEventStream();
@@ -800,16 +950,274 @@ describe('durable SaaS Studio flow', () => {
     await user.click(screen.getByRole('button', { name: 'Применить изменение' }));
 
     await waitFor(() => expect(requests.some(
-      ({ url }) => url === `/api/projects/${PROJECT_ID}/refinements`,
+      ({ url }) => url === `/api/projects/${PROJECT_ID}/versions/version-1/refine`,
     )).toBe(true));
     const request = requests.find(
-      ({ url }) => url === `/api/projects/${PROJECT_ID}/refinements`,
+      ({ url }) => url === `/api/projects/${PROJECT_ID}/versions/version-1/refine`,
     )!;
     expect(JSON.parse(String(request.init?.body))).toEqual({
       change_request: 'Сделай приветствие короче',
+      expected_active_version_id: 'version-1',
     });
     expect(new Headers(request.init?.headers).get('X-CSRF-Token')).toBe('csrf-for-studio');
     expect(new Headers(request.init?.headers).get('Idempotency-Key')).toMatch(/^refine-version-1-/);
+  });
+
+  it('reloads project versions after a refinement CAS conflict without resubmitting', async () => {
+    const completed = run({
+      status: 'completed',
+      state: 'completed',
+      progress: 100,
+      preview: {
+        id: 'artifact-version-1',
+        revision: 1,
+        body_html: '<main>Ready</main>',
+        css: '',
+        javascript: '',
+        quality_status: 'verified',
+        source: 'accepted_artifact',
+      },
+    });
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(completed));
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(completed);
+      if (url === `/api/projects/${PROJECT_ID}/versions`) {
+        return jsonResponse({
+          active_version_id: 'version-1',
+          versions: [{
+            id: 'version-1', project_id: PROJECT_ID, ordinal: 1, kind: 'initial',
+            change_request: null, parent_version_id: null, run_id: RUN_ID,
+            artifact_id: 'artifact-version-1', artifact_revision: 1,
+            refinable: true, created_at: '2026-07-30T08:00:00Z',
+          }],
+        });
+      }
+      if (url === '/api/artifacts/artifact-version-2') {
+        return jsonResponse(versionArtifact('artifact-version-2', 2, 'Текущая концепция'));
+      }
+      if (url === '/api/artifacts/artifact-version-1') {
+        return jsonResponse(versionArtifact(
+          'artifact-version-1',
+          1,
+          'Точная историческая концепция',
+        ));
+      }
+      if (url === `/api/projects/${PROJECT_ID}/versions/version-1/refine`) {
+        return jsonResponse({
+          error: {
+            code: 'project_version_conflict',
+            message: 'Project version changed',
+            retryable: true,
+          },
+        }, 409);
+      }
+      if (url === '/api/billing/subscription') return jsonResponse({ subscription: null });
+      if (url === '/api/billing/payments/pending') {
+        return jsonResponse({ payment: null, checkout_url: null });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    const user = userEvent.setup();
+
+    render(<StudioPage />);
+    await user.type(
+      await screen.findByLabelText('Что изменить в виджете?'),
+      'Сделай приветствие короче',
+    );
+    await user.click(screen.getByRole('button', { name: 'Применить изменение' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Версия проекта изменилась в другой вкладке. Данные обновлены — проверьте их и повторите доработку.',
+    );
+    expect(requests.filter(
+      ({ url }) => url === `/api/projects/${PROJECT_ID}/versions/version-1/refine`,
+    )).toHaveLength(1);
+    expect(requests.filter(
+      ({ url }) => url === `/api/projects/${PROJECT_ID}/versions`,
+    ).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('keeps the active durable preview and publication target after a failed refinement', async () => {
+    const failedRefinement = run({
+      id: 'run-refinement-failed',
+      status: 'failed',
+      state: 'failed',
+      progress: 84,
+      error_code: 'visual_quality_failed',
+      error_message: 'Visual audit failed',
+      preview: {
+        id: 'artifact-failed-draft',
+        revision: 4,
+        body_html: '<main>Failed draft</main>',
+        css: '',
+        javascript: '',
+        quality_status: 'restorable_draft',
+        source: 'restorable_draft',
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) {
+        return jsonResponse({
+          ...project(failedRefinement),
+          active_version_id: 'version-1',
+        });
+      }
+      if (url === '/api/runs/run-refinement-failed') return jsonResponse(failedRefinement);
+      if (url === `/api/projects/${PROJECT_ID}/versions`) {
+        return jsonResponse({
+          active_version_id: 'version-1',
+          versions: [{
+            id: 'version-1', project_id: PROJECT_ID, ordinal: 1, kind: 'initial',
+            change_request: null, parent_version_id: null,
+            run_id: 'run-version-1', artifact_id: 'artifact-version-1',
+            artifact_revision: 1, refinable: true,
+            created_at: '2026-07-30T08:00:00Z',
+          }],
+        });
+      }
+      if (url === '/api/artifacts/artifact-version-1') {
+        return jsonResponse(versionArtifact(
+          'artifact-version-1',
+          1,
+          'Проверенная активная концепция',
+        ));
+      }
+      if (url === '/api/billing/subscription') return jsonResponse({ subscription: null });
+      if (url === '/api/billing/payments/pending') {
+        return jsonResponse({ payment: null, checkout_url: null });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+
+    render(<StudioPage />);
+
+    const preview = await screen.findByTitle('Предпросмотр AI-сотрудника Kaigo');
+    expect(preview).toHaveAttribute(
+      'src',
+      expect.stringContaining('/api/runs/run-version-1/preview/document?revision=1'),
+    );
+    expect(await screen.findByRole('button', { name: 'Опубликовать и подключить' })).toBeVisible();
+  });
+
+  it('publishes the selected historical version without restoring it first', async () => {
+    const current = run({
+      status: 'completed',
+      state: 'completed',
+      progress: 100,
+      preview: {
+        id: 'artifact-version-2',
+        revision: 2,
+        body_html: '<main>Version 2</main>',
+        css: '',
+        javascript: '',
+        quality_status: 'verified',
+        source: 'accepted_artifact',
+      },
+    });
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) {
+        return jsonResponse({ ...project(current), active_version_id: 'version-2' });
+      }
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(current);
+      if (url === `/api/projects/${PROJECT_ID}/versions`) {
+        return jsonResponse({
+          active_version_id: 'version-2',
+          versions: [
+            {
+              id: 'version-2', project_id: PROJECT_ID, ordinal: 2, kind: 'refinement',
+              change_request: 'Добавь ответы', parent_version_id: 'version-1',
+              run_id: RUN_ID, artifact_id: 'artifact-version-2',
+              artifact_revision: 2, refinable: true,
+              created_at: '2026-07-30T09:00:00Z',
+            },
+            {
+              id: 'version-1', project_id: PROJECT_ID, ordinal: 1, kind: 'initial',
+              change_request: null, parent_version_id: null,
+              run_id: 'run-version-1', artifact_id: 'artifact-version-1',
+              artifact_revision: 1, refinable: true,
+              created_at: '2026-07-30T08:00:00Z',
+            },
+          ],
+        });
+      }
+      if (url === '/api/artifacts/artifact-version-2') {
+        return jsonResponse(versionArtifact('artifact-version-2', 2, 'Текущая концепция'));
+      }
+      if (url === '/api/artifacts/artifact-version-1') {
+        return jsonResponse(versionArtifact(
+          'artifact-version-1',
+          1,
+          'Точная историческая концепция',
+        ));
+      }
+      if (url === '/api/billing/subscription') {
+        return jsonResponse({
+          subscription: {
+            id: 'subscription-123',
+            plan_code: 'starter_monthly',
+            status: 'active',
+            current_period_start: '2026-07-28T12:00:00Z',
+            current_period_end: '2026-08-28T12:00:00Z',
+            auto_renew: true,
+            next_renewal_at: '2026-08-28T12:00:00Z',
+            generation_tokens_remaining: 750_000,
+          },
+        });
+      }
+      if (url === `/api/projects/${PROJECT_ID}/publish` && init?.method === 'POST') {
+        return jsonResponse({
+          publication_id: 'publication-123',
+          release_id: 'release-1',
+          artifact_id: 'artifact-version-1',
+          project_version_id: 'version-1',
+          stable_key: 'stable-widget',
+          revision: 1,
+          allowed_domains: ['https://example.com'],
+          checksum: 'checksum-1',
+          embed_url: 'https://widgets.kaigo.space/embed/stable-widget.js',
+          runtime_url: 'https://widgets.kaigo.space/runtime/stable-widget',
+        });
+      }
+      if (url === `/api/projects/${PROJECT_ID}/publication`) {
+        return jsonResponse({ publication: null });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+    const user = userEvent.setup();
+
+    render(<StudioPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Просмотреть версию 1' }));
+    expect(await screen.findByText('Точная историческая концепция')).toBeVisible();
+    expect(requests.some(({ url }) => url === '/api/artifacts/artifact-version-1')).toBe(true);
+    const domains = await screen.findByLabelText('Разрешённые домены');
+    await user.type(domains, 'https://example.com');
+    const publishButton = await screen.findByRole('button', { name: 'Опубликовать виджет' });
+    await waitFor(() => expect(publishButton).toBeEnabled());
+    await user.click(publishButton);
+
+    await waitFor(() => expect(requests.some(
+      ({ url, init }) => url === `/api/projects/${PROJECT_ID}/publish` && init?.method === 'POST',
+    )).toBe(true));
+    const publish = requests.find(
+      ({ url, init }) => url === `/api/projects/${PROJECT_ID}/publish` && init?.method === 'POST',
+    )!;
+    expect(JSON.parse(String(publish.init?.body))).toEqual({
+      project_version_id: 'version-1',
+      expected_active_release_id: null,
+      allowed_domains: ['https://example.com'],
+    });
+    expect(requests.some(({ url }) => url.endsWith('/versions/version-1/restore'))).toBe(false);
   });
 
   it('restores an earlier verified project version', async () => {
@@ -859,29 +1267,38 @@ describe('durable SaaS Studio flow', () => {
       if (url === `/api/projects/${PROJECT_ID}/versions`) {
         const base = [
           {
-            id: 'version-2', ordinal: 2, kind: 'refinement',
+            id: 'version-2', project_id: PROJECT_ID, ordinal: 2, kind: 'refinement',
             change_request: 'Добавь ответы', parent_version_id: 'version-1',
             run_id: RUN_ID, artifact_id: 'artifact-version-2',
-            active: !restored, created_at: '2026-07-30T09:00:00Z',
+            artifact_revision: 2, refinable: true,
+            created_at: '2026-07-30T09:00:00Z',
           },
           {
-            id: 'version-1', ordinal: 1, kind: 'initial',
+            id: 'version-1', project_id: PROJECT_ID, ordinal: 1, kind: 'initial',
             change_request: null, parent_version_id: null,
             run_id: 'run-version-1', artifact_id: 'artifact-version-1',
-            active: false, created_at: '2026-07-30T08:00:00Z',
+            artifact_revision: 1, refinable: true,
+            created_at: '2026-07-30T08:00:00Z',
           },
         ];
         return jsonResponse({
           active_version_id: restored ? 'version-3' : 'version-2',
           versions: restored
             ? [{
-                id: 'version-3', ordinal: 3, kind: 'restore',
+                id: 'version-3', project_id: PROJECT_ID, ordinal: 3, kind: 'restore',
                 change_request: null, parent_version_id: 'version-1',
                 run_id: 'run-version-1', artifact_id: 'artifact-version-1',
-                active: true, created_at: '2026-07-30T10:00:00Z',
+                artifact_revision: 1, refinable: true,
+                created_at: '2026-07-30T10:00:00Z',
               }, ...base]
             : base,
         });
+      }
+      if (url === '/api/artifacts/artifact-version-2') {
+        return jsonResponse(versionArtifact('artifact-version-2', 2, 'Текущая концепция'));
+      }
+      if (url === '/api/artifacts/artifact-version-1') {
+        return jsonResponse(versionArtifact('artifact-version-1', 1, 'Восстановленная концепция'));
       }
       if (url === `/api/projects/${PROJECT_ID}/versions/version-1/restore`) {
         restored = true;
@@ -897,6 +1314,11 @@ describe('durable SaaS Studio flow', () => {
 
     render(<StudioPage />);
 
+    await user.click(await screen.findByRole('button', { name: 'Просмотреть версию 1' }));
+    expect(screen.getByTitle('Предпросмотр AI-сотрудника Kaigo')).toHaveAttribute(
+      'src',
+      expect.stringContaining('/api/runs/run-version-1/preview/document?revision=1'),
+    );
     await user.click(await screen.findByRole('button', { name: 'Восстановить версию 1' }));
 
     await waitFor(() => expect(restored).toBe(true));
@@ -909,6 +1331,8 @@ describe('durable SaaS Studio flow', () => {
     expect(new Headers(request.init?.headers).get('Idempotency-Key')).toMatch(
       /^restore-version-2-/,
     );
-    expect(JSON.parse(String(request.init?.body))).toEqual({});
+    expect(JSON.parse(String(request.init?.body))).toEqual({
+      expected_active_version_id: 'version-2',
+    });
   });
 });

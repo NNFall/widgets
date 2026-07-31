@@ -2,7 +2,6 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 import {
   createBillingCheckout,
-  createProjectRefinement,
   disableBillingAutoRenew,
   getBillingPayment,
   getPendingBillingPayment,
@@ -10,6 +9,7 @@ import {
   getProjectPublication,
   getProjectVersions,
   publishProject,
+  refineProjectVersion,
   rollbackPublication,
   restoreProjectVersion,
   resumeBillingPayment,
@@ -27,7 +27,6 @@ it('lists versions and sends CSRF-protected refinement and restore requests', as
       parent_version_id: 'version-1',
       run_id: 'run-2',
       artifact_id: 'artifact-2',
-      active: true,
       created_at: '2026-07-30T08:00:00Z',
     }],
   };
@@ -48,14 +47,17 @@ it('lists versions and sends CSRF-protected refinement and restore requests', as
   vi.stubGlobal('fetch', fetchMock);
 
   await expect(getProjectVersions('project/123')).resolves.toEqual(versions);
-  await expect(createProjectRefinement(
+  await expect(refineProjectVersion(
     'project/123',
+    'version/2',
     'Сделай приветствие короче',
+    'version/2',
     'csrf-version',
     'refine-key',
   )).resolves.toMatchObject({ id: 'run-3' });
   await expect(restoreProjectVersion(
     'project/123',
+    'version/2',
     'version/2',
     'csrf-version',
     'restore-key',
@@ -66,17 +68,21 @@ it('lists versions and sends CSRF-protected refinement and restore requests', as
   expect(listInit.credentials).toBe('include');
 
   const [refineUrl, refineInit] = fetchMock.mock.calls[1] as [string, RequestInit];
-  expect(refineUrl).toBe('/api/projects/project%2F123/refinements');
+  expect(refineUrl).toBe('/api/projects/project%2F123/versions/version%2F2/refine');
   expect(new Headers(refineInit.headers).get('X-CSRF-Token')).toBe('csrf-version');
   expect(new Headers(refineInit.headers).get('Idempotency-Key')).toBe('refine-key');
   expect(JSON.parse(String(refineInit.body))).toEqual({
     change_request: 'Сделай приветствие короче',
+    expected_active_version_id: 'version/2',
   });
 
   const [restoreUrl, restoreInit] = fetchMock.mock.calls[2] as [string, RequestInit];
   expect(restoreUrl).toBe('/api/projects/project%2F123/versions/version%2F2/restore');
   expect(new Headers(restoreInit.headers).get('X-CSRF-Token')).toBe('csrf-version');
   expect(new Headers(restoreInit.headers).get('Idempotency-Key')).toBe('restore-key');
+  expect(JSON.parse(String(restoreInit.body))).toEqual({
+    expected_active_version_id: 'version/2',
+  });
 });
 
 afterEach(() => {
@@ -292,11 +298,12 @@ it('resumes the exact stored payment attempt with CSRF and no replacement payloa
   expect(init.body).toBeUndefined();
 });
 
-it('publishes the selected artifact with allowed domains and rolls back an owned publication', async () => {
+it('publishes the selected project version with CAS and rolls back with the observed release', async () => {
   const published = {
     publication_id: 'publication/123',
     release_id: 'release/456',
     artifact_id: 'artifact/789',
+    project_version_id: 'version/2',
     stable_key: 'stable-widget-key',
     revision: 4,
     allowed_domains: ['https://example.com', 'https://shop.example.com'],
@@ -322,8 +329,8 @@ it('publishes the selected artifact with allowed domains and rolls back an owned
   await expect(publishProject(
     'project/123',
     {
-      artifact_id: 'artifact/789',
-      revision: 4,
+      project_version_id: 'version/2',
+      expected_active_release_id: null,
       allowed_domains: ['https://example.com', 'https://shop.example.com'],
     },
     'csrf-publication',
@@ -331,6 +338,7 @@ it('publishes the selected artifact with allowed domains and rolls back an owned
   await expect(rollbackPublication(
     'publication/123',
     'release/old',
+    'release/456',
     'csrf-publication',
   )).resolves.toMatchObject({ release_id: 'release/old', revision: 3 });
 
@@ -340,8 +348,8 @@ it('publishes the selected artifact with allowed domains and rolls back an owned
   expect(publishInit.method).toBe('POST');
   expect(new Headers(publishInit.headers).get('X-CSRF-Token')).toBe('csrf-publication');
   expect(JSON.parse(String(publishInit.body))).toEqual({
-    artifact_id: 'artifact/789',
-    revision: 4,
+    project_version_id: 'version/2',
+    expected_active_release_id: null,
     allowed_domains: ['https://example.com', 'https://shop.example.com'],
   });
 
@@ -352,6 +360,7 @@ it('publishes the selected artifact with allowed domains and rolls back an owned
   expect(new Headers(rollbackInit.headers).get('X-CSRF-Token')).toBe('csrf-publication');
   expect(JSON.parse(String(rollbackInit.body))).toEqual({
     target_release_id: 'release/old',
+    expected_active_release_id: 'release/456',
   });
 });
 
@@ -366,6 +375,7 @@ it('hydrates owner publication history through an authenticated read without CSR
     active_release: {
       release_id: 'release-2',
       artifact_id: 'artifact-2',
+      project_version_id: 'version-2',
       previous_release_id: 'release-1',
       revision: 2,
       checksum: 'checksum-2',

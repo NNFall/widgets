@@ -20,8 +20,14 @@ import { canonicalWebsiteUrl } from '../shared/UrlComposer';
 import { StudioPreview } from './StudioPreview';
 import { StudioTimeline } from './StudioTimeline';
 import { StudioComposer } from './StudioComposer';
+import { ProjectVersionHistory } from './ProjectVersionHistory';
 import { UpgradeGate } from './UpgradeGate';
-import type { BuilderEngine, BuilderRunSnapshot, PreviewViewport, StudioError } from './types';
+import type {
+  BuilderEngine,
+  BuilderRunSnapshot,
+  PreviewViewport,
+  StudioError,
+} from './types';
 import { useBuilderRun } from './useBuilderRun';
 import { createProject, getAuthSession } from './api';
 
@@ -123,16 +129,31 @@ export function StudioPage() {
   const [projectPending, setProjectPending] = useState(false);
   const hydratedRun = useRef<string | null>(null);
   const previewAnchorRef = useRef<HTMLElement>(null);
-  const artifact = selectedArtifact(controller.snapshot);
+  const artifact = controller.selectedArtifact;
+  const activeVersionId = controller.activeVersionId ?? controller.project?.active_version_id ?? null;
+  const selectedVersion = controller.selectedVersion;
+  const previewRunId = controller.previewRunId;
+  const previewRevision = artifact?.revision
+    ?? selectedVersion?.artifact_revision
+    ?? null;
   const persistence = errorPersistenceState(controller.snapshot);
-  const freeResultReady = readyFreeResult(controller.snapshot);
+  const freeResultReady = controller.versionsAvailable
+    ? Boolean(selectedVersion && artifact)
+    : readyFreeResult(controller.snapshot);
   const status = controller.snapshot?.status ?? null;
   const running = status === 'created' || status === 'queued' || status === 'running';
   const controlsLocked = running || controller.mutationPending;
   const progress = progressFor(controller.snapshot, controller.events.length);
-  const refinable = status === 'completed'
-    && Boolean(artifact)
-    && (controller.projectMode || controller.snapshot?.request.engine === 'direct');
+  const refinable = controller.versionsAvailable
+    ? Boolean(
+        artifact
+        && selectedVersion?.id === activeVersionId
+        && selectedVersion.refinable
+        && !running,
+      )
+    : status === 'completed'
+      && Boolean(artifact)
+      && controller.snapshot?.request.engine === 'direct';
 
   useEffect(() => {
     const next = controller.snapshot;
@@ -475,36 +496,16 @@ export function StudioPage() {
                 : 'Доработка откроется после проверенной версии'}</p>
           </form>
 
-          {controller.projectMode && controller.versions.length > 0 && (
-            <section className="studio-versions" aria-label="История версий">
-              <header>
-                <strong>История версий</strong>
-                <span>{controller.versions.length}</span>
-              </header>
-              <div>
-                {controller.versions.map((version) => (
-                  <article key={version.id} className={version.active ? 'is-active' : undefined}>
-                    <div>
-                      <strong>Версия {version.ordinal}</strong>
-                      <span>{version.kind === 'initial'
-                        ? 'Первая версия'
-                        : version.kind === 'restore'
-                          ? 'Восстановленная версия'
-                          : 'Доработка'}</span>
-                    </div>
-                    {version.change_request && <p>{version.change_request}</p>}
-                    <button
-                      type="button"
-                      disabled={version.active || running || controller.mutationPending}
-                      onClick={() => void controller.restoreVersion(version.id)}
-                      aria-label={`Восстановить версию ${version.ordinal}`}
-                    >
-                      {version.active ? 'Активна' : 'Восстановить'}
-                    </button>
-                  </article>
-                ))}
-              </div>
-            </section>
+          {controller.projectMode && controller.versionsAvailable && controller.versions.length > 0 && (
+            <ProjectVersionHistory
+              versions={controller.versions}
+              activeVersionId={activeVersionId}
+              selectedVersionId={selectedVersion?.id ?? null}
+              mutationPending={controller.mutationPending}
+              running={running}
+              onSelect={(versionId) => void controller.selectVersion(versionId)}
+              onRestore={(versionId) => void controller.restoreVersion(versionId)}
+            />
           )}
         </motion.aside>
 
@@ -516,30 +517,38 @@ export function StudioPage() {
           transition={{ type: 'spring', stiffness: 95, damping: 22, delay: 0.08 }}
         >
           <div className="studio-workspace__metrics" aria-label="Метрики запуска">
-            <div><span>Ревизия</span><strong>{artifact?.revision ?? '—'}</strong></div>
+            <div><span>Ревизия</span><strong>{previewRevision ?? '—'}</strong></div>
             <div><span>Токены</span><strong>{controller.snapshot ? numberFormatter.format(controller.snapshot.usage.total_tokens) : '—'}</strong></div>
             <div><span>Время</span><strong>{controller.snapshot ? `${decimalFormatter.format(controller.snapshot.elapsed_seconds)} с` : '—'}</strong></div>
             <div className="studio-workspace__quality">
-              <CheckCircle aria-hidden size={19} weight={readyQuality(controller.snapshot?.quality_status) ? 'fill' : 'regular'} />
-              <span>{controller.snapshot?.quality_status === 'accepted' ? 'Готово' : controller.snapshot?.quality_status === 'verified' ? 'Проверено' : 'Черновик'}</span>
+              <CheckCircle aria-hidden size={19} weight={readyQuality(artifact?.quality_status ?? controller.snapshot?.quality_status) ? 'fill' : 'regular'} />
+              <span>{(artifact?.quality_status ?? controller.snapshot?.quality_status) === 'accepted' ? 'Готово' : (artifact?.quality_status ?? controller.snapshot?.quality_status) === 'verified' ? 'Проверено' : 'Черновик'}</span>
             </div>
           </div>
           <StudioPreview
-            runId={controller.runId}
-            revision={artifact?.revision ?? null}
+            runId={previewRunId}
+            revision={previewRevision}
             projectMode={controller.projectMode}
             csrfToken={controller.csrfToken}
             artDirection={artifact?.art_direction ?? ''}
-            qualityStatus={controller.snapshot?.quality_status ?? 'pending'}
+            qualityStatus={artifact?.quality_status ?? controller.snapshot?.quality_status ?? 'pending'}
             viewport={viewport}
             onViewportChange={setViewport}
           />
-          {controller.projectMode && projectId && artifact?.id && freeResultReady && (
+          {controller.projectMode
+            && projectId
+            && freeResultReady
+            && (controller.versionsAvailable ? Boolean(selectedVersion) : Boolean(artifact?.id))
+            && (
             <UpgradeGate
               csrfToken={controller.csrfToken}
               projectId={projectId}
-              artifactId={artifact.id}
-              revision={artifact.revision}
+              versionsEnabled={controller.versionsAvailable}
+              projectVersionId={selectedVersion?.id}
+              projectVersionOrdinal={selectedVersion?.ordinal}
+              projectVersions={controller.versions}
+              artifactId={artifact?.id}
+              revision={artifact?.revision}
             />
           )}
           <div className="studio-workspace__footer">

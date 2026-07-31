@@ -148,20 +148,24 @@ export interface SaasProject {
 
 export interface SaasProjectVersion {
   id: string;
+  project_id: string;
   ordinal: number;
   kind: 'initial' | 'refinement' | 'restore';
   change_request: string | null;
   parent_version_id: string | null;
   run_id: string;
   artifact_id: string;
-  active: boolean;
+  artifact_revision: number;
+  refinable: boolean;
   created_at: string;
 }
 
-export interface SaasProjectVersionList {
+export interface ProjectVersionList {
   active_version_id: string | null;
   versions: SaasProjectVersion[];
 }
+
+export type SaasProjectVersionList = ProjectVersionList;
 
 export interface SaasEvent {
   sequence: number;

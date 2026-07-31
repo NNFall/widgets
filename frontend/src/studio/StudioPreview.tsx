@@ -1,5 +1,5 @@
 import { Desktop, DeviceMobile, Eye, Sparkle } from '@phosphor-icons/react';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 
 import {
   BuilderApiError,
@@ -52,7 +52,7 @@ export function StudioPreview({
     requestsRef.current.clear();
   }, [channel]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!runId || !revision) return;
     const handleMessage = async (event: MessageEvent) => {
       const data = event.data as Record<string, unknown> | null;

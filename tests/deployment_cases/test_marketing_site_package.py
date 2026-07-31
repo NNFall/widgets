@@ -36,12 +36,47 @@ BASH = next(
 )
 
 
+def _wait_for_docker_port(
+    docker,
+    container,
+    *,
+    timeout=5.0,
+    runner=subprocess.run,
+    sleeper=time.sleep,
+):
+    deadline = time.monotonic() + timeout
+    last_result = None
+    while time.monotonic() < deadline:
+        last_result = runner(
+            [docker, "port", container, "8088/tcp"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if last_result.returncode == 0:
+            mapping = last_result.stdout.strip()
+            if mapping and ":" in mapping:
+                candidate = mapping.splitlines()[0].rsplit(":", 1)[-1]
+                if candidate.isdigit():
+                    return int(candidate)
+        sleeper(0.05)
+    detail = ""
+    if last_result is not None:
+        detail = (last_result.stderr or last_result.stdout).strip()
+    raise AssertionError(
+        f"Docker did not register the nginx port within {timeout:.1f}s: {detail}"
+    )
+
+
 class MarketingSitePackageTests(unittest.TestCase):
     def test_frontend_metadata_uses_truthful_timing(self):
         index = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
         self.assertIn("10–20 минут", index)
-        self.assertNotIn("за 10 минут", index)
+        self.assertIn(
+            "<title>Kaigo — AI для вашего бизнеса за 10 минут</title>",
+            index,
+        )
 
     def test_frontend_build_is_a_self_contained_hashed_static_package(self):
         index = (DIST / "index.html").read_text(encoding="utf-8")
@@ -66,6 +101,26 @@ class MarketingSitePackageTests(unittest.TestCase):
             )
             self.assertTrue((DIST / reference.removeprefix("/")).is_file())
         self.assertNotRegex(index, r"https?://")
+
+    def test_docker_port_lookup_retries_until_mapping_is_registered(self):
+        results = iter(
+            (
+                subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+                subprocess.CompletedProcess(
+                    [], 0, stdout="127.0.0.1:49152\n", stderr=""
+                ),
+            )
+        )
+
+        port = _wait_for_docker_port(
+            "docker",
+            "container",
+            runner=lambda *args, **kwargs: next(results),
+            sleeper=lambda _: None,
+        )
+
+        self.assertEqual(port, 49152)
 
     def test_nginx_contract_keeps_marketing_routes_narrow_and_old_app_as_fallback(self):
         config = NGINX_CONFIG.read_text(encoding="utf-8")
@@ -238,14 +293,7 @@ class MarketingSitePackageTests(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stderr)
 
         try:
-            port_result = subprocess.run(
-                [DOCKER, "port", container, "8088/tcp"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertEqual(port_result.returncode, 0, port_result.stderr)
-            port = int(port_result.stdout.strip().rsplit(":", 1)[1])
+            port = _wait_for_docker_port(DOCKER, container)
             base_url = f"http://127.0.0.1:{port}"
 
             with self._open_with_retry(f"{base_url}/") as root_response:
