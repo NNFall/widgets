@@ -17,6 +17,7 @@ from aiohttp_session import SimpleCookieStorage, get_session, setup as setup_ses
 from playwright.async_api import async_playwright
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.db.base import Base
 from app.chat import CHAT_SERVICE_KEY, ChatReply, RoutedChatService
@@ -839,6 +840,45 @@ async def test_rollback_is_atomic_and_resolve_fails_closed_on_corruption(publica
         )
     with pytest.raises(ReleaseCorrupt):
         await service.resolve(first.stable_key)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("invalid_version", "versioned"),
+    [(True, False), (1.0, False), (2.0, True)],
+)
+async def test_resolve_rejects_non_integer_manifest_versions(
+    publication_db,
+    invalid_version,
+    versioned,
+) -> None:
+    _engine, factory, ids = publication_db
+    service = PublicationService(factory)
+    if versioned:
+        published = await service.publish_version(
+            ids["project"],
+            actor_user_id=10,
+            tenant_id=1,
+            project_version_id=ids["first_version"],
+            expected_active_release_id=None,
+        )
+    else:
+        published = await service.publish(
+            ids["project"],
+            actor_user_id=10,
+            tenant_id=1,
+            artifact_id=ids["first"],
+        )
+
+    async with factory() as database, database.begin():
+        release = await database.get(PublicationRelease, published.release_id)
+        manifest = {**release.asset_manifest, "version": invalid_version}
+        release.asset_manifest = manifest
+        flag_modified(release, "asset_manifest")
+        release.checksum = service.manifest_checksum(manifest)
+
+    with pytest.raises(ReleaseCorrupt, match="release manifest is invalid"):
+        await service.resolve(published.stable_key)
 
 
 @pytest.mark.asyncio

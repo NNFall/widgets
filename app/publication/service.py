@@ -782,6 +782,11 @@ class PublicationService:
             raise ReleaseCorrupt("release checksum mismatch")
         artifact = manifest.get("artifact")
         version = manifest.get("version")
+        valid_manifest_version = (
+            isinstance(version, int)
+            and not isinstance(version, bool)
+            and version in {1, 2}
+        )
         expected_manifest_keys = (
             {"version", "artifact_id", "artifact"}
             if version == 1
@@ -795,7 +800,7 @@ class PublicationService:
             and manifest.get("project_version_id") == str(release.project_version_id)
         )
         if not (
-            version in {1, 2}
+            valid_manifest_version
             and set(manifest) == expected_manifest_keys
             and valid_linkage
             and manifest.get("artifact_id") == str(release.artifact_id)
