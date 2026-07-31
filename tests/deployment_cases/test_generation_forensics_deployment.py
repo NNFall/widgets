@@ -37,6 +37,12 @@ def test_forensics_volume_is_private_to_worker_and_cleanup() -> None:
     assert "ports:" not in cleanup
 
 
+def test_app_image_source_is_readable_by_non_root_cleanup_user() -> None:
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "RUN chmod -R a+rX /app" in dockerfile
+
+
 def test_forensics_cleanup_timer_and_installer_are_bounded() -> None:
     service = (
         ROOT / "deploy/systemd/kaigo-generation-forensics-cleanup.service"
