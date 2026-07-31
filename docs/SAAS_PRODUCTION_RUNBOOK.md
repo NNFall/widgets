@@ -318,6 +318,76 @@ Confirm:
 
 - `/studio` and `/studio/` return the static application without Basic Auth;
 - `/builder/` still returns `401` without its legacy credentials;
+
+## External HTTPS publication canary
+
+Local, loopback, mocked, HTTP, self-signed, skipped, or blocked runs are useful
+diagnostics but are **not** publication acceptance. The real gate uses two
+credential-free static origins and a dedicated non-customer owner account:
+
+- `https://canary.kaigo.space` is the only origin added to the publication
+  allowlist;
+- `https://denied-canary.kaigo.space` serves the identical static shell and
+  must not render a usable widget.
+
+Deploy `deploy/publication-canary/index.html` and `canary.js` to
+`/var/www/kaigo-publication-canary`, provision both certificates outside Git,
+install `deploy/nginx/kaigo-publication-canary.conf`, then run `nginx -t`
+before reloading nginx. The static hosts contain no owner API, Cookie, CSRF,
+OAuth, payment, prompt, customer, or generated-artifact data.
+
+Use this schema-first order:
+
+1. Back up PostgreSQL and record the running release plus Alembic revision.
+2. Apply migrations through `0016_project_versions` while
+   `KAIGO_PROJECT_VERSIONS_ENABLED=false`.
+3. Deploy the application and worker, then pass readiness and the existing
+   production smoke.
+4. Provision both static HTTPS canary hosts and verify their certificates,
+   redirects, CSP, `no-store`, `no-referrer`, `nosniff`, and permissions
+   headers.
+5. Set `KAIGO_PROJECT_VERSIONS_ENABLED=true`, restart the application, and
+   repeat readiness.
+6. Use a dedicated non-customer canary account with an active, unexpired test
+   subscription and a project containing two separately reviewed versions.
+7. Put the real browser Cookie header in an owner-only temporary file without
+   echoing it or passing it on argv.
+8. Run the external acceptance from the builder-lab/browser-tools environment:
+
+   ```bash
+   umask 077
+   export KAIGO_CANARY_APP_ORIGIN='https://kaigo.space'
+   export KAIGO_CANARY_ALLOWED_ORIGIN='https://canary.kaigo.space'
+   export KAIGO_CANARY_DENIED_ORIGIN='https://denied-canary.kaigo.space'
+   export KAIGO_CANARY_PROJECT_ID='<dedicated canary project UUID>'
+   export KAIGO_CANARY_BASELINE_VERSION_ID='<reviewed baseline UUID>'
+   export KAIGO_CANARY_CANDIDATE_VERSION_ID='<reviewed candidate UUID>'
+   export KAIGO_CANARY_COOKIE_FILE="$(mktemp /run/kaigo-canary-cookie.XXXXXX)"
+   export KAIGO_CANARY_EVIDENCE_FILE="/srv/kaigo/releases/$(date -u +%Y%m%dT%H%M%SZ)-publication-canary.json"
+   trap 'rm -f "$KAIGO_CANARY_COOKIE_FILE"' EXIT
+   chmod 600 "$KAIGO_CANARY_COOKIE_FILE"
+   read -rsp 'Paste the dedicated canary browser Cookie header: ' KAIGO_CANARY_COOKIE_INPUT
+   printf '\n'
+   printf '%s' "$KAIGO_CANARY_COOKIE_INPUT" > "$KAIGO_CANARY_COOKIE_FILE"
+   unset KAIGO_CANARY_COOKIE_INPUT
+   python scripts/run_publication_https_canary.py
+   rm -f "$KAIGO_CANARY_COOKIE_FILE"
+   unset KAIGO_CANARY_COOKIE_FILE
+   trap - EXIT
+   ```
+
+9. Retain only the sanitized JSON evidence. It contains public IDs, checksums,
+   timestamps, statuses, origins, and booleans—never Cookie, CSRF, capability,
+   Authorization, raw HTML, prompts, or chat text.
+10. If the gate fails, disable the flag or roll back application code using
+    the existing schema-forward procedure. Do not weaken the subscription gate
+    and do not publish a customer project to diagnose the canary.
+
+The runner proves baseline publish, public launcher/close/reopen/chat,
+candidate update with compare-and-swap, rollback with compare-and-swap,
+stable-key reuse, exact release markers, empty browser storage, absence of
+credential headers, and rejection at the denied origin. Any missing input or
+unproven assertion exits nonzero with `status="blocked"`.
 - `/api/health`, an SSE generation stream, `/embed/<key>.js`,
   `/runtime/<key>`, and `/billing/success` reach `127.0.0.1:8080`;
 - a YooKassa sandbox notification reaches the exact webhook and remains
