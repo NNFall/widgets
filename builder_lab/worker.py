@@ -38,7 +38,7 @@ from builder_lab.engines.base import (
     BuilderEngineError,
     DirectBuilderEngine,
 )
-from builder_lab.models import DirectionProposal, EngineName, Stage
+from builder_lab.models import DirectionProposal, DirectionRole, EngineName, Stage
 from builder_lab.modes import get_mode_policy
 from builder_lab.patterns.models import CompositionPlan
 from builder_lab.patterns.planner import CompositionPlanningError, plan_composition
@@ -1565,80 +1565,6 @@ class PostgresWorkerQueue:
             artifact_id=artifact_record.id,
         )
 
-    @staticmethod
-    async def _record_project_version(
-        database: AsyncSession,
-        run: GenerationRun,
-    ) -> ProjectVersion:
-        artifact = await database.scalar(
-            select(GenerationArtifact)
-            .where(
-                GenerationArtifact.run_id == run.id,
-                GenerationArtifact.quality_status.in_(("accepted", "verified")),
-            )
-            .order_by(GenerationArtifact.revision.desc())
-            .limit(1)
-        )
-        if artifact is None:
-            raise RuntimeError("completed run has no verified artifact")
-        project = await database.scalar(
-            select(Project)
-            .where(Project.id == run.project_id)
-            .with_for_update()
-        )
-        if project is None:
-            raise RuntimeError("completed run project is missing")
-        version = await database.scalar(
-            select(ProjectVersion).where(
-                ProjectVersion.project_id == project.id,
-                ProjectVersion.run_id == run.id,
-                ProjectVersion.artifact_id == artifact.id,
-            )
-        )
-        if version is None:
-            last_ordinal = await database.scalar(
-                select(func.max(ProjectVersion.ordinal)).where(
-                    ProjectVersion.project_id == project.id
-                )
-            )
-            if run.source_version_id is None:
-                if last_ordinal is not None:
-                    raise RuntimeError(
-                        "a new project version requires an explicit source version"
-                    )
-                kind = "initial"
-                parent_version_id = None
-                change_request = None
-            else:
-                parent = await database.scalar(
-                    select(ProjectVersion.id).where(
-                        ProjectVersion.id == run.source_version_id,
-                        ProjectVersion.project_id == project.id,
-                    )
-                )
-                if parent is None:
-                    raise RuntimeError("refinement source version is invalid")
-                change_request = (run.change_request or "").strip()
-                if not 1 <= len(change_request) <= 2_000:
-                    raise RuntimeError("refinement change request is invalid")
-                kind = "refinement"
-                parent_version_id = parent
-            version = ProjectVersion(
-                project_id=project.id,
-                ordinal=int(last_ordinal or 0) + 1,
-                run_id=run.id,
-                artifact_id=artifact.id,
-                parent_version_id=parent_version_id,
-                kind=kind,
-                change_request=change_request,
-            )
-            database.add(version)
-            await database.flush()
-        project.active_version_id = version.id
-        project.active_run_id = run.id
-        project.active_revision = artifact.revision
-        return version
-
     async def fail_claim(
         self,
         claim: RunClaim,
@@ -1777,43 +1703,100 @@ class PostgresWorkerQueue:
             if not isinstance(request_payload, dict):
                 raise RuntimeError(f"run {run.id} has no durable builder request")
             request = BuilderRequest.from_dict(request_payload)
-            artifact_record = (
-                await database.execute(
-                    select(GenerationArtifact)
-                    .where(GenerationArtifact.run_id == run.id)
-                    .order_by(GenerationArtifact.revision.desc())
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
-            previous = None
-            if artifact_record is not None:
+            if run.source_version_id is not None:
+                source_row = (
+                    await database.execute(
+                        select(ProjectVersion, GenerationArtifact)
+                        .join(
+                            GenerationArtifact,
+                            (GenerationArtifact.id == ProjectVersion.artifact_id)
+                            & (
+                                GenerationArtifact.run_id
+                                == ProjectVersion.run_id
+                            ),
+                        )
+                        .where(
+                            ProjectVersion.id == run.source_version_id,
+                            ProjectVersion.project_id == run.project_id,
+                            GenerationArtifact.quality_status.in_(
+                                ("accepted", "verified")
+                            ),
+                        )
+                    )
+                ).one_or_none()
+                if source_row is None:
+                    raise RuntimeError(
+                        f"run {run.id} has no exact refinable source artifact"
+                    )
+                _, artifact_record = source_row
                 artifact_payload = artifact_record.config.get("artifact")
                 if not isinstance(artifact_payload, dict):
                     raise RuntimeError(
-                        f"run {run.id} has an invalid durable artifact"
+                        f"run {run.id} has an invalid source version artifact"
                     )
                 previous = WidgetArtifact.from_dict(artifact_payload)
-            staged_payloads = (
-                await database.execute(
-                    select(GenerationEvent.payload)
-                    .where(
-                        GenerationEvent.run_id == run.id,
-                        GenerationEvent.event_type == "stage.result_staged",
+                composition = await PatternRepository(database).load_plan(run.id)
+                if composition is None:
+                    raise RuntimeError(
+                        f"run {run.id} has no cloned composition plan"
                     )
-                    .order_by(GenerationEvent.sequence.desc())
+                selected_direction = DirectionProposal(
+                    proposal_id=composition.plan.direction_id,
+                    role=DirectionRole.INTERACTION_INVENTOR,
+                    title="Сохранённое визуальное направление",
+                    art_direction=previous.art_direction,
+                    interaction_model=(
+                        "Сохранить принятую структуру и внести только пожелание "
+                        "пользователя."
+                    ),
+                    safeguards=(
+                        "Не менять подтверждённый визуальный язык без необходимости",
+                    ),
                 )
-            ).scalars().all()
-            context: dict = {}
-            for payload in staged_payloads:
-                result_payload = payload.get("result")
-                candidate = (
-                    result_payload.get("context")
-                    if isinstance(result_payload, dict)
-                    else None
-                )
-                if isinstance(candidate, dict) and candidate:
-                    context = json.loads(json.dumps(candidate, ensure_ascii=False))
-                    break
+                context = {
+                    "composition_plan": composition.plan.to_dict(),
+                    "selected_direction": selected_direction.to_dict(),
+                }
+            else:
+                artifact_record = (
+                    await database.execute(
+                        select(GenerationArtifact)
+                        .where(GenerationArtifact.run_id == run.id)
+                        .order_by(GenerationArtifact.revision.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                previous = None
+                if artifact_record is not None:
+                    artifact_payload = artifact_record.config.get("artifact")
+                    if not isinstance(artifact_payload, dict):
+                        raise RuntimeError(
+                            f"run {run.id} has an invalid durable artifact"
+                        )
+                    previous = WidgetArtifact.from_dict(artifact_payload)
+                staged_payloads = (
+                    await database.execute(
+                        select(GenerationEvent.payload)
+                        .where(
+                            GenerationEvent.run_id == run.id,
+                            GenerationEvent.event_type == "stage.result_staged",
+                        )
+                        .order_by(GenerationEvent.sequence.desc())
+                    )
+                ).scalars().all()
+                context = {}
+                for payload in staged_payloads:
+                    result_payload = payload.get("result")
+                    candidate = (
+                        result_payload.get("context")
+                        if isinstance(result_payload, dict)
+                        else None
+                    )
+                    if isinstance(candidate, dict) and candidate:
+                        context = json.loads(
+                            json.dumps(candidate, ensure_ascii=False)
+                        )
+                        break
             return StageInput(
                 request=request,
                 previous_artifact=previous,
@@ -2178,8 +2161,48 @@ class PostgresWorkerQueue:
             },
         )
         if next_stage is None:
-            await self._record_pattern_outcomes(database, run)
-            await self._record_project_version(database, run)
+            # Import lazily: app.projects exports route setup, and routes import
+            # this queue. Deferring the repository import keeps module startup
+            # acyclic while preserving the transaction boundary below.
+            from app.projects.versions import ProjectVersionRepository
+
+            final_artifact = await self._record_pattern_outcomes(database, run)
+            if final_artifact is None:
+                raise RuntimeError("completed run has no verified artifact")
+            activation = await ProjectVersionRepository(
+                database
+            ).materialize_completed_run(
+                run=run,
+                artifact=final_artifact,
+                now=now,
+            )
+            version_payload = {
+                "version_id": str(activation.version.id),
+                "ordinal": activation.version.ordinal,
+                "kind": activation.version.kind,
+                "activated": activation.activated,
+            }
+            if activation.created:
+                await self._append_event(
+                    database,
+                    run,
+                    event_type="project.version_created",
+                    message="Версия проекта сохранена",
+                    now=now,
+                    payload=version_payload,
+                )
+                if not activation.activated:
+                    await self._append_event(
+                        database,
+                        run,
+                        event_type="project.version_activation_conflict",
+                        message=(
+                            "Версия сохранена в истории, но активная версия "
+                            "проекта уже изменилась"
+                        ),
+                        now=now,
+                        payload=version_payload,
+                    )
             run.state = "completed"
             run.progress = 100
             run.finished_at = now
@@ -2212,17 +2235,20 @@ class PostgresWorkerQueue:
     async def _record_pattern_outcomes(
         database: AsyncSession,
         run: GenerationRun,
-    ) -> None:
+    ) -> GenerationArtifact | None:
         final_artifact = (
             await database.execute(
                 select(GenerationArtifact)
-                .where(GenerationArtifact.run_id == run.id)
+                .where(
+                    GenerationArtifact.run_id == run.id,
+                    GenerationArtifact.quality_status.in_(("accepted", "verified")),
+                )
                 .order_by(GenerationArtifact.revision.desc())
                 .limit(1)
             )
         ).scalar_one_or_none()
         if final_artifact is None:
-            return
+            return None
         totals = (
             await database.execute(
                 select(
@@ -2306,6 +2332,7 @@ class PostgresWorkerQueue:
             model_call_id=latest_model_call_id,
             metrics=metrics,
         )
+        return final_artifact
 
     async def finalize_stage(self, claim: RunClaim) -> str | None:
         async with self._sessions() as database, database.begin():

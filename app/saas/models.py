@@ -1275,6 +1275,11 @@ class FunnelEvent(Base):
 class Publication(Base):
     __tablename__ = "publications"
     __table_args__ = (
+        UniqueConstraint(
+            "id",
+            "project_id",
+            name="uq_publication_project_membership",
+        ),
         ForeignKeyConstraint(
             ["id", "active_release_id"],
             ["publication_releases.publication_id", "publication_releases.id"],
@@ -1314,28 +1319,48 @@ class Publication(Base):
 class PublicationRelease(Base):
     __tablename__ = "publication_releases"
     __table_args__ = (
-        UniqueConstraint(
-            "publication_id",
-            "artifact_id",
-            name="uq_publication_release_artifact",
+        ForeignKeyConstraint(
+            ["publication_id", "project_id"],
+            ["publications.id", "publications.project_id"],
+            name="fk_publication_releases_publication_membership",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "project_version_id"],
+            ["project_versions.project_id", "project_versions.id"],
+            name="fk_publication_releases_project_version_membership",
+            ondelete="RESTRICT",
+            deferrable=True,
+            initially="DEFERRED",
         ),
         UniqueConstraint(
             "publication_id",
             "id",
             name="uq_publication_release_membership",
         ),
+        Index(
+            "uq_publication_release_legacy_artifact",
+            "publication_id",
+            "artifact_id",
+            unique=True,
+            postgresql_where=text("project_version_id IS NULL"),
+            sqlite_where=text("project_version_id IS NULL"),
+        ),
+        Index(
+            "uq_publication_release_project_version",
+            "publication_id",
+            "project_version_id",
+            unique=True,
+            postgresql_where=text("project_version_id IS NOT NULL"),
+            sqlite_where=text("project_version_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[UUID] = _uuid_pk()
-    publication_id: Mapped[UUID] = mapped_column(ForeignKey("publications.id", ondelete="CASCADE"), nullable=False, index=True)
+    publication_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    project_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     artifact_id: Mapped[UUID] = mapped_column(ForeignKey("generation_artifacts.id", ondelete="RESTRICT"), nullable=False)
-    project_version_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey(
-            "project_versions.id",
-            name="fk_publication_releases_project_version_id",
-            ondelete="RESTRICT",
-        )
-    )
+    project_version_id: Mapped[UUID | None] = mapped_column()
     previous_release_id: Mapped[UUID | None] = mapped_column(ForeignKey("publication_releases.id", ondelete="SET NULL"))
     revision: Mapped[int] = mapped_column(Integer, nullable=False)
     asset_manifest: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)

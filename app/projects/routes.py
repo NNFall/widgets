@@ -12,7 +12,7 @@ from weakref import WeakValueDictionary
 
 from aiohttp import web
 from aiohttp_session import get_session
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.analytics.service import (
     create_funnel_journey,
@@ -42,6 +42,13 @@ from app.projects.serializers import (
     serialize_project_version,
     serialize_run,
 )
+from app.projects.versions import (
+    ProjectBusy,
+    ProjectVersionConflict,
+    ProjectVersionNotFound,
+    ProjectVersionNotRefinable,
+    ProjectVersionService,
+)
 from app.saas.models import (
     GenerationArtifact,
     GenerationEvent,
@@ -64,6 +71,7 @@ SSE_PAGE_SIZE = 100
 PREVIEW_DRAFT_CANDIDATE_LIMIT = 50
 PREVIEW_CHANNEL_PATTERN = re.compile(r"^[A-Za-z0-9_-]{22,96}$")
 CHAT_REQUEST_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{7,95}$")
+MAX_PROJECT_VERSION_BODY_BYTES = 32_768
 PROJECT_CHAT_SESSION_KEY = "project_chat_session_id"
 _SQLITE_PROJECT_LOCKS: WeakValueDictionary[tuple[int, UUID], asyncio.Lock] = (
     WeakValueDictionary()
@@ -72,6 +80,18 @@ GENERATION_FORENSICS_CONFIG_KEY = web.AppKey(
     "generation_forensics_config",
     GenerationForensicsConfig,
 )
+
+
+def _require_project_versions_enabled(request: web.Request) -> None:
+    config = request.app.get("config")
+    if not bool(
+        config is not None
+        and getattr(config, "project_versions_enabled", False)
+    ):
+        raise web.HTTPNotFound(
+            text=_error("not_found"),
+            content_type="application/json",
+        )
 
 
 async def _scope(request: web.Request, *, verified: bool = False) -> tuple[int, int]:
@@ -176,6 +196,95 @@ def _idempotency_key(request: web.Request) -> str:
             content_type="application/json",
         )
     return key
+
+
+class _DuplicateJsonKey(ValueError):
+    pass
+
+
+def _object_from_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise _DuplicateJsonKey(key)
+        value[key] = item
+    return value
+
+
+async def _project_version_body(
+    request: web.Request,
+    *,
+    exact_keys: frozenset[str],
+) -> dict[str, object]:
+    content_length = request.content_length
+    if (
+        content_length is not None
+        and content_length > MAX_PROJECT_VERSION_BODY_BYTES
+    ):
+        raise web.HTTPRequestEntityTooLarge(
+            max_size=MAX_PROJECT_VERSION_BODY_BYTES,
+            actual_size=content_length,
+            text=_error("request_too_large"),
+            content_type="application/json",
+        )
+    raw = bytearray()
+    try:
+        async for chunk in request.content.iter_chunked(MAX_PROJECT_VERSION_BODY_BYTES):
+            actual_size = len(raw) + len(chunk)
+            if actual_size > MAX_PROJECT_VERSION_BODY_BYTES:
+                raise web.HTTPRequestEntityTooLarge(
+                    max_size=MAX_PROJECT_VERSION_BODY_BYTES,
+                    actual_size=actual_size,
+                    text=_error("request_too_large"),
+                    content_type="application/json",
+                )
+            raw.extend(chunk)
+        payload = json.loads(raw.decode("utf-8"), object_pairs_hook=_object_from_pairs)
+    except web.HTTPRequestEntityTooLarge:
+        raise
+    except (json.JSONDecodeError, UnicodeError, _DuplicateJsonKey) as error:
+        raise web.HTTPBadRequest(
+            text=_error("invalid_json"), content_type="application/json"
+        ) from error
+    if not isinstance(payload, dict) or set(payload) != exact_keys:
+        raise web.HTTPBadRequest(
+            text=_error("invalid_body"), content_type="application/json"
+        )
+    return payload
+
+
+def _project_version_uuid(value: object) -> UUID:
+    if not isinstance(value, str) or not value:
+        raise web.HTTPBadRequest(
+            text=_error("invalid_body"), content_type="application/json"
+        )
+    try:
+        return UUID(value)
+    except ValueError as error:
+        raise web.HTTPBadRequest(
+            text=_error("invalid_body"), content_type="application/json"
+        ) from error
+
+
+def _raise_project_version_error(error: Exception) -> None:
+    if isinstance(error, ProjectVersionConflict):
+        raise web.HTTPConflict(
+            text=_error("project_version_conflict"),
+            content_type="application/json",
+        ) from error
+    if isinstance(error, ProjectVersionNotFound):
+        raise web.HTTPNotFound(
+            text=_error("not_found"), content_type="application/json"
+        ) from error
+    if isinstance(error, ProjectBusy):
+        raise web.HTTPConflict(
+            text=_error("project_busy"), content_type="application/json"
+        ) from error
+    if isinstance(error, ProjectVersionNotRefinable):
+        raise web.HTTPConflict(
+            text=_error("version_unavailable"), content_type="application/json"
+        ) from error
+    raise error
 
 
 async def _enqueue_express_run(
@@ -406,6 +515,7 @@ async def get_project(request: web.Request) -> web.Response:
 
 
 async def list_project_versions(request: web.Request) -> web.Response:
+    _require_project_versions_enabled(request)
     user_id, tenant_id = await _scope(request)
     factory = get_session_factory(request.app)
     async with factory() as database:
@@ -415,15 +525,28 @@ async def list_project_versions(request: web.Request) -> web.Response:
             user_id,
             tenant_id,
         )
-        versions = list(
+        version_rows = list(
             (
                 await database.execute(
-                    select(ProjectVersion)
+                    select(ProjectVersion, GenerationArtifact)
+                    .join(
+                        GenerationArtifact,
+                        (GenerationArtifact.id == ProjectVersion.artifact_id)
+                        & (GenerationArtifact.run_id == ProjectVersion.run_id),
+                    )
                     .where(ProjectVersion.project_id == project.id)
                     .order_by(ProjectVersion.ordinal.desc())
                 )
-            ).scalars()
+            ).all()
         )
+        version_service = ProjectVersionService(database)
+        version_readiness = {
+            version.id: await version_service.version_readiness(
+                version,
+                artifact=artifact,
+            )
+            for version, artifact in version_rows
+        }
     return web.json_response(
         {
             "active_version_id": (
@@ -432,9 +555,10 @@ async def list_project_versions(request: web.Request) -> web.Response:
             "versions": [
                 serialize_project_version(
                     version,
-                    active_version_id=project.active_version_id,
+                    artifact_revision=artifact.revision,
+                    refinable=version_readiness[version.id] is not None,
                 )
-                for version in versions
+                for version, artifact in version_rows
             ],
         }
     )
@@ -457,32 +581,31 @@ async def _require_active_subscription(database, user_id: int) -> None:
         )
 
 
-async def create_refinement(request: web.Request) -> web.Response:
+async def refine_project_version(request: web.Request) -> web.Response:
+    _require_project_versions_enabled(request)
     user_id, tenant_id = await _scope(request, verified=True)
     await _require_csrf(request)
     key = _idempotency_key(request)
-    try:
-        body = await request.json()
-    except Exception as error:  # noqa: BLE001
-        raise web.HTTPBadRequest(
-            text=_error("invalid_json"), content_type="application/json"
-        ) from error
-    if not isinstance(body, dict) or set(body) != {"change_request"}:
-        raise web.HTTPBadRequest(
-            text=_error("invalid_body"), content_type="application/json"
-        )
+    body = await _project_version_body(
+        request,
+        exact_keys=frozenset({"change_request", "expected_active_version_id"}),
+    )
     change_request = body.get("change_request")
     if not isinstance(change_request, str):
         raise web.HTTPBadRequest(
             text=_error("invalid_body"), content_type="application/json"
         )
     change_request = change_request.strip()
-    if not 1 <= len(change_request) <= 2_000:
+    if not 1 <= len(change_request) <= 2_000 or "\x00" in change_request:
         raise web.HTTPBadRequest(
             text=_error("invalid_body"), content_type="application/json"
         )
 
     project_id = _uuid(request.match_info["project_id"])
+    source_version_id = _uuid(request.match_info["version_id"])
+    expected_active_version_id = _project_version_uuid(
+        body["expected_active_version_id"]
+    )
     factory = get_session_factory(request.app)
     async with _project_mutation_guard(factory, project_id):
         async with factory() as database, database.begin():
@@ -493,60 +616,53 @@ async def create_refinement(request: web.Request) -> web.Response:
                 tenant_id,
                 lock=True,
             )
-            await _require_active_subscription(database, user_id)
-            existing = await database.scalar(
-                select(GenerationRun).where(
-                    GenerationRun.project_id == project.id,
-                    GenerationRun.idempotency_key == key,
-                )
-            )
-            if existing is not None:
-                if (
-                    existing.source_version_id is None
-                    or existing.change_request != change_request
-                ):
-                    raise web.HTTPConflict(
-                        text=_error("idempotency_conflict"),
-                        content_type="application/json",
-                    )
-                run = existing
-            else:
-                if project.active_version_id is None:
-                    raise web.HTTPConflict(
-                        text=_error("version_unavailable"),
-                        content_type="application/json",
-                    )
-                active_run = (
-                    await database.get(GenerationRun, project.active_run_id)
-                    if project.active_run_id is not None
-                    else None
-                )
-                if active_run is not None and active_run.state not in TERMINAL_STATES:
-                    raise web.HTTPConflict(
-                        text=_error("project_busy"),
-                        content_type="application/json",
-                    )
-                source = await database.scalar(
-                    select(ProjectVersion).where(
-                        ProjectVersion.id == project.active_version_id,
-                        ProjectVersion.project_id == project.id,
-                    )
-                )
-                if source is None:
-                    raise web.HTTPConflict(
-                        text=_error("version_unavailable"),
-                        content_type="application/json",
-                    )
-                run = await _enqueue_express_run(
-                    database,
-                    factory,
+            version_service = ProjectVersionService(database)
+            try:
+                prepared = await version_service.prepare_refinement(
                     project,
-                    user_id,
-                    key,
-                    request.app[GENERATION_FORENSICS_CONFIG_KEY],
-                    source_version_id=source.id,
+                    source_version_id=source_version_id,
+                    expected_active_version_id=expected_active_version_id,
                     change_request=change_request,
-                    reserve_trial=False,
+                    idempotency_key=key,
+                )
+            except (
+                ProjectBusy,
+                ProjectVersionConflict,
+                ProjectVersionNotFound,
+                ProjectVersionNotRefinable,
+            ) as error:
+                _raise_project_version_error(error)
+            if prepared.existing_run is not None:
+                run = prepared.existing_run
+            else:
+                await _require_active_subscription(database, user_id)
+                try:
+                    run = await version_service.enqueue_refinement(
+                        project.id,
+                        source_version_id=source_version_id,
+                        expected_active_version_id=expected_active_version_id,
+                        change_request=change_request,
+                        idempotency_key=key,
+                        actor_user_id=user_id,
+                        tenant_id=tenant_id,
+                    )
+                except (
+                    ProjectBusy,
+                    ProjectVersionConflict,
+                    ProjectVersionNotFound,
+                    ProjectVersionNotRefinable,
+                ) as error:
+                    _raise_project_version_error(error)
+                created_at = run.created_at or datetime.now(timezone.utc)
+                if created_at.tzinfo is None or created_at.utcoffset() is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                await ensure_pending_forensic_manifest(
+                    database,
+                    config=request.app[GENERATION_FORENSICS_CONFIG_KEY],
+                    user_id=user_id,
+                    project_id=project.id,
+                    run_id=run.id,
+                    created_at=created_at,
                 )
                 try:
                     await GenerationCreditService(factory).reserve_in_session(
@@ -573,11 +689,19 @@ async def create_refinement(request: web.Request) -> web.Response:
 
 
 async def restore_project_version(request: web.Request) -> web.Response:
+    _require_project_versions_enabled(request)
     user_id, tenant_id = await _scope(request, verified=True)
     await _require_csrf(request)
     key = _idempotency_key(request)
+    body = await _project_version_body(
+        request,
+        exact_keys=frozenset({"expected_active_version_id"}),
+    )
     project_id = _uuid(request.match_info["project_id"])
     target_id = _uuid(request.match_info["version_id"])
+    expected_active_version_id = _project_version_uuid(
+        body["expected_active_version_id"]
+    )
     factory = get_session_factory(request.app)
     async with _project_mutation_guard(factory, project_id):
         async with factory() as database, database.begin():
@@ -588,82 +712,36 @@ async def restore_project_version(request: web.Request) -> web.Response:
                 tenant_id,
                 lock=True,
             )
-            replay = await database.scalar(
-                select(ProjectVersion).where(
-                    ProjectVersion.project_id == project.id,
-                    ProjectVersion.idempotency_key == key,
+            version_service = ProjectVersionService(database)
+            try:
+                result = await version_service.restore(
+                    project,
+                    target_version_id=target_id,
+                    expected_active_version_id=expected_active_version_id,
+                    idempotency_key=key,
                 )
-            )
-            if replay is not None:
-                if replay.kind != "restore" or replay.parent_version_id != target_id:
-                    raise web.HTTPConflict(
-                        text=_error("idempotency_conflict"),
-                        content_type="application/json",
-                    )
-                return web.json_response(
-                    {
-                        "version": serialize_project_version(
-                            replay,
-                            active_version_id=project.active_version_id,
-                        )
-                    }
-                )
-            active_run = (
-                await database.get(GenerationRun, project.active_run_id)
-                if project.active_run_id is not None
-                else None
-            )
-            if active_run is not None and active_run.state not in TERMINAL_STATES:
-                raise web.HTTPConflict(
-                    text=_error("project_busy"), content_type="application/json"
-                )
-            target = await database.scalar(
-                select(ProjectVersion).where(
-                    ProjectVersion.id == target_id,
-                    ProjectVersion.project_id == project.id,
-                )
-            )
-            if target is None:
-                raise web.HTTPNotFound(
-                    text=_error("not_found"), content_type="application/json"
-                )
-            artifact = await database.scalar(
-                select(GenerationArtifact).where(
-                    GenerationArtifact.id == target.artifact_id,
-                    GenerationArtifact.run_id == target.run_id,
-                    GenerationArtifact.quality_status.in_(("accepted", "verified")),
-                )
-            )
-            if artifact is None:
-                raise web.HTTPConflict(
-                    text=_error("version_unavailable"),
-                    content_type="application/json",
-                )
-            last_ordinal = await database.scalar(
-                select(func.max(ProjectVersion.ordinal)).where(
-                    ProjectVersion.project_id == project.id
-                )
-            )
-            restored = ProjectVersion(
-                project_id=project.id,
-                ordinal=int(last_ordinal or 0) + 1,
-                run_id=target.run_id,
-                artifact_id=target.artifact_id,
-                parent_version_id=target.id,
-                kind="restore",
-                idempotency_key=key,
-            )
-            database.add(restored)
-            await database.flush()
-            project.active_version_id = restored.id
-            project.active_run_id = target.run_id
-            project.active_revision = artifact.revision
-            project.status = "free_result_ready"
+            except (
+                ProjectBusy,
+                ProjectVersionConflict,
+                ProjectVersionNotFound,
+                ProjectVersionNotRefinable,
+            ) as error:
+                _raise_project_version_error(error)
             payload = serialize_project_version(
-                restored,
-                active_version_id=restored.id,
+                result.version,
+                artifact_revision=result.artifact.revision,
+                refinable=(
+                    await version_service.version_readiness(
+                        result.version,
+                        artifact=result.artifact,
+                    )
+                    is not None
+                ),
             )
-    return web.json_response({"version": payload}, status=201)
+    return web.json_response(
+        {"version": payload},
+        status=201 if result.created else 200,
+    )
 
 
 async def create_run(request: web.Request) -> web.Response:
@@ -1301,7 +1379,8 @@ def setup_project_routes(
     app.router.add_patch("/api/projects/{project_id}", update_project_draft)
     app.router.add_get("/api/projects/{project_id}/versions", list_project_versions)
     app.router.add_post(
-        "/api/projects/{project_id}/refinements", create_refinement
+        "/api/projects/{project_id}/versions/{version_id}/refine",
+        refine_project_version,
     )
     app.router.add_post(
         "/api/projects/{project_id}/versions/{version_id}/restore",

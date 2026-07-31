@@ -31,6 +31,19 @@ from builder_lab.validation import validate_artifact
 
 _RELEASE_QUALITY = frozenset({"accepted", "verified"})
 _HOST_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+_EXPECTED_RELEASE_UNSET = object()
+_RUNTIME_ARTIFACT_KEYS = frozenset(
+    {
+        "schema_version",
+        "revision",
+        "stage",
+        "body_html",
+        "css",
+        "javascript",
+        "theme_tokens",
+        "layout_contract",
+    }
+)
 
 
 class PublicationError(RuntimeError):
@@ -61,11 +74,16 @@ class PublicationIdentityUnverified(PublicationError):
     pass
 
 
+class PublicationConflict(PublicationError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class PublishedRelease:
     publication_id: UUID
     release_id: UUID
     artifact_id: UUID
+    project_version_id: UUID | None
     stable_key: str
     revision: int
     allowed_domains: tuple[str, ...]
@@ -78,6 +96,7 @@ class PublishedRelease:
 class PublicationReleaseState:
     release_id: UUID
     artifact_id: UUID
+    project_version_id: UUID | None
     previous_release_id: UUID | None
     revision: int
     checksum: str
@@ -174,97 +193,163 @@ class PublicationService:
                 select(PublicationRelease).where(
                     PublicationRelease.publication_id == publication.id,
                     PublicationRelease.artifact_id == artifact.id,
+                    PublicationRelease.project_version_id.is_(None),
                 )
             )
             if existing is not None:
                 self._verify_release(existing)
                 publication.active_release_id = existing.id
                 publication.state = "published"
-                await PatternRepository(database).mark_active_publication(
-                    project_id=project.id,
-                    artifact_id=artifact.id,
-                )
-                await record_funnel_event(
+                await self._record_activation(
                     database,
-                    event_type="published",
-                    event_key=f"published:publication:{publication.id}",
-                    journey_id=publication.journey_id,
-                    user_id=actor_user_id,
-                    project_id=project.id,
-                    run_id=artifact.run_id,
-                    artifact_id=artifact.id,
-                    publication_id=publication.id,
+                    project=project,
+                    publication=publication,
+                    artifact=artifact,
+                    actor_user_id=actor_user_id,
                 )
                 return self._snapshot(publication, existing, created=False)
 
-            project_version = None
-            if project.active_version_id is not None:
-                project_version = await database.scalar(
-                    select(ProjectVersion).where(
-                        ProjectVersion.id == project.active_version_id,
-                        ProjectVersion.project_id == project.id,
-                        ProjectVersion.artifact_id == artifact.id,
-                    )
-                )
-            if project_version is None:
-                project_version = await database.scalar(
-                    select(ProjectVersion)
-                    .where(
-                        ProjectVersion.project_id == project.id,
-                        ProjectVersion.artifact_id == artifact.id,
-                    )
-                    .order_by(ProjectVersion.ordinal.desc())
-                    .limit(1)
-                )
-
-            manifest = {
-                "version": 1,
-                "artifact_id": str(artifact.id),
-                # Persist only runtime material. Prompts, source URLs,
-                # provenance, review text and provider traces stay private.
-                "artifact": {
-                    "schema_version": candidate.schema_version,
-                    "revision": candidate.revision,
-                    "stage": candidate.stage.value,
-                    "body_html": candidate.body_html,
-                    "css": candidate.css,
-                    "javascript": candidate.javascript,
-                    "theme_tokens": dict(candidate.theme_tokens),
-                    "layout_contract": dict(candidate.layout_contract),
-                },
-            }
-            release = PublicationRelease(
-                id=uuid4(),
-                publication_id=publication.id,
-                artifact_id=artifact.id,
-                project_version_id=(
-                    project_version.id if project_version is not None else None
-                ),
-                previous_release_id=publication.active_release_id,
-                revision=artifact.revision,
-                asset_manifest=manifest,
-                checksum=self.manifest_checksum(manifest),
+            release = self._new_release(
+                publication=publication,
+                project=project,
+                artifact=artifact,
+                candidate=candidate,
+                project_version_id=None,
             )
             database.add(release)
             await database.flush()
             publication.active_release_id = release.id
             publication.state = "published"
-            await PatternRepository(database).mark_active_publication(
-                project_id=project.id,
-                artifact_id=artifact.id,
-            )
-            await record_funnel_event(
+            await self._record_activation(
                 database,
-                event_type="published",
-                event_key=f"published:publication:{publication.id}",
-                journey_id=publication.journey_id,
-                user_id=actor_user_id,
-                project_id=project.id,
-                run_id=artifact.run_id,
-                artifact_id=artifact.id,
-                publication_id=publication.id,
+                project=project,
+                publication=publication,
+                artifact=artifact,
+                actor_user_id=actor_user_id,
             )
             return self._snapshot(publication, release, created=True)
+
+    async def publish_version(
+        self,
+        project_id: UUID,
+        *,
+        actor_user_id: int,
+        tenant_id: int,
+        project_version_id: UUID,
+        expected_active_release_id: UUID | None,
+        allowed_domains: Sequence[str] | None = None,
+    ) -> PublishedRelease:
+        if not isinstance(project_version_id, UUID):
+            raise InvalidPublicationArtifact("project_version_id is required")
+        if expected_active_release_id is not None and not isinstance(
+            expected_active_release_id, UUID
+        ):
+            raise PublicationConflict("invalid expected active release")
+
+        async with self._session_factory() as database, database.begin():
+            project = await database.scalar(
+                select(Project)
+                .where(
+                    Project.id == project_id,
+                    Project.owner_user_id == actor_user_id,
+                    Project.tenant_id == tenant_id,
+                )
+                .with_for_update()
+            )
+            if project is None:
+                raise PublicationNotFound("project not found")
+            await self._require_entitlement(database, actor_user_id)
+            publication = await database.scalar(
+                select(Publication)
+                .where(Publication.project_id == project.id)
+                .with_for_update()
+            )
+
+            version_row = (
+                await database.execute(
+                    select(ProjectVersion, GenerationArtifact)
+                    .join(
+                        GenerationRun,
+                        (GenerationRun.id == ProjectVersion.run_id)
+                        & (GenerationRun.project_id == ProjectVersion.project_id),
+                    )
+                    .join(
+                        GenerationArtifact,
+                        (GenerationArtifact.id == ProjectVersion.artifact_id)
+                        & (GenerationArtifact.run_id == ProjectVersion.run_id),
+                    )
+                    .where(
+                        ProjectVersion.id == project_version_id,
+                        ProjectVersion.project_id == project.id,
+                        GenerationRun.project_id == project.id,
+                        GenerationArtifact.quality_status.in_(_RELEASE_QUALITY),
+                    )
+                )
+            ).one_or_none()
+            if version_row is None:
+                raise InvalidPublicationArtifact("project version is not publishable")
+            project_version, artifact = version_row
+            candidate = self._validated_artifact(artifact)
+            domains = self._domains(allowed_domains, source_url=project.source_url)
+
+            if publication is None:
+                if expected_active_release_id is not None:
+                    raise PublicationConflict("publication pointer changed")
+                publication = Publication(
+                    project_id=project.id,
+                    journey_id=project.journey_id,
+                    stable_key=secrets.token_urlsafe(24),
+                    allowed_domains=list(domains),
+                    state="draft",
+                )
+                database.add(publication)
+                await database.flush()
+
+            existing = await database.scalar(
+                select(PublicationRelease).where(
+                    PublicationRelease.publication_id == publication.id,
+                    PublicationRelease.project_version_id == project_version.id,
+                )
+            )
+            current_domains = self._stored_domains(publication.allowed_domains)
+            if existing is not None and publication.active_release_id == existing.id:
+                self._verify_release(existing)
+                if current_domains == domains:
+                    if publication.state != "published":
+                        raise PublicationConflict("publication is not active")
+                    return self._snapshot(publication, existing, created=False)
+
+            if publication.active_release_id != expected_active_release_id:
+                raise PublicationConflict("publication pointer changed")
+
+            publication.allowed_domains = list(domains)
+            if publication.journey_id is None:
+                publication.journey_id = project.journey_id
+
+            created = existing is None
+            if existing is None:
+                existing = self._new_release(
+                    publication=publication,
+                    project=project,
+                    artifact=artifact,
+                    candidate=candidate,
+                    project_version_id=project_version.id,
+                )
+                database.add(existing)
+                await database.flush()
+            else:
+                self._verify_release(existing)
+
+            publication.active_release_id = existing.id
+            publication.state = "published"
+            await self._record_activation(
+                database,
+                project=project,
+                publication=publication,
+                artifact=artifact,
+                actor_user_id=actor_user_id,
+            )
+            return self._snapshot(publication, existing, created=created)
 
     async def get_project_state(
         self,
@@ -329,6 +414,7 @@ class PublicationService:
                 return PublicationReleaseState(
                     release_id=release.id,
                     artifact_id=release.artifact_id,
+                    project_version_id=release.project_version_id,
                     previous_release_id=release.previous_release_id,
                     revision=release.revision,
                     checksum=release.checksum,
@@ -352,6 +438,7 @@ class PublicationService:
         actor_user_id: int,
         tenant_id: int,
         target_release_id: UUID,
+        expected_active_release_id: UUID | None | object = _EXPECTED_RELEASE_UNSET,
     ) -> PublishedRelease:
         async with self._session_factory() as database, database.begin():
             # Resolve the parent through a join while locking only Project, then
@@ -384,6 +471,17 @@ class PublicationService:
             if publication is None or release is None:
                 raise PublicationNotFound("release not found")
             self._verify_release(release)
+            if release.project_id != project_id:
+                raise ReleaseCorrupt("release project membership is invalid")
+            if publication.active_release_id == release.id:
+                if publication.state != "published":
+                    raise PublicationConflict("publication is not active")
+                return self._snapshot(publication, release, created=False)
+            if (
+                expected_active_release_id is not _EXPECTED_RELEASE_UNSET
+                and publication.active_release_id != expected_active_release_id
+            ):
+                raise PublicationConflict("publication pointer changed")
             publication.active_release_id = release.id
             publication.state = "published"
             await PatternRepository(database).mark_active_publication(
@@ -436,7 +534,10 @@ class PublicationService:
             if row is None:
                 raise PublicationNotFound("publication not found")
             publication, release = row
-            if release.publication_id != publication.id:
+            if (
+                release.publication_id != publication.id
+                or release.project_id != publication.project_id
+            ):
                 raise ReleaseCorrupt("active release belongs to another publication")
             self._verify_release(release)
             return self._snapshot(publication, release, created=False)
@@ -585,21 +686,137 @@ class PublicationService:
         """Normalize an embed origin with the service's production policy."""
         return self._normalize_origin(value)
 
+    def _stored_domains(self, values: Any) -> tuple[str, ...]:
+        if not isinstance(values, list):
+            raise ReleaseCorrupt("publication domain policy is invalid")
+        try:
+            return tuple(self._normalize_origin(value) for value in values)
+        except (InvalidAllowedDomain, TypeError) as error:
+            raise ReleaseCorrupt("publication domain policy is invalid") from error
+
+    @staticmethod
+    def _runtime_artifact(candidate: WidgetArtifact) -> dict[str, Any]:
+        return {
+            "schema_version": candidate.schema_version,
+            "revision": candidate.revision,
+            "stage": candidate.stage.value,
+            "body_html": candidate.body_html,
+            "css": candidate.css,
+            "javascript": candidate.javascript,
+            "theme_tokens": dict(candidate.theme_tokens),
+            "layout_contract": dict(candidate.layout_contract),
+        }
+
+    def _manifest(
+        self,
+        *,
+        artifact_id: UUID,
+        candidate: WidgetArtifact,
+        project_version_id: UUID | None,
+    ) -> dict[str, Any]:
+        manifest: dict[str, Any] = {
+            "version": 1 if project_version_id is None else 2,
+            "artifact_id": str(artifact_id),
+            "artifact": self._runtime_artifact(candidate),
+        }
+        if project_version_id is not None:
+            manifest["project_version_id"] = str(project_version_id)
+        return manifest
+
+    def _new_release(
+        self,
+        *,
+        publication: Publication,
+        project: Project,
+        artifact: GenerationArtifact,
+        candidate: WidgetArtifact,
+        project_version_id: UUID | None,
+    ) -> PublicationRelease:
+        manifest = self._manifest(
+            artifact_id=artifact.id,
+            candidate=candidate,
+            project_version_id=project_version_id,
+        )
+        return PublicationRelease(
+            id=uuid4(),
+            publication_id=publication.id,
+            project_id=project.id,
+            artifact_id=artifact.id,
+            project_version_id=project_version_id,
+            previous_release_id=publication.active_release_id,
+            revision=artifact.revision,
+            asset_manifest=manifest,
+            checksum=self.manifest_checksum(manifest),
+        )
+
+    @staticmethod
+    async def _record_activation(
+        database: AsyncSession,
+        *,
+        project: Project,
+        publication: Publication,
+        artifact: GenerationArtifact,
+        actor_user_id: int,
+    ) -> None:
+        await PatternRepository(database).mark_active_publication(
+            project_id=project.id,
+            artifact_id=artifact.id,
+        )
+        await record_funnel_event(
+            database,
+            event_type="published",
+            event_key=f"published:publication:{publication.id}",
+            journey_id=publication.journey_id,
+            user_id=actor_user_id,
+            project_id=project.id,
+            run_id=artifact.run_id,
+            artifact_id=artifact.id,
+            publication_id=publication.id,
+        )
+
     def _verify_release(self, release: PublicationRelease) -> None:
-        if self.manifest_checksum(release.asset_manifest) != release.checksum:
-            raise ReleaseCorrupt("release checksum mismatch")
         manifest = release.asset_manifest
         if not isinstance(manifest, dict):
             raise ReleaseCorrupt("release manifest is invalid")
+        if self.manifest_checksum(manifest) != release.checksum:
+            raise ReleaseCorrupt("release checksum mismatch")
         artifact = manifest.get("artifact")
-        if (
-            manifest.get("version") != 1
-            or manifest.get("artifact_id") != str(release.artifact_id)
-            or not isinstance(artifact, dict)
-            or artifact.get("revision") != release.revision
-            or not isinstance(artifact.get("body_html"), str)
-            or not isinstance(artifact.get("css"), str)
-            or not isinstance(artifact.get("javascript", ""), str)
+        version = manifest.get("version")
+        expected_manifest_keys = (
+            {"version", "artifact_id", "artifact"}
+            if version == 1
+            else {"version", "artifact_id", "project_version_id", "artifact"}
+        )
+        valid_linkage = (
+            version == 1
+            and release.project_version_id is None
+            or version == 2
+            and release.project_version_id is not None
+            and manifest.get("project_version_id") == str(release.project_version_id)
+        )
+        if not (
+            version in {1, 2}
+            and set(manifest) == expected_manifest_keys
+            and valid_linkage
+            and manifest.get("artifact_id") == str(release.artifact_id)
+            and isinstance(artifact, dict)
+            and set(artifact) == _RUNTIME_ARTIFACT_KEYS
+            and (
+                isinstance(artifact.get("schema_version"), str)
+                and bool(artifact.get("schema_version"))
+                or isinstance(artifact.get("schema_version"), int)
+                and not isinstance(artifact.get("schema_version"), bool)
+                and artifact.get("schema_version") > 0
+            )
+            and artifact.get("revision") == release.revision
+            and isinstance(artifact.get("revision"), int)
+            and not isinstance(artifact.get("revision"), bool)
+            and isinstance(artifact.get("stage"), str)
+            and isinstance(artifact.get("body_html"), str)
+            and isinstance(artifact.get("css"), str)
+            and isinstance(artifact.get("javascript"), str)
+            and isinstance(artifact.get("theme_tokens"), dict)
+            and isinstance(artifact.get("layout_contract"), dict)
         ):
             raise ReleaseCorrupt("release manifest is invalid")
 
@@ -611,15 +828,14 @@ class PublicationService:
         created: bool,
     ) -> PublishedRelease:
         try:
-            domains = tuple(
-                self._normalize_origin(value) for value in publication.allowed_domains
-            )
+            domains = self._stored_domains(publication.allowed_domains)
         except (InvalidAllowedDomain, TypeError) as error:
             raise ReleaseCorrupt("publication domain policy is invalid") from error
         return PublishedRelease(
             publication_id=publication.id,
             release_id=release.id,
             artifact_id=release.artifact_id,
+            project_version_id=release.project_version_id,
             stable_key=publication.stable_key,
             revision=release.revision,
             allowed_domains=domains,
@@ -668,6 +884,7 @@ __all__ = [
     "InvalidAllowedDomain",
     "InvalidPublicationArtifact",
     "PublicationNotFound",
+    "PublicationConflict",
     "PublicationIdentityUnverified",
     "PublicationReleaseState",
     "PublicationService",

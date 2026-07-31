@@ -528,6 +528,11 @@ def test_disposable_postgres_preflight_legacy_and_additive_round_trip(
         assert asyncio.run(revision()) == "0017_funnel_journeys"
 
         head_snapshot = preflight.inspect_schema(rendered)
+        assert preflight._schema_fingerprint(head_snapshot) == (
+            preflight.EXPECTED_VERSIONED_SCHEMA_FINGERPRINTS[
+                "0017_funnel_journeys"
+            ]
+        )
         assert preflight.classify_schema(head_snapshot) == preflight.MigrationPlan(
             stamp_revision=None,
             upgrade_revision="head",
@@ -705,6 +710,23 @@ def test_disposable_postgres_preflight_legacy_and_additive_round_trip(
             stamp_revision=None,
             upgrade_revision="head",
         )
+
+        command.downgrade(config, "0016_project_versions")
+        assert asyncio.run(revision()) == "0016_project_versions"
+        project_versions_snapshot = preflight.inspect_schema(rendered)
+        assert preflight._schema_fingerprint(project_versions_snapshot) == (
+            preflight.EXPECTED_VERSIONED_SCHEMA_FINGERPRINTS[
+                "0016_project_versions"
+            ]
+        )
+        assert preflight.classify_schema(
+            project_versions_snapshot
+        ) == preflight.MigrationPlan(
+            stamp_revision=None,
+            upgrade_revision="head",
+        )
+        command.upgrade(config, "head")
+        assert asyncio.run(revision()) == "0017_funnel_journeys"
 
         command.downgrade(config, "0009_billing_foundation")
         assert asyncio.run(revision()) == "0009_billing_foundation"

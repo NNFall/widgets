@@ -898,7 +898,27 @@ async def _queued_run(factory, project_id, *, mode="direct", state="queued") -> 
         )
         database.add(run)
         await database.flush()
+        project = await database.get(Project, project_id)
+        assert project is not None
+        project.active_run_id = run.id
         return run.id
+
+
+async def _verified_terminal_artifact(factory, run_id: UUID) -> None:
+    candidate = artifact(revision=1, stage=Stage.AGENT_BUILD)
+    async with factory() as database, database.begin():
+        database.add(
+            GenerationArtifact(
+                run_id=run_id,
+                revision=candidate.revision,
+                stage=candidate.stage.value,
+                html=candidate.body_html,
+                css=candidate.css,
+                javascript=candidate.javascript,
+                config={"artifact": candidate.to_dict()},
+                quality_status="verified",
+            )
+        )
 
 
 @pytest.mark.asyncio
@@ -1327,6 +1347,7 @@ async def test_final_checkpoint_finishes_run_and_releases_lease(tmp_path) -> Non
         await queue.complete_stage(
             run_id, "reference_analysis", worker_id="worker"
         )
+        await _verified_terminal_artifact(factory, run_id)
         final_stage = await queue.complete_stage(
             run_id, "agent_build", worker_id="worker"
         )
@@ -1361,7 +1382,14 @@ async def test_worker_continues_all_stages_under_its_claim(tmp_path) -> None:
 
     async def handle(claim) -> None:
         handled.append(claim.next_stage)
-        return StageResult(public_message=f"Готов этап {claim.next_stage}")
+        return StageResult(
+            public_message=f"Готов этап {claim.next_stage}",
+            artifact=(
+                artifact(revision=1, stage=Stage.AGENT_BUILD)
+                if claim.next_stage == "agent_build"
+                else None
+            ),
+        )
 
     worker = BuilderWorker(
         queue=queue,
@@ -1722,7 +1750,14 @@ async def test_retryable_engine_error_has_three_total_attempts_and_not_before(
                     "quota_exceeded",
                     "Провайдер временно ограничил запросы",
                 )
-        return StageResult(public_message=f"Готов этап {claim.next_stage}")
+        return StageResult(
+            public_message=f"Готов этап {claim.next_stage}",
+            artifact=(
+                artifact(revision=1, stage=Stage.AGENT_BUILD)
+                if claim.next_stage == "agent_build"
+                else None
+            ),
+        )
 
     worker = BuilderWorker(
         queue=queue,
@@ -1962,6 +1997,11 @@ async def test_staged_result_survives_crash_without_reexecuting_stage(
         return StageResult(
             public_message=f"Готов этап {claim.next_stage}",
             output_refs=(f"model-call:{claim.next_stage}",),
+            artifact=(
+                artifact(revision=1, stage=Stage.AGENT_BUILD)
+                if claim.next_stage == "agent_build"
+                else None
+            ),
         )
 
     original_finalize = queue.finalize_stage
@@ -2474,7 +2514,14 @@ async def test_released_staged_result_is_finalized_without_reexecution(tmp_path)
     async def handle(claim):
         nonlocal calls
         calls += 1
-        return StageResult(public_message=f"done {claim.next_stage}")
+        return StageResult(
+            public_message=f"done {claim.next_stage}",
+            artifact=(
+                artifact(revision=1, stage=Stage.AGENT_BUILD)
+                if claim.next_stage == "agent_build"
+                else None
+            ),
+        )
 
     replacement = BuilderWorker(
         queue=queue,

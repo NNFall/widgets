@@ -12,7 +12,7 @@ from ipaddress import ip_address, ip_network
 from time import monotonic
 from typing import Mapping
 from urllib.parse import quote, urlsplit, urlunsplit
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import UUID
 
 from aiohttp import web
 from aiohttp_session import STORAGE_KEY, get_session, new_session
@@ -32,7 +32,7 @@ from app.auth.oauth import (
     UnverifiedIdentity,
     YandexOAuthProvider,
 )
-from app.auth.service import link_identity_and_claim_draft
+from app.auth.service import draft_project_id, link_identity_and_claim_draft
 from app.auth.session_storage import DatabaseSessionStorage
 from app.auth.tokens import issue_token, token_digest
 from app.config import AppConfig
@@ -248,7 +248,7 @@ async def claim_draft(request: web.Request) -> web.Response:
             text=_json_error("draft not found"), content_type="application/json"
         )
 
-    project_id = uuid5(NAMESPACE_URL, f"https://kaigo.space/drafts/{draft_id}")
+    project_id = draft_project_id(draft_id)
     created = False
     async with session_scope(request.app) as database:
         draft = await database.scalar(

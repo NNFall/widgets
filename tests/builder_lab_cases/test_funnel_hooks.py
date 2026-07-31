@@ -47,6 +47,7 @@ async def test_final_artifact_boundary_emits_first_artifact_and_free_result_once
             )
             database.add(run)
             await database.flush()
+            project.active_run_id = run.id
             run_id = run.id
 
         claim = await queue.claim("funnel-worker")

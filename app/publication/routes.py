@@ -21,6 +21,7 @@ from app.projects.routes import _require_csrf, _scope, _uuid
 from app.publication.service import (
     InvalidAllowedDomain,
     InvalidPublicationArtifact,
+    PublicationConflict,
     PublicationIdentityUnverified,
     PublicationNotFound,
     PublicationService,
@@ -43,6 +44,8 @@ _MAX_PUBLIC_CHAT_BODY_BYTES = 8_192
 _MAX_PUBLIC_CHAT_MESSAGE_CHARS = 1_000
 _MAX_PUBLIC_CHAT_ORIGIN_CHARS = 512
 _MAX_PUBLIC_CHAT_CAPABILITY_CHARS = 2_048
+_MAX_PUBLICATION_BODY_BYTES = 32_768
+_MAX_PUBLICATION_ORIGINS = 32
 _PUBLIC_REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{7,95}$")
 _PUBLIC_SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 
@@ -246,18 +249,89 @@ def _verify_chat_capability(
         ) from error
 
 
-async def _body(request: web.Request) -> dict:
+class _DuplicateJsonKey(ValueError):
+    pass
+
+
+def _object_from_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise _DuplicateJsonKey(key)
+        value[key] = item
+    return value
+
+
+async def _body(
+    request: web.Request,
+    *,
+    allowed_keys: frozenset[str],
+    required_keys: frozenset[str],
+) -> dict:
     try:
-        payload = await request.json()
-    except Exception as error:  # noqa: BLE001
+        content_length = request.content_length
+        if content_length is not None and content_length > _MAX_PUBLICATION_BODY_BYTES:
+            raise web.HTTPRequestEntityTooLarge(
+                max_size=_MAX_PUBLICATION_BODY_BYTES,
+                actual_size=content_length,
+                text=json.dumps(_error("request_too_large")),
+                content_type="application/json",
+            )
+        raw = bytearray()
+        async for chunk in request.content.iter_chunked(8_192):
+            actual_size = len(raw) + len(chunk)
+            if actual_size > _MAX_PUBLICATION_BODY_BYTES:
+                raise web.HTTPRequestEntityTooLarge(
+                    max_size=_MAX_PUBLICATION_BODY_BYTES,
+                    actual_size=actual_size,
+                    text=json.dumps(_error("request_too_large")),
+                    content_type="application/json",
+                )
+            raw.extend(chunk)
+        payload = json.loads(raw.decode("utf-8"), object_pairs_hook=_object_from_pairs)
+    except web.HTTPRequestEntityTooLarge:
+        raise
+    except (json.JSONDecodeError, UnicodeError, _DuplicateJsonKey) as error:
         raise web.HTTPBadRequest(
             text=json.dumps(_error("invalid_json")), content_type="application/json"
         ) from error
-    if not isinstance(payload, dict):
+    if (
+        not isinstance(payload, dict)
+        or not required_keys <= set(payload)
+        or not set(payload) <= allowed_keys
+    ):
         raise web.HTTPBadRequest(
             text=json.dumps(_error("invalid_body")), content_type="application/json"
         )
     return payload
+
+
+def _versions_enabled(request: web.Request) -> bool:
+    config = request.app.get("config")
+    return bool(config is not None and getattr(config, "project_versions_enabled", False))
+
+
+def _request_uuid(value: object, *, nullable: bool = False) -> UUID | None:
+    if nullable and value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ValueError("UUID value is required")
+    return UUID(value)
+
+
+def _allowed_domains(payload: dict) -> list[str] | None:
+    if "allowed_domains" not in payload:
+        return None
+    values = payload["allowed_domains"]
+    if (
+        not isinstance(values, list)
+        or len(values) > _MAX_PUBLICATION_ORIGINS
+        or any(not isinstance(value, str) for value in values)
+    ):
+        raise web.HTTPBadRequest(
+            text=json.dumps(_error("invalid_body")), content_type="application/json"
+        )
+    return values
 
 
 def _service(request: web.Request) -> PublicationService:
@@ -299,6 +373,11 @@ def _published_payload(published, *, base: str) -> web.Response:
             "publication_id": str(published.publication_id),
             "release_id": str(published.release_id),
             "artifact_id": str(published.artifact_id),
+            "project_version_id": (
+                str(published.project_version_id)
+                if published.project_version_id is not None
+                else None
+            ),
             "stable_key": published.stable_key,
             "revision": published.revision,
             "allowed_domains": list(published.allowed_domains),
@@ -315,6 +394,11 @@ def _publication_state_payload(publication, *, base: str) -> web.Response:
         return {
             "release_id": str(release.release_id),
             "artifact_id": str(release.artifact_id),
+            "project_version_id": (
+                str(release.project_version_id)
+                if release.project_version_id is not None
+                else None
+            ),
             "previous_release_id": (
                 str(release.previous_release_id)
                 if release.previous_release_id is not None
@@ -366,23 +450,77 @@ async def publish_project(request: web.Request) -> web.Response:
     await _require_csrf(request)
     base = _public_base_url(request)
     project_id = _uuid(request.match_info["project_id"])
-    payload = await _body(request)
-    artifact_id = payload.get("artifact_id")
-    revision = payload.get("revision")
     try:
-        parsed_artifact_id = UUID(artifact_id) if isinstance(artifact_id, str) else None
-        parsed_revision = int(revision) if revision is not None else None
-        allowed_domains = payload.get("allowed_domains") if "allowed_domains" in payload else None
-        published = await _service(request).publish(
-            project_id,
-            actor_user_id=user_id,
-            tenant_id=tenant_id,
-            artifact_id=parsed_artifact_id,
-            revision=parsed_revision,
-            allowed_domains=allowed_domains,
+        if _versions_enabled(request):
+            payload = await _body(
+                request,
+                allowed_keys=frozenset(
+                    {
+                        "project_version_id",
+                        "expected_active_release_id",
+                        "allowed_domains",
+                    }
+                ),
+                required_keys=frozenset(
+                    {
+                        "project_version_id",
+                        "expected_active_release_id",
+                        "allowed_domains",
+                    }
+                ),
+            )
+            published = await _service(request).publish_version(
+                project_id,
+                actor_user_id=user_id,
+                tenant_id=tenant_id,
+                project_version_id=_request_uuid(payload["project_version_id"]),
+                expected_active_release_id=_request_uuid(
+                    payload["expected_active_release_id"], nullable=True
+                ),
+                allowed_domains=_allowed_domains(payload),
+            )
+        else:
+            payload = await _body(
+                request,
+                allowed_keys=frozenset({"artifact_id", "revision", "allowed_domains"}),
+                required_keys=frozenset(),
+            )
+            artifact_id = payload.get("artifact_id")
+            revision = payload.get("revision")
+            if artifact_id is None and revision is None:
+                raise web.HTTPBadRequest(
+                    text=json.dumps(_error("invalid_body")),
+                    content_type="application/json",
+                )
+            parsed_artifact_id = (
+                _request_uuid(artifact_id) if artifact_id is not None else None
+            )
+            if isinstance(revision, bool) or (
+                revision is not None and not isinstance(revision, int)
+            ):
+                raise ValueError("revision must be an integer")
+            published = await _service(request).publish(
+                project_id,
+                actor_user_id=user_id,
+                tenant_id=tenant_id,
+                artifact_id=parsed_artifact_id,
+                revision=revision,
+                allowed_domains=_allowed_domains(payload),
+            )
+    except web.HTTPException:
+        raise
+    except PublicationConflict:
+        return web.json_response(
+            _error(
+                "publication_conflict",
+                message="Publication changed; reload before retrying",
+            ),
+            status=409,
         )
     except (TypeError, ValueError, InvalidAllowedDomain, InvalidPublicationArtifact) as error:
-        return web.json_response(_error("publication_invalid", message=str(error)), status=422)
+        status = 400 if isinstance(error, ValueError) else 422
+        code = "invalid_body" if status == 400 else "publication_invalid"
+        return web.json_response(_error(code, message=str(error)), status=status)
     except PublicationNotFound:
         raise web.HTTPNotFound(text=json.dumps(_error("not_found")), content_type="application/json")
     except PublicationUpgradeRequired:
@@ -397,17 +535,50 @@ async def rollback_publication(request: web.Request) -> web.Response:
     await _require_csrf(request)
     base = _public_base_url(request)
     publication_id = _uuid(request.match_info["publication_id"])
-    payload = await _body(request)
     try:
-        target = UUID(str(payload.get("target_release_id", "")))
-        published = await _service(request).rollback(
-            publication_id,
-            actor_user_id=user_id,
-            tenant_id=tenant_id,
-            target_release_id=target,
-        )
+        if _versions_enabled(request):
+            payload = await _body(
+                request,
+                allowed_keys=frozenset(
+                    {"target_release_id", "expected_active_release_id"}
+                ),
+                required_keys=frozenset(
+                    {"target_release_id", "expected_active_release_id"}
+                ),
+            )
+            published = await _service(request).rollback(
+                publication_id,
+                actor_user_id=user_id,
+                tenant_id=tenant_id,
+                target_release_id=_request_uuid(payload["target_release_id"]),
+                expected_active_release_id=_request_uuid(
+                    payload["expected_active_release_id"]
+                ),
+            )
+        else:
+            payload = await _body(
+                request,
+                allowed_keys=frozenset({"target_release_id"}),
+                required_keys=frozenset({"target_release_id"}),
+            )
+            published = await _service(request).rollback(
+                publication_id,
+                actor_user_id=user_id,
+                tenant_id=tenant_id,
+                target_release_id=_request_uuid(payload["target_release_id"]),
+            )
+    except web.HTTPException:
+        raise
     except ValueError:
         return web.json_response(_error("invalid_release_id"), status=400)
+    except PublicationConflict:
+        return web.json_response(
+            _error(
+                "publication_conflict",
+                message="Publication changed; reload before retrying",
+            ),
+            status=409,
+        )
     except (PublicationNotFound, ReleaseCorrupt):
         raise web.HTTPNotFound(text=json.dumps(_error("not_found")), content_type="application/json")
     except PublicationUpgradeRequired:

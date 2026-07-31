@@ -20,6 +20,8 @@ EXPECTED_GENERATION_EVENT_TYPES = {
     "direction.failed",
     "direction.judged",
     "provider.dispatch_armed",
+    "project.version_activation_conflict",
+    "project.version_created",
     "reference.completed",
     "reference.failed",
     "reference.started",

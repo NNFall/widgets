@@ -19,6 +19,8 @@ class GenerationEventType(StrEnum):
     DIRECTION_FAILED = "direction.failed"
     DIRECTION_JUDGED = "direction.judged"
     PROVIDER_DISPATCH_ARMED = "provider.dispatch_armed"
+    PROJECT_VERSION_ACTIVATION_CONFLICT = "project.version_activation_conflict"
+    PROJECT_VERSION_CREATED = "project.version_created"
     REFERENCE_COMPLETED = "reference.completed"
     REFERENCE_FAILED = "reference.failed"
     REFERENCE_STARTED = "reference.started"
@@ -132,6 +134,12 @@ EVENT_REGISTRY: dict[GenerationEventType, GenerationEventSpec] = {
     GenerationEventType.PROVIDER_DISPATCH_ARMED: _spec(
         "status", "stage", "attempt", "max_executions"
     ),
+    GenerationEventType.PROJECT_VERSION_ACTIVATION_CONFLICT: _spec(
+        "version_id", "ordinal", "kind", "activated"
+    ),
+    GenerationEventType.PROJECT_VERSION_CREATED: _spec(
+        "version_id", "ordinal", "kind", "activated"
+    ),
     GenerationEventType.REFERENCE_COMPLETED: _spec(
         "status",
         "stage",
@@ -216,9 +224,11 @@ if set(EVENT_REGISTRY) != set(GenerationEventType):
     raise RuntimeError("generation event registry must cover every event type")
 
 
-_TEXT_FIELDS = frozenset({"status", "stage", "next_stage", "error_code"})
+_TEXT_FIELDS = frozenset(
+    {"status", "stage", "next_stage", "error_code", "version_id", "kind"}
+)
 _INTEGER_FIELDS = frozenset(
-    {"revision", "attempt", "max_executions", "supersedes_sequence"}
+    {"revision", "attempt", "max_executions", "supersedes_sequence", "ordinal"}
 )
 _OPTIONAL_FIELDS = frozenset(
     {
@@ -357,6 +367,8 @@ def _project_value(field: str, value: object) -> JsonValue | None:
         return _public_text(value, limit=256)
     if field in _INTEGER_FIELDS:
         return _public_integer(value)
+    if field == "activated":
+        return value if isinstance(value, bool) else None
     if field == "usage":
         return _public_usage(value)
     if field == "not_before":

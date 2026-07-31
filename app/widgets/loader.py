@@ -193,7 +193,9 @@ def render_runtime(
   }});
   addEventListener('pagehide',()=>URL.revokeObjectURL(url),{{once:true}});
 }})();</script>
-<span hidden data-kaigo-release="{release.stable_key}"></span></body></html>"""
+<span hidden data-kaigo-release="{release.stable_key}"
+ data-kaigo-release-id="{release.release_id}"
+ data-kaigo-project-version-id="{release.project_version_id or ''}"></span></body></html>"""
 
 
 __all__ = ["render_loader", "render_runtime"]

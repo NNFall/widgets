@@ -138,6 +138,28 @@ _BACKFILL_ACTIVE_VERSION = sa.text(
 )
 
 
+_DOWNGRADE_GUARD = sa.text(
+    """
+    DO $kaigo$
+    BEGIN
+        IF EXISTS (
+            SELECT 1
+            FROM publication_releases
+            WHERE project_version_id IS NOT NULL
+               OR asset_manifest ->> 'version' = '2'
+               OR asset_manifest ->> 'project_version_id' IS NOT NULL
+        ) THEN
+            RAISE EXCEPTION
+                'cannot downgrade 0016_project_versions: '
+                'version-linked publication releases exist'
+                USING ERRCODE = 'check_violation';
+        END IF;
+    END
+    $kaigo$;
+    """
+)
+
+
 def upgrade() -> None:
     op.create_unique_constraint(
         "uq_generation_run_membership",
@@ -148,6 +170,11 @@ def upgrade() -> None:
         "uq_generation_artifact_membership",
         "generation_artifacts",
         ["run_id", "id"],
+    )
+    op.create_unique_constraint(
+        "uq_publication_project_membership",
+        "publications",
+        ["id", "project_id"],
     )
 
     op.create_table(
@@ -245,9 +272,34 @@ def upgrade() -> None:
         "publication_releases",
         sa.Column("project_version_id", sa.Uuid(), nullable=True),
     )
+    op.add_column(
+        "publication_releases",
+        sa.Column("project_id", sa.Uuid(), nullable=True),
+    )
 
     op.execute(_BACKFILL_PROJECT_VERSIONS)
     op.execute(_BACKFILL_ACTIVE_VERSION)
+    op.execute(
+        sa.text(
+            """
+            UPDATE publication_releases AS publication_release
+            SET project_id = publication.project_id
+            FROM publications AS publication
+            WHERE publication.id = publication_release.publication_id
+            """
+        )
+    )
+    op.alter_column(
+        "publication_releases",
+        "project_id",
+        existing_type=sa.Uuid(),
+        nullable=False,
+    )
+    op.create_index(
+        "ix_publication_releases_project_id",
+        "publication_releases",
+        ["project_id"],
+    )
 
     op.create_foreign_key(
         "fk_project_versions_run_membership",
@@ -295,18 +347,66 @@ def upgrade() -> None:
         initially="DEFERRED",
     )
     op.create_foreign_key(
-        "fk_publication_releases_project_version_id",
+        "fk_publication_releases_publication_membership",
+        "publication_releases",
+        "publications",
+        ["publication_id", "project_id"],
+        ["id", "project_id"],
+        ondelete="CASCADE",
+    )
+    op.create_foreign_key(
+        "fk_publication_releases_project_version_membership",
         "publication_releases",
         "project_versions",
-        ["project_version_id"],
-        ["id"],
+        ["project_id", "project_version_id"],
+        ["project_id", "id"],
         ondelete="RESTRICT",
+        deferrable=True,
+        initially="DEFERRED",
+    )
+    op.create_index(
+        "uq_publication_release_legacy_artifact",
+        "publication_releases",
+        ["publication_id", "artifact_id"],
+        unique=True,
+        postgresql_where=sa.text("project_version_id IS NULL"),
+    )
+    op.create_index(
+        "uq_publication_release_project_version",
+        "publication_releases",
+        ["publication_id", "project_version_id"],
+        unique=True,
+        postgresql_where=sa.text("project_version_id IS NOT NULL"),
+    )
+    op.drop_constraint(
+        "uq_publication_release_artifact",
+        "publication_releases",
+        type_="unique",
     )
 
 
 def downgrade() -> None:
+    op.execute(_DOWNGRADE_GUARD)
+    op.create_unique_constraint(
+        "uq_publication_release_artifact",
+        "publication_releases",
+        ["publication_id", "artifact_id"],
+    )
+    op.drop_index(
+        "uq_publication_release_project_version",
+        table_name="publication_releases",
+    )
+    op.drop_index(
+        "uq_publication_release_legacy_artifact",
+        table_name="publication_releases",
+    )
     op.drop_constraint(
-        "fk_publication_releases_project_version_id",
+        "fk_publication_releases_project_version_membership",
+        "publication_releases",
+        type_="foreignkey",
+    )
+    op.drop_constraint(
+        "fk_publication_releases_publication_membership",
         "publication_releases",
         type_="foreignkey",
     )
@@ -336,6 +436,11 @@ def downgrade() -> None:
         type_="foreignkey",
     )
 
+    op.drop_index(
+        "ix_publication_releases_project_id",
+        table_name="publication_releases",
+    )
+    op.drop_column("publication_releases", "project_id")
     op.drop_column("publication_releases", "project_version_id")
     op.drop_column("generation_runs", "change_request")
     op.drop_column("generation_runs", "source_version_id")
@@ -359,6 +464,11 @@ def downgrade() -> None:
     op.drop_constraint(
         "uq_generation_artifact_membership",
         "generation_artifacts",
+        type_="unique",
+    )
+    op.drop_constraint(
+        "uq_publication_project_membership",
+        "publications",
         type_="unique",
     )
     op.drop_constraint(

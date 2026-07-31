@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import os
 import re
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 import pytest_asyncio
@@ -31,6 +34,7 @@ from app.publication.routes import setup_publication_routes
 from app.publication.service import (
     InvalidAllowedDomain,
     InvalidPublicationArtifact,
+    PublicationConflict,
     PublicationIdentityUnverified,
     PublicationNotFound,
     PublicationService,
@@ -48,6 +52,9 @@ from app.saas.models import (
     UserIdentity,
 )
 from tests.builder_lab_cases.test_validation import artifact
+
+
+POSTGRES_URL = os.getenv("KAIGO_TEST_POSTGRES_URL")
 
 
 class FakePublicChatService:
@@ -217,6 +224,24 @@ async def _seed(factory):
         )
         database.add(second_version)
         await database.flush()
+        draft_version = ProjectVersion(
+            project_id=project.id,
+            ordinal=3,
+            run_id=run.id,
+            artifact_id=draft.id,
+            parent_version_id=second_version.id,
+            kind="refinement",
+            change_request="Publish an intentionally unreviewed artifact",
+        )
+        foreign_version = ProjectVersion(
+            project_id=foreign_project.id,
+            ordinal=1,
+            run_id=foreign_run.id,
+            artifact_id=foreign.id,
+            kind="initial",
+        )
+        database.add_all([draft_version, foreign_version])
+        await database.flush()
         project.active_run_id = run.id
         project.active_revision = 1
         project.active_version_id = first_version.id
@@ -229,6 +254,8 @@ async def _seed(factory):
             "foreign": foreign.id,
             "first_version": first_version.id,
             "second_version": second_version.id,
+            "draft_version": draft_version.id,
+            "foreign_version": foreign_version.id,
         }
 
 
@@ -243,6 +270,153 @@ async def publication_db(tmp_path):
         yield engine, factory, ids
     finally:
         await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_publication_body_stops_streaming_at_32_kib() -> None:
+    class ChunkedContent:
+        def __init__(self) -> None:
+            self.consumed = 0
+
+        async def iter_chunked(self, _size: int):
+            for chunk in (b"x" * 32_769, b"must-not-be-consumed"):
+                self.consumed += 1
+                yield chunk
+
+    class StreamingRequest:
+        content_length = None
+
+        def __init__(self) -> None:
+            self.content = ChunkedContent()
+
+        async def read(self) -> bytes:
+            raise AssertionError("publication bodies must not be fully buffered")
+
+    request = StreamingRequest()
+    with pytest.raises(web.HTTPRequestEntityTooLarge):
+        await publication_routes._body(
+            request,
+            allowed_keys=frozenset({"project_version_id"}),
+            required_keys=frozenset({"project_version_id"}),
+        )
+    assert request.content.consumed == 1
+
+
+@pytest_asyncio.fixture
+async def postgres_publication_db():
+    assert POSTGRES_URL is not None
+    engine = create_async_engine(POSTGRES_URL)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.drop_all)
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    ids = await _seed(factory)
+    try:
+        yield engine, factory, ids
+    finally:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.drop_all)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.postgres
+@pytest.mark.skipif(
+    not POSTGRES_URL, reason="KAIGO_TEST_POSTGRES_URL is not configured"
+)
+async def test_postgres_concurrent_version_updates_have_one_cas_winner(
+    postgres_publication_db,
+) -> None:
+    _engine, factory, ids = postgres_publication_db
+    service = PublicationService(factory)
+    first = await service.publish_version(
+        ids["project"],
+        actor_user_id=10,
+        tenant_id=1,
+        project_version_id=ids["first_version"],
+        expected_active_release_id=None,
+        allowed_domains=["https://example.com"],
+    )
+
+    outcomes = await asyncio.gather(
+        service.publish_version(
+            ids["project"],
+            actor_user_id=10,
+            tenant_id=1,
+            project_version_id=ids["second_version"],
+            expected_active_release_id=first.release_id,
+            allowed_domains=["https://winner-a.example"],
+        ),
+        service.publish_version(
+            ids["project"],
+            actor_user_id=10,
+            tenant_id=1,
+            project_version_id=ids["second_version"],
+            expected_active_release_id=first.release_id,
+            allowed_domains=["https://winner-b.example"],
+        ),
+        return_exceptions=True,
+    )
+
+    winners = [outcome for outcome in outcomes if not isinstance(outcome, Exception)]
+    conflicts = [outcome for outcome in outcomes if isinstance(outcome, PublicationConflict)]
+    assert len(winners) == 1
+    assert len(conflicts) == 1
+    winner = winners[0]
+    state = await service.get_project_state(
+        ids["project"], actor_user_id=10, tenant_id=1
+    )
+    assert state is not None
+    assert state.active_release.release_id == winner.release_id
+    assert state.allowed_domains == winner.allowed_domains
+    async with factory() as database:
+        assert await database.scalar(select(func.count()).select_from(Publication)) == 1
+        assert (
+            await database.scalar(select(func.count()).select_from(PublicationRelease))
+            == 2
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.postgres
+@pytest.mark.skipif(
+    not POSTGRES_URL, reason="KAIGO_TEST_POSTGRES_URL is not configured"
+)
+async def test_postgres_concurrent_first_publish_preserves_stable_membership(
+    postgres_publication_db,
+) -> None:
+    _engine, factory, ids = postgres_publication_db
+    first, second = await asyncio.gather(
+        *[
+            PublicationService(factory).publish_version(
+                ids["project"],
+                actor_user_id=10,
+                tenant_id=1,
+                project_version_id=ids["first_version"],
+                expected_active_release_id=None,
+                allowed_domains=["https://example.com"],
+            )
+            for _ in range(2)
+        ]
+    )
+
+    assert first.stable_key == second.stable_key
+    assert first.release_id == second.release_id
+    async with factory() as database:
+        publication = await database.scalar(select(Publication))
+        release = await database.scalar(select(PublicationRelease))
+        assert publication is not None
+        assert release is not None
+        assert await database.scalar(select(func.count()).select_from(Publication)) == 1
+        assert (
+            await database.scalar(select(func.count()).select_from(PublicationRelease))
+            == 1
+        )
+        assert publication.project_id == ids["project"]
+        assert publication.active_release_id == release.id
+        assert release.publication_id == publication.id
+        assert release.project_id == ids["project"]
+        assert release.project_version_id == ids["first_version"]
 
 
 @pytest.mark.asyncio
@@ -283,9 +457,144 @@ async def test_publish_is_artifact_idempotent_stable_and_immutable(publication_d
         assert await database.scalar(select(func.count()).select_from(PublicationRelease)) == 2
         original = await database.get(PublicationRelease, first.release_id)
         assert original.asset_manifest == first.manifest
-        assert original.project_version_id == ids["first_version"]
+        assert original.project_version_id is None
         active = await database.get(PublicationRelease, second.release_id)
-        assert active.project_version_id == ids["second_version"]
+        assert active.project_version_id is None
+
+
+@pytest.mark.asyncio
+async def test_publish_version_creates_manifest_v2_and_enforces_compare_and_swap(
+    publication_db,
+) -> None:
+    _engine, factory, ids = publication_db
+    service = PublicationService(factory)
+
+    first = await service.publish_version(
+        ids["project"],
+        actor_user_id=10,
+        tenant_id=1,
+        project_version_id=ids["first_version"],
+        expected_active_release_id=None,
+        allowed_domains=["https://example.com"],
+    )
+    second = await service.publish_version(
+        ids["project"],
+        actor_user_id=10,
+        tenant_id=1,
+        project_version_id=ids["second_version"],
+        expected_active_release_id=first.release_id,
+        allowed_domains=["https://example.com"],
+    )
+
+    assert first.project_version_id == ids["first_version"]
+    assert second.project_version_id == ids["second_version"]
+    assert second.manifest["version"] == 2
+    assert second.manifest["project_version_id"] == str(ids["second_version"])
+
+    with pytest.raises(PublicationConflict):
+        await service.publish_version(
+            ids["project"],
+            actor_user_id=10,
+            tenant_id=1,
+            project_version_id=ids["first_version"],
+            expected_active_release_id=first.release_id,
+            allowed_domains=["https://other.example"],
+        )
+
+    unchanged = await service.get_project_state(
+        ids["project"], actor_user_id=10, tenant_id=1
+    )
+    assert unchanged is not None
+    assert unchanged.active_release.release_id == second.release_id
+    assert unchanged.allowed_domains == ("https://example.com",)
+
+    replay = await service.publish_version(
+        ids["project"],
+        actor_user_id=10,
+        tenant_id=1,
+        project_version_id=ids["second_version"],
+        expected_active_release_id=first.release_id,
+        allowed_domains=["https://example.com"],
+    )
+    assert replay.release_id == second.release_id
+    assert replay.created is False
+
+    with pytest.raises(PublicationConflict):
+        await service.publish_version(
+            ids["project"],
+            actor_user_id=10,
+            tenant_id=1,
+            project_version_id=ids["second_version"],
+            expected_active_release_id=first.release_id,
+            allowed_domains=["https://changed.example"],
+        )
+
+
+@pytest.mark.asyncio
+async def test_publish_version_rejects_foreign_and_unpublishable_versions(
+    publication_db,
+) -> None:
+    _engine, factory, ids = publication_db
+    service = PublicationService(factory)
+
+    for version_id in (ids["foreign_version"], ids["draft_version"]):
+        with pytest.raises(InvalidPublicationArtifact):
+            await service.publish_version(
+                ids["project"],
+                actor_user_id=10,
+                tenant_id=1,
+                project_version_id=version_id,
+                expected_active_release_id=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_versioned_rollback_uses_compare_and_swap_and_replays_active_target(
+    publication_db,
+) -> None:
+    _engine, factory, ids = publication_db
+    service = PublicationService(factory)
+    first = await service.publish_version(
+        ids["project"],
+        actor_user_id=10,
+        tenant_id=1,
+        project_version_id=ids["first_version"],
+        expected_active_release_id=None,
+    )
+    second = await service.publish_version(
+        ids["project"],
+        actor_user_id=10,
+        tenant_id=1,
+        project_version_id=ids["second_version"],
+        expected_active_release_id=first.release_id,
+    )
+
+    rolled_back = await service.rollback(
+        first.publication_id,
+        actor_user_id=10,
+        tenant_id=1,
+        target_release_id=first.release_id,
+        expected_active_release_id=second.release_id,
+    )
+    assert rolled_back.release_id == first.release_id
+
+    replay = await service.rollback(
+        first.publication_id,
+        actor_user_id=10,
+        tenant_id=1,
+        target_release_id=first.release_id,
+        expected_active_release_id=second.release_id,
+    )
+    assert replay.release_id == first.release_id
+
+    with pytest.raises(PublicationConflict):
+        await service.rollback(
+            first.publication_id,
+            actor_user_id=10,
+            tenant_id=1,
+            target_release_id=second.release_id,
+            expected_active_release_id=second.release_id,
+        )
 
 
 @pytest.mark.asyncio
@@ -575,6 +884,80 @@ async def test_resolve_rejects_disabled_or_corrupt_domain_policy(publication_db)
         await service.resolve(published.stable_key)
 
 
+@pytest.mark.asyncio
+async def test_versioned_publish_replay_rejects_disabled_publication(
+    publication_db,
+) -> None:
+    _engine, factory, ids = publication_db
+    service = PublicationService(factory)
+    published = await service.publish_version(
+        ids["project"],
+        actor_user_id=10,
+        tenant_id=1,
+        project_version_id=ids["first_version"],
+        expected_active_release_id=None,
+        allowed_domains=["https://example.com"],
+    )
+    async with factory() as database, database.begin():
+        publication = await database.get(Publication, published.publication_id)
+        publication.state = "disabled"
+
+    with pytest.raises(PublicationConflict):
+        await service.publish_version(
+            ids["project"],
+            actor_user_id=10,
+            tenant_id=1,
+            project_version_id=ids["first_version"],
+            expected_active_release_id=None,
+            allowed_domains=["https://example.com"],
+        )
+    async with factory() as database:
+        publication = await database.get(Publication, published.publication_id)
+        assert publication.state == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_rollback_replay_rejects_disabled_publication(publication_db) -> None:
+    _engine, factory, ids = publication_db
+    service = PublicationService(factory)
+    first = await service.publish_version(
+        ids["project"],
+        actor_user_id=10,
+        tenant_id=1,
+        project_version_id=ids["first_version"],
+        expected_active_release_id=None,
+    )
+    second = await service.publish_version(
+        ids["project"],
+        actor_user_id=10,
+        tenant_id=1,
+        project_version_id=ids["second_version"],
+        expected_active_release_id=first.release_id,
+    )
+    await service.rollback(
+        first.publication_id,
+        actor_user_id=10,
+        tenant_id=1,
+        target_release_id=first.release_id,
+        expected_active_release_id=second.release_id,
+    )
+    async with factory() as database, database.begin():
+        publication = await database.get(Publication, first.publication_id)
+        publication.state = "disabled"
+
+    with pytest.raises(PublicationConflict):
+        await service.rollback(
+            first.publication_id,
+            actor_user_id=10,
+            tenant_id=1,
+            target_release_id=first.release_id,
+            expected_active_release_id=second.release_id,
+        )
+    async with factory() as database:
+        publication = await database.get(Publication, first.publication_id)
+        assert publication.state == "disabled"
+
+
 async def _publication_app(tmp_path, *, config=None, chat_service=None):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'routes.db'}")
     async with engine.begin() as connection:
@@ -669,6 +1052,7 @@ async def test_publish_route_requires_auth_csrf_owner_verified_and_subscription(
         )
         assert published.status == 201
         payload = await published.json()
+        assert payload["project_version_id"] is None
         assert payload["embed_url"] == (
             f"https://kaigo.example/embed/{payload['stable_key']}.js"
         )
@@ -817,7 +1201,8 @@ async def test_loader_and_runtime_are_secure_stable_and_network_free(tmp_path) -
             json={"artifact_id": str(ids["first"]), "allowed_domains": ["https://example.com"]},
             headers={"X-CSRF-Token": "csrf"},
         )
-        key = (await published.json())["stable_key"]
+        published_payload = await published.json()
+        key = published_payload["stable_key"]
 
         loader = await client.get(f"/embed/{key}.js")
         loader_text = await loader.text()
@@ -844,6 +1229,11 @@ async def test_loader_and_runtime_are_secure_stable_and_network_free(tmp_path) -
         assert "X-Frame-Options" not in runtime.headers
         assert runtime.headers["Cache-Control"] == "no-store"
         assert "kaigo-widget" in runtime_text
+        assert (
+            f'data-kaigo-release-id="{published_payload["release_id"]}"'
+            in runtime_text
+        )
+        assert 'data-kaigo-project-version-id=""' in runtime_text
         assert "kaigo:inner-geometry" in runtime_text
         assert "chat.request" in runtime_text
         assert "'/runtime/'" in runtime_text and "+'/chat'" in runtime_text
@@ -1493,6 +1883,324 @@ async def test_rollback_route_is_owner_scoped_and_preserves_stable_embed(tmp_pat
         )
         assert rolled_back.status == 200
         assert (await rolled_back.json())["release_id"] == first["release_id"]
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_versioned_publish_route_enforces_exact_bounded_request_contract(
+    tmp_path,
+) -> None:
+    config = SimpleNamespace(
+        public_auth_enabled=True,
+        public_base_url="https://kaigo.example",
+        environment="production",
+        publication_allow_insecure_origins=False,
+        project_versions_enabled=True,
+    )
+    engine, factory, client, ids = await _publication_app(tmp_path, config=config)
+    route = f"/api/projects/{ids['project']}/publish"
+    headers = {"X-CSRF-Token": "csrf", "Content-Type": "application/json"}
+    try:
+        assert (await client.post(route, json={})).status == 401
+        await client.post("/test/login/11")
+        hidden_body = {
+            "project_version_id": str(ids["first_version"]),
+            "expected_active_release_id": None,
+            "allowed_domains": ["https://example.com"],
+        }
+        assert (
+            await client.post(
+                route, json=hidden_body, headers={"X-CSRF-Token": "csrf"}
+            )
+        ).status == 404
+        await client.post("/test/login/10")
+        body = {
+            "project_version_id": str(ids["first_version"]),
+            "expected_active_release_id": None,
+            "allowed_domains": ["https://example.com"],
+        }
+        assert (await client.post(route, json=body)).status == 403
+
+        async with factory() as database, database.begin():
+            subscription = await database.scalar(
+                select(Subscription).where(Subscription.user_id == 10)
+            )
+            subscription.status = "cancelled"
+        assert (
+            await client.post(route, json=body, headers={"X-CSRF-Token": "csrf"})
+        ).status == 402
+        async with factory() as database, database.begin():
+            subscription = await database.scalar(
+                select(Subscription).where(Subscription.user_id == 10)
+            )
+            subscription.status = "active"
+
+        first_response = await client.post(
+            route, json=body, headers={"X-CSRF-Token": "csrf"}
+        )
+        assert first_response.status == 201
+        first = await first_response.json()
+        assert first["project_version_id"] == str(ids["first_version"])
+        runtime = await client.get(f"/runtime/{first['stable_key']}")
+        runtime_text = await runtime.text()
+        assert f'data-kaigo-release-id="{first["release_id"]}"' in runtime_text
+        assert (
+            f'data-kaigo-project-version-id="{ids["first_version"]}"'
+            in runtime_text
+        )
+
+        invalid_origin = await client.post(
+            route,
+            json={**body, "allowed_domains": ["http://example.com"]},
+            headers={"X-CSRF-Token": "csrf"},
+        )
+        assert invalid_origin.status == 422
+
+        invalid_bodies = (
+            json.dumps({**body, "unknown": True}),
+            '{"project_version_id":"%s","project_version_id":"%s",'
+            '"expected_active_release_id":null,"allowed_domains":[]}'
+            % (ids["first_version"], ids["second_version"]),
+            json.dumps({**body, "project_version_id": True}),
+            json.dumps({**body, "project_version_id": "not-a-uuid"}),
+            json.dumps({**body, "expected_active_release_id": "not-a-uuid"}),
+            json.dumps({**body, "allowed_domains": ["https://example.com"] * 33}),
+        )
+        for raw in invalid_bodies:
+            response = await client.post(route, data=raw, headers=headers)
+            assert response.status == 400
+
+        oversized = json.dumps(
+            {
+                **body,
+                "allowed_domains": ["https://example.com/" + ("x" * 33_000)],
+            }
+        )
+        oversized_response = await client.post(route, data=oversized, headers=headers)
+        assert oversized_response.status == 413
+        assert await oversized_response.json() == {
+            "error": {"code": "request_too_large"}
+        }
+
+        second_body = {
+            "project_version_id": str(ids["second_version"]),
+            "expected_active_release_id": first["release_id"],
+            "allowed_domains": ["https://example.com"],
+        }
+        second_response = await client.post(
+            route, json=second_body, headers={"X-CSRF-Token": "csrf"}
+        )
+        assert second_response.status == 201
+
+        stale = await client.post(
+            route,
+            json={
+                **body,
+                "allowed_domains": ["https://changed.example"],
+                "expected_active_release_id": first["release_id"],
+            },
+            headers={"X-CSRF-Token": "csrf"},
+        )
+        assert stale.status == 409
+        assert await stale.json() == {
+            "error": {
+                "code": "publication_conflict",
+                "message": "Publication changed; reload before retrying",
+            }
+        }
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_versioned_rollback_route_requires_expected_pointer(tmp_path) -> None:
+    config = SimpleNamespace(
+        public_auth_enabled=True,
+        public_base_url="https://kaigo.example",
+        environment="production",
+        publication_allow_insecure_origins=False,
+        project_versions_enabled=True,
+    )
+    engine, _factory, client, ids = await _publication_app(tmp_path, config=config)
+    headers = {"X-CSRF-Token": "csrf", "Content-Type": "application/json"}
+    try:
+        await client.post("/test/login/10")
+        first = await (
+            await client.post(
+                f"/api/projects/{ids['project']}/publish",
+                json={
+                    "project_version_id": str(ids["first_version"]),
+                    "expected_active_release_id": None,
+                    "allowed_domains": ["https://example.com"],
+                },
+                headers=headers,
+            )
+        ).json()
+        second = await (
+            await client.post(
+                f"/api/projects/{ids['project']}/publish",
+                json={
+                    "project_version_id": str(ids["second_version"]),
+                    "expected_active_release_id": first["release_id"],
+                    "allowed_domains": ["https://example.com"],
+                },
+                headers=headers,
+            )
+        ).json()
+        route = f"/api/publications/{first['publication_id']}/rollback"
+        missing = await client.post(
+            route, json={"target_release_id": first["release_id"]}, headers=headers
+        )
+        assert missing.status == 400
+
+        invalid_requests = (
+            (
+                json.dumps(
+                    {
+                        "target_release_id": first["release_id"],
+                        "expected_active_release_id": second["release_id"],
+                        "unknown": True,
+                    }
+                ),
+                "invalid_body",
+            ),
+            (
+                '{"target_release_id":"%s","target_release_id":"%s",'
+                '"expected_active_release_id":"%s"}'
+                % (first["release_id"], second["release_id"], second["release_id"]),
+                "invalid_json",
+            ),
+            (
+                json.dumps(
+                    {
+                        "target_release_id": "not-a-uuid",
+                        "expected_active_release_id": second["release_id"],
+                    }
+                ),
+                "invalid_release_id",
+            ),
+            (
+                json.dumps(
+                    {
+                        "target_release_id": first["release_id"],
+                        "expected_active_release_id": "not-a-uuid",
+                    }
+                ),
+                "invalid_release_id",
+            ),
+            (
+                json.dumps(
+                    {
+                        "target_release_id": True,
+                        "expected_active_release_id": second["release_id"],
+                    }
+                ),
+                "invalid_release_id",
+            ),
+        )
+        for raw, error_code in invalid_requests:
+            response = await client.post(route, data=raw, headers=headers)
+            assert response.status == 400
+            assert (await response.json())["error"]["code"] == error_code
+
+        oversized = json.dumps(
+            {
+                "target_release_id": "x" * 33_000,
+                "expected_active_release_id": second["release_id"],
+            }
+        )
+        oversized_response = await client.post(route, data=oversized, headers=headers)
+        assert oversized_response.status == 413
+        assert await oversized_response.json() == {
+            "error": {"code": "request_too_large"}
+        }
+
+        restored = await client.post(
+            route,
+            json={
+                "target_release_id": first["release_id"],
+                "expected_active_release_id": second["release_id"],
+            },
+            headers=headers,
+        )
+        assert restored.status == 200
+        assert (await restored.json())["project_version_id"] == str(ids["first_version"])
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_disabling_versions_keeps_owner_safe_legacy_rollback_for_v2_history(
+    tmp_path,
+) -> None:
+    config = SimpleNamespace(
+        public_auth_enabled=True,
+        public_base_url="https://kaigo.example",
+        environment="production",
+        publication_allow_insecure_origins=False,
+        project_versions_enabled=True,
+    )
+    engine, factory, client, ids = await _publication_app(tmp_path, config=config)
+    headers = {"X-CSRF-Token": "csrf"}
+    try:
+        await client.post("/test/login/10")
+        first_response = await client.post(
+            f"/api/projects/{ids['project']}/publish",
+            json={
+                "project_version_id": str(ids["first_version"]),
+                "expected_active_release_id": None,
+                "allowed_domains": ["https://example.com"],
+            },
+            headers=headers,
+        )
+        first = await first_response.json()
+        second_response = await client.post(
+            f"/api/projects/{ids['project']}/publish",
+            json={
+                "project_version_id": str(ids["second_version"]),
+                "expected_active_release_id": first["release_id"],
+                "allowed_domains": ["https://example.com"],
+            },
+            headers=headers,
+        )
+        second = await second_response.json()
+        assert first_response.status == second_response.status == 201
+        assert second["release_id"] != first["release_id"]
+
+        config.project_versions_enabled = False
+        route = f"/api/publications/{first['publication_id']}/rollback"
+        await client.post("/test/login/11")
+        hidden = await client.post(
+            route,
+            json={"target_release_id": first["release_id"]},
+            headers=headers,
+        )
+        assert hidden.status == 404
+
+        await client.post("/test/login/10")
+        restored = await client.post(
+            route,
+            json={"target_release_id": first["release_id"]},
+            headers=headers,
+        )
+        assert restored.status == 200
+        assert (await restored.json())["project_version_id"] == str(
+            ids["first_version"]
+        )
+        async with factory() as database:
+            publication = await database.get(
+                Publication, UUID(first["publication_id"])
+            )
+            release = await database.get(
+                PublicationRelease, UUID(first["release_id"])
+            )
+            assert publication.active_release_id == release.id
+            assert release.project_id == ids["project"]
+            assert release.project_version_id == ids["first_version"]
     finally:
         await client.close()
         await engine.dispose()

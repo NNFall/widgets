@@ -324,10 +324,10 @@ EXPECTED_VERSIONED_SCHEMA_FINGERPRINTS: Mapping[str, str] = MappingProxyType(
             "a94711d160ea0002f2c3451b9ba5b1f2fa106d49aee84425d4a2bdb7a6c17725"
         ),
         "0016_project_versions": (
-            "864a72828d4279d905e0e7cc9de5d17599c5a04fac6d5cd6d6a5d5f79909bb40"
+            "e1e53c056b19c9f3dc2ba082627d681b8abf2d8abd823a1e788d9805b900ac8e"
         ),
         "0017_funnel_journeys": (
-            "dfb9b1873b662614009431ac95ab91635872db4dfda9b7bb402d0f48ea2fadee"
+            "ce8fd393984cd270ca6681e507248964311f79e63f8857f695599cbc8f04b517"
         ),
     }
 )

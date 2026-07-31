@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import CheckConstraint, ForeignKeyConstraint, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, UniqueConstraint
 
 from app.db.base import Base
 from app.saas import models as saas_models  # noqa: F401
@@ -238,10 +238,8 @@ def test_project_version_pointers_and_membership_keys_are_deferred() -> None:
     assert runs.c.source_version_id.nullable is True
     assert runs.c.change_request.nullable is True
     assert runs.c.change_request.type.length == 2000
+    assert releases.c.project_id.nullable is False
     assert releases.c.project_version_id.nullable is True
-    assert next(iter(releases.c.project_version_id.foreign_keys)).target_fullname == (
-        "project_versions.id"
-    )
     assert "uq_generation_run_membership" in _constraint_names(
         "generation_runs", UniqueConstraint
     )
@@ -282,19 +280,63 @@ def test_project_version_pointers_and_membership_keys_are_deferred() -> None:
     assert source_membership.initially == "DEFERRED"
 
 
-def test_publication_release_constraints_are_artifact_idempotent_and_referential() -> None:
-    assert "uq_publication_release_artifact" in _constraint_names(
+def test_publication_release_constraints_are_version_aware_and_referential() -> None:
+    releases = Base.metadata.tables["publication_releases"]
+    publications = Base.metadata.tables["publications"]
+    index_names = {index.name for index in releases.indexes}
+
+    assert "uq_publication_release_artifact" not in _constraint_names(
         "publication_releases", UniqueConstraint
     )
+    assert {
+        "uq_publication_release_legacy_artifact",
+        "uq_publication_release_project_version",
+    } <= index_names
+    for name in (
+        "uq_publication_release_legacy_artifact",
+        "uq_publication_release_project_version",
+    ):
+        index = next(index for index in releases.indexes if index.name == name)
+        assert isinstance(index, Index)
+        assert index.unique is True
+        assert index.dialect_options["postgresql"]["where"] is not None
+        assert index.dialect_options["sqlite"]["where"] is not None
     assert "uq_publication_release_revision" not in _constraint_names(
         "publication_releases", UniqueConstraint
     )
     assert "uq_publication_release_membership" in _constraint_names(
         "publication_releases", UniqueConstraint
     )
+    assert "uq_publication_project_membership" in _constraint_names(
+        "publications", UniqueConstraint
+    )
+
+    publication_membership = _foreign_key(
+        "publication_releases", "fk_publication_releases_publication_membership"
+    )
+    assert tuple(
+        element.parent.name for element in publication_membership.elements
+    ) == ("publication_id", "project_id")
+    assert tuple(
+        element.target_fullname for element in publication_membership.elements
+    ) == ("publications.id", "publications.project_id")
+
+    version_membership = _foreign_key(
+        "publication_releases", "fk_publication_releases_project_version_membership"
+    )
+    assert tuple(element.parent.name for element in version_membership.elements) == (
+        "project_id",
+        "project_version_id",
+    )
+    assert tuple(element.target_fullname for element in version_membership.elements) == (
+        "project_versions.project_id",
+        "project_versions.id",
+    )
+    assert version_membership.deferrable is True
+    assert version_membership.initially == "DEFERRED"
     active_release = next(
         foreign_key
-        for foreign_key in Base.metadata.tables["publications"].foreign_keys
+        for foreign_key in publications.foreign_keys
         if foreign_key.parent.name == "active_release_id"
         and foreign_key.constraint.name == "fk_publications_active_release_id"
     )

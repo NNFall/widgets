@@ -14,7 +14,7 @@ from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from app.publication.service import PublicationService
@@ -56,6 +56,9 @@ def test_project_versions_migration_is_additive_and_backfills_exact_active_artif
 
         def add_column(self, table, column):
             calls.append(("add_column", table, column.name, column))
+
+        def alter_column(self, table, column, **kwargs):
+            calls.append(("alter_column", table, column, kwargs))
 
         def execute(self, statement):
             calls.append(("execute", str(statement)))
@@ -140,6 +143,7 @@ def test_project_versions_migration_is_additive_and_backfills_exact_active_artif
         ("add_column", "generation_runs", "source_version_id"),
         ("add_column", "generation_runs", "change_request"),
         ("add_column", "publication_releases", "project_version_id"),
+        ("add_column", "publication_releases", "project_id"),
     } <= {call[:3] for call in calls if call[0] == "add_column"}
 
     sql = "\n".join(call[1] for call in calls if call[0] == "execute")
@@ -176,7 +180,8 @@ def test_project_versions_migration_is_additive_and_backfills_exact_active_artif
     )
     assert "update generation_artifacts" not in normalized_sql
     assert "update generation_runs" not in normalized_sql
-    assert "update publication_releases" not in normalized_sql
+    assert "update publication_releases as publication_release" in normalized_sql
+    assert "set project_id = publication.project_id" in normalized_sql
     assert "update publications" not in normalized_sql
     assert "delete from" not in normalized_sql
 
@@ -197,23 +202,65 @@ def test_project_versions_migration_is_additive_and_backfills_exact_active_artif
         "deferrable": True,
         "initially": "DEFERRED",
     }
+    assert foreign_keys["fk_publication_releases_publication_membership"][4:6] == (
+        ("publication_id", "project_id"),
+        ("id", "project_id"),
+    )
+    assert foreign_keys["fk_publication_releases_project_version_membership"][4:6] == (
+        ("project_id", "project_version_id"),
+        ("project_id", "id"),
+    )
+    assert foreign_keys["fk_publication_releases_project_version_membership"][6] == {
+        "ondelete": "RESTRICT",
+        "deferrable": True,
+        "initially": "DEFERRED",
+    }
+    release_indexes = {
+        call[1]: call for call in calls if call[0] == "create_index"
+        and call[2] == "publication_releases"
+    }
+    assert {
+        "ix_publication_releases_project_id",
+        "uq_publication_release_legacy_artifact",
+        "uq_publication_release_project_version",
+    } <= set(release_indexes)
+    assert release_indexes["ix_publication_releases_project_id"][4] == {}
+    assert release_indexes["uq_publication_release_legacy_artifact"][4]["unique"] is True
+    assert release_indexes["uq_publication_release_project_version"][4]["unique"] is True
+    assert (
+        "drop_constraint",
+        "uq_publication_release_artifact",
+        "publication_releases",
+        {"type_": "unique"},
+    ) in calls
 
     calls.clear()
     migration.downgrade()
 
-    assert not any(call[0] == "execute" for call in calls)
+    assert calls[0][0] == "execute"
+    downgrade_guard = calls[0][1].lower()
+    assert "cannot downgrade 0016_project_versions" in downgrade_guard
+    assert "project_version_id is not null" in downgrade_guard
+    assert "asset_manifest" in downgrade_guard
+    assert (
+        "drop_index",
+        "ix_publication_releases_project_id",
+        {"table_name": "publication_releases"},
+    ) in calls
     assert (
         "drop_table",
         "project_versions",
     ) in calls
     assert {(call[1], call[2]) for call in calls if call[0] == "drop_column"} == {
         ("publication_releases", "project_version_id"),
+        ("publication_releases", "project_id"),
         ("generation_runs", "change_request"),
         ("generation_runs", "source_version_id"),
         ("projects", "active_version_id"),
     }
     assert {call[1] for call in calls if call[0] == "drop_constraint"} == {
-        "fk_publication_releases_project_version_id",
+        "fk_publication_releases_project_version_membership",
+        "fk_publication_releases_publication_membership",
         "fk_generation_runs_source_version_membership",
         "fk_projects_active_version_membership",
         "fk_project_versions_parent_membership",
@@ -221,6 +268,7 @@ def test_project_versions_migration_is_additive_and_backfills_exact_active_artif
         "fk_project_versions_run_membership",
         "uq_generation_artifact_membership",
         "uq_generation_run_membership",
+        "uq_publication_project_membership",
     }
 
 
@@ -385,6 +433,7 @@ async def test_postgres_project_versions_backfill_preserves_manifest_v1_releases
                     "domains": json.dumps(["https://example.com"]),
                 },
             )
+
             await connection.execute(
                 text(
                     "INSERT INTO publication_releases "
@@ -683,6 +732,91 @@ async def test_postgres_project_versions_backfill_preserves_manifest_v1_releases
                 },
             )
 
+        restore_version_id = uuid4()
+        initial_versioned_release_id = uuid4()
+        restore_versioned_release_id = uuid4()
+        initial_v2_manifest = {
+            **release_manifest,
+            "version": 2,
+            "project_version_id": str(release_version["id"]),
+        }
+        restore_v2_manifest = {
+            **release_manifest,
+            "version": 2,
+            "project_version_id": str(restore_version_id),
+        }
+        async with target_engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO project_versions "
+                    "(id, project_id, ordinal, run_id, artifact_id, "
+                    "parent_version_id, kind) VALUES "
+                    "(CAST(:id AS UUID), CAST(:project_id AS UUID), 2, "
+                    "CAST(:run_id AS UUID), CAST(:artifact_id AS UUID), "
+                    "CAST(:parent_id AS UUID), 'restore')"
+                ),
+                {
+                    "id": str(restore_version_id),
+                    "project_id": str(release_project_id),
+                    "run_id": str(release_run_id),
+                    "artifact_id": str(release_artifact_id),
+                    "parent_id": str(release_version["id"]),
+                },
+            )
+            for release_id, version_id, manifest in (
+                (
+                    initial_versioned_release_id,
+                    release_version["id"],
+                    initial_v2_manifest,
+                ),
+                (
+                    restore_versioned_release_id,
+                    restore_version_id,
+                    restore_v2_manifest,
+                ),
+            ):
+                await connection.execute(
+                    text(
+                        "INSERT INTO publication_releases "
+                        "(id, publication_id, project_id, artifact_id, "
+                        "project_version_id, previous_release_id, revision, "
+                        "asset_manifest, checksum) VALUES "
+                        "(CAST(:id AS UUID), CAST(:publication_id AS UUID), "
+                        "CAST(:project_id AS UUID), CAST(:artifact_id AS UUID), "
+                        "CAST(:version_id AS UUID), CAST(:previous_id AS UUID), 1, "
+                        "CAST(:manifest AS JSON), :checksum)"
+                    ),
+                    {
+                        "id": str(release_id),
+                        "publication_id": str(release_publication_id),
+                        "project_id": str(release_project_id),
+                        "artifact_id": str(release_artifact_id),
+                        "version_id": str(version_id),
+                        "previous_id": str(release_only_id),
+                        "manifest": json.dumps(manifest),
+                        "checksum": PublicationService.manifest_checksum(manifest),
+                    },
+                )
+
+        await _expect_integrity_error(
+            target_engine,
+            "INSERT INTO publication_releases "
+            "(id, publication_id, project_id, artifact_id, project_version_id, "
+            "revision, asset_manifest, checksum) VALUES "
+            "(CAST(:id AS UUID), CAST(:publication_id AS UUID), "
+            "CAST(:project_id AS UUID), CAST(:artifact_id AS UUID), "
+            "CAST(:version_id AS UUID), 1, CAST(:manifest AS JSON), :checksum)",
+            {
+                "id": str(uuid4()),
+                "publication_id": str(release_publication_id),
+                "project_id": str(release_project_id),
+                "artifact_id": str(release_artifact_id),
+                "version_id": str(foreign_version_id),
+                "manifest": json.dumps(initial_v2_manifest),
+                "checksum": PublicationService.manifest_checksum(initial_v2_manifest),
+            },
+        )
+
         invalid_version = (
             "INSERT INTO project_versions "
             "(id, project_id, ordinal, run_id, artifact_id, parent_version_id, "
@@ -759,6 +893,51 @@ async def test_postgres_project_versions_backfill_preserves_manifest_v1_releases
             "WHERE id=CAST(:run_id AS UUID)",
             {"version_id": str(foreign_version_id), "run_id": str(run_id)},
         )
+
+        await target_engine.dispose()
+        target_engine = None
+        with pytest.raises(
+            DBAPIError,
+            match="cannot downgrade 0016_project_versions",
+        ):
+            await asyncio.to_thread(
+                command.downgrade, config, "0015_yookassa_recurring_foundation"
+            )
+        target_engine = create_async_engine(rendered)
+        assert await _revision(target_engine) == "0017_funnel_journeys"
+        async with target_engine.connect() as connection:
+            tables_after_rejected_downgrade = set(
+                await connection.run_sync(lambda sync: inspect(sync).get_table_names())
+            )
+            release_columns_after_rejected_downgrade = {
+                column["name"]
+                for column in await connection.run_sync(
+                    lambda sync: inspect(sync).get_columns("publication_releases")
+                )
+            }
+            linked_release_count = await connection.scalar(
+                text(
+                    "SELECT count(*) FROM publication_releases "
+                    "WHERE project_version_id IS NOT NULL"
+                )
+            )
+        assert "funnel_journeys" in tables_after_rejected_downgrade
+        assert "project_version_id" in release_columns_after_rejected_downgrade
+        assert linked_release_count == 2
+
+        # Once version-linked proof rows are removed, the legacy-only downgrade
+        # remains available and preserves all legacy releases.
+        async with target_engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "DELETE FROM publication_releases WHERE id IN "
+                    "(CAST(:first AS UUID), CAST(:second AS UUID))"
+                ),
+                {
+                    "first": str(initial_versioned_release_id),
+                    "second": str(restore_versioned_release_id),
+                },
+            )
 
         await target_engine.dispose()
         target_engine = None

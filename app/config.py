@@ -44,6 +44,7 @@ class AppConfig:
     yookassa_secret_key: str | None = field(default=None, repr=False)
     yookassa_test_mode: bool = True
     yookassa_timeout_seconds: float = 20
+    project_versions_enabled: bool = False
     publication_allow_insecure_origins: bool = False
     publication_chat_signing_secret: str | None = field(default=None, repr=False)
     publication_chat_capability_ttl_seconds: int = 300
@@ -283,7 +284,12 @@ def _env_flag(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
         return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be a boolean flag")
 
 
 def _is_private_provider_host(hostname: str | None) -> bool:
@@ -428,6 +434,7 @@ def load_config() -> AppConfig:
         yookassa_secret_key=yookassa_secret_key,
         yookassa_test_mode=_env_flag("YOOKASSA_TEST_MODE", True),
         yookassa_timeout_seconds=_env_int("YOOKASSA_TIMEOUT_SECONDS", 20),
+        project_versions_enabled=_env_flag("KAIGO_PROJECT_VERSIONS_ENABLED"),
         publication_allow_insecure_origins=_env_flag(
             "KAIGO_PUBLICATION_ALLOW_INSECURE_ORIGINS"
         ),

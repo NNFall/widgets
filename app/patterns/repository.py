@@ -262,6 +262,67 @@ class PatternRepository:
             ),
         )
 
+    async def clone_plan(
+        self,
+        *,
+        source_run_id: UUID,
+        target_run_id: UUID,
+    ) -> PersistedComposition:
+        """Clone the immutable persisted plan without consulting the live registry."""
+
+        existing = await self.load_plan(target_run_id)
+        if existing is not None:
+            return existing
+        source = await self._session.scalar(
+            select(CompositionPlanRecord).where(
+                CompositionPlanRecord.run_id == source_run_id
+            )
+        )
+        if source is None:
+            raise ValueError("source run has no persisted composition plan")
+        source_items = list(
+            (
+                await self._session.execute(
+                    select(CompositionPlanItem)
+                    .where(CompositionPlanItem.composition_plan_id == source.id)
+                    .order_by(CompositionPlanItem.slot)
+                )
+            ).scalars()
+        )
+        clone = CompositionPlanRecord(
+            run_id=target_run_id,
+            direction_artifact_id=None,
+            planner_model_call_id=None,
+            schema_version=source.schema_version,
+            direction_id=source.direction_id,
+            summary=source.summary,
+            custom_escape=(
+                _json_clone(source.custom_escape)
+                if source.custom_escape is not None
+                else None
+            ),
+            registry_digest=source.registry_digest,
+        )
+        self._session.add(clone)
+        await self._session.flush()
+        self._session.add_all(
+            [
+                CompositionPlanItem(
+                    composition_plan_id=clone.id,
+                    pattern_version_id=item.pattern_version_id,
+                    slot=item.slot,
+                    parameters=_json_clone(item.parameters),
+                    reason=item.reason,
+                )
+                for item in source_items
+            ]
+        )
+        await self._session.flush()
+        cloned = await self.load_plan(target_run_id)
+        if cloned is None:  # pragma: no cover - transaction invariant
+            raise RuntimeError("cloned composition plan was not persisted")
+        return cloned
+
     async def record_terminal_outcomes(
         self,
         *,

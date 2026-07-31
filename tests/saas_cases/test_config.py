@@ -48,6 +48,22 @@ def test_app_loads_shared_generation_forensics_config(
     )
 
 
+def test_project_versions_flag_is_strict_and_defaults_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _database(monkeypatch)
+    monkeypatch.setenv("KAIGO_ENVIRONMENT", "test")
+    monkeypatch.delenv("KAIGO_PROJECT_VERSIONS_ENABLED", raising=False)
+    assert load_config().project_versions_enabled is False
+
+    monkeypatch.setenv("KAIGO_PROJECT_VERSIONS_ENABLED", "true")
+    assert load_config().project_versions_enabled is True
+
+    monkeypatch.setenv("KAIGO_PROJECT_VERSIONS_ENABLED", "sometimes")
+    with pytest.raises(RuntimeError, match="KAIGO_PROJECT_VERSIONS_ENABLED"):
+        load_config()
+
+
 def test_app_config_revalidates_direct_production_forensics_config() -> None:
     unsafe = GenerationForensicsConfig(
         enabled=True,

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
-from uuid import UUID
 
 from app.saas.models import (
     GenerationArtifact,
@@ -114,10 +113,12 @@ def serialize_project(project: Project, *, active_run: GenerationRun | None = No
 def serialize_project_version(
     version: ProjectVersion,
     *,
-    active_version_id: UUID | None = None,
+    artifact_revision: int,
+    refinable: bool,
 ) -> dict[str, Any]:
     return {
         "id": str(version.id),
+        "project_id": str(version.project_id),
         "ordinal": version.ordinal,
         "kind": version.kind,
         "change_request": version.change_request,
@@ -126,7 +127,8 @@ def serialize_project_version(
         ),
         "run_id": str(version.run_id),
         "artifact_id": str(version.artifact_id),
-        "active": version.id == active_version_id,
+        "artifact_revision": artifact_revision,
+        "refinable": refinable,
         "created_at": _timestamp(version.created_at),
     }
 
