@@ -20,8 +20,6 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 
 COPY . .
 
-RUN chmod -R a+rX /app
-
 # Указываем Python, что корень нашего проекта /app является
 # местом, откуда можно импортировать модули (app, core, wrappers).
 ENV PYTHONPATH /app

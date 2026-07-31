@@ -159,7 +159,7 @@ services:
   generation-forensics-cleanup:
     profiles:
       - operations
-    image: ${KAIGO_APP_IMAGE:-ai_project-app:local}
+    image: ${KAIGO_BUILDER_WORKER_IMAGE:-ai_project-builder-worker:local}
     env_file:
       - path: .env
         required: false
