@@ -51,7 +51,7 @@ def render_layout(title: str, content: str, *, nav_extra: str | None = None) -> 
     </head><body>
     <header>
       <h1>{escape(title)}</h1>
-      <nav><a href="/admin" class="button">Панель</a><a href="/admin/tenants">Заказчики</a>{extra_html}<a href="/admin/logout">Выход</a></nav>
+      <nav><a href="/admin" class="button">Панель</a><a href="/admin/tenants">Заказчики</a><a href="/admin/funnel">Воронка</a>{extra_html}<a href="/admin/logout">Выход</a></nav>
     </header>
     {content}
     </body></html>

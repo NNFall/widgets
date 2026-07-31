@@ -8,6 +8,7 @@ from .service import (
     TrialSettlementReconciler,
     TrialService,
     TrialUnavailable,
+    UsageBalanceService,
     UnverifiedTrialUser,
 )
 
@@ -21,6 +22,7 @@ __all__ = [
     "TrialSettlementReconciler",
     "TrialService",
     "TrialUnavailable",
+    "UsageBalanceService",
     "UnverifiedTrialUser",
 ]
 from app.billing.contracts import (

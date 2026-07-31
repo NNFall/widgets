@@ -85,6 +85,23 @@ class TrialReservation:
 GENERATION_RUN_RESERVATION_TOKENS = 500_000
 
 
+class UsageBalanceService:
+    """Read canonical token balances across trial and paid usage."""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._sessions = session_factory
+
+    async def token_balance(self, user_id: int) -> int:
+        async with self._sessions() as database:
+            value = await database.scalar(
+                select(func.coalesce(func.sum(UsageLedger.amount), 0)).where(
+                    UsageLedger.user_id == user_id,
+                    UsageLedger.bucket.in_(("tokens", "generation_tokens")),
+                )
+            )
+        return int(value or 0)
+
+
 class GenerationCreditService:
     """Reserve subscription tokens before a paid generation starts."""
 
@@ -99,23 +116,27 @@ class GenerationCreditService:
         period_id = subscription.payment_attempt_id
         if period_id is None:
             return 0
-        credit_exists = await database.scalar(
-            select(
-                exists().where(
-                    UsageLedger.user_id == subscription.user_id,
-                    UsageLedger.payment_attempt_id == period_id,
-                    UsageLedger.bucket == "generation_tokens",
-                    UsageLedger.entry_type == "subscription.credit",
-                )
+        credit_bucket = await database.scalar(
+            select(UsageLedger.bucket)
+            .where(
+                UsageLedger.user_id == subscription.user_id,
+                UsageLedger.payment_attempt_id == period_id,
+                UsageLedger.bucket.in_(("tokens", "generation_tokens")),
+                UsageLedger.entry_type == "subscription.credit",
             )
+            .order_by(
+                (UsageLedger.bucket == "tokens").desc(),
+                UsageLedger.created_at,
+            )
+            .limit(1)
         )
-        if not credit_exists:
+        if credit_bucket is None:
             return 0
         available = await database.scalar(
             select(func.coalesce(func.sum(UsageLedger.amount), 0)).where(
                 UsageLedger.user_id == subscription.user_id,
                 UsageLedger.payment_attempt_id == period_id,
-                UsageLedger.bucket == "generation_tokens",
+                UsageLedger.bucket == credit_bucket,
             )
         )
         return int(available or 0)
@@ -162,7 +183,7 @@ class GenerationCreditService:
             if (
                 existing.user_id != user_id
                 or existing.project_id != project_id
-                or existing.bucket != "generation_tokens"
+                or existing.bucket not in {"tokens", "generation_tokens"}
                 or existing.amount != -amount
                 or existing.payment_attempt_id is None
             ):
@@ -200,12 +221,27 @@ class GenerationCreditService:
             raise GenerationCreditsUnavailable(
                 "generation token balance is insufficient"
             )
+        credit_bucket = await database.scalar(
+            select(UsageLedger.bucket)
+            .where(
+                UsageLedger.user_id == user_id,
+                UsageLedger.payment_attempt_id == subscription.payment_attempt_id,
+                UsageLedger.entry_type == "subscription.credit",
+                UsageLedger.bucket.in_(("tokens", "generation_tokens")),
+            )
+            .order_by((UsageLedger.bucket == "tokens").desc())
+            .limit(1)
+        )
+        if credit_bucket is None:
+            raise GenerationCreditsUnavailable(
+                "subscription generation credit is missing"
+            )
         reservation = UsageLedger(
             user_id=user_id,
             project_id=project_id,
             run_id=run_id,
             payment_attempt_id=subscription.payment_attempt_id,
-            bucket="generation_tokens",
+            bucket=credit_bucket,
             entry_type="generation.reserve",
             amount=-amount,
             idempotency_key=f"generation:{run_id}:reserve",
@@ -743,7 +779,7 @@ class TrialService:
     ) -> tuple[UsageLedger, ...]:
         if token_bucket not in {"tokens", "generation_tokens"}:
             raise ValueError("model usage token bucket is invalid")
-        if (token_bucket == "generation_tokens") != (payment_attempt_id is not None):
+        if token_bucket == "generation_tokens" and payment_attempt_id is None:
             raise ValueError("paid model usage billing period is invalid")
         async with self._model_guard(model_call_id):
             async with self._sessions() as database, database.begin():
@@ -911,7 +947,7 @@ class TrialSettlementReconciler:
         if reservation is None:
             return None
         if (
-            reservation.bucket != "generation_tokens"
+            reservation.bucket not in {"tokens", "generation_tokens"}
             or reservation.amount >= 0
             or reservation.payment_attempt_id is None
         ):
@@ -927,7 +963,7 @@ class TrialSettlementReconciler:
             "project_id": reservation.project_id,
             "run_id": reservation.run_id,
             "payment_attempt_id": reservation.payment_attempt_id,
-            "bucket": "generation_tokens",
+            "bucket": reservation.bucket,
             "entry_type": "generation.release",
             "amount": -reservation.amount,
             "idempotency_key": idempotency_key,
@@ -990,7 +1026,7 @@ class TrialSettlementReconciler:
                 await self._record_model_usage(
                     run_id,
                     paid_reservation.user_id,
-                    token_bucket="generation_tokens",
+                    token_bucket=paid_reservation.bucket,
                     payment_attempt_id=paid_reservation.payment_attempt_id,
                 )
                 await self._release_paid_reservation(paid_reservation)

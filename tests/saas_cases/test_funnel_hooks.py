@@ -121,7 +121,7 @@ async def test_checkout_and_webhook_replays_emit_one_server_owned_event_each(
     assert {event.payment_attempt_id for event in events} == {checkout.payment_id}
     assert {event.project_id for event in events} == {project.id}
     assert {event.journey_id for event in events} == {journey.id}
-    assert all(event.campaign_source is None for event in events)
+    assert all(event.campaign_source == "telegram" for event in events)
     assert all(event.event_key for event in events)
     async with factory() as database:
         attempt = await database.get(PaymentAttempt, checkout.payment_id)

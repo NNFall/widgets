@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from html import escape
 
-from typing import Dict, Tuple
+from typing import Tuple
 
 from aiohttp import web
 
 from aiohttp_session import get_session
 
 from app.admin.auth import SESSION_EMAIL_KEY, SESSION_TENANT_KEY, login_page, login_submit, logout
+from app.admin.funnel import setup_funnel_admin_routes
 from app.admin.layout import render_layout as _render_layout
 from app.admin.tenants import setup_tenant_admin_routes
 
@@ -1036,3 +1037,7 @@ def setup_admin_routes(app: web.Application) -> None:
     app.router.add_get('/admin/widgets/{widget_id}/assets/{version}/preview', widget_assets_preview)
 
     setup_tenant_admin_routes(app)
+
+    config = app.get("config")
+    if bool(getattr(config, "funnel_journeys_enabled", False)):
+        setup_funnel_admin_routes(app)

@@ -15,7 +15,9 @@ from aiohttp_session import get_session
 from sqlalchemy import select
 
 from app.analytics.service import (
+    FUNNEL_JOURNEY_SESSION_KEY,
     create_funnel_journey,
+    ensure_funnel_journey,
     record_funnel_event,
     sanitize_campaign,
 )
@@ -80,6 +82,21 @@ GENERATION_FORENSICS_CONFIG_KEY = web.AppKey(
     "generation_forensics_config",
     GenerationForensicsConfig,
 )
+
+
+def _session_funnel_journey_id(session) -> UUID | None:
+    candidate = session.get(FUNNEL_JOURNEY_SESSION_KEY)
+    try:
+        return UUID(candidate) if isinstance(candidate, str) else None
+    except ValueError:
+        return None
+
+
+def _funnel_journeys_enabled(request: web.Request) -> bool:
+    config = request.app.get("config")
+    return True if config is None else bool(
+        getattr(config, "funnel_journeys_enabled", True)
+    )
 
 
 def _require_project_versions_enabled(request: web.Request) -> None:
@@ -386,6 +403,7 @@ async def list_projects(request: web.Request) -> web.Response:
 async def create_project(request: web.Request) -> web.Response:
     user_id, tenant_id = await _scope(request)
     await _require_csrf(request)
+    session = await get_session(request)
     try:
         body = await request.json()
     except Exception as error:  # noqa: BLE001
@@ -416,11 +434,20 @@ async def create_project(request: web.Request) -> web.Response:
             text=_error("invalid_source_url"), content_type="application/json"
         )
     async with get_session_factory(request.app)() as database, database.begin():
-        journey = await create_funnel_journey(database, campaign=campaign)
+        journey_id = None
+        if _funnel_journeys_enabled(request):
+            journey = (
+                await ensure_funnel_journey(
+                    database,
+                    journey_id=_session_funnel_journey_id(session),
+                    campaign=campaign,
+                )
+            ).journey
+            journey_id = journey.id
         project = Project(
             tenant_id=tenant_id,
             owner_user_id=user_id,
-            journey_id=journey.id,
+            journey_id=journey_id,
             source_url=source_url,
             brief=brief,
             status="draft",
@@ -431,12 +458,24 @@ async def create_project(request: web.Request) -> web.Response:
             database,
             event_type="composer_submitted",
             event_key=f"composer_submitted:project:{project.id}",
-            journey_id=journey.id,
+            journey_id=journey_id,
             user_id=user_id,
             project_id=project.id,
             campaign=campaign,
         )
+        if journey_id is not None:
+            await record_funnel_event(
+                database,
+                event_type="authenticated_project",
+                event_key=f"authenticated_project:project:{project.id}",
+                journey_id=journey_id,
+                user_id=user_id,
+                project_id=project.id,
+            )
         payload = serialize_project(project)
+        stored_journey_id = str(journey_id) if journey_id is not None else None
+    if stored_journey_id is not None:
+        session[FUNNEL_JOURNEY_SESSION_KEY] = stored_journey_id
     return web.json_response(payload, status=201)
 
 

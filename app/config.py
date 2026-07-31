@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
+from app.billing.receipts import BillingReceiptSettings
 from builder_lab.forensics.config import GenerationForensicsConfig
 
 load_dotenv()
@@ -44,6 +45,13 @@ class AppConfig:
     yookassa_secret_key: str | None = field(default=None, repr=False)
     yookassa_test_mode: bool = True
     yookassa_timeout_seconds: float = 20
+    billing_renewals_enabled: bool = False
+    billing_worker_poll_seconds: float = 5
+    yookassa_receipts_enabled: bool = False
+    yookassa_receipt_vat_code: int | None = None
+    yookassa_receipt_tax_system_code: int | None = None
+    yookassa_receipt_payment_subject: str = "service"
+    yookassa_receipt_payment_mode: str = "full_payment"
     project_versions_enabled: bool = False
     publication_allow_insecure_origins: bool = False
     publication_chat_signing_secret: str | None = field(default=None, repr=False)
@@ -55,6 +63,11 @@ class AppConfig:
     entry_rate_limit_window_seconds: int = 60
     entry_max_body_bytes: int = 16_384
     entry_trusted_proxy_cidrs: tuple[str, ...] = ()
+    funnel_journeys_enabled: bool = False
+    funnel_retention_days: int = 90
+    funnel_cleanup_interval_seconds: int = 3_600
+    funnel_cleanup_batch_size: int = 500
+    funnel_cleanup_time_budget_seconds: int = 5
     oauth_callback_concurrency: int = 4
     readiness_token: str | None = field(default=None, repr=False)
     expected_worker_deployment_id: str | None = None
@@ -212,6 +225,24 @@ class AppConfig:
             or not 1 <= self.yookassa_timeout_seconds <= 60
         ):
             raise ValueError("yookassa_timeout_seconds must be between 1 and 60")
+        if (
+            isinstance(self.billing_worker_poll_seconds, bool)
+            or not 1 <= self.billing_worker_poll_seconds <= 60
+        ):
+            raise ValueError("billing_worker_poll_seconds must be between 1 and 60")
+        BillingReceiptSettings(
+            enabled=self.yookassa_receipts_enabled,
+            vat_code=self.yookassa_receipt_vat_code,
+            tax_system_code=self.yookassa_receipt_tax_system_code,
+            payment_subject=self.yookassa_receipt_payment_subject,
+            payment_mode=self.yookassa_receipt_payment_mode,
+        )
+        if self.yookassa_receipts_enabled and not (
+            self.yookassa_shop_id and self.yookassa_secret_key
+        ):
+            raise ValueError(
+                "YooKassa credentials are required when receipts are enabled"
+            )
         bounds = (
             ("chat_session_ttl_seconds", self.chat_session_ttl_seconds, 30, 86_400),
             ("chat_max_sessions", self.chat_max_sessions, 1, 10_000),
@@ -261,6 +292,20 @@ class AppConfig:
                 3_600,
             ),
             ("entry_max_body_bytes", self.entry_max_body_bytes, 1_024, 1_048_576),
+            ("funnel_retention_days", self.funnel_retention_days, 7, 365),
+            (
+                "funnel_cleanup_interval_seconds",
+                self.funnel_cleanup_interval_seconds,
+                60,
+                86_400,
+            ),
+            ("funnel_cleanup_batch_size", self.funnel_cleanup_batch_size, 1, 10_000),
+            (
+                "funnel_cleanup_time_budget_seconds",
+                self.funnel_cleanup_time_budget_seconds,
+                1,
+                60,
+            ),
             ("oauth_callback_concurrency", self.oauth_callback_concurrency, 1, 32),
         )
         for name, value, minimum, maximum in bounds:
@@ -307,6 +352,13 @@ def _env_int(name: str, default: int) -> int:
         return int(os.getenv(name, str(default)))
     except ValueError as error:
         raise RuntimeError(f"{name} must be an integer") from error
+
+
+def _env_optional_int(name: str) -> int | None:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return None
+    return _env_int(name, 0)
 
 
 def _env_int_with_fallback(primary: str, fallback: str, default: int) -> int:
@@ -434,6 +486,19 @@ def load_config() -> AppConfig:
         yookassa_secret_key=yookassa_secret_key,
         yookassa_test_mode=_env_flag("YOOKASSA_TEST_MODE", True),
         yookassa_timeout_seconds=_env_int("YOOKASSA_TIMEOUT_SECONDS", 20),
+        billing_renewals_enabled=_env_flag("KAIGO_BILLING_RENEWALS_ENABLED"),
+        billing_worker_poll_seconds=_env_int("KAIGO_BILLING_WORKER_POLL_SECONDS", 5),
+        yookassa_receipts_enabled=_env_flag("YOOKASSA_RECEIPTS_ENABLED"),
+        yookassa_receipt_vat_code=_env_optional_int("YOOKASSA_RECEIPT_VAT_CODE"),
+        yookassa_receipt_tax_system_code=_env_optional_int(
+            "YOOKASSA_RECEIPT_TAX_SYSTEM_CODE"
+        ),
+        yookassa_receipt_payment_subject=os.getenv(
+            "YOOKASSA_RECEIPT_PAYMENT_SUBJECT", "service"
+        ),
+        yookassa_receipt_payment_mode=os.getenv(
+            "YOOKASSA_RECEIPT_PAYMENT_MODE", "full_payment"
+        ),
         project_versions_enabled=_env_flag("KAIGO_PROJECT_VERSIONS_ENABLED"),
         publication_allow_insecure_origins=_env_flag(
             "KAIGO_PUBLICATION_ALLOW_INSECURE_ORIGINS"
@@ -463,6 +528,17 @@ def load_config() -> AppConfig:
         ),
         entry_max_body_bytes=_env_int("KAIGO_ENTRY_MAX_BODY_BYTES", 16_384),
         entry_trusted_proxy_cidrs=entry_trusted_proxy_cidrs,
+        funnel_journeys_enabled=_env_flag("KAIGO_FUNNEL_JOURNEYS_ENABLED"),
+        funnel_retention_days=_env_int("KAIGO_FUNNEL_RETENTION_DAYS", 90),
+        funnel_cleanup_interval_seconds=_env_int(
+            "KAIGO_FUNNEL_CLEANUP_INTERVAL_SECONDS", 3_600
+        ),
+        funnel_cleanup_batch_size=_env_int(
+            "KAIGO_FUNNEL_CLEANUP_BATCH_SIZE", 500
+        ),
+        funnel_cleanup_time_budget_seconds=_env_int(
+            "KAIGO_FUNNEL_CLEANUP_TIME_BUDGET_SECONDS", 5
+        ),
         oauth_callback_concurrency=_env_int("KAIGO_OAUTH_CALLBACK_CONCURRENCY", 4),
         readiness_token=_first_nonblank("KAIGO_READINESS_TOKEN"),
         expected_worker_deployment_id=_first_nonblank("KAIGO_RELEASE_ID"),

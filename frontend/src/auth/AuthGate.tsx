@@ -1,6 +1,8 @@
 import { ArrowRight, LockKey, SpinnerGap } from '@phosphor-icons/react';
 import { type ReactNode, useEffect, useState } from 'react';
 
+import { ensureLandingJourney } from '../shared/journey';
+
 type SessionSnapshot = {
   enabled: boolean;
   authenticated: boolean;
@@ -41,6 +43,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
     async function hydrate() {
       try {
+        await ensureLandingJourney();
         const response = await fetch('/api/auth/session', {
           credentials: 'include',
           signal: controller.signal,

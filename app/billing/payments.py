@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -17,11 +20,15 @@ from app.billing.catalog import PLAN_CATALOG, BillingPlan
 from app.billing.contracts import (
     CheckoutCommand,
     Money,
+    PaymentReceipt,
     PaymentProvider,
     PaymentStatus,
     ProviderPayment,
+    ProviderPaymentMethod,
+    RecurringPaymentCommand,
     validate_provider_idempotency_key,
 )
+from app.billing.receipts import BillingReceiptSettings, resolve_payment_receipt
 from app.db.models import User
 from app.saas.models import (
     BillingPaymentMethod,
@@ -82,14 +89,91 @@ _PROVIDER_DISPATCH_SAFETY_MARGIN = timedelta(minutes=5)
 _AUTO_RENEW_CONSENT_VERSION = "yookassa-auto-renew-v1"
 
 
+def _canonical_money(money: Money) -> dict[str, object]:
+    return {
+        "amount_minor": money.amount_minor,
+        "currency": money.currency,
+    }
+
+
+def _canonical_receipt(receipt: PaymentReceipt | None) -> dict[str, object] | None:
+    if receipt is None:
+        return None
+    return {
+        "customer_email": receipt.customer_email,
+        "tax_system_code": receipt.tax_system_code,
+        "items": [
+            {
+                "description": item.description,
+                "quantity": format(item.quantity, "f"),
+                "amount": _canonical_money(item.amount),
+                "vat_code": item.vat_code,
+                "measure": item.measure,
+                "payment_mode": item.payment_mode,
+                "payment_subject": item.payment_subject,
+            }
+            for item in receipt.items
+        ],
+    }
+
+
+def _canonical_provider_request(
+    command: CheckoutCommand | RecurringPaymentCommand,
+) -> dict[str, object]:
+    document: dict[str, object] = {
+        "amount": _canonical_money(command.amount),
+        "capture": True,
+        "description": command.description,
+        "metadata": dict(command.metadata),
+        "receipt": _canonical_receipt(command.receipt),
+    }
+    if isinstance(command, CheckoutCommand):
+        document.update(
+            {
+                "confirmation": True,
+                "payment_method_id": None,
+                # None deliberately represents the omitted provider field and
+                # remains distinct from an explicit false value.
+                "save_payment_method": command.save_payment_method,
+            }
+        )
+    else:
+        document.update(
+            {
+                "confirmation": False,
+                "payment_method_id": command.payment_method_id,
+                "save_payment_method": None,
+            }
+        )
+    return document
+
+
+def _request_fingerprint(
+    command: CheckoutCommand | RecurringPaymentCommand,
+) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            _canonical_provider_request(command),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 class BillingService:
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         provider: PaymentProvider,
+        *,
+        receipt_settings: BillingReceiptSettings = BillingReceiptSettings(),
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._sessions = session_factory
         self._provider = provider
+        self._receipt_settings = receipt_settings
+        self._clock = clock or (lambda: datetime.now(UTC))
         merchant_account_fingerprint = provider.merchant_account_fingerprint
         if not _MERCHANT_ACCOUNT_FINGERPRINT_PATTERN.fullmatch(
             merchant_account_fingerprint
@@ -102,6 +186,12 @@ class BillingService:
         self._fulfillment_locks: WeakValueDictionary[int, asyncio.Lock] = (
             WeakValueDictionary()
         )
+
+    def _now(self) -> datetime:
+        value = self._clock()
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
 
     async def close(self) -> None:
         await self._provider.aclose()
@@ -122,12 +212,34 @@ class BillingService:
 
     @staticmethod
     def _metadata(attempt: PaymentAttempt) -> dict[str, str]:
-        return {
+        metadata = {
             "payment_attempt_id": str(attempt.id),
             "user_id": str(attempt.user_id),
             "plan_code": attempt.plan_code,
             "plan_fingerprint": attempt.plan_fingerprint,
         }
+        if attempt.purpose == "renewal":
+            if (
+                attempt.subscription_id is None
+                or attempt.billing_period_start is None
+                or attempt.billing_period_end is None
+            ):
+                raise BillingError("renewal payment target is invalid")
+            start = attempt.billing_period_start
+            end = attempt.billing_period_end
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=UTC)
+            if end.tzinfo is None:
+                end = end.replace(tzinfo=UTC)
+            metadata.update(
+                {
+                    "purpose": "renewal",
+                    "subscription_id": str(attempt.subscription_id),
+                    "billing_period_start": start.astimezone(UTC).isoformat(),
+                    "billing_period_end": end.astimezone(UTC).isoformat(),
+                }
+            )
+        return metadata
 
     @staticmethod
     def _provider_idempotency_key(attempt_id: UUID) -> str:
@@ -315,6 +427,8 @@ class BillingService:
             lease_token: str | None = None
             provider_idempotency_key: str | None = None
             provider_idempotency_expires_at: datetime | None = None
+            provider_command: CheckoutCommand | None = None
+            receipt: PaymentReceipt | None = None
             try:
                 async with self._sessions() as database, database.begin():
                     # Locking the user serializes checkout decisions across
@@ -426,7 +540,7 @@ class BillingService:
                         updated_at = attempt.updated_at
                         if updated_at is not None and updated_at.tzinfo is None:
                             updated_at = updated_at.replace(tzinfo=UTC)
-                        now = datetime.now(UTC)
+                        now = self._now()
                         if (
                             attempt.status == "creating"
                             and updated_at is not None
@@ -459,6 +573,12 @@ class BillingService:
                             attempt.payload = payload
                             dispatch = True
                     else:
+                        receipt = await resolve_payment_receipt(
+                            database,
+                            user_id=user_id,
+                            plan=plan,
+                            settings=self._receipt_settings,
+                        )
                         attempt = PaymentAttempt(
                             user_id=user_id,
                             project_id=project_id,
@@ -484,12 +604,12 @@ class BillingService:
                             consent_version=(
                                 _AUTO_RENEW_CONSENT_VERSION if auto_renew else None
                             ),
-                            consented_at=(datetime.now(UTC) if auto_renew else None),
+                            consented_at=(self._now() if auto_renew else None),
                             payload={},
                         )
                         database.add(attempt)
                         await database.flush()
-                        first_dispatched_at = datetime.now(UTC)
+                        first_dispatched_at = self._now()
                         provider_idempotency_key = self._provider_idempotency_key(
                             attempt.id
                         )
@@ -518,6 +638,40 @@ class BillingService:
                     )
                     attempt_id = attempt.id
                     metadata = self._metadata(attempt)
+                    if dispatch:
+                        if not created:
+                            receipt = await resolve_payment_receipt(
+                                database,
+                                user_id=user_id,
+                                plan=plan,
+                                settings=self._receipt_settings,
+                            )
+                        if provider_idempotency_key is None:
+                            raise BillingError("payment attempt requires manual recovery")
+                        provider_command = CheckoutCommand(
+                            idempotency_key=provider_idempotency_key,
+                            amount=plan.amount,
+                            description=plan.title,
+                            metadata=metadata,
+                            save_payment_method=(
+                                attempt.save_payment_method_requested
+                            ),
+                            receipt=receipt,
+                        )
+                        request_fingerprint = _request_fingerprint(provider_command)
+                        if created:
+                            attempt.request_fingerprint = request_fingerprint
+                        elif attempt.request_fingerprint is None:
+                            # Legacy attempts predate immutable receipt
+                            # snapshots. They remain replayable only under the
+                            # disabled receipt policy that preserves their old
+                            # request shape.
+                            if receipt is not None:
+                                raise BillingError(
+                                    "payment attempt requires manual recovery"
+                                )
+                        elif attempt.request_fingerprint != request_fingerprint:
+                            raise BillingError("stored provider request was modified")
             except IntegrityError:
                 # Another process may have committed the same per-user key
                 # between our SELECT and INSERT. The winner owns the provider
@@ -567,20 +721,14 @@ class BillingService:
                 ):
                     raise BillingError("payment attempt requires manual recovery")
                 if (
-                    datetime.now(UTC)
+                    self._now()
                     >= provider_idempotency_expires_at
                     - _PROVIDER_DISPATCH_SAFETY_MARGIN
                 ):
                     raise BillingError("provider idempotency window expired")
-                checkout = await self._provider.create_checkout(
-                    CheckoutCommand(
-                        idempotency_key=provider_idempotency_key,
-                        amount=plan.amount,
-                        description=plan.title,
-                        metadata=metadata,
-                        save_payment_method=(True if auto_renew else None),
-                    )
-                )
+                if provider_command is None:
+                    raise BillingError("payment attempt requires manual recovery")
+                checkout = await self._provider.create_checkout(provider_command)
                 if (
                     checkout.amount != plan.amount
                     or dict(checkout.metadata) != metadata
@@ -621,7 +769,7 @@ class BillingService:
                     attempt.provider_payment_id = checkout.provider_payment_id
                     attempt.checkout_url = checkout.checkout_url
                     attempt.status = checkout.status.value
-                    attempt.next_reconcile_at = datetime.now(UTC)
+                    attempt.next_reconcile_at = self._now()
                     attempt.payload = {"test_mode": checkout.test_mode}
                     await database.flush()
                     result = self._checkout_result(attempt, created=created)
@@ -756,6 +904,82 @@ class BillingService:
             return "payment.canceled"
         raise BillingError("verified payment is not terminal")
 
+    async def _activate_verified_method(
+        self,
+        database: AsyncSession,
+        *,
+        attempt: PaymentAttempt,
+        provider_method: ProviderPaymentMethod,
+        now: datetime,
+    ) -> BillingPaymentMethod | None:
+        """Activate a verified method without risking paid-period rollback.
+
+        Provider method identifiers are globally unique only inside the
+        configured merchant account. A collision with another Kaigo user is
+        therefore treated as an auto-renew refusal, never as a reason to undo
+        an already verified payment.
+        """
+
+        identity = (
+            BillingPaymentMethod.provider == self._provider.name,
+            BillingPaymentMethod.merchant_account_fingerprint
+            == attempt.merchant_account_fingerprint,
+            BillingPaymentMethod.provider_payment_method_id
+            == provider_method.provider_payment_method_id,
+        )
+        saved_method = await database.scalar(
+            select(BillingPaymentMethod).where(*identity).with_for_update()
+        )
+        if saved_method is not None and saved_method.user_id != attempt.user_id:
+            payload = dict(attempt.payload)
+            payload["auto_renew_error"] = "payment_method_identity_collision"
+            attempt.payload = payload
+            return None
+
+        if saved_method is None:
+            candidate = BillingPaymentMethod(
+                user_id=attempt.user_id,
+                provider=self._provider.name,
+                merchant_account_fingerprint=attempt.merchant_account_fingerprint,
+                provider_payment_method_id=(
+                    provider_method.provider_payment_method_id
+                ),
+                source_payment_attempt_id=attempt.id,
+                status="active",
+                consent_version=str(attempt.consent_version),
+                consented_at=attempt.consented_at,
+                saved_at=now,
+            )
+            try:
+                async with database.begin_nested():
+                    database.add(candidate)
+                    await database.flush()
+                saved_method = candidate
+            except IntegrityError:
+                # A concurrent transaction may have claimed the same opaque
+                # provider identity. The SAVEPOINT keeps fulfillment intact.
+                saved_method = await database.scalar(
+                    select(BillingPaymentMethod).where(*identity).with_for_update()
+                )
+                if (
+                    saved_method is None
+                    or saved_method.user_id != attempt.user_id
+                ):
+                    payload = dict(attempt.payload)
+                    payload["auto_renew_error"] = (
+                        "payment_method_identity_collision"
+                    )
+                    attempt.payload = payload
+                    return None
+
+        saved_method.source_payment_attempt_id = attempt.id
+        saved_method.status = "active"
+        saved_method.consent_version = str(attempt.consent_version)
+        saved_method.consented_at = attempt.consented_at
+        saved_method.saved_at = now
+        saved_method.disabled_at = None
+        return saved_method
+
     async def apply_verified_payment(
         self,
         attempt_id: UUID,
@@ -802,10 +1026,18 @@ class BillingService:
                 attempt.merchant_account_fingerprint = (
                     self._merchant_account_fingerprint
                 )
+            subscription_query = select(Subscription).where(
+                Subscription.user_id == user_id,
+                Subscription.status == "active",
+            )
+            if attempt.purpose == "renewal":
+                if attempt.subscription_id is None:
+                    raise BillingError("renewal payment has no subscription")
+                subscription_query = subscription_query.where(
+                    Subscription.id == attempt.subscription_id
+                )
             subscription = await database.scalar(
-                select(Subscription)
-                .where(Subscription.user_id == user_id, Subscription.status == "active")
-                .with_for_update()
+                subscription_query.with_for_update()
             )
             event_name = self._event_name(payment)
             event_key = f"{event_name}:{payment.provider_payment_id}"
@@ -824,7 +1056,7 @@ class BillingService:
                     False,
                 )
 
-            now = datetime.now(UTC)
+            now = self._now()
             event_payload = {
                 "provider_payment_id": payment.provider_payment_id,
                 "status": (
@@ -840,6 +1072,14 @@ class BillingService:
             }
             if payment.status is PaymentStatus.CANCELLED:
                 attempt.status = "cancelled"
+                if attempt.purpose == "renewal":
+                    attempt_payload = dict(attempt.payload)
+                    attempt_payload["cancellation_reason"] = (
+                        payment.cancellation_reason.value
+                        if payment.cancellation_reason is not None
+                        else "unknown"
+                    )
+                    attempt.payload = attempt_payload
                 database.add(
                     PaymentWebhookEvent(
                         provider=self._provider.name,
@@ -856,7 +1096,37 @@ class BillingService:
                 return FulfillmentResult(attempt.id, None, True)
 
             plan = self._stored_plan(attempt)
-            if subscription is None:
+            if attempt.purpose == "renewal":
+                if (
+                    subscription is None
+                    or attempt.billing_period_start is None
+                    or attempt.billing_period_end is None
+                ):
+                    raise BillingError("renewal payment target is invalid")
+                period_start = attempt.billing_period_start
+                period_end = attempt.billing_period_end
+                if period_start.tzinfo is None:
+                    period_start = period_start.replace(tzinfo=UTC)
+                if period_end.tzinfo is None:
+                    period_end = period_end.replace(tzinfo=UTC)
+                current_end = subscription.current_period_end
+                if current_end is not None and current_end.tzinfo is None:
+                    current_end = current_end.replace(tzinfo=UTC)
+                if current_end is None or current_end < period_start:
+                    raise BillingError("renewal payment period is inconsistent")
+                if current_end < period_end:
+                    if current_end != period_start:
+                        raise BillingError("renewal payment period overlaps")
+                    subscription.current_period_start = period_start
+                    subscription.current_period_end = period_end
+                subscription.payment_attempt_id = attempt.id
+                subscription.provider = self._provider.name
+                subscription.plan_code = plan.code
+                subscription.plan_snapshot = attempt.plan_snapshot
+                subscription.plan_fingerprint = attempt.plan_fingerprint
+                if subscription.auto_renew:
+                    subscription.next_renewal_at = subscription.current_period_end
+            elif subscription is None:
                 subscription = Subscription(
                     user_id=user_id,
                     provider=self._provider.name,
@@ -897,54 +1167,27 @@ class BillingService:
                 and provider_method is not None
                 and provider_method.saved is True
             ):
-                saved_method = await database.scalar(
-                    select(BillingPaymentMethod)
-                    .where(
-                        BillingPaymentMethod.provider == self._provider.name,
-                        BillingPaymentMethod.merchant_account_fingerprint
-                        == attempt.merchant_account_fingerprint,
-                        BillingPaymentMethod.provider_payment_method_id
-                        == provider_method.provider_payment_method_id,
-                    )
-                    .with_for_update()
+                saved_method = await self._activate_verified_method(
+                    database,
+                    attempt=attempt,
+                    provider_method=provider_method,
+                    now=now,
                 )
-                if saved_method is not None and saved_method.user_id != user_id:
-                    raise BillingError("saved payment method belongs to another user")
-                if saved_method is None:
-                    saved_method = BillingPaymentMethod(
-                        user_id=user_id,
-                        provider=self._provider.name,
-                        merchant_account_fingerprint=(
-                            attempt.merchant_account_fingerprint
-                        ),
-                        provider_payment_method_id=(
-                            provider_method.provider_payment_method_id
-                        ),
-                        source_payment_attempt_id=attempt.id,
-                        status="active",
-                        consent_version=attempt.consent_version,
-                        consented_at=attempt.consented_at,
-                        saved_at=now,
+                if saved_method is not None:
+                    subscription.merchant_account_fingerprint = (
+                        attempt.merchant_account_fingerprint
                     )
-                    database.add(saved_method)
-                    await database.flush()
+                    attempt.payment_method_id = saved_method.id
+                    subscription.payment_method_id = saved_method.id
+                    subscription.auto_renew = True
+                    subscription.next_renewal_at = subscription.current_period_end
+                    subscription.auto_renew_enabled_at = now
+                    subscription.auto_renew_disabled_at = None
                 else:
-                    saved_method.source_payment_attempt_id = attempt.id
-                    saved_method.status = "active"
-                    saved_method.consent_version = attempt.consent_version
-                    saved_method.consented_at = attempt.consented_at
-                    saved_method.saved_at = now
-                    saved_method.disabled_at = None
-
-                subscription.merchant_account_fingerprint = (
-                    attempt.merchant_account_fingerprint
-                )
-                attempt.payment_method_id = saved_method.id
-                subscription.payment_method_id = saved_method.id
-                subscription.auto_renew = True
-                subscription.next_renewal_at = subscription.current_period_end
-                subscription.auto_renew_enabled_at = now
-                subscription.auto_renew_disabled_at = None
+                    subscription.payment_method_id = None
+                    subscription.auto_renew = False
+                    subscription.next_renewal_at = None
+                    subscription.auto_renew_disabled_at = now
 
             database.add(
                 PaymentWebhookEvent(
@@ -966,22 +1209,39 @@ class BillingService:
                 project_id=attempt.project_id,
                 payment_attempt_id=attempt.id,
             )
-            database.add(
-                UsageLedger(
-                    user_id=user_id,
-                    payment_attempt_id=attempt.id,
-                    bucket="generation_tokens",
-                    entry_type="subscription.credit",
-                    amount=plan.generation_tokens,
-                    idempotency_key=(
-                        f"{self._provider.name}:{event_key}:generation_tokens"
-                    ),
-                    payload={
-                        "plan_code": plan.code,
-                        "plan_fingerprint": plan.fingerprint(),
-                    },
+            if attempt.purpose == "renewal":
+                if attempt.subscription_id is None or attempt.billing_period_start is None:
+                    raise BillingError("renewal payment target is invalid")
+                period_start = attempt.billing_period_start
+                if period_start.tzinfo is None:
+                    period_start = period_start.replace(tzinfo=UTC)
+                credit_key = (
+                    f"renewal:{attempt.subscription_id}:"
+                    f"{period_start.isoformat()}:tokens"
+                )
+            else:
+                credit_key = f"payment:{attempt.id}:tokens"
+            existing_credit = await database.scalar(
+                select(UsageLedger).where(
+                    UsageLedger.idempotency_key == credit_key
                 )
             )
+            if existing_credit is None:
+                database.add(
+                    UsageLedger(
+                        user_id=user_id,
+                        payment_attempt_id=attempt.id,
+                        bucket="tokens",
+                        entry_type="subscription.credit",
+                        amount=plan.generation_tokens,
+                        idempotency_key=credit_key,
+                        payload={
+                            "plan_code": plan.code,
+                            "plan_fingerprint": plan.fingerprint(),
+                            "purpose": attempt.purpose,
+                        },
+                    )
+                )
             attempt.status = "succeeded"
             await database.flush()
             return FulfillmentResult(attempt.id, subscription.id, True)
@@ -1007,11 +1267,45 @@ class BillingService:
             )
             if subscription is None:
                 raise PaymentNotFound("subscription not found")
+            renewal_attempts = list(
+                await database.scalars(
+                    select(PaymentAttempt)
+                    .where(
+                        PaymentAttempt.subscription_id == subscription.id,
+                        PaymentAttempt.purpose == "renewal",
+                        PaymentAttempt.status.not_in(
+                            ("succeeded", "cancelled", "canceled")
+                        ),
+                    )
+                    .with_for_update()
+                )
+            )
+            if any(
+                attempt.status in {"dispatching", "pending", "dispatch_unknown"}
+                for attempt in renewal_attempts
+            ):
+                raise BillingError("renewal_in_progress")
+            for attempt in renewal_attempts:
+                if attempt.status in {"scheduled", "creating"}:
+                    attempt.status = "cancelled"
+            method = (
+                await database.scalar(
+                    select(BillingPaymentMethod)
+                    .where(BillingPaymentMethod.id == subscription.payment_method_id)
+                    .with_for_update()
+                )
+                if subscription.payment_method_id is not None
+                else None
+            )
+            now = self._now()
+            if method is not None and method.user_id == user_id:
+                method.status = "disabled"
+                method.disabled_at = now
             if subscription.auto_renew:
                 subscription.auto_renew = False
                 subscription.next_renewal_at = None
-                subscription.auto_renew_disabled_at = datetime.now(UTC)
+                subscription.auto_renew_disabled_at = now
             elif subscription.auto_renew_disabled_at is None:
-                subscription.auto_renew_disabled_at = datetime.now(UTC)
+                subscription.auto_renew_disabled_at = now
             await database.flush()
             return subscription

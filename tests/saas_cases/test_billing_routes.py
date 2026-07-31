@@ -255,6 +255,9 @@ async def test_disable_auto_renew_is_owner_scoped_csrf_protected_and_idempotent(
             assert stored_period_end == period_end
             assert stored.auto_renew is False
             assert stored.next_renewal_at is None
+            stored_method = await database.get(BillingPaymentMethod, method.id)
+            assert stored_method.status == "disabled"
+            assert stored_method.disabled_at is not None
     finally:
         await client.close()
         await engine.dispose()

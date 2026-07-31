@@ -19,7 +19,8 @@ from aiohttp_session import STORAGE_KEY, get_session, new_session
 from sqlalchemy import delete, or_, select, update
 
 from app.analytics.service import (
-    create_funnel_journey,
+    FUNNEL_JOURNEY_SESSION_KEY,
+    ensure_funnel_journey,
     record_funnel_event,
     sanitize_campaign,
 )
@@ -47,6 +48,21 @@ OAUTH_CALLBACK_SEMAPHORE_KEY = web.AppKey("oauth_callback_semaphore", Semaphore)
 _MAX_SOURCE_URL_CHARS = 2_048
 _MAX_BRIEF_CHARS = 4_000
 logger = logging.getLogger(__name__)
+
+
+def _session_journey_id(session) -> UUID | None:
+    candidate = session.get(FUNNEL_JOURNEY_SESSION_KEY)
+    try:
+        return UUID(candidate) if isinstance(candidate, str) else None
+    except ValueError:
+        return None
+
+
+def _funnel_journeys_enabled(request: web.Request) -> bool:
+    config = request.app.get("config")
+    return True if config is None else bool(
+        getattr(config, "funnel_journeys_enabled", True)
+    )
 
 
 def _oauth_failure_location(public_code: str) -> str:
@@ -194,19 +210,29 @@ async def create_draft(request: web.Request) -> web.Response:
     )
     async with session_scope(request.app) as database:
         await _cleanup_expired_auth_records(database, datetime.now(UTC))
-        journey = await create_funnel_journey(database, campaign=campaign)
-        draft.journey_id = journey.id
+        journey_id = None
+        if _funnel_journeys_enabled(request):
+            journey_result = await ensure_funnel_journey(
+                database,
+                journey_id=_session_journey_id(session),
+                campaign=campaign,
+            )
+            journey_id = journey_result.journey.id
+            draft.journey_id = journey_id
         database.add(draft)
         await database.flush()
         await record_funnel_event(
             database,
             event_type="composer_submitted",
             event_key=f"composer_submitted:draft:{draft.id}",
-            journey_id=journey.id,
+            journey_id=journey_id,
             anonymous_draft_id=draft.id,
             campaign=campaign,
         )
         draft_id = str(draft.id)
+        stored_journey_id = str(journey_id) if journey_id is not None else None
+    if stored_journey_id is not None:
+        session[FUNNEL_JOURNEY_SESSION_KEY] = stored_journey_id
     session["pending_draft_id"] = draft_id
     session["pending_draft_claim"] = raw_claim
     return web.json_response(
@@ -299,6 +325,15 @@ async def claim_draft(request: web.Request) -> web.Response:
             created = True
         if project.journey_id is None and draft.journey_id is not None:
             project.journey_id = draft.journey_id
+        if project.journey_id is not None:
+            await record_funnel_event(
+                database,
+                event_type="authenticated_project",
+                event_key=f"authenticated_project:project:{project.id}",
+                journey_id=project.journey_id,
+                user_id=user_id,
+                project_id=project.id,
+            )
         payload = {
             "project": {
                 "id": str(project.id),
@@ -361,6 +396,18 @@ async def auth_start(request: web.Request) -> web.StreamResponse:
             session.pop("pending_draft_id", None)
             session.pop("pending_draft_claim", None)
         draft_id = draft.id if draft is not None else None
+        journey_id = None
+        if _funnel_journeys_enabled(request):
+            journey_result = await ensure_funnel_journey(
+                database,
+                journey_id=(
+                    draft.journey_id
+                    if draft is not None
+                    else _session_journey_id(session)
+                ),
+                campaign=draft.campaign if draft is not None else None,
+            )
+            journey_id = journey_result.journey.id
         oauth_state = OAuthState(
             state_digest=state_digest,
             session_binding_digest=token_digest(browser_binding),
@@ -369,7 +416,7 @@ async def auth_start(request: web.Request) -> web.StreamResponse:
             nonce=nonce,
             return_path="/studio",
             draft_id=draft_id,
-            journey_id=draft.journey_id if draft is not None else None,
+            journey_id=journey_id,
             expires_at=datetime.now(UTC) + timedelta(minutes=10),
         )
         database.add(oauth_state)
@@ -529,6 +576,15 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
             project_id=project.id if project is not None else None,
             campaign=draft.campaign if draft is not None else None,
         )
+        if project is not None and project.journey_id is not None:
+            await record_funnel_event(
+                database,
+                event_type="authenticated_project",
+                event_key=f"authenticated_project:project:{project.id}",
+                journey_id=project.journey_id,
+                user_id=user.id,
+                project_id=project.id,
+            )
 
     old_identity = browser_session.identity
     storage = request[STORAGE_KEY]
@@ -540,6 +596,8 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
     authenticated["tenant_id"] = user.tenant_id
     authenticated["email"] = user.email
     authenticated["csrf_token"] = secrets.token_urlsafe(32)
+    if claimed["journey_id"] is not None:
+        authenticated[FUNNEL_JOURNEY_SESSION_KEY] = str(claimed["journey_id"])
     location = f"/studio?project={project.id}" if project else "/studio"
     raise web.HTTPFound(location)
 

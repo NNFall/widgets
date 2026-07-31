@@ -15,6 +15,8 @@ from app.saas.models import FunnelEvent, FunnelJourney
 
 FUNNEL_EVENT_TYPES = frozenset(
     {
+        "landing_entered",
+        "authenticated_project",
         "composer_submitted",
         "auth_started",
         "auth_completed",
@@ -26,6 +28,17 @@ FUNNEL_EVENT_TYPES = frozenset(
         "published",
     }
 )
+
+FUNNEL_JOURNEY_SESSION_KEY = "funnel_journey_id"
+CORE_FUNNEL_STAGES = (
+    "landing_entered",
+    "authenticated_project",
+    "run_queued",
+    "free_result",
+    "payment_completed",
+    "published",
+)
+COMMERCIAL_FUNNEL_STAGES = ("upgrade_started", "payment_completed")
 
 _CAMPAIGN_COLUMNS = {
     "utm_source": "campaign_source",
@@ -75,6 +88,12 @@ class FunnelEventResult:
     created: bool
 
 
+@dataclass(frozen=True)
+class FunnelJourneyResult:
+    journey: FunnelJourney
+    created: bool
+
+
 async def create_funnel_journey(
     database: AsyncSession,
     *,
@@ -84,6 +103,27 @@ async def create_funnel_journey(
     database.add(journey)
     await database.flush()
     return journey
+
+
+async def ensure_funnel_journey(
+    database: AsyncSession,
+    *,
+    journey_id: UUID | None,
+    campaign: Mapping[str, object] | None,
+    now=None,
+) -> FunnelJourneyResult:
+    if journey_id is not None:
+        existing = await database.get(FunnelJourney, journey_id)
+        if existing is not None:
+            return FunnelJourneyResult(journey=existing, created=False)
+
+    values = _campaign_values(campaign)
+    if now is not None:
+        values["started_at"] = now
+    journey = FunnelJourney(**values)
+    database.add(journey)
+    await database.flush()
+    return FunnelJourneyResult(journey=journey, created=True)
 
 
 def sanitize_campaign(campaign: Mapping[str, object] | None) -> dict[str, str]:
@@ -155,11 +195,24 @@ async def record_funnel_event(
     if not normalized_key or len(normalized_key) > _MAX_EVENT_KEY_LENGTH:
         raise ValueError("Funnel event key must contain 1 to 255 characters")
 
+    journey = None
+    if journey_id is not None:
+        journey = await database.get(FunnelJourney, journey_id)
+        if journey is None:
+            raise ValueError("Funnel journey does not exist")
+
     existing = await database.scalar(
         select(FunnelEvent).where(FunnelEvent.event_key == normalized_key)
     )
     if existing is not None:
+        _reject_conflicting_journey(existing, journey_id)
         return FunnelEventResult(event=existing, created=False)
+
+    campaign_values = (
+        _journey_campaign_values(journey)
+        if journey is not None
+        else _campaign_values(campaign)
+    )
 
     event = FunnelEvent(
         event_key=normalized_key,
@@ -173,7 +226,7 @@ async def record_funnel_event(
         artifact_id=artifact_id,
         payment_attempt_id=payment_attempt_id,
         publication_id=publication_id,
-        **_campaign_values(campaign),
+        **campaign_values,
     )
     savepoint = await database.begin_nested()
     try:
@@ -186,16 +239,44 @@ async def record_funnel_event(
         )
         if existing is None:
             raise
+        _reject_conflicting_journey(existing, journey_id)
         return FunnelEventResult(event=existing, created=False)
     else:
         await savepoint.commit()
         return FunnelEventResult(event=event, created=True)
 
 
+def _journey_campaign_values(journey: FunnelJourney) -> dict[str, str | None]:
+    return {
+        "campaign_source": journey.campaign_source,
+        "campaign_medium": journey.campaign_medium,
+        "campaign_name": journey.campaign_name,
+        "campaign_term": journey.campaign_term,
+        "campaign_content": journey.campaign_content,
+    }
+
+
+def _reject_conflicting_journey(
+    existing: FunnelEvent,
+    requested_journey_id: UUID | None,
+) -> None:
+    if (
+        existing.journey_id is not None
+        and requested_journey_id is not None
+        and existing.journey_id != requested_journey_id
+    ):
+        raise ValueError("Funnel event key belongs to a different journey")
+
+
 __all__ = [
+    "COMMERCIAL_FUNNEL_STAGES",
+    "CORE_FUNNEL_STAGES",
     "FUNNEL_EVENT_TYPES",
+    "FUNNEL_JOURNEY_SESSION_KEY",
     "FunnelEventResult",
+    "FunnelJourneyResult",
     "create_funnel_journey",
+    "ensure_funnel_journey",
     "record_funnel_event",
     "sanitize_campaign",
 ]

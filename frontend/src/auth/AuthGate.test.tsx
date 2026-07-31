@@ -15,12 +15,17 @@ it('offers OAuth only for the opaque draft bound to this browser session', async
     '',
     '/studio?draft=draft-1',
   );
-  const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({
-    enabled: true,
-    authenticated: false,
-    pending_draft_id: 'draft-1',
-    providers: ['google', 'yandex'],
-  })));
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input) === '/api/analytics/entry') {
+      return new Response(null, { status: 204 });
+    }
+    return new Response(JSON.stringify({
+      enabled: true,
+      authenticated: false,
+      pending_draft_id: 'draft-1',
+      providers: ['google', 'yandex'],
+    }));
+  });
   vi.stubGlobal('fetch', fetchMock);
 
   render(<AuthGate><h1>Закрытая студия</h1></AuthGate>);
@@ -33,7 +38,11 @@ it('offers OAuth only for the opaque draft bound to this browser session', async
   );
   expect(screen.getByText(/платить нужно только за публикацию и подключение готового виджета/i)).toBeVisible();
   expect(screen.queryByText(/дорабат/i)).not.toBeInTheDocument();
-  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+    '/api/analytics/entry',
+    '/api/auth/session',
+  ]);
 });
 
 it('does not attach an unbound draft id to OAuth', async () => {

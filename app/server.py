@@ -9,6 +9,8 @@ from sqlalchemy import select
 from app.admin.routes import setup_admin_routes
 from app.admin.generation_forensics import setup_operator_forensics_routes
 from app.admin.funnel_analytics import setup_operator_funnel_routes
+from app.analytics.routes import setup_analytics_routes
+from app.analytics.runtime import setup_analytics_runtime
 from app.api.routes import setup_api_routes
 from app.config import AppConfig, load_config
 from app.auth.session_storage import DatabaseSessionStorage
@@ -376,6 +378,7 @@ async def create_app(
     app.on_startup.append(_init_history_db)
 
     init_db_signals(app)
+    setup_analytics_runtime(app)
     setup_billing_runtime(app)
     # Registered after the database context because routed chat auditing needs
     # the live async session factory during startup.
@@ -399,6 +402,7 @@ async def create_app(
         entry_max_body_bytes=cfg.entry_max_body_bytes,
         trusted_proxy_cidrs=cfg.publication_chat_trusted_proxy_cidrs,
     )
+    setup_analytics_routes(app, enabled=cfg.funnel_journeys_enabled)
     setup_project_routes(app, generation_forensics=cfg.generation_forensics)
     setup_publication_routes(app)
     setup_billing_routes(app)

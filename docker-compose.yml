@@ -35,6 +35,37 @@ services:
       - 1.1.1.1
       - 8.8.8.8
 
+  billing-worker:
+    profiles:
+      - saas-billing-worker
+    image: ${KAIGO_APP_IMAGE:-ai_project-app:local}
+    container_name: ai_project_billing_worker
+    command: ["python", "scripts/run_billing_worker.py"]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      KAIGO_ENVIRONMENT: production
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://widget_admin:change-me@db:5432/widget_platform}
+      KAIGO_BILLING_RENEWALS_ENABLED: ${KAIGO_BILLING_RENEWALS_ENABLED:-false}
+      KAIGO_BILLING_WORKER_POLL_SECONDS: ${KAIGO_BILLING_WORKER_POLL_SECONDS:-5}
+    depends_on:
+      - db
+    networks:
+      kaigo_app_public:
+        gw_priority: 1
+      kaigo_app_db:
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+
   builder-worker:
     profiles:
       - saas-worker

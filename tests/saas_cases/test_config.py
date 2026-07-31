@@ -419,6 +419,46 @@ def test_load_config_reads_private_provider_proxy_opt_in(
     assert load_config().allow_insecure_provider_proxy is True
 
 
+def test_funnel_retention_defaults_and_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = AppConfig(database_url="sqlite+aiosqlite:///:memory:")
+    assert config.funnel_journeys_enabled is False
+    assert config.funnel_retention_days == 90
+    assert config.funnel_cleanup_interval_seconds == 3600
+    assert config.funnel_cleanup_batch_size == 500
+    assert config.funnel_cleanup_time_budget_seconds == 5
+
+    _database(monkeypatch)
+    monkeypatch.setenv("KAIGO_FUNNEL_JOURNEYS_ENABLED", "true")
+    monkeypatch.setenv("KAIGO_FUNNEL_RETENTION_DAYS", "120")
+    monkeypatch.setenv("KAIGO_FUNNEL_CLEANUP_INTERVAL_SECONDS", "600")
+    monkeypatch.setenv("KAIGO_FUNNEL_CLEANUP_BATCH_SIZE", "250")
+    monkeypatch.setenv("KAIGO_FUNNEL_CLEANUP_TIME_BUDGET_SECONDS", "4")
+    loaded = load_config()
+    assert loaded.funnel_journeys_enabled is True
+    assert loaded.funnel_retention_days == 120
+    assert loaded.funnel_cleanup_interval_seconds == 600
+    assert loaded.funnel_cleanup_batch_size == 250
+    assert loaded.funnel_cleanup_time_budget_seconds == 4
+
+
+@pytest.mark.parametrize("value", [6, 366])
+def test_funnel_retention_rejects_unbounded_days(value: int) -> None:
+    with pytest.raises(ValueError, match="funnel_retention_days"):
+        AppConfig(
+            database_url="sqlite+aiosqlite:///:memory:",
+            funnel_retention_days=value,
+        )
+
+
+@pytest.mark.parametrize("value", [59, 86_401])
+def test_funnel_retention_rejects_unbounded_interval(value: int) -> None:
+    with pytest.raises(ValueError, match="funnel_cleanup_interval_seconds"):
+        AppConfig(
+            database_url="sqlite+aiosqlite:///:memory:",
+            funnel_cleanup_interval_seconds=value,
+        )
+
+
 def test_chat_user_rate_limit_prefers_user_name_and_supports_legacy_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -452,6 +492,53 @@ def test_yookassa_configuration_hides_secret_and_uses_fixed_provider_origin(
     assert config.yookassa_timeout_seconds == 17
     assert "super-secret" not in repr(config)
     assert not hasattr(config, "yookassa_api_base_url")
+
+
+def test_yookassa_receipt_configuration_is_explicit_and_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert AppConfig(
+        database_url="sqlite+aiosqlite:///:memory:"
+    ).yookassa_receipts_enabled is False
+
+    _database(monkeypatch)
+    monkeypatch.setenv("KAIGO_PUBLIC_BASE_URL", "https://kaigo.space")
+    monkeypatch.setenv("YOOKASSA_SHOP_ID", "shop-123")
+    monkeypatch.setenv("YOOKASSA_SECRET_KEY", "super-secret")
+    monkeypatch.setenv("YOOKASSA_RECEIPTS_ENABLED", "true")
+    monkeypatch.setenv("YOOKASSA_RECEIPT_VAT_CODE", "1")
+    monkeypatch.setenv("YOOKASSA_RECEIPT_TAX_SYSTEM_CODE", "1")
+    monkeypatch.setenv("YOOKASSA_RECEIPT_PAYMENT_SUBJECT", "service")
+    monkeypatch.setenv("YOOKASSA_RECEIPT_PAYMENT_MODE", "full_payment")
+
+    config = load_config()
+
+    assert config.yookassa_receipts_enabled is True
+    assert config.yookassa_receipt_vat_code == 1
+    assert config.yookassa_receipt_tax_system_code == 1
+    assert config.yookassa_receipt_payment_subject == "service"
+    assert config.yookassa_receipt_payment_mode == "full_payment"
+
+    monkeypatch.delenv("YOOKASSA_RECEIPT_VAT_CODE")
+    with pytest.raises(ValueError, match="vat_code"):
+        load_config()
+
+
+def test_billing_worker_is_safe_and_bounded_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _database(monkeypatch)
+    monkeypatch.delenv("KAIGO_BILLING_RENEWALS_ENABLED", raising=False)
+    monkeypatch.delenv("KAIGO_BILLING_WORKER_POLL_SECONDS", raising=False)
+
+    config = load_config()
+
+    assert config.billing_renewals_enabled is False
+    assert config.billing_worker_poll_seconds == 5
+
+    monkeypatch.setenv("KAIGO_BILLING_WORKER_POLL_SECONDS", "61")
+    with pytest.raises(ValueError, match="billing_worker_poll_seconds"):
+        load_config()
 
 
 def test_yookassa_requires_complete_credentials_and_public_base(

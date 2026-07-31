@@ -9,6 +9,10 @@ import { HowItWorksSection } from './HowItWorksSection';
 import { StudioSection } from './StudioSection';
 
 export function LandingPage() {
+  useEffect(() => {
+    void ensureLandingJourney();
+  }, []);
+
   return (
     <main>
       <HeroSection />
@@ -23,3 +27,6 @@ export function LandingPage() {
     </main>
   );
 }
+import { useEffect } from 'react';
+
+import { ensureLandingJourney } from '../shared/journey';

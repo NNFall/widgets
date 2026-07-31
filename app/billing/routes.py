@@ -361,6 +361,17 @@ async def disable_auto_renew(request: web.Request) -> web.Response:
         )
     except PaymentNotFound:
         raise web.HTTPNotFound() from None
+    except BillingError as error:
+        if str(error) == "renewal_in_progress":
+            return web.json_response(
+                _error(
+                    "renewal_in_progress",
+                    "Продление уже обрабатывается; проверьте статус платежа",
+                    retryable=True,
+                ),
+                status=409,
+            )
+        raise
     remaining = await GenerationCreditService(
         get_session_factory(request.app)
     ).available_tokens(user_id)

@@ -2,6 +2,7 @@ import { LinkSimple } from '@phosphor-icons/react';
 import { useId, useState, type FormEvent } from 'react';
 
 import { campaignFromSearch, studioHrefWithDraft } from './campaign';
+import { ensureLandingJourney } from './journey';
 
 const URL_ERROR = 'Введите публичный HTTPS-адрес без параметров и авторизации';
 const PRIVATE_SUFFIXES = ['.internal', '.localhost', '.local', '.lan', '.home'];
@@ -65,6 +66,7 @@ export function UrlComposer({
     setError('');
     setPending(true);
     try {
+      await ensureLandingJourney();
       const campaign = campaignFromSearch();
       const response = await fetch('/api/drafts', {
         method: 'POST',

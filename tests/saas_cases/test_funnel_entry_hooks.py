@@ -11,11 +11,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.auth.routes import OAUTH_PROVIDERS_KEY, setup_auth_routes
+from app.analytics.routes import setup_analytics_routes
 from app.auth.session_storage import DatabaseSessionStorage
 from app.db.base import Base
 from app.db.session import SESSION_FACTORY_KEY
 from app.saas.models import (
     AnonymousDraft,
+    AuthSession,
     FunnelEvent,
     FunnelJourney,
     GenerationRun,
@@ -47,9 +49,15 @@ async def test_draft_and_oauth_boundaries_emit_only_server_owned_funnel_events()
         ),
     )
     setup_auth_routes(app, public_base_url="https://kaigo.space")
+    setup_analytics_routes(app)
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
+        entry = await client.post(
+            "/api/analytics/entry",
+            json={"campaign": {"utm_source": "telegram", "utm_campaign": "launch"}},
+        )
+        assert entry.status == 204
         draft_response = await client.post(
             "/api/drafts",
             json={
@@ -86,20 +94,26 @@ async def test_draft_and_oauth_boundaries_emit_only_server_owned_funnel_events()
             stored_draft = await database.get(AnonymousDraft, UUID(draft["id"]))
             state = await database.scalar(select(OAuthState))
             project = await database.scalar(select(Project))
+            auth_session = await database.scalar(
+                select(AuthSession).where(AuthSession.user_id.is_not(None))
+            )
             journeys = list((await database.execute(select(FunnelJourney))).scalars())
             events = list((await database.execute(select(FunnelEvent))).scalars())
 
         by_type = {event.event_type: event for event in events}
         assert set(by_type) == {
+            "landing_entered",
             "composer_submitted",
             "auth_started",
             "auth_completed",
+            "authenticated_project",
         }
         assert len(journeys) == 1
         journey = journeys[0]
         assert stored_draft.journey_id == journey.id
         assert state.journey_id == journey.id
         assert project.journey_id == journey.id
+        assert auth_session.payload["session"]["funnel_journey_id"] == str(journey.id)
         assert {event.journey_id for event in events} == {journey.id}
         composed = by_type["composer_submitted"]
         started_event = by_type["auth_started"]
@@ -107,10 +121,10 @@ async def test_draft_and_oauth_boundaries_emit_only_server_owned_funnel_events()
         assert composed.event_key == f"composer_submitted:draft:{draft['id']}"
         assert composed.anonymous_draft_id == state.draft_id
         assert composed.campaign_source == "telegram"
-        assert composed.campaign_medium == "social"
+        assert composed.campaign_medium is None
         assert composed.campaign_name == "launch"
-        assert composed.campaign_term == "widgets"
-        assert composed.campaign_content == "hero"
+        assert composed.campaign_term is None
+        assert composed.campaign_content is None
         assert started_event.event_key == f"auth_started:oauth_state:{state.id}"
         assert started_event.oauth_state_id == state.id
         assert started_event.anonymous_draft_id == state.draft_id
@@ -122,7 +136,7 @@ async def test_draft_and_oauth_boundaries_emit_only_server_owned_funnel_events()
         for event in events:
             assert event.campaign_source == "telegram"
             assert event.campaign_name == "launch"
-            assert event.campaign_medium == "social"
+            assert event.campaign_medium is None
         stored = " ".join(
             str(value)
             for event in events

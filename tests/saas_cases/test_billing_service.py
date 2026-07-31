@@ -26,6 +26,7 @@ from app.billing.payments import (
     CheckoutIdempotencyConflict,
 )
 from app.billing.reconciliation import PaymentReconciler
+from app.billing.service import UsageBalanceService
 from app.db.base import Base
 from app.db.models import Tenant, User
 from app.saas.models import (
@@ -452,18 +453,32 @@ async def test_saved_method_identity_cannot_be_claimed_by_another_user(
         await verified_payment(first.payment_id),
         source="webhook",
     )
-    with pytest.raises(BillingError, match="belongs to another user"):
-        await service.apply_verified_payment(
-            second.payment_id,
-            await verified_payment(second.payment_id),
-            source="webhook",
-        )
+    result = await service.apply_verified_payment(
+        second.payment_id,
+        await verified_payment(second.payment_id),
+        source="webhook",
+    )
 
     async with factory() as database:
         methods = list(await database.scalars(select(BillingPaymentMethod)))
-        subscriptions = list(await database.scalars(select(Subscription)))
+        subscriptions = list(
+            await database.scalars(
+                select(Subscription).order_by(Subscription.user_id)
+            )
+        )
+        credits = list(
+            await database.scalars(
+                select(UsageLedger).where(
+                    UsageLedger.entry_type == "subscription.credit"
+                )
+            )
+        )
+    assert result.processed is True
     assert [method.user_id for method in methods] == [10]
-    assert [subscription.user_id for subscription in subscriptions] == [10]
+    assert [subscription.user_id for subscription in subscriptions] == [10, 11]
+    assert subscriptions[1].auto_renew is False
+    assert subscriptions[1].payment_method_id is None
+    assert len(credits) == 2
 
 
 @pytest.mark.asyncio
@@ -1029,13 +1044,42 @@ async def test_verified_webhook_fulfills_once_and_extends_subscription(
         assert webhook.payment_attempt_id == checkout.payment_id
         assert webhook.payload["source"] == "webhook"
         assert ledger.payment_attempt_id == checkout.payment_id
-        assert ledger.bucket == "generation_tokens"
+        assert ledger.bucket == "tokens"
         assert ledger.amount == 1_000_000
-        assert ledger.idempotency_key == (
-            f"fakepay:payment.succeeded:{payment_id}:generation_tokens"
-        )
+        assert ledger.idempotency_key == f"payment:{checkout.payment_id}:tokens"
         assert await database.scalar(select(func.count()).select_from(UsageLedger)) == 1
+    assert await UsageBalanceService(factory).token_balance(10) == 1_000_000
     assert len(provider.verify_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_usage_balance_includes_legacy_and_canonical_token_buckets(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+    async with factory() as database, database.begin():
+        database.add_all(
+            [
+                UsageLedger(
+                    user_id=10,
+                    bucket="generation_tokens",
+                    entry_type="subscription.credit",
+                    amount=125,
+                    idempotency_key="legacy-balance-credit",
+                    payload={},
+                ),
+                UsageLedger(
+                    user_id=10,
+                    bucket="tokens",
+                    entry_type="subscription.credit",
+                    amount=275,
+                    idempotency_key="canonical-balance-credit",
+                    payload={},
+                ),
+            ]
+        )
+
+    assert await UsageBalanceService(factory).token_balance(10) == 400
 
 
 @pytest.mark.asyncio
@@ -1107,10 +1151,12 @@ async def test_ledger_idempotency_is_namespaced_by_provider(billing_db) -> None:
                 )
             )
         )
-    assert keys == [
-        "provider_one:payment.succeeded:shared-provider-payment-id:generation_tokens",
-        "provider_two:payment.succeeded:shared-provider-payment-id:generation_tokens",
-    ]
+    assert keys == sorted(
+        [
+            f"payment:{attempts[0].id}:tokens",
+            f"payment:{attempts[1].id}:tokens",
+        ]
+    )
 
 
 @pytest.mark.asyncio

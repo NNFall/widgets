@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -36,6 +37,7 @@ from app.saas.models import (
     GenerationForensicManifest,
     GenerationRun,
     FunnelEvent,
+    FunnelJourney,
     ModelCall,
     Project,
     TrialEntitlement,
@@ -245,11 +247,14 @@ async def test_create_project_requires_owner_session_and_csrf_and_always_creates
                     )
                 ).scalars()
             )
+            journeys = list((await database.scalars(select(FunnelJourney))).all())
         assert len(created) == 2
         assert {(project.owner_user_id, project.tenant_id) for project in created} == {
             (10, 1)
         }
-        assert len(funnel_events) == 2
+        assert len(journeys) == 1
+        assert {project.journey_id for project in created} == {journeys[0].id}
+        assert len(funnel_events) == 4
         assert all(event.campaign_source == "telegram" for event in funnel_events)
         assert all(event.campaign_name == "launch" for event in funnel_events)
         assert {
@@ -262,12 +267,13 @@ async def test_create_project_requires_owner_session_and_csrf_and_always_creates
             for event in funnel_events
         } == {
             (
-                "composer_submitted",
-                f"composer_submitted:project:{project_id}",
+                event_type,
+                f"{event_type}:project:{project_id}",
                 10,
                 project_id,
             )
             for project_id in {created_project.id for created_project in created}
+            for event_type in {"composer_submitted", "authenticated_project"}
         }
         stored_funnel_data = " ".join(
             str(value)
@@ -282,6 +288,40 @@ async def test_create_project_requires_owner_session_and_csrf_and_always_creates
         assert "must-not-store.example" not in stored_funnel_data
         assert "campaign-private@example.com" not in stored_funnel_data
         assert "203.0.113.43" not in stored_funnel_data
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_create_project_does_not_write_journey_when_rollout_is_disabled(
+    tmp_path,
+) -> None:
+    def configure(app: web.Application, _factory) -> None:
+        app["config"] = SimpleNamespace(funnel_journeys_enabled=False)
+
+    engine, factory, client, _project_id, _ = await _project_app(
+        tmp_path,
+        configure_app=configure,
+    )
+    try:
+        await client.post("/test/login/10")
+        response = await client.post(
+            "/api/projects",
+            json={"url": "https://disabled.example.com/", "brief": "disabled"},
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        assert response.status == 201
+        project_id = UUID((await response.json())["id"])
+        async with factory() as database:
+            project = await database.get(Project, project_id)
+            journeys = list((await database.scalars(select(FunnelJourney))).all())
+            events = list((await database.scalars(select(FunnelEvent))).all())
+        assert project is not None and project.journey_id is None
+        assert journeys == []
+        assert [(event.event_type, event.journey_id) for event in events] == [
+            ("composer_submitted", None)
+        ]
     finally:
         await client.close()
         await engine.dispose()
