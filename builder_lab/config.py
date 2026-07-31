@@ -181,7 +181,7 @@ class BuilderLabConfig:
             agentrouter_api_key=_first_nonblank("AGENTROUTER_API_KEY"),
             agentrouter_base_url=os.getenv(
                 "AGENTROUTER_BASE_URL",
-                "https://agentrouter.org/v1",
+                "https://co.agentrouter.org/v1",
             ).strip().rstrip("/"),
             agentrouter_timeout_seconds=_int(
                 "AGENTROUTER_TIMEOUT_SECONDS",

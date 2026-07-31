@@ -298,7 +298,7 @@ async def test_cli_version_is_pinned_and_environment_is_allowlisted(
     environment = launch.await_args.kwargs["env"]
     assert "UNRELATED_SECRET" not in environment
     assert environment["OPENAI_API_KEY"] == "unit-test-key"
-    assert environment["OPENAI_BASE_URL"] == "https://agentrouter.org/v1"
+    assert environment["OPENAI_BASE_URL"] == "https://co.agentrouter.org/v1"
     assert environment["OPENAI_MODEL"] == "glm-5.2"
     assert environment["NO_COLOR"] == "1"
 

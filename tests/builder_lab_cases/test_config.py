@@ -86,7 +86,7 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertEqual(config.max_repairs, 3)
         self.assertFalse(config.hybrid_routing_enabled)
         self.assertIsNone(config.agentrouter_api_key)
-        self.assertEqual(config.agentrouter_base_url, "https://agentrouter.org/v1")
+        self.assertEqual(config.agentrouter_base_url, "https://co.agentrouter.org/v1")
         self.assertEqual(config.agentrouter_timeout_seconds, 180)
         self.assertEqual(config.agentrouter_qwen_executable, "qwen")
         self.assertEqual(config.agentrouter_gpt_model, "gpt-5.5")

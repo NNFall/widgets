@@ -176,6 +176,15 @@ class BuilderLabPackagingTests(unittest.TestCase):
             env_example,
             r"(?m)^AGENTROUTER_API_KEY=.+$",
         )
+        self.assertIn(
+            "      AGENTROUTER_BASE_URL: "
+            "${AGENTROUTER_BASE_URL:-https://co.agentrouter.org/v1}",
+            worker,
+        )
+        self.assertRegex(
+            env_example,
+            r"(?m)^AGENTROUTER_BASE_URL=https://co\.agentrouter\.org/v1$",
+        )
 
     def test_hybrid_routing_defaults_off_in_compose_and_env_example(self):
         compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")

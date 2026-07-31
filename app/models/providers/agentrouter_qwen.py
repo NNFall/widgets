@@ -59,7 +59,7 @@ class AgentRouterQwenProvider:
         self,
         *,
         api_key: str,
-        base_url: str = "https://agentrouter.org/v1",
+        base_url: str = "https://co.agentrouter.org/v1",
         timeout_seconds: float = 180.0,
         working_directory: str | Path | None = None,
         executable: str | None = None,
