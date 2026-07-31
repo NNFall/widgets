@@ -515,7 +515,7 @@ Add `project_versions_enabled: bool = False` to `AppConfig` and load `KAIGO_PROJ
 
 - [ ] **Step 4: Implement thin route handlers**
 
-Keep parsing/auth/CSRF/status mapping in `app/projects/routes.py` and all transaction logic in `ProjectVersionService`. Reuse `_idempotency_key()`. Reject unknown JSON keys and bodies above 4 KiB before mutation. Do not proxy to `/builder/api/runs/{id}/refine` and do not read `ORCHESTRATOR_KEY`.
+Keep parsing/auth/CSRF/status mapping in `app/projects/routes.py` and all transaction logic in `ProjectVersionService`. Reuse `_idempotency_key()`. Reject unknown JSON keys and bodies above 32 KiB before mutation; this bounded cap intentionally accommodates the complete 2,000-character Unicode change-request contract, including four-byte code points. Do not proxy to `/builder/api/runs/{id}/refine` and do not read `ORCHESTRATOR_KEY`.
 
 Add `active_version_id` to `serialize_project()` without removing `active_run` or `active_revision` compatibility fields.
 
