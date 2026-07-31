@@ -7,6 +7,19 @@ import pytest
 
 from app.billing import worker as worker_module
 from app.billing.worker import BillingWorker
+from scripts.run_billing_worker import _database_url
+
+
+def test_billing_worker_normalizes_postgresql_dsn_for_asyncpg() -> None:
+    assert _database_url("postgresql://user:pass@db/kaigo") == (
+        "postgresql+asyncpg://user:pass@db/kaigo"
+    )
+    assert _database_url("postgresql+asyncpg://user:pass@db/kaigo") == (
+        "postgresql+asyncpg://user:pass@db/kaigo"
+    )
+
+    with pytest.raises(RuntimeError, match="PostgreSQL with asyncpg"):
+        _database_url("sqlite+aiosqlite:///billing.db")
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,15 @@ from app.config import load_config
 logger = logging.getLogger(__name__)
 
 
+def _database_url(value: str) -> str:
+    database_url = value.strip()
+    if database_url.startswith("postgresql://"):
+        return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if not database_url.startswith("postgresql+asyncpg://"):
+        raise RuntimeError("billing worker requires PostgreSQL with asyncpg")
+    return database_url
+
+
 def install_signal_handlers(worker: BillingWorker) -> None:
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -30,7 +39,7 @@ def install_signal_handlers(worker: BillingWorker) -> None:
 
 async def run() -> None:
     config = load_config()
-    engine = create_async_engine(config.database_url, pool_pre_ping=True)
+    engine = create_async_engine(_database_url(config.database_url), pool_pre_ping=True)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     runtime = create_billing_runtime(config, sessions)
     if runtime is None:
