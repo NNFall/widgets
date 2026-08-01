@@ -13,6 +13,7 @@ from app.models.contracts import (
     ModelResponse,
     ModelUnavailable,
     ProviderCapabilities,
+    ProviderPermissionDenied,
     ProviderQuotaExceeded,
     ProviderTimeout,
     ProviderUnavailable,
@@ -287,6 +288,22 @@ async def test_provider_errors_are_classified_and_sanitized(
 
     assert "secret route" not in str(caught.value)
     assert "private-route" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_billing_permission_denial_is_terminal_and_sanitized() -> None:
+    error = RuntimeError(
+        "403 PERMISSION_DENIED. Lightning dunning decision is deny for "
+        "project: projects/671587661095"
+    )
+    provider = GeminiModelProvider(api_key="secret", client=FakeClient(error=error))
+
+    with pytest.raises(ProviderPermissionDenied) as caught:
+        await provider.generate(ModelRequest(prompt="Generate"), model="gemini-3.5-flash")
+
+    assert caught.value.error_code == "provider_permission_denied"
+    assert "671587661095" not in str(caught.value)
+    assert "dunning" not in str(caught.value).lower()
 
 
 @pytest.mark.asyncio

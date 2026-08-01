@@ -117,6 +117,58 @@ class PreviewRuntimeBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await root.get_attribute("data-state"), "closed")
         self.assertTrue(await launcher.is_visible())
 
+    async def test_top_level_trusted_runtime_fails_chat_as_visual_only_without_staying_busy(
+        self,
+    ):
+        document = build_trusted_runtime_document(
+            artifact(revision=9), channel_id=CHANNEL
+        )
+        await self.page.set_content(document)
+
+        await self.page.locator('[data-region="launcher"]').click()
+        input_box = self.page.locator('[data-kaigo-runtime-input="true"]')
+        question = "\u041a\u0430\u043a \u043d\u0430\u0447\u0430\u0442\u044c?"
+        await input_box.fill(question)
+        await input_box.press("Enter")
+
+        status = self.page.locator('[data-kaigo-runtime-status="error"]')
+        await status.wait_for()
+        self.assertEqual(
+            await status.inner_text(),
+            "\u042d\u0442\u043e \u0432\u0438\u0437\u0443\u0430\u043b\u044c\u043d\u044b\u0439 "
+            "\u043f\u0440\u0435\u0434\u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440. \u0414\u0438\u0430\u043b\u043e\u0433 "
+            "\u0441 AI \u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u0432 \u0441\u0442\u0443\u0434\u0438\u0438.",
+        )
+        self.assertEqual(await input_box.input_value(), question)
+        self.assertEqual(
+            await self.page.locator('[data-region="composer"]').get_attribute(
+                "aria-busy"
+            ),
+            "false",
+        )
+        self.assertFalse(
+            await self.page.locator('[data-region="composer"] button').is_disabled()
+        )
+        self.assertEqual(
+            await self.page.locator('[data-kaigo-runtime-retry="true"]').count(),
+            0,
+        )
+        self.assertEqual(
+            await self.page.locator('[data-kaigo-runtime-content="user"]').inner_text(),
+            question,
+        )
+
+        second_question = (
+            "\u0410 \u0447\u0442\u043e \u0434\u0430\u043b\u044c\u0448\u0435?"
+        )
+        await input_box.fill(second_question)
+        await input_box.press("Enter")
+        self.assertEqual(
+            await self.page.locator('[data-kaigo-runtime-message="user"]').count(),
+            2,
+        )
+        self.assertEqual(await input_box.input_value(), second_question)
+
     async def test_runtime_hidden_suggestions_cannot_be_reshown_by_generated_css(self):
         base = artifact(revision=9)
         body_html = base.body_html.replace(

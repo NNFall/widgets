@@ -10,6 +10,7 @@ from app.models.contracts import (
     ModelRouteAttempt,
     ModelRouteExhausted,
     ModelUsage,
+    ProviderPermissionDenied,
     ProviderTimeout,
 )
 from builder_lab.engines.base import BuilderEngineError
@@ -151,6 +152,52 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("BilledProviderUnavailable", caught.exception.diagnostic)
         for provider_name in ("Gemini", "GPT", "GLM"):
             self.assertNotIn(provider_name, caught.exception.public_message)
+
+    async def test_direct_permission_denial_is_terminal_and_public_message_is_safe(self):
+        client = FakeClient(
+            error=RuntimeError(
+                "403 PERMISSION_DENIED. Lightning dunning decision is deny for "
+                "project: projects/671587661095"
+            )
+        )
+        engine = GeminiDirectEngine(api_key="test-key", client=client)
+
+        with self.assertRaises(BuilderEngineError) as caught:
+            await engine.propose_direction(
+                request=self.request,
+                role=DirectionRole.BRAND_ARCHAEOLOGIST,
+                proposal_id="candidate-1",
+            )
+
+        self.assertEqual(caught.exception.error_code, "provider_permission_denied")
+        self.assertEqual(len(client.aio.models.calls), 1)
+        self.assertIn("ограничений доступа или оплаты", caught.exception.public_message)
+        self.assertNotIn("671587661095", caught.exception.public_message)
+        self.assertNotIn("dunning", caught.exception.public_message.lower())
+
+    async def test_routed_permission_denial_keeps_terminal_code_and_safe_message(self):
+        router = std_types.SimpleNamespace(
+            generate=AsyncMock(
+                side_effect=ProviderPermissionDenied(
+                    "provider project access is not permitted"
+                )
+            )
+        )
+        engine = GeminiDirectEngine(
+            model_router=router,
+            routing_role="widget_generator",
+        )
+
+        with self.assertRaises(BuilderEngineError) as caught:
+            await engine.generate(
+                request=self.request,
+                stage=Stage.FOUNDATION,
+                revision=1,
+            )
+
+        self.assertEqual(caught.exception.error_code, "provider_permission_denied")
+        self.assertIn("ограничений доступа или оплаты", caught.exception.public_message)
+        self.assertNotIn("project", caught.exception.public_message.lower())
 
     async def test_routed_result_diagnostic_uses_actual_provider_and_model(self):
         payload = artifact(revision=1, stage=Stage.FOUNDATION).to_dict()

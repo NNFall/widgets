@@ -344,10 +344,7 @@ class ModelRouter:
                         attempts=tuple(route_attempts),
                         usage=total_usage,
                     )
-                if (
-                    attempt < len(policy.targets)
-                    and error.error_code not in _FALLBACK_ERROR_CODES
-                ):
+                if error.error_code not in _FALLBACK_ERROR_CODES:
                     raise
                 continue
 

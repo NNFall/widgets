@@ -22,7 +22,12 @@ from urllib.parse import urlsplit, urlunsplit
 
 from PIL import Image, UnidentifiedImageError
 
-from app.models.contracts import ModelRequest, ModelRouteExhausted, ModelUsage
+from app.models.contracts import (
+    ModelRequest,
+    ModelRouteExhausted,
+    ModelUsage,
+    ProviderPermissionDenied,
+)
 from app.models.structured_generation import (
     GeminiStructuredGenerationBackend,
     StructuredGenerationBackend,
@@ -610,6 +615,12 @@ async def analyze_reference_site(
                 else "The generation service returned an invalid grounded reference"
             ),
             diagnostic=last_semantic_error or type(exc).__name__,
+        ) from exc
+    except ProviderPermissionDenied as exc:
+        raise ReferenceAnalysisError(
+            exc.error_code,
+            "Сервис генерации недоступен из-за ограничений доступа или оплаты. Обратитесь в поддержку.",
+            diagnostic=f"{type(exc).__name__}: {exc}",
         ) from exc
     except ModelRouteExhausted as exc:
         raise ReferenceAnalysisError(

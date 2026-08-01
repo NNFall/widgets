@@ -73,6 +73,7 @@ class RunStatus(str, Enum):
 PUBLIC_ERROR_CODES = frozenset(
     {
         "missing_api_key",
+        "provider_permission_denied",
         "provider_unavailable",
         "model_unavailable",
         "agent_unavailable",

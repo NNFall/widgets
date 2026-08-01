@@ -77,6 +77,12 @@ def build_low_thinking_config(
 def _provider_error(exc: Exception) -> BuilderEngineError:
     diagnostic = f"{type(exc).__name__}: {exc}"
     category = classify_gemini_error(exc)
+    if category == "provider_permission_denied":
+        return BuilderEngineError(
+            "provider_permission_denied",
+            "Сервис генерации недоступен из-за ограничений доступа или оплаты. Обратитесь в поддержку.",
+            diagnostic=diagnostic,
+        )
     if category == "generation_timeout":
         return BuilderEngineError(
             "generation_timeout",
@@ -218,6 +224,7 @@ class GeminiDirectEngine:
                 )
             except ModelProviderError as exc:
                 public_messages = {
+                    "provider_permission_denied": "Сервис генерации недоступен из-за ограничений доступа или оплаты. Обратитесь в поддержку.",
                     "generation_timeout": "Сервис генерации не завершил этап вовремя",
                     "quota_exceeded": "Квота сервиса генерации временно исчерпана",
                     "model_unavailable": "Выбранная модель генерации временно недоступна",

@@ -16,6 +16,7 @@ from app.models.contracts import (
     ModelUnavailable,
     ModelUsage,
     ProviderCapabilities,
+    ProviderPermissionDenied,
     ProviderQuotaExceeded,
     ProviderTimeout,
     ProviderUnavailable,
@@ -159,6 +160,11 @@ def classify_gemini_error(error: Exception) -> str:
     combined = " ".join((diagnostic, status, code))
     if isinstance(error, (TimeoutError, asyncio.TimeoutError)) or "timeout" in combined:
         return "generation_timeout"
+    if "403" in combined and any(
+        token in combined
+        for token in ("permission_denied", "permission denied", "dunning decision")
+    ):
+        return "provider_permission_denied"
     if any(token in combined for token in ("429", "resource_exhausted", "quota")):
         return "quota_exceeded"
     explicit_model_error = any(
@@ -328,6 +334,8 @@ def _normalized_usage(response: Any) -> ModelUsage:
 
 def _provider_error(error: Exception) -> Exception:
     category = classify_gemini_error(error)
+    if category == "provider_permission_denied":
+        return ProviderPermissionDenied("Gemini request is not permitted")
     if category == "quota_exceeded":
         return ProviderQuotaExceeded("Gemini quota is temporarily unavailable")
     if category == "model_unavailable":

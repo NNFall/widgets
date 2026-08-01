@@ -15,6 +15,7 @@ from app.models.contracts import (
     ModelRouteExhausted,
     ModelUsage,
     ProviderCapabilities,
+    ProviderPermissionDenied,
     ProviderUnavailable,
 )
 from app.models.router import InMemoryModelCallAudit, ModelPolicy, ModelRouter, ProviderTarget
@@ -105,6 +106,43 @@ async def test_fallback_is_a_second_visible_attempt() -> None:
     assert [call.status for call in audit.calls] == ["failed", "completed"]
     assert audit.calls[0].error_code == "provider_unavailable"
     assert audit.calls[1].provider == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_permission_denial_is_preserved_and_never_falls_back() -> None:
+    class PermissionDeniedProvider(FakeProvider):
+        async def generate(self, request: ModelRequest, *, model: str) -> ModelResponse:
+            self.requests.append(request)
+            raise ProviderPermissionDenied("provider access is not permitted")
+
+    primary = PermissionDeniedProvider()
+    fallback = FakeProvider()
+    audit = InMemoryModelCallAudit()
+    router = ModelRouter(
+        providers={"primary": primary, "fallback": fallback},
+        policies={
+            ("reference_analyzer", "standard"): ModelPolicy(
+                prompt_version="reference-v1",
+                targets=(
+                    ProviderTarget("primary", "gemini-3.6-flash", 1, 1),
+                    ProviderTarget("fallback", "must-not-run", 1, 1),
+                ),
+            )
+        },
+        audit=audit,
+    )
+
+    with pytest.raises(ProviderPermissionDenied) as caught:
+        await router.generate(
+            role="reference_analyzer",
+            mode="standard",
+            request=ModelRequest(prompt="Analyze"),
+        )
+
+    assert caught.value.error_code == "provider_permission_denied"
+    assert len(primary.requests) == 1
+    assert fallback.requests == []
+    assert [call.error_code for call in audit.calls] == ["provider_permission_denied"]
 
 
 @pytest.mark.asyncio

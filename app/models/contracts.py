@@ -73,6 +73,10 @@ class ProviderUnavailable(ModelProviderError):
     error_code = "provider_unavailable"
 
 
+class ProviderPermissionDenied(ModelProviderError):
+    error_code = "provider_permission_denied"
+
+
 class ProviderTimeout(ModelProviderError):
     error_code = "generation_timeout"
 

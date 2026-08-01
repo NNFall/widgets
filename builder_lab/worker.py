@@ -90,6 +90,7 @@ ALLOWED_STAGE_RESULT_EVENTS = frozenset(
 )
 
 _PROVIDER_FAILURE_CODES = frozenset({
+    "provider_permission_denied",
     "provider_unavailable",
     "model_unavailable",
     "agent_unavailable",

@@ -234,6 +234,36 @@ class ReferenceInputValidationTests(unittest.TestCase):
 
 
 class ReferenceGeminiAnalysisTests(unittest.IsolatedAsyncioTestCase):
+    async def test_permission_denial_is_preserved_without_retry(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inputs, manifest_path = evidence_with_manifest(root)
+            fake = FakeClient(
+                RuntimeError(
+                    "403 PERMISSION_DENIED. Lightning dunning decision is deny for "
+                    "project: projects/671587661095"
+                )
+            )
+
+            with self.assertRaises(ReferenceAnalysisError) as caught:
+                await analyze_reference_site(
+                    source_url="https://rawbureau.ru/",
+                    allowed_hosts={"rawbureau.ru"},
+                    screenshot_inputs=inputs,
+                    evidence_root=root,
+                    captured_at="2026-07-19T12:10:23.127441+00:00",
+                    coverage_status="complete",
+                    capture_manifest=manifest_path,
+                    api_key=None,
+                    client=fake,
+                    model="gemini-3.6-flash",
+                )
+
+        self.assertEqual(caught.exception.error_code, "provider_permission_denied")
+        self.assertEqual(len(fake.aio.models.calls), 1)
+        self.assertIn("ограничений доступа или оплаты", caught.exception.public_message)
+        self.assertNotIn("671587661095", caught.exception.public_message)
+
     async def test_retries_transient_provider_unavailable_with_backoff(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

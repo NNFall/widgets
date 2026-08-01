@@ -332,6 +332,7 @@ class GeminiReferencePipeline:
                 terminal_route_error = exc.error_code in {
                     "route_exhausted",
                     "invalid_response",
+                    "provider_permission_denied",
                 }
                 error_code = (
                     exc.error_code

@@ -20,6 +20,10 @@ PREVIEW_CSP = (
 )
 _CHANNEL_ID = re.compile(r"^[A-Za-z0-9_-]{22,96}$")
 DEFAULT_VISUAL_CHANNEL = "visual-only-preview-channel"
+TOP_LEVEL_VISUAL_ONLY_MESSAGE = (
+    "\u042d\u0442\u043e \u0432\u0438\u0437\u0443\u0430\u043b\u044c\u043d\u044b\u0439 \u043f\u0440\u0435\u0434\u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440. "
+    "\u0414\u0438\u0430\u043b\u043e\u0433 \u0441 AI \u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u0432 \u0441\u0442\u0443\u0434\u0438\u0438."
+)
 
 
 def preview_iframe_attributes() -> dict[str, str]:
@@ -66,6 +70,8 @@ try {{
 </script>"""
     revision = int(artifact.revision)
     encoded_channel = json.dumps(channel_id)
+    encoded_visual_only_message = json.dumps(TOP_LEVEL_VISUAL_ONLY_MESSAGE)
+    trusted_runtime = "true" if not include_generated_javascript else "false"
     return f"""<!doctype html>
 <html lang="ru">
 <head>
@@ -91,6 +97,8 @@ try {{
   'use strict';
   const channelId = {encoded_channel};
   const revision = {revision};
+  const trustedRuntime = {trusted_runtime};
+  const topLevelVisualOnlyMessage = {encoded_visual_only_message};
   const root = document.querySelector('[data-region="root"]');
   const assistantLabel = String(
     (root && (root.dataset.assistantLabel || root.getAttribute('aria-label')))
@@ -255,6 +263,14 @@ try {{
 
   function postPendingRequest() {{
     if (!pendingRequest) return;
+    if (trustedRuntime && window.parent === window) {{
+      pendingRequest = null;
+      failedRequest = null;
+      clearStatus();
+      setBusy(false);
+      showStatus('error', topLevelVisualOnlyMessage, false);
+      return;
+    }}
     clearStatus();
     setBusy(true);
     showStatus('pending', 'Gemini готовит ответ');

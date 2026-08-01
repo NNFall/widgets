@@ -25,6 +25,7 @@ DIRECTION_ROLES = (
 )
 
 _INFRASTRUCTURE_PUBLIC_MESSAGES = {
+    "provider_permission_denied": "Сервис генерации недоступен из-за ограничений доступа или оплаты. Обратитесь в поддержку.",
     "generation_timeout": "Сервис генерации не завершил этап вовремя",
     "provider_unavailable": "Сервис генерации временно недоступен",
     "quota_exceeded": "Квота сервиса генерации временно исчерпана",

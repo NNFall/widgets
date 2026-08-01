@@ -121,6 +121,34 @@ class FakeCrawler:
 
 
 class ReferencePipelineTests(unittest.IsolatedAsyncioTestCase):
+    async def test_permission_denial_crosses_pipeline_unchanged(self):
+        async def analyzer(**_kwargs):
+            from scripts.analyze_reference_site import ReferenceAnalysisError
+
+            raise ReferenceAnalysisError(
+                "provider_permission_denied",
+                "Сервис генерации недоступен из-за ограничений доступа или оплаты. Обратитесь в поддержку.",
+                diagnostic="ProviderPermissionDenied: provider access is not permitted",
+            )
+
+        pipeline = GeminiReferencePipeline(
+            crawler=FakeCrawler(crawl_result()),
+            analyzer=analyzer,
+            api_key="direct-key-is-not-used",
+            model="routed-model",
+            thinking_level="high",
+            base_url="https://example.invalid",
+        )
+
+        with self.assertRaises(ReferencePipelineError) as caught:
+            await pipeline.analyze(
+                "https://example.com/",
+                structured_backend=object(),
+            )
+
+        self.assertEqual(caught.exception.error_code, "provider_permission_denied")
+        self.assertIn("ограничений доступа или оплаты", caught.exception.public_message)
+
     async def test_terminal_routed_failure_crosses_pipeline_with_usage_and_diagnostic(self):
         diagnostic = (
             '{"terminal_reason":"all_generation_timeout",'

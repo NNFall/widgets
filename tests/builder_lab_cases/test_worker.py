@@ -2222,6 +2222,58 @@ async def test_deterministic_engine_error_fails_immediately_with_safe_fields(
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_permission_denial_is_terminal_provider_failure_without_retry(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id)
+    calls = 0
+    public_message = (
+        "Сервис генерации недоступен из-за ограничений доступа или оплаты. "
+        "Обратитесь в поддержку."
+    )
+
+    async def handle(_claim):
+        nonlocal calls
+        calls += 1
+        raise BuilderEngineError(
+            "provider_permission_denied",
+            public_message,
+            diagnostic="private project billing diagnostic",
+        )
+
+    worker = BuilderWorker(
+        queue=queue,
+        worker_id="permission-denied-worker",
+        stage_handler=handle,
+    )
+    try:
+        assert await worker.run_once()
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_id)
+            events = list(
+                (
+                    await database.execute(
+                        select(GenerationEvent)
+                        .where(GenerationEvent.run_id == run_id)
+                        .order_by(GenerationEvent.sequence)
+                    )
+                ).scalars()
+            )
+
+        assert calls == 1
+        assert run is not None
+        assert run.state == "failed"
+        assert run.error_code == "provider_permission_denied"
+        assert run.error_message == public_message
+        assert run.failure_category == "provider"
+        assert not any(
+            event.event_type == "stage.retry_scheduled" for event in events
+        )
+    finally:
+        await engine.dispose()
+
+
 def test_invalid_response_is_classified_as_model_invalid_output() -> None:
     category = failure_category_for_error(
         BuilderEngineError(
