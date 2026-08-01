@@ -6,9 +6,8 @@ from typing import Tuple
 
 from aiohttp import web
 
-from aiohttp_session import get_session
-
-from app.admin.auth import SESSION_EMAIL_KEY, SESSION_TENANT_KEY, login_page, login_submit, logout
+from app.admin.auth import login_page, login_submit, logout, require_admin_session
+from app.admin.generation_forensics import setup_generation_forensics_routes
 from app.admin.funnel import setup_funnel_admin_routes
 from app.admin.layout import render_layout as _render_layout
 from app.admin.tenants import setup_tenant_admin_routes
@@ -24,6 +23,7 @@ from core.config import settings as core_settings
 from core import database as history_db
 
 from app.widgets.templates import DEFAULT_TEMPLATE_KEY, TEMPLATE_LABELS, TEMPLATES, get_template_html
+from builder_lab.forensics.config import GenerationForensicsConfig
 
 def _default_widget_assets(template_key: str) -> Tuple[str, str | None, str | None]:
 
@@ -93,20 +93,6 @@ async def _collect_asset_fields(request: web.Request) -> dict[str, str]:
 
     return fields
 
-async def _require_session(request: web.Request) -> tuple[str, str]:
-
-    session = await get_session(request)
-
-    email = session.get(SESSION_EMAIL_KEY)
-
-    tenant_slug = session.get(SESSION_TENANT_KEY)
-
-    if not email or not tenant_slug:
-
-        raise web.HTTPFound('/admin/login')
-
-    return email, tenant_slug
-
 async def _get_tenant_id(request: web.Request, tenant_slug: str) -> int:
 
     async with session_scope(request.app) as db_session:
@@ -123,7 +109,7 @@ async def _get_tenant_id(request: web.Request, tenant_slug: str) -> int:
 
 async def admin_index(request: web.Request) -> web.Response:
 
-    email, tenant_slug = await _require_session(request)
+    email, tenant_slug = await require_admin_session(request)
 
     tenant_id = await _get_tenant_id(request, tenant_slug)
 
@@ -240,7 +226,7 @@ def _widget_form(widget: models.Widget | None = None) -> str:
 
 async def widget_create(request: web.Request) -> web.Response:
 
-    await _require_session(request)
+    await require_admin_session(request)
 
     form_html = _widget_form()
 
@@ -248,7 +234,7 @@ async def widget_create(request: web.Request) -> web.Response:
 
 async def widget_create_submit(request: web.Request) -> web.StreamResponse:
 
-    email, tenant_slug = await _require_session(request)
+    email, tenant_slug = await require_admin_session(request)
 
     tenant_id = await _get_tenant_id(request, tenant_slug)
 
@@ -320,7 +306,7 @@ async def widget_create_submit(request: web.Request) -> web.StreamResponse:
 
 async def widget_overview(request: web.Request) -> web.Response:
 
-    await _require_session(request)
+    await require_admin_session(request)
 
     widget_id = int(request.match_info['widget_id'])
 
@@ -476,7 +462,7 @@ async def widget_overview(request: web.Request) -> web.Response:
 
 async def widget_dialogs(request: web.Request) -> web.Response:
 
-    await _require_session(request)
+    await require_admin_session(request)
 
     widget_id = int(request.match_info['widget_id'])
 
@@ -538,7 +524,7 @@ async def widget_dialogs(request: web.Request) -> web.Response:
 
 async def widget_binding_add(request: web.Request) -> web.StreamResponse:
 
-    await _require_session(request)
+    await require_admin_session(request)
 
     widget_id = int(request.match_info['widget_id'])
 
@@ -570,7 +556,7 @@ async def widget_binding_add(request: web.Request) -> web.StreamResponse:
 
 async def widget_binding_delete(request: web.Request) -> web.StreamResponse:
 
-    await _require_session(request)
+    await require_admin_session(request)
 
     widget_id = int(request.match_info['widget_id'])
 
@@ -598,7 +584,7 @@ async def widget_binding_delete(request: web.Request) -> web.StreamResponse:
 
 async def widget_edit(request: web.Request) -> web.Response:
 
-    await _require_session(request)
+    await require_admin_session(request)
 
     widget_id = int(request.match_info['widget_id'])
 
@@ -620,7 +606,7 @@ async def widget_edit(request: web.Request) -> web.Response:
 
 async def widget_update(request: web.Request) -> web.StreamResponse:
 
-    await _require_session(request)
+    await require_admin_session(request)
 
     widget_id = int(request.match_info['widget_id'])
 
@@ -684,7 +670,7 @@ async def widget_update(request: web.Request) -> web.StreamResponse:
 
 async def widget_delete(request: web.Request) -> web.StreamResponse:
 
-    await _require_session(request)
+    await require_admin_session(request)
 
     widget_id = int(request.match_info['widget_id'])
 
@@ -698,7 +684,7 @@ async def widget_delete(request: web.Request) -> web.StreamResponse:
 
 async def widget_assets_list(request: web.Request) -> web.Response:
 
-    email, tenant_slug = await _require_session(request)
+    email, tenant_slug = await require_admin_session(request)
 
     widget_id = int(request.match_info['widget_id'])
 
@@ -882,7 +868,7 @@ async def widget_assets_new(request: web.Request) -> web.Response:
 
 async def widget_assets_create(request: web.Request) -> web.StreamResponse:
 
-    await _require_session(request)
+    await require_admin_session(request)
 
     widget_id = int(request.match_info['widget_id'])
 
@@ -924,7 +910,7 @@ async def widget_assets_create(request: web.Request) -> web.StreamResponse:
 
 async def widget_assets_preview_live(request: web.Request) -> web.Response:
 
-    await _require_session(request)
+    await require_admin_session(request)
 
     widget_id = int(request.match_info['widget_id'])
 
@@ -962,7 +948,7 @@ async def widget_assets_preview_live(request: web.Request) -> web.Response:
 
 async def widget_assets_preview(request: web.Request) -> web.Response:
 
-    await _require_session(request)
+    await require_admin_session(request)
 
     widget_id = int(request.match_info['widget_id'])
 
@@ -996,7 +982,11 @@ async def widget_assets_preview(request: web.Request) -> web.Response:
 
     return web.Response(text=html_doc, content_type='text/html')
 
-def setup_admin_routes(app: web.Application) -> None:
+def setup_admin_routes(
+    app: web.Application,
+    *,
+    generation_forensics: GenerationForensicsConfig | None = None,
+) -> None:
 
     app.router.add_get('/admin', admin_index)
 
@@ -1037,6 +1027,8 @@ def setup_admin_routes(app: web.Application) -> None:
     app.router.add_get('/admin/widgets/{widget_id}/assets/{version}/preview', widget_assets_preview)
 
     setup_tenant_admin_routes(app)
+
+    setup_generation_forensics_routes(app, config=generation_forensics)
 
     config = app.get("config")
     if bool(getattr(config, "funnel_journeys_enabled", False)):

@@ -906,6 +906,7 @@ async def test_project_run_and_preview_reads_are_owner_scoped_and_restore_state(
                             "status": "needs_repair",
                             "revision": 1,
                         },
+                        forensic_ref="events/00000002-artifact.draft_staged.json",
                     ),
                 ]
             )
@@ -936,6 +937,15 @@ async def test_project_run_and_preview_reads_are_owner_scoped_and_restore_state(
         }
         assert payload["preview"]["revision"] == 1
         assert payload["preview"]["source"] == "restorable_draft"
+        owner_json = json.dumps(payload)
+        for private_value in (
+            "forensic_ref",
+            "events/00000002-artifact.draft_staged.json",
+            "private prompt",
+            "private stack trace",
+            "/admin/generation-runs",
+        ):
+            assert private_value not in owner_json
 
         preview = await client.get(f"/api/runs/{run_id}/preview")
         assert preview.status == 200

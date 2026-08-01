@@ -1535,6 +1535,38 @@ class GenerationForensicStorage:
         with self._lock:
             return self._load_manifest_snapshot(run_id)[1]
 
+    def read_manifest_entry(self, run_id: UUID, entry: ForensicEntry) -> bytes:
+        """Read one manifest-bound entry and verify it again against its digest."""
+
+        if not isinstance(entry, ForensicEntry):
+            raise ValueError("entry must be a ForensicEntry")
+        with self._lock:
+            manifest, _digest_value = self._load_manifest_snapshot(run_id)
+            listed = next(
+                (
+                    item
+                    for item in manifest.entries
+                    if item.relative_path == entry.relative_path
+                ),
+                None,
+            )
+            if listed is None or listed != entry:
+                raise ValueError("forensic entry is not listed by this manifest")
+            maximum = (
+                MAX_FORENSIC_BLOB_BYTES
+                if entry.kind == "blob"
+                else MAX_FORENSIC_ENTRY_BYTES
+            )
+            candidate = self._run_dir(run_id).joinpath(
+                *entry.relative_path.split("/")
+            )
+            data = self._read_private(candidate, maximum=maximum)
+            if len(data) != entry.byte_count or _digest(data) != entry.sha256:
+                raise ValueError("forensic manifest entry checksum mismatch")
+            if entry.kind == "blob":
+                _validate_jpeg_bytes(data)
+            return data
+
     def usage(self) -> int:
         if not self.available:
             return 0

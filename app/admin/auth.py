@@ -17,6 +17,21 @@ DEFAULT_TENANT_SLUG = 'demo'
 DEFAULT_TENANT_NAME = 'Demo Tenant'
 
 
+async def require_admin_session(request: web.Request) -> tuple[str, str]:
+    """Return the normalized legacy admin identity or redirect to login."""
+
+    session = await get_session(request)
+    raw_email = session.get(SESSION_EMAIL_KEY)
+    tenant_slug = session.get(SESSION_TENANT_KEY)
+    if not isinstance(raw_email, str) or not isinstance(tenant_slug, str):
+        raise web.HTTPFound('/admin/login')
+    email = raw_email.strip().casefold()
+    tenant_slug = tenant_slug.strip()
+    if not email or not tenant_slug:
+        raise web.HTTPFound('/admin/login')
+    return email, tenant_slug
+
+
 async def login_page(request: web.Request) -> web.Response:
     form = """
     <section class='card login-card'>

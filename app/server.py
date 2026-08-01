@@ -387,7 +387,7 @@ async def create_app(
     else:
         setup_chat_runtime(app, service_factory=chat_service_factory)
     app.router.add_get('/', _home)
-    setup_admin_routes(app)
+    setup_admin_routes(app, generation_forensics=cfg.generation_forensics)
     setup_operator_forensics_routes(app)
     setup_operator_funnel_routes(app)
     setup_api_routes(app)

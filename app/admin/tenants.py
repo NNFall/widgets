@@ -5,9 +5,7 @@ from html import escape
 from urllib.parse import quote_plus
 
 from aiohttp import web
-from aiohttp_session import get_session
-
-from app.admin.auth import SESSION_EMAIL_KEY, SESSION_TENANT_KEY
+from app.admin.auth import require_admin_session
 from app.admin.layout import render_layout
 from app.db import models
 from app.db.repositories import TenantRepository, UserRepository, WidgetRepository
@@ -16,7 +14,7 @@ from core.security import hash_password
 
 
 async def tenants_index(request: web.Request) -> web.Response:
-    await _require_session(request)
+    await require_admin_session(request)
     query = (request.query.get('q') or '').strip().lower()
 
     async with session_scope(request.app) as db_session:
@@ -71,7 +69,7 @@ async def tenants_index(request: web.Request) -> web.Response:
 
 
 async def tenant_create_page(request: web.Request) -> web.Response:
-    await _require_session(request)
+    await require_admin_session(request)
     alert = request.query.get('alert')
     notice = f"<section class='card notice'>{escape(alert)}</section>" if alert else ''
 
@@ -102,7 +100,7 @@ async def tenant_create_page(request: web.Request) -> web.Response:
 
 
 async def tenant_create_submit(request: web.Request) -> web.StreamResponse:
-    await _require_session(request)
+    await require_admin_session(request)
     data = await request.post()
     name = (data.get('name') or '').strip()
     slug = (data.get('slug') or '').strip().lower()
@@ -156,7 +154,7 @@ async def tenant_create_submit(request: web.Request) -> web.StreamResponse:
 
 
 async def tenant_credentials(request: web.Request) -> web.Response:
-    await _require_session(request)
+    await require_admin_session(request)
     tenant_id = int(request.match_info['tenant_id'])
     alert = request.query.get('alert')
 
@@ -219,7 +217,7 @@ async def tenant_credentials(request: web.Request) -> web.Response:
 
 
 async def tenant_credentials_save(request: web.Request) -> web.StreamResponse:
-    await _require_session(request)
+    await require_admin_session(request)
     tenant_id = int(request.match_info['tenant_id'])
     data = await request.post()
     action = (data.get('action') or 'save').strip().lower()
@@ -291,7 +289,7 @@ async def tenant_credentials_save(request: web.Request) -> web.StreamResponse:
 
 
 async def tenant_edit(request: web.Request) -> web.Response:
-    await _require_session(request)
+    await require_admin_session(request)
     tenant_id = int(request.match_info['tenant_id'])
     alert = request.query.get('alert')
 
@@ -376,7 +374,7 @@ async def tenant_edit(request: web.Request) -> web.Response:
 
 
 async def tenant_update(request: web.Request) -> web.StreamResponse:
-    await _require_session(request)
+    await require_admin_session(request)
     tenant_id = int(request.match_info['tenant_id'])
     data = await request.post()
     name = (data.get('name') or '').strip()
@@ -402,7 +400,7 @@ async def tenant_update(request: web.Request) -> web.StreamResponse:
 
 
 async def tenant_widget_attach(request: web.Request) -> web.StreamResponse:
-    await _require_session(request)
+    await require_admin_session(request)
     tenant_id = int(request.match_info['tenant_id'])
     data = await request.post()
     slug = (data.get('slug') or '').strip().lower()
@@ -426,7 +424,7 @@ async def tenant_widget_attach(request: web.Request) -> web.StreamResponse:
 
 
 async def tenant_widget_attach_select(request: web.Request) -> web.StreamResponse:
-    await _require_session(request)
+    await require_admin_session(request)
     tenant_id = int(request.match_info['tenant_id'])
     data = await request.post()
     widget_id_raw = (data.get('widget_id') or '').strip()
@@ -455,7 +453,7 @@ async def tenant_widget_attach_select(request: web.Request) -> web.StreamRespons
 
 
 async def tenant_widget_detach(request: web.Request) -> web.StreamResponse:
-    await _require_session(request)
+    await require_admin_session(request)
     tenant_id = int(request.match_info['tenant_id'])
     widget_id = int(request.match_info['widget_id'])
 
@@ -483,15 +481,6 @@ def setup_tenant_admin_routes(app: web.Application) -> None:
     app.router.add_post('/admin/tenants/{tenant_id}/widgets/attach', tenant_widget_attach)
     app.router.add_post('/admin/tenants/{tenant_id}/widgets/attach-select', tenant_widget_attach_select)
     app.router.add_post('/admin/tenants/{tenant_id}/widgets/{widget_id}/detach', tenant_widget_detach)
-
-
-async def _require_session(request: web.Request) -> tuple[str, str]:
-    session = await get_session(request)
-    email = session.get(SESSION_EMAIL_KEY)
-    tenant_slug = session.get(SESSION_TENANT_KEY)
-    if not email or not tenant_slug:
-        raise web.HTTPFound('/admin/login')
-    return email, tenant_slug
 
 
 def _generate_password() -> str:
