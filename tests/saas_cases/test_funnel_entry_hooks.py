@@ -201,13 +201,25 @@ async def test_run_queue_replay_emits_one_run_queued_event(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_queue_respects_disabled_funnel_journeys_flag(tmp_path) -> None:
-    engine, factory, client, project_id, _ = await _project_app(tmp_path)
+@pytest.mark.parametrize("config_state", ["disabled", "missing"])
+async def test_run_queue_respects_fail_closed_funnel_journeys_flag(
+    tmp_path,
+    config_state: str,
+) -> None:
+    def configure(app: web.Application, _factory) -> None:
+        if config_state == "missing":
+            del app["config"]
+        else:
+            app["config"] = SimpleNamespace(
+                funnel_journeys_enabled=False,
+                project_versions_enabled=False,
+            )
+
+    engine, factory, client, project_id, _ = await _project_app(
+        tmp_path,
+        configure_app=configure,
+    )
     try:
-        client.server.app["config"] = SimpleNamespace(
-            funnel_journeys_enabled=False,
-            project_versions_enabled=False,
-        )
         await client.post("/test/login/10")
 
         response = await client.post(

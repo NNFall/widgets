@@ -94,8 +94,9 @@ def _session_funnel_journey_id(session) -> UUID | None:
 
 def _funnel_journeys_enabled(request: web.Request) -> bool:
     config = request.app.get("config")
-    return True if config is None else bool(
-        getattr(config, "funnel_journeys_enabled", True)
+    return bool(
+        config is not None
+        and getattr(config, "funnel_journeys_enabled", False)
     )
 
 

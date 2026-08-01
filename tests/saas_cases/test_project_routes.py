@@ -163,6 +163,10 @@ async def _project_app(
 
     app = web.Application()
     app[SESSION_FACTORY_KEY] = factory
+    app["config"] = SimpleNamespace(
+        funnel_journeys_enabled=True,
+        project_versions_enabled=False,
+    )
     app["project_sse_poll_seconds"] = 0.01
     setup_session(app, SimpleCookieStorage(cookie_name="kaigo_test"))
 
