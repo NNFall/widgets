@@ -340,11 +340,12 @@ async def _enqueue_express_run(
     key: str,
     generation_forensics: GenerationForensicsConfig,
     *,
+    funnel_journeys_enabled: bool,
     source_version_id: UUID | None = None,
     change_request: str | None = None,
     reserve_trial: bool = True,
 ):
-    if project.journey_id is None:
+    if funnel_journeys_enabled and project.journey_id is None:
         journey = await create_funnel_journey(database)
         project.journey_id = journey.id
     builder_request = BuilderRequest(
@@ -841,6 +842,7 @@ async def create_run(request: web.Request) -> web.Response:
                     user_id,
                     key,
                     request.app[GENERATION_FORENSICS_CONFIG_KEY],
+                    funnel_journeys_enabled=_funnel_journeys_enabled(request),
                 )
             await record_funnel_event(
                 database,
@@ -1007,6 +1009,7 @@ async def retry_run(request: web.Request) -> web.Response:
                         user_id,
                         key,
                         request.app[GENERATION_FORENSICS_CONFIG_KEY],
+                        funnel_journeys_enabled=_funnel_journeys_enabled(request),
                         source_version_id=source.source_version_id,
                         change_request=source.change_request,
                         reserve_trial=not paid_retry,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from urllib.parse import parse_qs, urlsplit
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -194,6 +195,46 @@ async def test_run_queue_replay_emits_one_run_queued_event(tmp_path) -> None:
         assert events[0].user_id == 10
         assert events[0].project_id == project_id
         assert str(events[0].run_id) == first_payload["id"]
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_run_queue_respects_disabled_funnel_journeys_flag(tmp_path) -> None:
+    engine, factory, client, project_id, _ = await _project_app(tmp_path)
+    try:
+        client.server.app["config"] = SimpleNamespace(
+            funnel_journeys_enabled=False,
+            project_versions_enabled=False,
+        )
+        await client.post("/test/login/10")
+
+        response = await client.post(
+            f"/api/projects/{project_id}/runs",
+            json={"mode": "express"},
+            headers={
+                "Idempotency-Key": "funnel-disabled-run-key",
+                "X-CSRF-Token": "test-csrf",
+            },
+        )
+        payload = await response.json()
+
+        async with factory() as database:
+            project = await database.get(Project, project_id)
+            run = await database.get(GenerationRun, UUID(payload["id"]))
+            journey_count = await database.scalar(
+                select(func.count()).select_from(FunnelJourney)
+            )
+            events = list((await database.scalars(select(FunnelEvent))).all())
+
+        assert response.status == 202
+        assert project.journey_id is None
+        assert run.journey_id is None
+        assert journey_count == 0
+        assert [(event.event_type, event.journey_id) for event in events] == [
+            ("run_queued", None)
+        ]
     finally:
         await client.close()
         await engine.dispose()
