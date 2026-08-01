@@ -993,6 +993,7 @@ class VisualRepairGate:
                 usage = getattr(result, "usage", TokenUsage())
                 role_results = getattr(result, "role_results", {})
                 role_failures = getattr(result, "role_failures", {})
+                reused_roles = set(getattr(result, "reused_roles", ()))
                 if isinstance(role_results, dict):
                     for role, role_result in role_results.items():
                         role_name = _critic_role_label(role)
@@ -1000,6 +1001,12 @@ class VisualRepairGate:
                         role_findings = tuple(
                             getattr(role_critique, "findings", ())
                         )
+                        reused = role in reused_roles
+                        critic_evidence = _critic_forensic_evidence(
+                            role,
+                            role_result,
+                        )
+                        critic_evidence["reused"] = reused
                         await self._store.append_event(
                             run_id,
                             event_type="visual_critic.completed",
@@ -1007,15 +1014,23 @@ class VisualRepairGate:
                             status="completed",
                             message=(
                                 f"Критик {role_name}: "
-                                f"{getattr(role_critique, 'summary', 'проверка завершена')}"
+                                + (
+                                    "использован сохранённый результат предыдущей попытки; "
+                                    if reused
+                                    else ""
+                                )
+                                + str(
+                                    getattr(
+                                        role_critique,
+                                        "summary",
+                                        "проверка завершена",
+                                    )
+                                )
                             ),
                             revision=candidate.revision,
                             issues=visual_finding_issues(role_findings),
                             forensic_payload={
-                                "critic": _critic_forensic_evidence(
-                                    role,
-                                    role_result,
-                                )
+                                "critic": critic_evidence
                             },
                         )
                 if isinstance(role_failures, dict):

@@ -107,6 +107,32 @@ class FakeJudge:
         self.closed = True
 
 
+class SequencedCritic(FakeCritic):
+    def __init__(self, *responses):
+        super().__init__()
+        self.responses = list(responses)
+
+    async def critique(self, **kwargs):
+        self.calls.append(kwargs)
+        response = self.responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+
+class SequencedJudge(FakeJudge):
+    def __init__(self, *responses):
+        super().__init__(None)
+        self.responses = list(responses)
+
+    async def judge(self, *, role_results):
+        self.calls.append(role_results)
+        response = self.responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+
 class Barrier:
     def __init__(self, parties):
         self.parties = parties
@@ -177,6 +203,91 @@ async def test_two_valid_roles_form_quorum_and_all_roles_run_in_parallel():
     assert all(critic.closed for critic in critics.values())
     assert judge.closed
     assert len(judge.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_reuses_successful_roles_and_only_calls_failed_critic_again():
+    transient = VisualCriticError(
+        "visual_critic_unavailable",
+        "critic unavailable",
+        usage=TokenUsage(prompt_tokens=13),
+    )
+    critics = {
+        VisualCriticRole.CONVERSATION_UX: FakeCritic(result(tokens=11)),
+        VisualCriticRole.BRAND_MOTION: FakeCritic(result(tokens=12)),
+        VisualCriticRole.ADVERSARIAL_CUSTOMER: SequencedCritic(
+            transient,
+            result(tokens=13),
+        ),
+    }
+    judge = SequencedJudge(
+        VisualJudgeError(
+            "invalid_visual_judgement",
+            "judge output did not pass semantic validation",
+            usage=TokenUsage(prompt_tokens=7),
+        ),
+        judged_result(tokens=17),
+    )
+    visual_committee = committee(critics, judge)
+    audit = types.SimpleNamespace()
+
+    with pytest.raises(VisualCommitteeError) as first_attempt:
+        await visual_committee.critique(
+            audit=audit,
+            brief="Brief",
+            art_direction="Direction",
+        )
+
+    assert first_attempt.value.error_code == "visual_review_inconclusive"
+    combined = await visual_committee.critique(
+        audit=audit,
+        brief="Brief",
+        art_direction="Direction",
+    )
+
+    assert len(critics[VisualCriticRole.CONVERSATION_UX].calls) == 1
+    assert len(critics[VisualCriticRole.BRAND_MOTION].calls) == 1
+    assert len(critics[VisualCriticRole.ADVERSARIAL_CUSTOMER].calls) == 2
+    assert set(combined.reused_roles) == {
+        VisualCriticRole.CONVERSATION_UX,
+        VisualCriticRole.BRAND_MOTION,
+    }
+    assert combined.role_failures == {}
+    assert combined.usage == TokenUsage(prompt_tokens=30)
+    assert len(judge.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_new_audit_invalidates_successful_role_cache():
+    critics = {
+        role: FakeCritic(result(tokens=10))
+        for role in VisualCriticRole
+    }
+    judge = SequencedJudge(
+        VisualJudgeError(
+            "invalid_visual_judgement",
+            "judge output did not pass semantic validation",
+            usage=TokenUsage(prompt_tokens=7),
+        ),
+        judged_result(tokens=17),
+    )
+    visual_committee = committee(critics, judge)
+
+    with pytest.raises(VisualCommitteeError):
+        await visual_committee.critique(
+            audit=types.SimpleNamespace(),
+            brief="Brief",
+            art_direction="Direction",
+        )
+    combined = await visual_committee.critique(
+        audit=types.SimpleNamespace(),
+        brief="Brief",
+        art_direction="Direction",
+    )
+
+    assert all(len(critic.calls) == 2 for critic in critics.values())
+    assert combined.reused_roles == ()
+    assert combined.usage == TokenUsage(prompt_tokens=47)
 
 
 @pytest.mark.asyncio

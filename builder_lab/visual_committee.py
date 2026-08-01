@@ -115,6 +115,7 @@ class VisualCommitteeResult:
     role_results: Mapping[VisualCriticRole, VisualCriticResult]
     role_failures: Mapping[VisualCriticRole, str]
     supporting_roles: Mapping[str, tuple[VisualCriticRole, ...]]
+    reused_roles: tuple[VisualCriticRole, ...]
 
 
 class VisualCriticCommittee:
@@ -144,6 +145,13 @@ class VisualCriticCommittee:
         }
         self._judge = judge_factory()
         self._closed = False
+        self._cached_audit: Any | None = None
+        self._cached_brief = ""
+        self._cached_art_direction = ""
+        self._cached_role_results: dict[
+            VisualCriticRole,
+            VisualCriticResult,
+        ] = {}
 
     async def critique(
         self,
@@ -155,6 +163,20 @@ class VisualCriticCommittee:
         if self._closed:
             raise RuntimeError("visual committee is closed")
         roles = tuple(VisualCriticRole)
+        same_input = (
+            audit is self._cached_audit
+            and brief == self._cached_brief
+            and art_direction == self._cached_art_direction
+        )
+        if not same_input:
+            self._cached_audit = audit
+            self._cached_brief = brief
+            self._cached_art_direction = art_direction
+            self._cached_role_results.clear()
+        reused_role_results = dict(self._cached_role_results)
+        roles_to_run = tuple(
+            role for role in roles if role not in reused_role_results
+        )
         responses = await asyncio.gather(
             *(
                 self._critics[role].critique(
@@ -162,15 +184,17 @@ class VisualCriticCommittee:
                     brief=brief,
                     art_direction=art_direction,
                 )
-                for role in roles
+                for role in roles_to_run
             ),
             return_exceptions=True,
         )
-        role_results: dict[VisualCriticRole, VisualCriticResult] = {}
+        role_results: dict[VisualCriticRole, VisualCriticResult] = dict(
+            reused_role_results
+        )
         role_failures: dict[VisualCriticRole, str] = {}
         role_errors: dict[VisualCriticRole, BaseException] = {}
         usage = TokenUsage()
-        for role, response in zip(roles, responses):
+        for role, response in zip(roles_to_run, responses):
             if isinstance(response, BaseException):
                 response_usage = getattr(response, "usage", TokenUsage())
                 if isinstance(response_usage, TokenUsage):
@@ -183,6 +207,7 @@ class VisualCriticCommittee:
                     raise response
                 continue
             role_results[role] = response
+            self._cached_role_results[role] = response
             usage = usage + response.usage
 
         if len(role_results) < 2:
@@ -278,12 +303,17 @@ class VisualCriticCommittee:
             role_results=dict(role_results),
             role_failures=dict(role_failures),
             supporting_roles=dict(judgement.supporting_roles),
+            reused_roles=tuple(
+                role for role in roles if role in reused_role_results
+            ),
         )
 
     async def aclose(self) -> None:
         if self._closed:
             return
         self._closed = True
+        self._cached_audit = None
+        self._cached_role_results.clear()
         await asyncio.gather(
             *(critic.aclose() for critic in self._critics.values()),
             self._judge.aclose(),

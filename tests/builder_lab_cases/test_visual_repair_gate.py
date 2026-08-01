@@ -302,6 +302,7 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
                             "visual_critic_unavailable",
                     },
                     supporting_roles={},
+                    reused_roles=(VisualCriticRole.CONVERSATION_UX,),
                 )
 
         result = await self.evaluate(FakeAuditor(), CommitteeCritic([]))
@@ -355,6 +356,25 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
             completed_evidence["critique"]["findings"][0]["finding_id"],
             "role-detail",
         )
+        reused_evidence = next(
+            item
+            for item in critic_evidence
+            if item["role"] == VisualCriticRole.CONVERSATION_UX.value
+        )
+        fresh_evidence = next(
+            item
+            for item in critic_evidence
+            if item["role"] == VisualCriticRole.BRAND_MOTION.value
+        )
+        self.assertIs(reused_evidence["reused"], True)
+        self.assertIs(fresh_evidence["reused"], False)
+        reused_event = next(
+            event
+            for event in roles
+            if event.status == "completed"
+            and "сохранён" in event.message
+        )
+        self.assertIn("диалог и удобство", reused_event.message)
         failed_evidence = next(
             item for item in critic_evidence if "failure" in item
         )
