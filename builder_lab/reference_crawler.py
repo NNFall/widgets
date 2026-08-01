@@ -119,6 +119,17 @@ class ReferenceCaptureError(RuntimeError):
         self.trace = trace
 
 
+class FontReadyTimeout(TimeoutError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        image_error: BaseException | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.image_error = image_error
+
+
 @dataclass(frozen=True)
 class GuardedUrl:
     url: str
@@ -1148,39 +1159,101 @@ def browser_unavailable_reason() -> str | None:
 
 
 async def _wait_for_fonts_and_viewport_images(page: Any, timeout_ms: int) -> None:
-    await page.evaluate(
-        """(timeoutMs) => Promise.race([
-          document.fonts && document.fonts.ready
-            ? document.fonts.ready
-            : Promise.resolve(),
-          new Promise((resolve) => setTimeout(resolve, timeoutMs))
-        ])""",
-        timeout_ms,
+    async def wait_for_fonts() -> None:
+        outcome = await page.evaluate(
+            """(timeoutMs) => new Promise((resolve, reject) => {
+              let finished = false;
+              const timer = setTimeout(() => {
+                finished = true;
+                resolve('timeout');
+              }, timeoutMs);
+              const ready = document.fonts && document.fonts.ready
+                ? document.fonts.ready
+                : Promise.resolve();
+              Promise.resolve(ready).then(() => {
+                if (finished) return;
+                finished = true;
+                clearTimeout(timer);
+                resolve('ready');
+              }, (error) => {
+                if (finished) return;
+                finished = true;
+                clearTimeout(timer);
+                reject(error);
+              });
+            })""",
+            timeout_ms,
+        )
+        if outcome == "timeout":
+            raise FontReadyTimeout("document fonts ready timed out")
+
+    async def wait_for_images() -> None:
+        await page.wait_for_function(
+            """() => {
+              const images = [...document.images].slice(0, 500).filter((img) => {
+                const r = img.getBoundingClientRect();
+                const s = getComputedStyle(img);
+                const intersectsViewport =
+                  r.bottom >= -200 && r.top <= innerHeight + 200 &&
+                  r.right >= -200 && r.left <= innerWidth + 200;
+                return intersectsViewport &&
+                  r.width > 1 && r.height > 1 &&
+                  s.display !== 'none' && s.visibility !== 'hidden';
+              });
+              return images.every((img) => {
+                const source =
+                  img.currentSrc ||
+                  img.getAttribute('src') ||
+                  img.getAttribute('srcset');
+                return !source ||
+                  (img.naturalWidth > 0 && img.naturalHeight > 0) ||
+                  img.complete;
+              });
+            }""",
+            timeout=timeout_ms,
+        )
+
+    font_result, image_result = await asyncio.gather(
+        wait_for_fonts(),
+        wait_for_images(),
+        return_exceptions=True,
     )
-    await page.wait_for_function(
-        """() => {
-          const images = [...document.images].slice(0, 500).filter((img) => {
-            const r = img.getBoundingClientRect();
-            const s = getComputedStyle(img);
-            const intersectsViewport =
-              r.bottom >= -200 && r.top <= innerHeight + 200 &&
-              r.right >= -200 && r.left <= innerWidth + 200;
-            return intersectsViewport &&
-              r.width > 1 && r.height > 1 &&
-              s.display !== 'none' && s.visibility !== 'hidden';
-          });
-          return images.every((img) => {
-            const source =
-              img.currentSrc ||
-              img.getAttribute('src') ||
-              img.getAttribute('srcset');
-            return !source ||
-              (img.naturalWidth > 0 && img.naturalHeight > 0) ||
-              img.complete;
-          });
-        }""",
-        timeout=timeout_ms,
-    )
+    for result in (font_result, image_result):
+        if isinstance(result, BaseException) and not isinstance(result, Exception):
+            raise result
+    if isinstance(font_result, BaseException):
+        if isinstance(font_result, FontReadyTimeout) and isinstance(
+            image_result,
+            BaseException,
+        ):
+            font_result.image_error = image_result
+        raise font_result
+    if isinstance(image_result, BaseException):
+        raise image_result
+
+
+async def _settle_viewport_assets_nonfatal(
+    page: Any,
+    *,
+    timeout_ms: int,
+    skipped_reasons: list[str],
+    image_timeout_reason: str | None,
+) -> None:
+    try:
+        await _wait_for_fonts_and_viewport_images(page, timeout_ms)
+    except FontReadyTimeout as exc:
+        if "font_ready_timeout" not in skipped_reasons:
+            skipped_reasons.append("font_ready_timeout")
+        if exc.image_error is not None:
+            if image_timeout_reason is None:
+                raise exc.image_error
+            if image_timeout_reason not in skipped_reasons:
+                skipped_reasons.append(image_timeout_reason)
+    except Exception:
+        if image_timeout_reason is None:
+            raise
+        if image_timeout_reason not in skipped_reasons:
+            skipped_reasons.append(image_timeout_reason)
 
 
 async def _wait_for_visual_quiet(
@@ -1383,13 +1456,6 @@ async def _settle_scrolled_viewport(
 ) -> None:
     timeout_ms = settings.page_timeout_seconds * 1000
 
-    async def wait_for_viewport_images() -> None:
-        try:
-            await _wait_for_fonts_and_viewport_images(page, min(2500, timeout_ms))
-        except Exception:
-            if image_timeout_reason not in skipped_reasons:
-                skipped_reasons.append(image_timeout_reason)
-
     await asyncio.gather(
         _wait_for_visual_quiet(
             page,
@@ -1397,7 +1463,12 @@ async def _settle_scrolled_viewport(
             quiet_ms=450,
             maximum_ms=min(2500, timeout_ms),
         ),
-        wait_for_viewport_images(),
+        _settle_viewport_assets_nonfatal(
+            page,
+            timeout_ms=min(2500, timeout_ms),
+            skipped_reasons=skipped_reasons,
+            image_timeout_reason=image_timeout_reason,
+        ),
     )
 
 
@@ -1765,7 +1836,12 @@ async def _capture_loaded_page(
     telemetry.raise_if_oversize()
     if guard is not None:
         await asyncio.to_thread(guard.validate_redirect, page.url)
-    await _wait_for_fonts_and_viewport_images(page, min(timeout_ms, 5000))
+    await _settle_viewport_assets_nonfatal(
+        page,
+        timeout_ms=min(timeout_ms, 5000),
+        skipped_reasons=skipped_reasons,
+        image_timeout_reason=None,
+    )
     await page.wait_for_timeout(settings.warmup_ms)
     await _wait_for_visual_quiet(page)
     telemetry.raise_if_oversize()

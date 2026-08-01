@@ -901,6 +901,7 @@ class BrowserLifecycleTests(unittest.TestCase):
         class FakePage:
             async def evaluate(self, script, *args):
                 evaluate_call.update(script=script, args=args)
+                return "ready"
 
             async def wait_for_function(self, _script, *, timeout):
                 self.image_timeout = timeout
@@ -913,10 +914,137 @@ class BrowserLifecycleTests(unittest.TestCase):
             )
         )
 
-        self.assertIn("Promise.race", evaluate_call["script"])
         self.assertIn("setTimeout", evaluate_call["script"])
+        self.assertIn("clearTimeout", evaluate_call["script"])
         self.assertEqual(evaluate_call["args"], (1234,))
         self.assertEqual(page.image_timeout, 1234)
+
+    def test_font_ready_timeout_waits_for_images_then_raises_explicit_signal(self):
+        image_wait_completed = False
+
+        class FakePage:
+            async def evaluate(self, _script, *_args):
+                return "timeout"
+
+            async def wait_for_function(self, _script, *, timeout):
+                nonlocal image_wait_completed
+                self.image_timeout = timeout
+                await asyncio.sleep(0)
+                image_wait_completed = True
+
+        page = FakePage()
+        with self.assertRaisesRegex(
+            reference_crawler_module.FontReadyTimeout,
+            "document fonts ready timed out",
+        ):
+            asyncio.run(
+                reference_crawler_module._wait_for_fonts_and_viewport_images(
+                    page,
+                    1234,
+                )
+            )
+
+        self.assertTrue(image_wait_completed)
+        self.assertEqual(page.image_timeout, 1234)
+
+    def test_font_timeout_is_nonfatal_and_deduped_for_initial_and_scroll_settles(self):
+        reasons = []
+
+        async def font_timeout(_page, _timeout_ms):
+            raise reference_crawler_module.FontReadyTimeout(
+                "document fonts ready timed out"
+            )
+
+        async def exercise_initial_and_scroll_settles():
+            await reference_crawler_module._settle_viewport_assets_nonfatal(
+                object(),
+                timeout_ms=5000,
+                skipped_reasons=reasons,
+                image_timeout_reason=None,
+            )
+            await reference_crawler_module._settle_viewport_assets_nonfatal(
+                object(),
+                timeout_ms=2500,
+                skipped_reasons=reasons,
+                image_timeout_reason="lazy_image_settle_timeout",
+            )
+
+        with patch.object(
+            reference_crawler_module,
+            "_wait_for_fonts_and_viewport_images",
+            font_timeout,
+        ):
+            asyncio.run(exercise_initial_and_scroll_settles())
+
+        self.assertEqual(reasons, ["font_ready_timeout"])
+
+    def test_initial_font_timeout_does_not_mask_concurrent_image_failure(self):
+        reasons = []
+
+        class FakePage:
+            async def evaluate(self, _script, *_args):
+                return "timeout"
+
+            async def wait_for_function(self, _script, *, timeout):
+                raise TimeoutError(f"image wait timed out after {timeout}ms")
+
+        with self.assertRaisesRegex(TimeoutError, "image wait timed out"):
+            asyncio.run(
+                reference_crawler_module._settle_viewport_assets_nonfatal(
+                    FakePage(),
+                    timeout_ms=1234,
+                    skipped_reasons=reasons,
+                    image_timeout_reason=None,
+                )
+            )
+
+        self.assertEqual(reasons, ["font_ready_timeout"])
+
+    def test_scrolled_font_and_image_timeouts_record_both_reasons(self):
+        reasons = []
+
+        class FakePage:
+            async def evaluate(self, _script, *_args):
+                return "timeout"
+
+            async def wait_for_function(self, _script, *, timeout):
+                raise TimeoutError(f"image wait timed out after {timeout}ms")
+
+        asyncio.run(
+            reference_crawler_module._settle_viewport_assets_nonfatal(
+                FakePage(),
+                timeout_ms=1234,
+                skipped_reasons=reasons,
+                image_timeout_reason="lazy_image_settle_timeout",
+            )
+        )
+
+        self.assertEqual(
+            reasons,
+            ["font_ready_timeout", "lazy_image_settle_timeout"],
+        )
+
+    def test_font_timeout_does_not_swallow_concurrent_cancellation(self):
+        reasons = []
+
+        class FakePage:
+            async def evaluate(self, _script, *_args):
+                return "timeout"
+
+            async def wait_for_function(self, _script, *, timeout):
+                raise asyncio.CancelledError
+
+        with self.assertRaises(asyncio.CancelledError):
+            asyncio.run(
+                reference_crawler_module._settle_viewport_assets_nonfatal(
+                    FakePage(),
+                    timeout_ms=1234,
+                    skipped_reasons=reasons,
+                    image_timeout_reason="lazy_image_settle_timeout",
+                )
+            )
+
+        self.assertEqual(reasons, [])
 
     def test_single_page_crawl_skips_sitemap_discovery(self):
         class StopAfterDiscovery(Exception):
