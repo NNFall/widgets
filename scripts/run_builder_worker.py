@@ -248,6 +248,9 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
     def gemini_target(model: str) -> ProviderTarget:
         return ProviderTarget("gemini", model, input_rate, output_rate)
 
+    def gemini_retry_targets(model: str) -> tuple[ProviderTarget, ...]:
+        return (gemini_target(model), gemini_target(model))
+
     def gpt_target() -> ProviderTarget:
         return ProviderTarget(
             "agentrouter",
@@ -295,11 +298,9 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
                 else glm_targets()
                 if hybrid_enabled and role in glm_roles
                 else (
-                    gemini_target(
-                        config.reference_analyzer_model
-                        if role == "reference_analyst"
-                        else config.direct_model
-                    ),
+                    (gemini_target(config.reference_analyzer_model),)
+                    if role == "reference_analyst"
+                    else gemini_retry_targets(config.direct_model)
                 )
             )
             prompt_version = (
@@ -329,7 +330,7 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
         direction_targets = (
             gpt_targets()
             if hybrid_enabled
-            else (gemini_target(config.direct_model),)
+            else gemini_retry_targets(config.direct_model)
         )
         for role in ("direction_candidate", "direction_judge"):
             policies[(role, policy.name)] = ModelPolicy(
@@ -339,7 +340,7 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
         repair_targets = (
             glm_targets()
             if hybrid_enabled
-            else (gemini_target(config.direct_model),)
+            else gemini_retry_targets(config.direct_model)
         )
         policies[("repair", policy.name)] = ModelPolicy(
             prompt_version="repair-v1",
@@ -348,7 +349,7 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
         review_targets = (
             gpt_targets()
             if hybrid_enabled
-            else (gemini_target(config.visual_critic_model),)
+            else gemini_retry_targets(config.visual_critic_model)
         )
         policies[("code_review", policy.name)] = ModelPolicy(
             prompt_version="code-review-v1",

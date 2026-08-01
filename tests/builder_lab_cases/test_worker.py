@@ -142,6 +142,48 @@ def test_runtime_router_has_explicit_repair_and_code_review_policies(
     assert ("code_review", "express") in router._policies
 
 
+def test_runtime_router_retries_transient_direct_gemini_builder_failure(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION", "100")
+    monkeypatch.setenv("GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION", "200")
+    config = SimpleNamespace(
+        gemini_api_key="test-key",
+        gemini_base_url="https://example.test",
+        direct_model="gemini-builder",
+        reference_analyzer_model="gemini-reference",
+        visual_critic_model="gemini-review",
+        hybrid_routing_enabled=False,
+    )
+
+    router = run_builder_worker.make_runtime_model_router(config, None)
+
+    for mode in ("direct", "express"):
+        for role in (
+            "direction_candidate",
+            "direction_judge",
+            "composition_planner",
+            "art_direction_generator",
+            "widget_generator",
+            "brand_designer",
+            "conversation_designer",
+            "motion_designer",
+            "repair",
+        ):
+            targets = router._policies[(role, mode)].targets
+            assert [(target.provider, target.model) for target in targets] == [
+                ("gemini", "gemini-builder"),
+                ("gemini", "gemini-builder"),
+            ]
+        assert [
+            (target.provider, target.model)
+            for target in router._policies[("code_review", mode)].targets
+        ] == [
+            ("gemini", "gemini-review"),
+            ("gemini", "gemini-review"),
+        ]
+
+
 def test_runtime_router_maps_hybrid_roles_to_gpt_glm_and_gemini(
     monkeypatch,
 ) -> None:
