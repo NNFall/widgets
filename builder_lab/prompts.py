@@ -16,6 +16,7 @@ from .models import (
     WidgetArtifact,
 )
 from .visual_models import VisualFinding
+from .validation import ALLOWED_ELEMENTS, COMMON_ATTRIBUTES
 
 if TYPE_CHECKING:
     from .patterns.resolver import ResolvedComposition
@@ -497,6 +498,25 @@ def build_stage_prompt(
         if composition is not None
         else "Композиция паттернов ещё не выбрана для этого этапа."
     )
+    allowed_elements_json = json.dumps(
+        sorted(ALLOWED_ELEMENTS),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    allowed_attributes_json = json.dumps(
+        sorted(
+            COMMON_ATTRIBUTES
+            | {
+                "aria-*",
+                "data-region",
+                "data-action",
+                "data-suggestion",
+                "data-state",
+            }
+        ),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     if visual_findings:
         allowed_fields = tuple(
             sorted(
@@ -545,6 +565,10 @@ change_summary всегда входит в ALLOWED только как поль
 Безопасный контракт обязателен:
 - верни только JSON по заданной схеме;
 - body_html содержит полный HTML-фрагмент, css содержит полный stylesheet;
+- HTML_ALLOWED_ELEMENTS_JSON: {allowed_elements_json}
+- HTML_ALLOWED_ATTRIBUTES_JSON: {allowed_attributes_json}
+- body_html may use only the allowlisted elements and attributes above. Never use
+  foreignObject, use, mask, filter, style, form, xmlns, focusable, event attributes and arbitrary data-*;
 - javascript содержит unrestricted JavaScript виджета: разрешены любые DOM-сценарии,
   таймеры, обработчики прокрутки, произвольные переходы состояний и запуск анимаций;
 {change_summary_contract}

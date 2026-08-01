@@ -94,3 +94,22 @@ def test_visual_repair_always_allows_plain_language_change_summary():
         if line.startswith("VISUAL_REPAIR_LOCKED_FIELDS_JSON:")
     )
     assert '"change_summary"' not in locked_line
+
+
+def test_stage_prompt_exposes_exact_html_element_and_attribute_allowlists():
+    prompt = build_stage_prompt(
+        request=_request(),
+        stage=Stage.IDENTITY,
+        revision=6,
+        previous_artifact=_artifact(),
+    )
+
+    assert "HTML_ALLOWED_ELEMENTS_JSON:" in prompt
+    assert '"button"' in prompt
+    assert '"svg"' in prompt
+    assert "HTML_ALLOWED_ATTRIBUTES_JSON:" in prompt
+    assert '"aria-*"' in prompt
+    assert '"data-region"' in prompt
+    assert '"data-action"' in prompt
+    assert "foreignObject, use, mask, filter, style, form" in prompt
+    assert "xmlns, focusable, event attributes and arbitrary data-*" in prompt
