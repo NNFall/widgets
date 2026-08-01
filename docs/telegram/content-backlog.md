@@ -29,6 +29,7 @@
 | TG-018 | 1 | ready | Почему GPT-5.5 оказался дешевле GLM-5.2 | Цена за миллион выше, но на одинаковом Flowwow-виджете GPT потратил почти в 2,9 раза меньше из-за короткого output/reasoning | [Release packet](release-packets/2026-07-28-agentrouter-model-comparison.md) |
 | TG-019 | 1 | ready | Первый новый сайт после починки визуального судьи | Simple Coffee прошёл production-цикл до 100% за 10:28 и около 44 рублей, несмотря на отказ одного из трёх критиков | [Release packet](release-packets/2026-08-01-simplecoffee-control-live-run.md) |
 | TG-020 | 1 | ready | Два критика уже ответили — зачем платить им второй раз | Kaigo сохраняет успешные визуальные заключения для тех же кадров, повторяет только сбойную роль и не ослабляет независимого судью | [Release packet](release-packets/2026-08-01-visual-critic-reuse.md) |
+| TG-021 | 1 | ready | Один запрещённый SVG ломал 13-минутную сборку | На Dodo Brands forensic-лог показал рассинхрон prompt и HTML-валидатора; общий allowlist убрал повторные repairs, а production-прогон дошёл до 100% | [Доказательства](../release-evidence/2026-08-01-dodobrands-control-live-run.md) |
 
 ## Как добавлять тему
 
