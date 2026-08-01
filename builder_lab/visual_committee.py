@@ -72,6 +72,23 @@ def _safe_route_diagnostic(value: object) -> dict[str, object]:
     return {"terminal_reason": terminal_reason, "route_attempts": attempts}
 
 
+def _is_transient_route_failure(value: object) -> bool:
+    route = _safe_route_diagnostic(value)
+    attempts = route.get("route_attempts")
+    if not isinstance(attempts, list) or not attempts:
+        return False
+    error_codes = {
+        attempt.get("error_code")
+        for attempt in attempts
+        if isinstance(attempt, dict)
+    }
+    return bool(error_codes) and error_codes <= {
+        "generation_timeout",
+        "provider_unavailable",
+        "quota_exceeded",
+    }
+
+
 class VisualCritic(Protocol):
     async def critique(
         self, *, audit: Any, brief: str, art_direction: str
@@ -217,7 +234,17 @@ class VisualCriticCommittee:
                 if getattr(role_errors.get(role), "error_code", None)
                 in _TERMINAL_ROUTE_CODES
             ]
-            if terminal_failures:
+            # One provider route can fail while the other two critics still have
+            # a recoverable semantic/evidence problem. Keep that case retryable:
+            # the outer visual gate can reuse any successful critic and ask the
+            # missing roles again. A terminal committee failure is justified only
+            # when at least two independent critic routes are exhausted, because
+            # then a two-of-three quorum cannot be recovered in this attempt.
+            committee_routes_are_transient = bool(terminal_failures) and all(
+                _is_transient_route_failure(getattr(error, "diagnostic", None))
+                for _, error in terminal_failures
+            )
+            if len(terminal_failures) >= 2 and not committee_routes_are_transient:
                 terminal_codes = {
                     str(getattr(error, "error_code"))
                     for _, error in terminal_failures
@@ -257,10 +284,34 @@ class VisualCriticCommittee:
                     diagnostic=diagnostic,
                     usage=usage,
                 ) from terminal_cause
-            diagnostic = ",".join(
-                f"{role.value}:{role_failures.get(role, 'missing')}"
-                for role in roles
-                if role not in role_results
+            diagnostic = json.dumps(
+                {
+                    "terminal_reason": (
+                        "committee_transient_routes"
+                        if len(terminal_failures) >= 2
+                        and committee_routes_are_transient
+                        else "committee_inconclusive"
+                    ),
+                    "role_failures": [
+                        {
+                            "role": role.value,
+                            "error_code": role_failures.get(role, "missing"),
+                            **(
+                                {
+                                    "route": _safe_route_diagnostic(
+                                        getattr(role_errors.get(role), "diagnostic", None)
+                                    )
+                                }
+                                if role_failures.get(role) in _TERMINAL_ROUTE_CODES
+                                else {}
+                            ),
+                        }
+                        for role in roles
+                        if role not in role_results
+                    ],
+                },
+                ensure_ascii=True,
+                separators=(",", ":"),
             )
             raise VisualCommitteeError(
                 "visual_review_inconclusive",

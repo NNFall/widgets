@@ -21,7 +21,11 @@ from builder_lab.orchestrator import BuilderOrchestrator
 from builder_lab.store import RunStore, RunTerminal
 from builder_lab.browser_audit import BrowserAuditError, CapturedScreenshot
 from builder_lab.visual_committee import VisualCommitteeError
-from builder_lab.visual_gate import VisualRepairGate, artifact_fingerprint
+from builder_lab.visual_gate import (
+    VisualRepairGate,
+    _transient_visual_retry_delay,
+    artifact_fingerprint,
+)
 from builder_lab.visual_critic import VisualCriticRole
 from builder_lab.visual_review import (
     RepairCheck,
@@ -182,6 +186,17 @@ class FakeVerifier:
 
 
 class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
+    def test_transient_committee_routes_receive_bounded_backoff(self):
+        diagnostic = (
+            '{"terminal_reason":"committee_transient_routes",'
+            '"role_failures":[]}'
+        )
+
+        self.assertEqual(_transient_visual_retry_delay(diagnostic, 1), 5)
+        self.assertEqual(_transient_visual_retry_delay(diagnostic, 2), 15)
+        self.assertEqual(_transient_visual_retry_delay(diagnostic, 3), 0)
+        self.assertEqual(_transient_visual_retry_delay("not-json", 1), 0)
+
     def test_change_summary_alone_does_not_count_as_a_visual_repair(self):
         before = artifact(revision=5, change_summary="До исправления")
         after = replace(before, change_summary="Якобы исправлено")

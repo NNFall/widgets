@@ -34,6 +34,7 @@ MAX_VALIDATION_REPAIRS = 4
 MAX_VISUAL_REPAIRS = 10
 MAX_REPEATED_VISUAL_ISSUE_ROUNDS = 3
 MIN_REPAIR_CONFIDENCE = 0.75
+_TRANSIENT_VISUAL_RETRY_DELAYS_SECONDS = (5, 15)
 LOGGER = logging.getLogger(__name__)
 
 _CRITIC_ROLE_LABELS = {
@@ -50,6 +51,24 @@ def _critic_role_label(role: Any) -> str:
 
 def _critic_role_value(role: Any) -> str:
     return str(getattr(role, "value", role))
+
+
+def _transient_visual_retry_delay(
+    diagnostic: object,
+    attempt: int,
+) -> int:
+    if not isinstance(diagnostic, str) or not 1 <= attempt < MAX_AI_REVIEW_ATTEMPTS:
+        return 0
+    try:
+        payload = json.loads(diagnostic)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return 0
+    if (
+        not isinstance(payload, dict)
+        or payload.get("terminal_reason") != "committee_transient_routes"
+    ):
+        return 0
+    return _TRANSIENT_VISUAL_RETRY_DELAYS_SECONDS[attempt - 1]
 
 
 def _critic_forensic_evidence(role: Any, role_result: Any) -> dict[str, Any]:
@@ -973,6 +992,12 @@ class VisualRepairGate:
                         }
                         and ai_review_attempt < MAX_AI_REVIEW_ATTEMPTS
                     ):
+                        retry_delay = _transient_visual_retry_delay(
+                            getattr(exc, "diagnostic", None),
+                            ai_review_attempt,
+                        )
+                        if retry_delay:
+                            await asyncio.sleep(retry_delay)
                         continue
                     if getattr(exc, "error_code", None) in {
                         "visual_evidence_unproven",

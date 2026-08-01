@@ -374,7 +374,7 @@ async def test_only_one_valid_role_is_inconclusive_not_visual_quality_failure():
 
 
 @pytest.mark.asyncio
-async def test_terminal_critic_route_exhaustion_crosses_committee_when_quorum_is_lost():
+async def test_single_terminal_critic_failure_stays_retryable_when_other_roles_are_inconclusive():
     diagnostic = (
         '{"terminal_reason":"all_generation_timeout",'
         '"route_attempts":[{"cost_microusd":12345}]}'
@@ -403,11 +403,11 @@ async def test_terminal_critic_route_exhaustion_crosses_committee_when_quorum_is
             art_direction="Direction",
         )
 
-    assert caught.value.error_code == "route_exhausted"
+    assert caught.value.error_code == "visual_review_inconclusive"
     assert caught.value.usage == TokenUsage(prompt_tokens=112, output_tokens=20)
-    aggregated = json.loads(caught.value.diagnostic)
-    assert aggregated["terminal_reason"] == "committee_terminal_failures"
-    assert aggregated["role_failures"] == [
+    preserved = json.loads(caught.value.diagnostic)
+    assert preserved["terminal_reason"] == "committee_inconclusive"
+    assert preserved["role_failures"] == [
         {
             "role": "brand_motion",
             "error_code": "route_exhausted",
@@ -415,8 +415,48 @@ async def test_terminal_critic_route_exhaustion_crosses_committee_when_quorum_is
                 "terminal_reason": "all_generation_timeout",
                 "route_attempts": [{"usage": {}, "cost_microusd": 12345}],
             },
-        }
+        },
+        {
+            "role": "adversarial_customer",
+            "error_code": "visual_critic_unavailable",
+        },
     ]
+
+
+@pytest.mark.asyncio
+async def test_all_transient_provider_routes_are_retryable_at_committee_level():
+    diagnostic = (
+        '{"terminal_reason":"all_provider_unavailable",'
+        '"route_attempts":[{"provider":"gemini","model":"gemini-3.6-flash",'
+        '"outcome":"failed","usage":{"input_tokens":0,"output_tokens":0,'
+        '"thinking_tokens":0},"cost_microusd":0,"cost_state":"unknown",'
+        '"error_code":"provider_unavailable"}]}'
+    )
+    critics = {
+        role: FakeCritic(
+            error=VisualCriticError(
+                "route_exhausted",
+                "route failed",
+                diagnostic=diagnostic,
+            )
+        )
+        for role in VisualCriticRole
+    }
+
+    with pytest.raises(VisualCommitteeError) as caught:
+        await committee(critics).critique(
+            audit=types.SimpleNamespace(),
+            brief="Brief",
+            art_direction="Direction",
+        )
+
+    assert caught.value.error_code == "visual_review_inconclusive"
+    preserved = json.loads(caught.value.diagnostic)
+    assert preserved["terminal_reason"] == "committee_transient_routes"
+    assert len(preserved["role_failures"]) == 3
+    assert {
+        item["route"]["terminal_reason"] for item in preserved["role_failures"]
+    } == {"all_provider_unavailable"}
 
 
 @pytest.mark.asyncio
