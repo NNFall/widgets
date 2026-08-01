@@ -19,6 +19,7 @@ from app.models.router import ModelRouter
 MAX_CHAT_TEXT_CHARS = 1_000
 MAX_CHAT_REPLY_CHARS = 4_000
 MAX_HISTORY_PAIRS = 8
+MAX_CHAT_REFERENCE_CONTEXT_CHARS = 8_000
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{7,95}$")
 _SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _SCOPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:._-]{2,511}$")
@@ -45,6 +46,18 @@ class ChatContext:
     source_url: str
     brief: str
     art_direction: str
+    reference_context: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.reference_context, str):
+            raise ValueError("reference_context must be text")
+        reference_context = self.reference_context.strip()
+        if (
+            len(reference_context) > MAX_CHAT_REFERENCE_CONTEXT_CHARS
+            or "\x00" in reference_context
+        ):
+            raise ValueError("reference_context is invalid")
+        object.__setattr__(self, "reference_context", reference_context)
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,11 +123,20 @@ def _prompt(
     history: tuple[tuple[str, str], ...],
     text: str,
 ) -> str:
+    try:
+        structured_reference = (
+            json.loads(context.reference_context)
+            if context.reference_context
+            else None
+        )
+    except (RecursionError, ValueError):
+        structured_reference = context.reference_context
     encoded_context = json.dumps(
         {
             "source_url": context.source_url,
             "business_brief": context.brief,
             "widget_identity": context.art_direction,
+            "reference_context": structured_reference,
         },
         ensure_ascii=False,
         separators=(",", ":"),

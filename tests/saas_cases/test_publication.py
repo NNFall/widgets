@@ -44,6 +44,7 @@ from app.publication.service import (
 )
 from app.saas.models import (
     GenerationArtifact,
+    GenerationEvent,
     GenerationRun,
     Project,
     ProjectVersion,
@@ -52,6 +53,7 @@ from app.saas.models import (
     Subscription,
     UserIdentity,
 )
+from builder_lab.models import BuilderRequest, EngineName
 from tests.builder_lab_cases.test_validation import artifact
 
 
@@ -96,6 +98,16 @@ def _runtime_capability(runtime_text: str) -> str:
     match = re.search(r"const chatCapability=(\"[^\"]+\");", runtime_text)
     assert match is not None
     return json.loads(match.group(1))
+
+
+def _legacy_builder_request_without_reference_context() -> dict:
+    payload = BuilderRequest(
+        engine=EngineName.DIRECT,
+        brief="Valid legacy publication request",
+        source_url="https://example.com/",
+    ).to_dict()
+    del payload["reference_context"]
+    return payload
 
 
 def test_production_unknown_loopback_proxy_disables_ip_bucket() -> None:
@@ -1420,8 +1432,27 @@ async def test_published_runtime_keeps_fixed_widget_interactions_and_closed_hitb
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "legacy_request_payload",
+    (
+        pytest.param(
+            {"reference_context": ["not", "trusted", "text"]},
+            id="non-text",
+        ),
+        pytest.param({"reference_context": "x" * 8_001}, id="oversize"),
+        pytest.param(
+            {"reference_context": '{"public_facts":["invalid builder"]}'},
+            id="invalid-builder",
+        ),
+        pytest.param(
+            _legacy_builder_request_without_reference_context(),
+            id="valid_legacy_missing_reference_context",
+        ),
+    ),
+)
 async def test_public_chat_is_bound_to_active_release_and_approved_embed_origin(
     tmp_path,
+    legacy_request_payload,
 ) -> None:
     config = SimpleNamespace(
         public_auth_enabled=False,
@@ -1430,13 +1461,29 @@ async def test_public_chat_is_bound_to_active_release_and_approved_embed_origin(
         publication_allow_insecure_origins=True,
     )
     chat_service = FakePublicChatService()
-    engine, _factory, client, ids = await _publication_app(
+    engine, factory, client, ids = await _publication_app(
         tmp_path,
         config=config,
         chat_service=chat_service,
     )
     host_origin = str(client.make_url("/")).rstrip("/")
     try:
+        async with factory() as database, database.begin():
+            published_artifact = await database.get(GenerationArtifact, ids["first"])
+            assert published_artifact is not None
+            database.add(
+                GenerationEvent(
+                    id=702,
+                    run_id=published_artifact.run_id,
+                    sequence=1,
+                    event_type="run.created",
+                    public_message="Legacy generation queued",
+                    payload={
+                        "status": "queued",
+                        "request": legacy_request_payload,
+                    },
+                )
+            )
         await client.post("/test/login/10")
         published = await client.post(
             f"/api/projects/{ids['project']}/publish",
@@ -1491,6 +1538,7 @@ async def test_public_chat_is_bound_to_active_release_and_approved_embed_origin(
         )
         assert stale.status == 409
         assert len(chat_service.calls) == 1
+        assert chat_service.calls[0]["context"].reference_context == ""
     finally:
         await client.close()
         await engine.dispose()
@@ -1568,6 +1616,7 @@ async def test_public_chat_rejects_missing_forged_or_expired_runtime_capability(
 async def test_public_route_preserves_ownerless_idempotency_and_session_rate_limit(
     tmp_path,
 ) -> None:
+    public_fact_marker = "PUBLICATION-PUBLIC-FACT-a3c529"
     config = SimpleNamespace(
         public_auth_enabled=False,
         public_base_url=None,
@@ -1607,6 +1656,29 @@ async def test_public_route_preserves_ownerless_idempotency_and_session_rate_lim
     client.server.app[CHAT_SERVICE_KEY] = service
     host_origin = str(client.make_url("/")).rstrip("/")
     try:
+        async with factory() as database, database.begin():
+            published_artifact = await database.get(GenerationArtifact, ids["first"])
+            assert published_artifact is not None
+            database.add(
+                GenerationEvent(
+                    id=701,
+                    run_id=published_artifact.run_id,
+                    sequence=1,
+                    event_type="run.created",
+                    public_message="Generation queued",
+                    payload={
+                        "status": "queued",
+                        "request": BuilderRequest(
+                            engine=EngineName.DIRECT,
+                            brief="Private prompt must never be published",
+                            reference_context=json.dumps(
+                                {"public_facts": [public_fact_marker]}
+                            ),
+                            source_url="https://example.com/",
+                        ).to_dict(),
+                    },
+                )
+            )
         await client.post("/test/login/10")
         published = await client.post(
             f"/api/projects/{ids['project']}/publish",
@@ -1660,6 +1732,7 @@ async def test_public_route_preserves_ownerless_idempotency_and_session_rate_lim
         assert (await limited.json())["error"]["code"] == "chat_rate_limited"
         assert len(provider.requests) == 1
         assert "Private prompt must never be published" in provider.requests[0].prompt
+        assert public_fact_marker in provider.requests[0].prompt
     finally:
         await service.close()
         await client.close()

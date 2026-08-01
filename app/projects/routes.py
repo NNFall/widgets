@@ -190,6 +190,34 @@ async def _owned_run(
     return row
 
 
+async def _chat_reference_context(database, run_id: UUID) -> str:
+    payload = await database.scalar(
+        select(GenerationEvent.payload)
+        .where(
+            GenerationEvent.run_id == run_id,
+            GenerationEvent.event_type == "run.created",
+        )
+        .order_by(GenerationEvent.sequence.asc())
+        .limit(1)
+    )
+    if not isinstance(payload, dict):
+        return ""
+    builder_payload = payload.get("request")
+    if not isinstance(builder_payload, dict):
+        return ""
+    reference_context = builder_payload.get("reference_context", "")
+    if (
+        not isinstance(reference_context, str)
+        or len(reference_context) > 8_000
+        or "\x00" in reference_context
+    ):
+        return ""
+    try:
+        return BuilderRequest.from_dict(builder_payload).reference_context
+    except (OverflowError, TypeError, ValueError):
+        return ""
+
+
 @asynccontextmanager
 async def _project_mutation_guard(factory, project_id: UUID):
     bind = factory.kw.get("bind")
@@ -1274,6 +1302,7 @@ async def run_chat(request: web.Request) -> web.Response:
             tenant_id,
         )
         selected = await _preview_candidate(database, run.id, revision=revision)
+        reference_context = await _chat_reference_context(database, run.id)
     if selected is None:
         return _chat_error(
             "chat_not_ready",
@@ -1320,6 +1349,7 @@ async def run_chat(request: web.Request) -> web.Response:
                 source_url=project.source_url,
                 brief=project.brief or "",
                 art_direction=candidate.art_direction,
+                reference_context=reference_context,
             ),
             run_id=run.id,
         )

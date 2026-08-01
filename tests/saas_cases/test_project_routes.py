@@ -45,6 +45,7 @@ from app.saas.models import (
     UserIdentity,
 )
 from builder_lab.forensics.config import GenerationForensicsConfig
+from builder_lab.models import BuilderRequest, EngineName
 from builder_lab.preview import PREVIEW_CSP
 from tests.builder_lab_cases.test_validation import artifact
 
@@ -1503,6 +1504,8 @@ async def test_preview_document_can_render_an_exact_restorable_draft(tmp_path) -
 async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(
     tmp_path,
 ) -> None:
+    public_fact_marker = "OWNER-PUBLIC-FACT-4f97c1"
+
     class FakeProvider:
         capabilities = ProviderCapabilities()
 
@@ -1569,6 +1572,24 @@ async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(
             candidate = artifact(revision=2, art_direction="Trusted identity marker")
             database.add_all(
                 [
+                    GenerationEvent(
+                        id=601,
+                        run_id=run.id,
+                        sequence=1,
+                        event_type="run.created",
+                        public_message="Generation queued",
+                        payload={
+                            "status": "queued",
+                            "request": BuilderRequest(
+                                engine=EngineName.DIRECT,
+                                brief="Build a sales assistant",
+                                reference_context=json.dumps(
+                                    {"public_facts": [public_fact_marker]}
+                                ),
+                                source_url="https://example.com/",
+                            ).to_dict(),
+                        },
+                    ),
                     GenerationArtifact(
                         run_id=run.id,
                         revision=2,
@@ -1642,6 +1663,7 @@ async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(
         assert len(provider.requests) == 1
         assert "Build a sales assistant" in provider.requests[0].prompt
         assert "Trusted identity marker" in provider.requests[0].prompt
+        assert public_fact_marker in provider.requests[0].prompt
         async with factory() as database:
             call = (await database.execute(select(ModelCall))).scalar_one()
         assert call.role == "chat_visitor"
@@ -1666,6 +1688,8 @@ async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(
             headers={"X-CSRF-Token": "test-csrf"},
         )
         assert owner_to_foreign.status == 200
+        assert len(provider.requests) == 2
+        assert public_fact_marker not in provider.requests[1].prompt
     finally:
         await service.close()
         await client.close()

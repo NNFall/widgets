@@ -17,7 +17,7 @@ from aiohttp import web
 from sqlalchemy import select
 from app.chat import CHAT_SERVICE_KEY, ChatContext, ChatServiceError
 from app.db.session import get_session_factory
-from app.projects.routes import _require_csrf, _scope, _uuid
+from app.projects.routes import _chat_reference_context, _require_csrf, _scope, _uuid
 from app.publication.service import (
     InvalidAllowedDomain,
     InvalidPublicationArtifact,
@@ -780,6 +780,11 @@ async def public_runtime_chat(request: web.Request) -> web.Response:
                     .where(GenerationArtifact.id == published.artifact_id)
                 )
             ).one_or_none()
+            reference_context = (
+                await _chat_reference_context(database, row[1].id)
+                if row is not None
+                else ""
+            )
         if row is None:
             raise ChatServiceError(
                 "chat_not_ready",
@@ -822,6 +827,7 @@ async def public_runtime_chat(request: web.Request) -> web.Response:
                 source_url=project.source_url,
                 brief=project.brief or "",
                 art_direction=art_direction,
+                reference_context=reference_context,
             ),
             run_id=run.id,
         )
