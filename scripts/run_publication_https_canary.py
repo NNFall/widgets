@@ -262,10 +262,17 @@ async def _load_release_marker(page, config: CanaryConfig, stable_key: str) -> s
     outer = page.locator("iframe[data-kaigo-widget-key]")
     await outer.wait_for(state="attached", timeout=20_000)
     outer_frame = page.frame_locator("iframe[data-kaigo-widget-key]")
-    marker = await outer_frame.locator("body").get_attribute(
+    marker_element = outer_frame.locator(
+        "[data-kaigo-release][data-kaigo-release-id]"
+    )
+    await marker_element.wait_for(state="attached", timeout=20_000)
+    marker_key = await marker_element.get_attribute(
+        "data-kaigo-release", timeout=20_000
+    )
+    marker = await marker_element.get_attribute(
         "data-kaigo-release-id", timeout=20_000
     )
-    if not marker:
+    if marker_key != stable_key or not marker:
         raise CanaryBlocked("runtime release marker is missing")
     return marker
 

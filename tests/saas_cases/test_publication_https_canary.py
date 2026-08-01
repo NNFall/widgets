@@ -227,3 +227,60 @@ async def test_authenticated_request_rejects_redirect_without_following(
         assert redirected is False
     finally:
         await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_release_marker_is_read_from_runtime_marker_element(
+    unused_tcp_port: int,
+    tmp_path: Path,
+) -> None:
+    from aiohttp import web
+    from playwright.async_api import async_playwright
+
+    release_id = str(uuid4())
+
+    async def host(_request: web.Request) -> web.Response:
+        return web.Response(
+            text='<iframe data-kaigo-widget-key="canary-key" src="/runtime"></iframe>',
+            content_type="text/html",
+        )
+
+    async def runtime(_request: web.Request) -> web.Response:
+        return web.Response(
+            text=(
+                '<span hidden data-kaigo-release="canary-key" '
+                f'data-kaigo-release-id="{release_id}"></span>'
+            ),
+            content_type="text/html",
+        )
+
+    app = web.Application()
+    app.router.add_get("/", host)
+    app.router.add_get("/runtime", runtime)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", unused_tcp_port)
+    await site.start()
+    config = canary.CanaryConfig(
+        app_origin="https://kaigo.space",
+        allowed_origin=f"http://127.0.0.1:{unused_tcp_port}",
+        denied_origin="https://denied.example",
+        project_id=uuid4(),
+        baseline_version_id=uuid4(),
+        candidate_version_id=uuid4(),
+        cookie_file=tmp_path / "unused-cookie",
+        evidence_file=tmp_path / "unused-evidence.json",
+    )
+    try:
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            page = await browser.new_page()
+            try:
+                assert (
+                    await canary._load_release_marker(page, config, "canary-key")
+                    == release_id
+                )
+            finally:
+                await browser.close()
+    finally:
+        await runner.cleanup()
