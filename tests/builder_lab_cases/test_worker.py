@@ -28,6 +28,7 @@ from app.saas.models import (
     GenerationEvent,
     GenerationForensicManifest,
     GenerationRun,
+    GenerationStageAttempt,
     ModelCall,
     Project,
 )
@@ -1244,6 +1245,91 @@ async def test_only_one_worker_claims_a_run(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_claim_stages_and_completes_the_same_persisted_attempt(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id)
+    try:
+        claim = await queue.claim("worker")
+        assert isinstance(claim, RunClaim)
+
+        async with factory() as database:
+            attempt = await database.get(GenerationStageAttempt, claim.attempt_id)
+            assert attempt is not None
+            assert attempt.run_id == run_id
+            assert attempt.stage == "reference_analysis"
+            assert attempt.ordinal == 1
+            assert attempt.status == "running"
+            assert attempt.finished_at is None
+
+        await queue.stage_result(
+            claim,
+            StageResult(public_message="analysis ready"),
+        )
+        async with factory() as database:
+            attempt = await database.get(GenerationStageAttempt, claim.attempt_id)
+            assert attempt is not None
+            assert attempt.status == "result_staged"
+            assert attempt.finished_at is None
+
+        assert await queue.finalize_stage(claim) == "art_direction"
+        async with factory() as database:
+            attempt = await database.get(GenerationStageAttempt, claim.attempt_id)
+            assert attempt is not None
+            assert attempt.status == "completed"
+            assert attempt.finished_at is not None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_expired_lease_interrupts_attempt_before_replacement_claim(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id)
+    try:
+        stale = await queue.claim("stale")
+        assert isinstance(stale, RunClaim)
+        async with factory() as database, database.begin():
+            run = await database.get(GenerationRun, run_id)
+            assert run is not None
+            run.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+
+        replacement = await queue.claim("replacement")
+
+        assert isinstance(replacement, RunClaim)
+        assert replacement.attempt_id != stale.attempt_id
+        async with factory() as database:
+            attempts = (
+                await database.execute(
+                    select(GenerationStageAttempt)
+                    .where(
+                        GenerationStageAttempt.run_id == run_id,
+                        GenerationStageAttempt.stage == "reference_analysis",
+                    )
+                    .order_by(GenerationStageAttempt.ordinal)
+                )
+            ).scalars().all()
+            assert [attempt.ordinal for attempt in attempts] == [1, 2]
+            assert [attempt.status for attempt in attempts] == [
+                "interrupted",
+                "running",
+            ]
+            assert attempts[0].finished_at is not None
+            assert attempts[1].finished_at is None
+
+        with pytest.raises(LeaseLostError):
+            await queue.stage_result(
+                stale,
+                StageResult(public_message="stale result"),
+            )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_inline_created_run_is_not_taken_from_durable_queue(tmp_path) -> None:
     engine, factory, project_id = await _database(tmp_path)
     queue = PostgresWorkerQueue(factory, lease_seconds=30)
@@ -1475,8 +1561,16 @@ async def test_cancelled_claim_never_invokes_stage_handler(tmp_path) -> None:
         assert not called
         async with factory() as database:
             run = await database.get(GenerationRun, run_id)
+            attempt = await database.scalar(
+                select(GenerationStageAttempt).where(
+                    GenerationStageAttempt.run_id == run_id
+                )
+            )
             assert run.state == "cancelled"
             assert run.lease_owner is None
+            assert attempt is not None
+            assert attempt.status == "cancelled"
+            assert attempt.finished_at is not None
     finally:
         await engine.dispose()
 
@@ -1663,6 +1757,10 @@ async def test_expired_paid_dispatch_fails_closed_without_reexecuting_stage(
         assert settled_runs == [run_id]
         async with factory() as database:
             run = await database.get(GenerationRun, run_id)
+            attempt = await database.get(
+                GenerationStageAttempt,
+                first.attempt_id,
+            )
             assert run is not None
             model_calls = list(
                 (
@@ -1684,6 +1782,9 @@ async def test_expired_paid_dispatch_fails_closed_without_reexecuting_stage(
             assert run.error_code == "provider_dispatch_ambiguous"
             assert run.failure_category == "platform"
             assert run.lease_owner is None
+            assert attempt is not None
+            assert attempt.status == "accounting_failed"
+            assert attempt.finished_at is not None
             assert len(model_calls) == 1
             assert model_calls[0].status == "completed"
             assert [event.event_type for event in events][-2:] == [
@@ -1828,9 +1929,26 @@ async def test_retryable_engine_error_has_three_total_attempts_and_not_before(
                     .order_by(GenerationEvent.sequence)
                 )
             ).scalars().all()
+            attempts = (
+                await database.execute(
+                    select(GenerationStageAttempt)
+                    .where(
+                        GenerationStageAttempt.run_id == run_id,
+                        GenerationStageAttempt.stage == "reference_analysis",
+                    )
+                    .order_by(GenerationStageAttempt.ordinal)
+                )
+            ).scalars().all()
             assert calls == 3
             assert len(retries) == 2
             assert [event.payload["attempt"] for event in retries] == [1, 2]
+            assert [attempt.ordinal for attempt in attempts] == [1, 2, 3]
+            assert [attempt.status for attempt in attempts] == [
+                "interrupted",
+                "interrupted",
+                "completed",
+            ]
+            assert all(attempt.finished_at is not None for attempt in attempts)
             assert run.state == "completed"
             assert run.stage_retry_count == 0
             assert run.retry_not_before is None
@@ -1909,11 +2027,19 @@ async def test_deterministic_engine_error_fails_immediately_with_safe_fields(
         assert await worker.run_once()
         async with factory() as database:
             run = await database.get(GenerationRun, run_id)
+            attempt = await database.scalar(
+                select(GenerationStageAttempt).where(
+                    GenerationStageAttempt.run_id == run_id
+                )
+            )
             assert calls == 1
             assert run.state == "failed"
             assert run.error_code == "provider_unavailable"
             assert run.error_message == "Модель генерации сейчас не настроена"
             assert "secret" not in run.error_message
+            assert attempt is not None
+            assert attempt.status == "failed"
+            assert attempt.finished_at is not None
     finally:
         await engine.dispose()
 
@@ -2089,7 +2215,9 @@ async def test_staged_result_survives_crash_without_reexecuting_stage(
 
 
 @pytest.mark.asyncio
-async def test_stale_attempt_cannot_finalize_staged_result(tmp_path) -> None:
+async def test_staged_result_recovery_reuses_attempt_and_fences_stale_worker(
+    tmp_path,
+) -> None:
     engine, factory, project_id = await _database(tmp_path)
     queue = PostgresWorkerQueue(factory, lease_seconds=30)
     run_id = await _queued_run(factory, project_id)
@@ -2108,12 +2236,25 @@ async def test_stale_attempt_cannot_finalize_staged_result(tmp_path) -> None:
             run.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
         replacement = await queue.claim("replacement")
         assert replacement is not None
-        assert replacement.attempt_id != stale.attempt_id
+        assert replacement.attempt_id == stale.attempt_id
 
         with pytest.raises(LeaseLostError):
             await queue.finalize_stage(stale)
 
         assert await queue.finalize_stage(replacement) == "art_direction"
+        async with factory() as database:
+            attempts = (
+                await database.execute(
+                    select(GenerationStageAttempt).where(
+                        GenerationStageAttempt.run_id == run_id,
+                        GenerationStageAttempt.stage == "reference_analysis",
+                    )
+                )
+            ).scalars().all()
+            assert len(attempts) == 1
+            assert attempts[0].id == stale.attempt_id
+            assert attempts[0].ordinal == 1
+            assert attempts[0].status == "completed"
     finally:
         await engine.dispose()
 

@@ -23,6 +23,7 @@ from app.saas.models import (
     GenerationArtifact,
     GenerationEvent,
     GenerationRun,
+    GenerationStageAttempt,
     ModelCall,
     Project,
     ProjectVersion,
@@ -1022,6 +1023,176 @@ class PostgresWorkerQueue:
         raise LeaseLostError(f"run {run_id} has no valid stage attempt")
 
     @staticmethod
+    async def _stage_attempt(
+        database: AsyncSession,
+        *,
+        run_id: UUID,
+        stage: str,
+        attempt_id: UUID,
+    ) -> GenerationStageAttempt:
+        attempt = await database.scalar(
+            select(GenerationStageAttempt)
+            .where(
+                GenerationStageAttempt.id == attempt_id,
+                GenerationStageAttempt.run_id == run_id,
+                GenerationStageAttempt.stage == stage,
+            )
+            .with_for_update()
+        )
+        if attempt is None:
+            raise LeaseLostError(f"run {run_id} has no matching stage attempt")
+        return attempt
+
+    @classmethod
+    async def _transition_stage_attempt(
+        cls,
+        database: AsyncSession,
+        *,
+        run_id: UUID,
+        stage: str,
+        attempt_id: UUID,
+        status: str,
+        now: datetime,
+        expected_statuses: tuple[str, ...] = ("running", "result_staged"),
+    ) -> GenerationStageAttempt:
+        attempt = await cls._stage_attempt(
+            database,
+            run_id=run_id,
+            stage=stage,
+            attempt_id=attempt_id,
+        )
+        if attempt.status not in expected_statuses:
+            raise LeaseLostError(f"attempt fence moved for run {run_id}")
+        attempt.status = status
+        attempt.finished_at = (
+            None if status in {"running", "result_staged"} else now
+        )
+        return attempt
+
+    @staticmethod
+    async def _next_stage_attempt_ordinal(
+        database: AsyncSession,
+        *,
+        run_id: UUID,
+        stage: str,
+    ) -> int:
+        highest = await database.scalar(
+            select(func.max(GenerationStageAttempt.ordinal)).where(
+                GenerationStageAttempt.run_id == run_id,
+                GenerationStageAttempt.stage == stage,
+            )
+        )
+        return int(highest or 0) + 1
+
+    @classmethod
+    async def _start_stage_attempt(
+        cls,
+        database: AsyncSession,
+        run: GenerationRun,
+        *,
+        stage: str,
+        attempt_id: UUID,
+        now: datetime,
+    ) -> GenerationStageAttempt:
+        # Every caller holds the GenerationRun row lock, which serializes both
+        # interruption of the old active attempt and 1-based ordinal allocation.
+        active_attempts = (
+            await database.execute(
+                select(GenerationStageAttempt)
+                .where(
+                    GenerationStageAttempt.run_id == run.id,
+                    GenerationStageAttempt.stage == stage,
+                    GenerationStageAttempt.status.in_(
+                        ("running", "result_staged")
+                    ),
+                )
+                .with_for_update()
+            )
+        ).scalars().all()
+        for active in active_attempts:
+            active.status = "interrupted"
+            active.finished_at = now
+        attempt = GenerationStageAttempt(
+            id=attempt_id,
+            run_id=run.id,
+            stage=stage,
+            ordinal=await cls._next_stage_attempt_ordinal(
+                database,
+                run_id=run.id,
+                stage=stage,
+            ),
+            status="running",
+            started_at=now,
+        )
+        database.add(attempt)
+        return attempt
+
+    @classmethod
+    async def _recover_staged_attempt(
+        cls,
+        database: AsyncSession,
+        run: GenerationRun,
+        *,
+        stage: str,
+        staged: GenerationEvent,
+        now: datetime,
+    ) -> UUID:
+        try:
+            attempt_id = UUID(str(staged.payload["attempt_id"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise LeaseLostError(
+                f"run {run.id} has no valid staged attempt"
+            ) from exc
+        attempt = await database.get(
+            GenerationStageAttempt,
+            attempt_id,
+            with_for_update=True,
+        )
+        if attempt is not None:
+            if (
+                attempt.run_id != run.id
+                or attempt.stage != stage
+                or attempt.status != "result_staged"
+            ):
+                raise LeaseLostError(f"attempt fence moved for run {run.id}")
+            return attempt_id
+
+        started_at = now
+        started_records = (
+            await database.execute(
+                select(GenerationEvent)
+                .where(
+                    GenerationEvent.run_id == run.id,
+                    GenerationEvent.event_type == "stage.started",
+                )
+                .order_by(GenerationEvent.sequence.desc())
+                .limit(20)
+            )
+        ).scalars().all()
+        for record in started_records:
+            if (
+                record.payload.get("stage") == stage
+                and record.payload.get("attempt_id") == str(attempt_id)
+            ):
+                started_at = cls._utc(record.created_at)
+                break
+        database.add(
+            GenerationStageAttempt(
+                id=attempt_id,
+                run_id=run.id,
+                stage=stage,
+                ordinal=await cls._next_stage_attempt_ordinal(
+                    database,
+                    run_id=run.id,
+                    stage=stage,
+                ),
+                status="result_staged",
+                started_at=started_at,
+            )
+        )
+        return attempt_id
+
+    @staticmethod
     async def _ambiguous_dispatched_claim(
         database: AsyncSession,
         run: GenerationRun,
@@ -1226,12 +1397,12 @@ class PostgresWorkerQueue:
                     and run.lease_expires_at is not None
                     and self._utc(run.lease_expires_at) <= now
                 )
+                staged = await self._staged_result_record(
+                    database,
+                    run.id,
+                    next_stage,
+                )
                 if expired_attempt:
-                    staged = await self._staged_result_record(
-                        database,
-                        run.id,
-                        next_stage,
-                    )
                     ambiguous_claim = (
                         await self._ambiguous_dispatched_claim(
                             database,
@@ -1260,7 +1431,23 @@ class PostgresWorkerQueue:
                 run.lease_owner = worker_id
                 run.heartbeat_at = now
                 run.lease_expires_at = self._lease_expiry(now)
-                attempt_id = uuid4()
+                if staged is None:
+                    attempt_id = uuid4()
+                    await self._start_stage_attempt(
+                        database,
+                        run,
+                        stage=next_stage,
+                        attempt_id=attempt_id,
+                        now=now,
+                    )
+                else:
+                    attempt_id = await self._recover_staged_attempt(
+                        database,
+                        run,
+                        stage=next_stage,
+                        staged=staged,
+                        now=now,
+                    )
                 provider_dispatch_count = await self._provider_dispatch_count(
                     database,
                     run.id,
@@ -1328,6 +1515,13 @@ class PostgresWorkerQueue:
             run.heartbeat_at = now
             run.lease_expires_at = self._lease_expiry(now)
             attempt_id = uuid4()
+            await self._start_stage_attempt(
+                database,
+                run,
+                stage=next_stage,
+                attempt_id=attempt_id,
+                now=now,
+            )
             provider_dispatch_count = await self._provider_dispatch_count(
                 database,
                 run.id,
@@ -1395,6 +1589,16 @@ class PostgresWorkerQueue:
             self._assert_live_lease(run, worker_id=worker_id, now=now)
             if not await self._cancel_requested(database, run_id):
                 raise RunCancelledError(f"run {run_id} has no cancellation request")
+            stage = run.current_stage or ""
+            attempt_id = await self._latest_attempt_id(database, run.id, stage)
+            await self._transition_stage_attempt(
+                database,
+                run_id=run.id,
+                stage=stage,
+                attempt_id=attempt_id,
+                status="cancelled",
+                now=now,
+            )
             run.state = "cancelled"
             run.finished_at = now
             run.heartbeat_at = now
@@ -1438,6 +1642,7 @@ class PostgresWorkerQueue:
                 database,
                 run.id,
                 claim.next_stage,
+                attempt_id=claim.attempt_id,
             )
             ambiguous_claim = (
                 await self._ambiguous_dispatched_claim(
@@ -1464,6 +1669,15 @@ class PostgresWorkerQueue:
                     now,
                 )
                 return
+            if staged is None:
+                await self._transition_stage_attempt(
+                    database,
+                    run_id=run.id,
+                    stage=claim.next_stage,
+                    attempt_id=claim.attempt_id,
+                    status="interrupted",
+                    now=now,
+                )
             run.state = "queued"
             run.heartbeat_at = now
             run.lease_owner = None
@@ -1490,6 +1704,19 @@ class PostgresWorkerQueue:
         error: BuilderEngineError,
         now: datetime,
     ) -> None:
+        attempt_status = (
+            "accounting_failed"
+            if error.error_code == "provider_dispatch_ambiguous"
+            else "failed"
+        )
+        await self._transition_stage_attempt(
+            database,
+            run_id=run.id,
+            stage=claim.next_stage,
+            attempt_id=claim.attempt_id,
+            status=attempt_status,
+            now=now,
+        )
         run.state = "failed"
         run.finished_at = now
         run.heartbeat_at = now
@@ -1605,6 +1832,14 @@ class PostgresWorkerQueue:
             if failed_execution >= MAX_STAGE_EXECUTIONS:
                 await self._fail_locked(database, run, claim, error, now)
                 return False
+            await self._transition_stage_attempt(
+                database,
+                run_id=run.id,
+                stage=claim.next_stage,
+                attempt_id=claim.attempt_id,
+                status="interrupted",
+                now=now,
+            )
             delay = self.retry_backoff_seconds * (2 ** (failed_execution - 1))
             not_before = now + timedelta(seconds=delay)
             run.stage_retry_count = failed_execution
@@ -1647,10 +1882,22 @@ class PostgresWorkerQueue:
         )
         if current_attempt != claim.attempt_id:
             raise LeaseLostError(f"attempt fence moved for run {run.id}")
+        attempt = await self._stage_attempt(
+            database,
+            run_id=run.id,
+            stage=claim.next_stage,
+            attempt_id=claim.attempt_id,
+        )
+        if attempt.status not in {"running", "result_staged"}:
+            raise LeaseLostError(f"attempt fence moved for run {run.id}")
 
     @staticmethod
     async def _staged_result_record(
-        database: AsyncSession, run_id: UUID, stage: str
+        database: AsyncSession,
+        run_id: UUID,
+        stage: str,
+        *,
+        attempt_id: UUID | None = None,
     ) -> GenerationEvent | None:
         records = (
             await database.execute(
@@ -1664,14 +1911,25 @@ class PostgresWorkerQueue:
             )
         ).scalars().all()
         return next(
-            (record for record in records if record.payload.get("stage") == stage),
+            (
+                record
+                for record in records
+                if record.payload.get("stage") == stage
+                and (
+                    attempt_id is None
+                    or record.payload.get("attempt_id") == str(attempt_id)
+                )
+            ),
             None,
         )
 
     async def staged_result(self, claim: RunClaim) -> StageResult | None:
         async with self._sessions() as database:
             record = await self._staged_result_record(
-                database, claim.run_id, claim.next_stage
+                database,
+                claim.run_id,
+                claim.next_stage,
+                attempt_id=claim.attempt_id,
             )
             if record is None:
                 return None
@@ -1921,7 +2179,10 @@ class PostgresWorkerQueue:
                 raise LeaseLostError(f"run {claim.run_id} no longer exists")
             await self._assert_claim(database, run, claim, now)
             existing = await self._staged_result_record(
-                database, claim.run_id, claim.next_stage
+                database,
+                claim.run_id,
+                claim.next_stage,
+                attempt_id=claim.attempt_id,
             )
             if existing is not None:
                 return StageResult.from_dict(existing.payload["result"])
@@ -1929,6 +2190,15 @@ class PostgresWorkerQueue:
                 database,
                 claim=claim,
                 result=result,
+            )
+            await self._transition_stage_attempt(
+                database,
+                run_id=run.id,
+                stage=claim.next_stage,
+                attempt_id=claim.attempt_id,
+                status="result_staged",
+                now=now,
+                expected_statuses=("running",),
             )
             await self._append_event(
                 database,
@@ -2118,6 +2388,7 @@ class PostgresWorkerQueue:
         stage: str,
         worker_id: str,
         result: StageResult | None = None,
+        attempt_id: UUID | None = None,
     ) -> str | None:
         # Lease extension belongs at the checkpoint boundary. In particular,
         # never reuse the timestamp captured before staged-result parsing and
@@ -2128,6 +2399,19 @@ class PostgresWorkerQueue:
             raise ValueError(
                 f"cannot checkpoint stage {stage!r}; expected {expected_stage!r}"
             )
+        attempt_id = attempt_id or await self._latest_attempt_id(
+            database,
+            run.id,
+            stage,
+        )
+        await self._transition_stage_attempt(
+            database,
+            run_id=run.id,
+            stage=stage,
+            attempt_id=attempt_id,
+            status="completed",
+            now=now,
+        )
         stages = self.stage_sequence(run.mode)
         stage_index = stages.index(stage)
         next_stage = stages[stage_index + 1] if stage_index + 1 < len(stages) else None
@@ -2350,7 +2634,10 @@ class PostgresWorkerQueue:
             if await self._cancel_requested(database, run.id):
                 raise RunCancelledError(f"run {run.id} was cancelled")
             staged = await self._staged_result_record(
-                database, run.id, claim.next_stage
+                database,
+                run.id,
+                claim.next_stage,
+                attempt_id=claim.attempt_id,
             )
             if staged is None or not isinstance(staged.payload.get("result"), dict):
                 raise RuntimeError("stage result must be persisted before finalize")
@@ -2362,6 +2649,7 @@ class PostgresWorkerQueue:
                 stage=claim.next_stage,
                 worker_id=claim.worker_id,
                 result=result,
+                attempt_id=claim.attempt_id,
             )
 
     async def complete_stage(
@@ -2386,11 +2674,27 @@ class PostgresWorkerQueue:
                 return expected
             if expected != stage or run.current_stage != stage:
                 raise ValueError(f"cannot checkpoint stage {stage!r}")
+            try:
+                attempt_id = await self._latest_attempt_id(
+                    database,
+                    run.id,
+                    stage,
+                )
+            except LeaseLostError:
+                attempt_id = uuid4()
+                await self._start_stage_attempt(
+                    database,
+                    run,
+                    stage=stage,
+                    attempt_id=attempt_id,
+                    now=now,
+                )
             return await self._checkpoint_locked(
                 database,
                 run,
                 stage=stage,
                 worker_id=worker_id,
+                attempt_id=attempt_id,
             )
 
 
