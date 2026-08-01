@@ -18,12 +18,22 @@ class ModelUsage:
     input_tokens: int = 0
     output_tokens: int = 0
     thinking_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
 
     def __post_init__(self) -> None:
-        if min(self.input_tokens, self.output_tokens, self.thinking_tokens) < 0:
+        if min(
+            self.input_tokens,
+            self.output_tokens,
+            self.thinking_tokens,
+            self.cache_read_tokens,
+            self.cache_write_tokens,
+        ) < 0:
             raise ValueError("model usage cannot be negative")
         if self.thinking_tokens > self.output_tokens:
             raise ValueError("thinking_tokens cannot exceed output_tokens")
+        if self.cache_read_tokens + self.cache_write_tokens > self.input_tokens:
+            raise ValueError("cache token buckets cannot exceed input_tokens")
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +52,17 @@ class ModelResponse:
     usage: ModelUsage = ModelUsage()
     request_id: str | None = None
     raw: Mapping[str, Any] | None = None
+    actual_provider: str | None = None
+    actual_model: str | None = None
+    reported_cost_microusd: int | None = None
+    no_charge_confirmed: bool = False
+
+    def __post_init__(self) -> None:
+        _validate_actual_identity(self.actual_provider, self.actual_model)
+        _validate_billing_signals(
+            self.reported_cost_microusd,
+            self.no_charge_confirmed,
+        )
 
 
 class ModelProviderError(RuntimeError):
@@ -71,10 +92,20 @@ class BilledModelProviderError(ModelProviderError):
         *,
         usage: ModelUsage = ModelUsage(),
         request_id: str | None = None,
+        actual_provider: str | None = None,
+        actual_model: str | None = None,
+        reported_cost_microusd: int | None = None,
+        no_charge_confirmed: bool = False,
     ) -> None:
+        _validate_actual_identity(actual_provider, actual_model)
+        _validate_billing_signals(reported_cost_microusd, no_charge_confirmed)
         super().__init__(message)
         self.usage = usage
         self.request_id = request_id
+        self.actual_provider = actual_provider
+        self.actual_model = actual_model
+        self.reported_cost_microusd = reported_cost_microusd
+        self.no_charge_confirmed = no_charge_confirmed
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +142,8 @@ class ModelRouteAttempt:
                 "input_tokens": self.usage.input_tokens,
                 "output_tokens": self.usage.output_tokens,
                 "thinking_tokens": self.usage.thinking_tokens,
+                "cache_read_tokens": self.usage.cache_read_tokens,
+                "cache_write_tokens": self.usage.cache_write_tokens,
             },
             "cost_microusd": self.cost_microusd,
             "cost_state": self.cost_state,
@@ -164,3 +197,33 @@ class ModelProvider(Protocol):
     capabilities: ProviderCapabilities
 
     async def generate(self, request: ModelRequest, *, model: str) -> ModelResponse: ...
+
+
+def _validate_actual_identity(
+    actual_provider: str | None,
+    actual_model: str | None,
+) -> None:
+    if (actual_provider is None) != (actual_model is None):
+        raise ValueError("actual provider and model must be paired")
+    for name, value in (
+        ("actual_provider", actual_provider),
+        ("actual_model", actual_model),
+    ):
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError(f"{name} must be non-empty when provided")
+
+
+def _validate_billing_signals(
+    reported_cost_microusd: int | None,
+    no_charge_confirmed: bool,
+) -> None:
+    if reported_cost_microusd is not None and (
+        isinstance(reported_cost_microusd, bool)
+        or not isinstance(reported_cost_microusd, int)
+        or reported_cost_microusd < 0
+    ):
+        raise ValueError("reported_cost_microusd must be non-negative or None")
+    if not isinstance(no_charge_confirmed, bool):
+        raise ValueError("no_charge_confirmed must be a boolean")
+    if reported_cost_microusd is not None and no_charge_confirmed:
+        raise ValueError("billing signals are mutually exclusive")

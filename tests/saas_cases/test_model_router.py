@@ -7,6 +7,7 @@ import pytest
 
 import app.models.router as router_module
 from app.models.contracts import (
+    BilledModelProviderError,
     InvalidModelResponse,
     ModelProviderError,
     ModelRequest,
@@ -153,6 +154,31 @@ def test_model_usage_rejects_thinking_greater_than_billed_output() -> None:
         ModelUsage(input_tokens=10, output_tokens=3, thinking_tokens=4)
 
 
+@pytest.mark.parametrize("factory", [ModelResponse, BilledModelProviderError])
+def test_provider_contract_rejects_conflicting_billing_signals(factory) -> None:
+    kwargs = {
+        "reported_cost_microusd": 17,
+        "no_charge_confirmed": True,
+    }
+    if factory is ModelResponse:
+        with pytest.raises(ValueError, match="billing signals are mutually exclusive"):
+            factory(text="{}", **kwargs)
+    else:
+        with pytest.raises(ValueError, match="billing signals are mutually exclusive"):
+            factory("provider failed", **kwargs)
+
+
+@pytest.mark.parametrize("factory", [ModelResponse, BilledModelProviderError])
+def test_provider_contract_requires_paired_actual_identity(factory) -> None:
+    kwargs = {"actual_provider": "agentrouter", "actual_model": None}
+    if factory is ModelResponse:
+        with pytest.raises(ValueError, match="actual provider and model must be paired"):
+            factory(text="{}", **kwargs)
+    else:
+        with pytest.raises(ValueError, match="actual provider and model must be paired"):
+            factory("provider failed", **kwargs)
+
+
 @pytest.mark.asyncio
 async def test_provider_attempt_deadline_audits_timeout_then_falls_back() -> None:
     class NeverReturningProvider(FakeProvider):
@@ -255,6 +281,8 @@ async def test_fallback_success_preserves_attempt_lineage_and_all_billed_usage()
         "input_tokens": 11,
         "output_tokens": 7,
         "thinking_tokens": 2,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
     }
     assert "private upstream payload" not in str(attempts)
 
