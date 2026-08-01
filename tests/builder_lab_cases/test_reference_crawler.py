@@ -783,6 +783,191 @@ class BrowserLifecycleTests(unittest.TestCase):
                 )
             )
 
+    def test_reverse_reset_settles_once_only_after_top_is_restored(self):
+        initial_state = {
+            "top": 0,
+            "height": 2000,
+            "client": 900,
+            "rect": {"x": 0, "y": 0, "width": 1440, "height": 900},
+            "transformSignature": "",
+            "visibleSignature": "top",
+            "potentialVirtual": False,
+        }
+        states = [
+            {**initial_state, "top": 1200, "visibleSignature": "bottom"},
+            {**initial_state, "top": 600, "visibleSignature": "middle"},
+            initial_state,
+            initial_state,
+        ]
+        events = []
+
+        class FakePage:
+            async def evaluate(self, _script):
+                return states.pop(0)
+
+        async def record_scroll(_page, _state, step):
+            events.append(("wheel", step))
+            return "wheel"
+
+        async def record_settle(_page, **_kwargs):
+            events.append(("settle", None))
+
+        settings = CaptureSettings(
+            width=1440,
+            height=900,
+            warmup_ms=1000,
+            scroll_delay_ms=600,
+            final_settle_ms=500,
+            max_scroll_steps=4,
+        )
+        with (
+            patch.object(reference_crawler_module, "_scroll_once", record_scroll),
+            patch.object(
+                reference_crawler_module,
+                "_settle_scrolled_viewport",
+                record_settle,
+            ),
+        ):
+            asyncio.run(
+                reference_crawler_module._restore_reference_start(
+                    FakePage(),
+                    initial_state=initial_state,
+                    settings=settings,
+                )
+            )
+
+        self.assertEqual(
+            events,
+            [("wheel", -630), ("wheel", -630), ("settle", None)],
+        )
+
+    def test_forward_settle_runs_quiet_and_images_together_without_fixed_delay(self):
+        visual_active = False
+        image_saw_visual = False
+        visual_kwargs = {}
+        fixed_delays = []
+
+        class FakePage:
+            async def wait_for_timeout(self, delay_ms):
+                fixed_delays.append(delay_ms)
+
+        async def record_visual(_page, **kwargs):
+            nonlocal visual_active
+            visual_kwargs.update(kwargs)
+            visual_active = True
+            await asyncio.sleep(0)
+            visual_active = False
+
+        async def record_images(_page, _timeout_ms):
+            nonlocal image_saw_visual
+            image_saw_visual = visual_active
+
+        settings = CaptureSettings(
+            width=1440,
+            height=900,
+            warmup_ms=1000,
+            scroll_delay_ms=700,
+            final_settle_ms=500,
+            max_scroll_steps=4,
+        )
+        with (
+            patch.object(
+                reference_crawler_module,
+                "_wait_for_visual_quiet",
+                record_visual,
+            ),
+            patch.object(
+                reference_crawler_module,
+                "_wait_for_fonts_and_viewport_images",
+                record_images,
+            ),
+        ):
+            asyncio.run(
+                reference_crawler_module._settle_scrolled_viewport(
+                    FakePage(),
+                    settings=settings,
+                    skipped_reasons=[],
+                    image_timeout_reason="lazy_image_settle_timeout",
+                )
+            )
+
+        self.assertEqual(fixed_delays, [])
+        self.assertTrue(image_saw_visual)
+        self.assertEqual(visual_kwargs["minimum_ms"], settings.scroll_delay_ms)
+
+    def test_font_ready_wait_is_locally_bounded_by_supplied_timeout(self):
+        evaluate_call = {}
+
+        class FakePage:
+            async def evaluate(self, script, *args):
+                evaluate_call.update(script=script, args=args)
+
+            async def wait_for_function(self, _script, *, timeout):
+                self.image_timeout = timeout
+
+        page = FakePage()
+        asyncio.run(
+            reference_crawler_module._wait_for_fonts_and_viewport_images(
+                page,
+                1234,
+            )
+        )
+
+        self.assertIn("Promise.race", evaluate_call["script"])
+        self.assertIn("setTimeout", evaluate_call["script"])
+        self.assertEqual(evaluate_call["args"], (1234,))
+        self.assertEqual(page.image_timeout, 1234)
+
+    def test_single_page_crawl_skips_sitemap_discovery(self):
+        class StopAfterDiscovery(Exception):
+            pass
+
+        sitemap_called = False
+
+        async def allow_robots(_self, _url):
+            return None
+
+        async def canonicalize(url, **_kwargs):
+            return url
+
+        async def record_sitemap(*_args, **_kwargs):
+            nonlocal sitemap_called
+            sitemap_called = True
+            return ()
+
+        async def stop_after_discovery(*_args, **_kwargs):
+            raise StopAfterDiscovery
+
+        crawler = VisualReferenceCrawler(
+            guard=PermissiveLocalGuard(),
+            limits=ReferenceCrawlLimits(max_pages=1),
+        )
+        with (
+            patch.object(
+                reference_crawler_module.GuardedRobotsPolicy,
+                "require_allowed",
+                allow_robots,
+            ),
+            patch.object(
+                reference_crawler_module,
+                "_canonicalize_document_url",
+                canonicalize,
+            ),
+            patch.object(
+                reference_crawler_module,
+                "_sitemap_candidates",
+                record_sitemap,
+            ),
+            patch(
+                "crawlee.storages.RequestQueue.open",
+                stop_after_discovery,
+            ),
+            self.assertRaises(StopAfterDiscovery),
+        ):
+            asyncio.run(crawler.crawl("http://127.0.0.1/"))
+
+        self.assertFalse(sitemap_called)
+
     def test_chunked_response_is_aborted_near_byte_cap_without_full_buffering(self):
         reason = browser_unavailable_reason()
         if reason:
@@ -1377,6 +1562,23 @@ class BrowserLifecycleTests(unittest.TestCase):
         self.assertTrue(first_top["complete"])
         self.assertGreater(first_top["naturalWidth"], 0)
         self.assertEqual(evidence.reset_strategy, "wheel-prewarm-return-top")
+        self.assertEqual(
+            set(evidence.timings_ms),
+            {
+                "load_and_initial_settle",
+                "warm_pass",
+                "reset_pass",
+                "evidence_pass",
+                "final_settle_and_screenshots",
+                "total",
+                "warm_steps",
+                "reset_steps",
+                "evidence_steps",
+            },
+        )
+        self.assertGreater(evidence.timings_ms["warm_steps"], 0)
+        self.assertGreater(evidence.timings_ms["reset_steps"], 0)
+        self.assertGreater(evidence.timings_ms["evidence_steps"], 0)
 
     def test_warmup_incremental_scroll_and_tiles_reveal_lazy_content(self):
         reason = browser_unavailable_reason()

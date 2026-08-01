@@ -1149,7 +1149,13 @@ def browser_unavailable_reason() -> str | None:
 
 async def _wait_for_fonts_and_viewport_images(page: Any, timeout_ms: int) -> None:
     await page.evaluate(
-        "() => document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()"
+        """(timeoutMs) => Promise.race([
+          document.fonts && document.fonts.ready
+            ? document.fonts.ready
+            : Promise.resolve(),
+          new Promise((resolve) => setTimeout(resolve, timeoutMs))
+        ])""",
+        timeout_ms,
     )
     await page.wait_for_function(
         """() => {
@@ -1376,25 +1382,30 @@ async def _settle_scrolled_viewport(
     image_timeout_reason: str,
 ) -> None:
     timeout_ms = settings.page_timeout_seconds * 1000
-    await page.wait_for_timeout(settings.scroll_delay_ms)
-    await _wait_for_visual_quiet(
-        page,
-        minimum_ms=600,
-        quiet_ms=450,
-        maximum_ms=min(2500, timeout_ms),
+
+    async def wait_for_viewport_images() -> None:
+        try:
+            await _wait_for_fonts_and_viewport_images(page, min(2500, timeout_ms))
+        except Exception:
+            if image_timeout_reason not in skipped_reasons:
+                skipped_reasons.append(image_timeout_reason)
+
+    await asyncio.gather(
+        _wait_for_visual_quiet(
+            page,
+            minimum_ms=settings.scroll_delay_ms,
+            quiet_ms=450,
+            maximum_ms=min(2500, timeout_ms),
+        ),
+        wait_for_viewport_images(),
     )
-    try:
-        await _wait_for_fonts_and_viewport_images(page, min(2500, timeout_ms))
-    except Exception:
-        if image_timeout_reason not in skipped_reasons:
-            skipped_reasons.append(image_timeout_reason)
 
 
 async def _warm_reference_page(
     page: Any,
     *,
     settings: CaptureSettings,
-) -> tuple[Mapping[str, Any], tuple[str, ...]]:
+) -> tuple[Mapping[str, Any], tuple[str, ...], int]:
     initial_state = await page.evaluate(_SCROLL_STATE_SCRIPT)
     state = initial_state
     skipped_reasons: list[str] = []
@@ -1405,6 +1416,7 @@ async def _warm_reference_page(
     native_progressed = False
     virtual = bool(state.get("potentialVirtual"))
     exhausted = True
+    steps = 0
 
     for _step_index in range(settings.max_scroll_steps):
         if int(state["height"]) > settings.max_scroll_height:
@@ -1413,6 +1425,7 @@ async def _warm_reference_page(
             break
         previous = state
         await _scroll_once(page, previous, step_px)
+        steps += 1
         await _settle_scrolled_viewport(
             page,
             settings=settings,
@@ -1473,7 +1486,7 @@ async def _warm_reference_page(
 
     if exhausted:
         skipped_reasons.append("warmup_scroll_step_cap_reached")
-    return initial_state, tuple(skipped_reasons)
+    return initial_state, tuple(skipped_reasons), steps
 
 
 def _scroll_state_is_restored(
@@ -1495,26 +1508,31 @@ async def _restore_reference_start(
     *,
     initial_state: Mapping[str, Any],
     settings: CaptureSettings,
-) -> tuple[str, ...]:
+) -> tuple[tuple[str, ...], int]:
     state = await page.evaluate(_SCROLL_STATE_SCRIPT)
     skipped_reasons: list[str] = []
     if _scroll_state_is_restored(state, initial_state):
-        return ()
+        return (), 0
 
     step_px = -max(1, int(settings.height * 0.7))
     stable_steps = 0
+    steps = 0
     for _step_index in range(settings.max_scroll_steps):
         previous = state
         await _scroll_once(page, previous, step_px)
-        await _settle_scrolled_viewport(
-            page,
-            settings=settings,
-            skipped_reasons=skipped_reasons,
-            image_timeout_reason="reset_lazy_image_settle_timeout",
-        )
+        steps += 1
         state = await page.evaluate(_SCROLL_STATE_SCRIPT)
         if _scroll_state_is_restored(state, initial_state):
-            return tuple(skipped_reasons)
+            await _settle_scrolled_viewport(
+                page,
+                settings=settings,
+                skipped_reasons=skipped_reasons,
+                image_timeout_reason="reset_lazy_image_settle_timeout",
+            )
+            state = await page.evaluate(_SCROLL_STATE_SCRIPT)
+            if _scroll_state_is_restored(state, initial_state):
+                return tuple(skipped_reasons), steps
+            break
         if _scroll_state_changed(previous, state):
             stable_steps = 0
         else:
@@ -1730,6 +1748,8 @@ async def _capture_loaded_page(
     telemetry: CaptureTelemetry,
 ) -> ReferencePageEvidence:
     started = time.monotonic()
+    phase_started = started
+    timings_ms: dict[str, int | float] = {}
     observed_texts: list[str] = []
     skipped_reasons: list[str] = []
     samples: list[Mapping[str, Any]] = []
@@ -1755,30 +1775,32 @@ async def _capture_loaded_page(
           return /reveal|animate|hidden/i.test(el.className || '') && r.width>1 && r.height>1 && (s.opacity==='0' || s.visibility==='hidden');
         }).length"""
     )
-    initial_state, warmup_reasons = await _warm_reference_page(
+    timings_ms["load_and_initial_settle"] = round(
+        (time.monotonic() - phase_started) * 1000,
+        1,
+    )
+
+    phase_started = time.monotonic()
+    initial_state, warmup_reasons, warm_steps = await _warm_reference_page(
         page,
         settings=settings,
     )
+    timings_ms["warm_pass"] = round((time.monotonic() - phase_started) * 1000, 1)
+    timings_ms["warm_steps"] = warm_steps
     skipped_reasons.extend(warmup_reasons)
-    reset_reasons = await _restore_reference_start(
+
+    phase_started = time.monotonic()
+    reset_reasons, reset_steps = await _restore_reference_start(
         page,
         initial_state=initial_state,
         settings=settings,
     )
+    timings_ms["reset_pass"] = round((time.monotonic() - phase_started) * 1000, 1)
+    timings_ms["reset_steps"] = reset_steps
     skipped_reasons.extend(reset_reasons)
-    try:
-        await _wait_for_fonts_and_viewport_images(page, min(timeout_ms, 2500))
-    except Exception:
-        if "reset_lazy_image_settle_timeout" not in skipped_reasons:
-            skipped_reasons.append("reset_lazy_image_settle_timeout")
-    await _wait_for_visual_quiet(
-        page,
-        minimum_ms=600,
-        quiet_ms=450,
-        maximum_ms=min(2500, timeout_ms),
-    )
     telemetry.raise_if_oversize()
 
+    phase_started = time.monotonic()
     screenshots: dict[str, ScreenshotEvidence] = {}
     state = await page.evaluate(_SCROLL_STATE_SCRIPT)
     observed_texts.extend(state.get("visible", ()))
@@ -1808,6 +1830,7 @@ async def _capture_loaded_page(
     native_progressed = False
     exhausted = True
     coverage_complete = False
+    evidence_steps = 0
     for step_index in range(settings.max_scroll_steps):
         if int(state["height"]) > settings.max_scroll_height:
             skipped_reasons.append("scroll_height_cap_reached")
@@ -1815,19 +1838,14 @@ async def _capture_loaded_page(
             break
         previous = state
         scroll_result = await _scroll_once(page, previous, step_px)
+        evidence_steps += 1
         fallback_used = fallback_used or scroll_result == "script_fallback"
-        await page.wait_for_timeout(settings.scroll_delay_ms)
-        await _wait_for_visual_quiet(
+        await _settle_scrolled_viewport(
             page,
-            minimum_ms=600,
-            quiet_ms=450,
-            maximum_ms=min(5000, timeout_ms),
+            settings=settings,
+            skipped_reasons=skipped_reasons,
+            image_timeout_reason="lazy_image_settle_timeout",
         )
-        try:
-            await _wait_for_fonts_and_viewport_images(page, 2500)
-        except Exception:
-            if "lazy_image_settle_timeout" not in skipped_reasons:
-                skipped_reasons.append("lazy_image_settle_timeout")
         telemetry.raise_if_oversize()
         state = await page.evaluate(_SCROLL_STATE_SCRIPT)
         top_changed = int(state["top"]) != int(previous["top"])
@@ -1910,6 +1928,13 @@ async def _capture_loaded_page(
                 break
     if exhausted:
         skipped_reasons.append("scroll_step_cap_reached")
+    timings_ms["evidence_pass"] = round(
+        (time.monotonic() - phase_started) * 1000,
+        1,
+    )
+    timings_ms["evidence_steps"] = evidence_steps
+
+    phase_started = time.monotonic()
     await page.wait_for_timeout(settings.final_settle_ms)
     await _wait_for_visual_quiet(page)
     observed_texts.extend(state.get("visible", ()))
@@ -1949,6 +1974,11 @@ async def _capture_loaded_page(
         scroll_strategy = "mixed"
     if fallback_used:
         scroll_strategy = f"{scroll_strategy}+script_fallback"
+    timings_ms["final_settle_and_screenshots"] = round(
+        (time.monotonic() - phase_started) * 1000,
+        1,
+    )
+    timings_ms["total"] = round((time.monotonic() - started) * 1000, 1)
     return ReferencePageEvidence(
         page_id=page_id,
         category=category,
@@ -1966,7 +1996,7 @@ async def _capture_loaded_page(
         page_failures=tuple(telemetry.page_failures),
         request_failures=tuple(telemetry.request_failures),
         policy_blocks=tuple(telemetry.policy_blocks),
-        timings_ms={"total": round((time.monotonic() - started) * 1000, 1)},
+        timings_ms=timings_ms,
         transferred_bytes=transferred_bytes,
         scroll_strategy=scroll_strategy,
         reset_strategy="wheel-prewarm-return-top",
@@ -2262,17 +2292,19 @@ class VisualReferenceCrawler:
                 ),
                 started_at=started_at,
             )
-        try:
-            sitemap = await asyncio.wait_for(
-                _sitemap_candidates(
-                    home_url,
-                    guard=self.guard,
-                    timeout_seconds=min(15, self.limits.page_timeout_seconds),
-                ),
-                timeout=min(20, remaining_timeout()),
-            )
-        except (TimeoutError, OSError):
-            sitemap = ()
+        sitemap: tuple[LinkCandidate, ...] = ()
+        if self.limits.max_pages > 1:
+            try:
+                sitemap = await asyncio.wait_for(
+                    _sitemap_candidates(
+                        home_url,
+                        guard=self.guard,
+                        timeout_seconds=min(15, self.limits.page_timeout_seconds),
+                    ),
+                    timeout=min(20, remaining_timeout()),
+                )
+            except (TimeoutError, OSError):
+                sitemap = ()
         failure_trace: TraceEvidence | None = None
         byte_budget = CrawlByteBudget(self.limits.max_total_bytes)
         accumulator = CrawlAccumulator(
