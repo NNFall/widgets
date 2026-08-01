@@ -895,6 +895,61 @@ class BrowserLifecycleTests(unittest.TestCase):
         self.assertTrue(image_saw_visual)
         self.assertEqual(visual_kwargs["minimum_ms"], settings.scroll_delay_ms)
 
+    def test_visual_settle_failure_cancels_and_awaits_asset_sibling(self):
+        asset_started = asyncio.Event()
+        asset_cancelled = asyncio.Event()
+        asset_finished = asyncio.Event()
+        never_finished = asyncio.Event()
+
+        async def fail_visual(_page, **_kwargs):
+            await asset_started.wait()
+            raise RuntimeError("visual quiet failed")
+
+        async def wait_for_assets(_page, **_kwargs):
+            asset_started.set()
+            try:
+                await never_finished.wait()
+            except asyncio.CancelledError:
+                asset_cancelled.set()
+                raise
+            finally:
+                asset_finished.set()
+
+        settings = CaptureSettings(
+            width=1440,
+            height=900,
+            warmup_ms=1000,
+            scroll_delay_ms=600,
+            final_settle_ms=500,
+            max_scroll_steps=4,
+        )
+
+        async def exercise_failure():
+            with self.assertRaisesRegex(RuntimeError, "visual quiet failed"):
+                await reference_crawler_module._settle_scrolled_viewport(
+                    object(),
+                    settings=settings,
+                    skipped_reasons=[],
+                    image_timeout_reason="lazy_image_settle_timeout",
+                )
+            await asyncio.sleep(0)
+            self.assertTrue(asset_cancelled.is_set())
+            self.assertTrue(asset_finished.is_set())
+
+        with (
+            patch.object(
+                reference_crawler_module,
+                "_wait_for_visual_quiet",
+                fail_visual,
+            ),
+            patch.object(
+                reference_crawler_module,
+                "_settle_viewport_assets_nonfatal",
+                wait_for_assets,
+            ),
+        ):
+            asyncio.run(exercise_failure())
+
     def test_font_ready_wait_is_locally_bounded_by_supplied_timeout(self):
         evaluate_call = {}
 

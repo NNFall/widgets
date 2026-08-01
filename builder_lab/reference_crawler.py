@@ -1456,20 +1456,31 @@ async def _settle_scrolled_viewport(
 ) -> None:
     timeout_ms = settings.page_timeout_seconds * 1000
 
-    await asyncio.gather(
+    visual_task = asyncio.create_task(
         _wait_for_visual_quiet(
             page,
             minimum_ms=settings.scroll_delay_ms,
             quiet_ms=450,
             maximum_ms=min(2500, timeout_ms),
-        ),
+        )
+    )
+    asset_task = asyncio.create_task(
         _settle_viewport_assets_nonfatal(
             page,
             timeout_ms=min(2500, timeout_ms),
             skipped_reasons=skipped_reasons,
             image_timeout_reason=image_timeout_reason,
-        ),
+        )
     )
+    tasks = (visual_task, asset_task)
+    try:
+        await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
 
 async def _warm_reference_page(
