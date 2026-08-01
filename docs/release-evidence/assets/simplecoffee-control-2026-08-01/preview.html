@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27;; style-src &#x27;unsafe-inline&#x27;; img-src data:; font-src &#x27;none&#x27;; connect-src &#x27;none&#x27;; form-action &#x27;none&#x27;; base-uri &#x27;none&#x27;; object-src &#x27;none&#x27;">
+  <title>Kaigo Builder Preview</title>
+  <style>
+    html, body { margin: 0; min-height: 100%; background: transparent; }
+    body { min-height: 100vh; overflow: hidden; font-family: Inter, Arial, sans-serif; }
+    .kaigo-widget, .kaigo-widget * { box-sizing: border-box; margin: 0; padding: 0; } .kaigo-widget h1, .kaigo-widget h2, .kaigo-widget h3, .kaigo-widget p { margin: 0; } .kaigo-widget { position: fixed; bottom: 20px; right: 20px; z-index: 99999; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #222222; font-size: 14px; line-height: 1.45; -webkit-font-smoothing: antialiased; } .kaigo-widget__launcher { display: flex; align-items: center; gap: 8px; height: 52px; padding: 0 18px 0 12px; background: #E55325; color: #FFFFFF; border: none; border-radius: 9999px; cursor: pointer; box-shadow: 0 8px 24px rgba(229, 83, 37, 0.38), 0 2px 6px rgba(0,0,0,0.08); font-size: 14px; font-weight: 700; text-transform: lowercase; transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease, background-color 0.2s ease; min-width: 44px; min-height: 44px; } .kaigo-widget__launcher:hover { background: #d4471e; transform: translateY(-3px) scale(1.02); box-shadow: 0 14px 32px rgba(229, 83, 37, 0.48), 0 4px 10px rgba(0,0,0,0.12); } .kaigo-widget__launcher:active { transform: translateY(0) scale(0.98); } .kaigo-widget__launcher-badge { display: inline-flex; align-items: center; justify-content: center; background: #FFD200; color: #111111; font-size: 11px; font-weight: 800; padding: 2px 7px; border-radius: 9999px; text-transform: uppercase; letter-spacing: 0.5px; } .kaigo-widget__launcher-text { margin-left: 2px; } .kaigo-widget__steam-1 { animation: kaigo-steam-float 2s infinite ease-in-out; } .kaigo-widget__steam-2 { animation: kaigo-steam-float 2s infinite ease-in-out 0.4s; } .kaigo-widget__steam-3 { animation: kaigo-steam-float 2s infinite ease-in-out 0.8s; } @keyframes kaigo-steam-float { 0%, 100% { transform: translateY(0); opacity: 0.6; } 50% { transform: translateY(-2px); opacity: 1; } } .kaigo-widget.kaigo-preview-attention [data-region="launcher"] { animation: kaigo-attention-bounce 1.8s infinite cubic-bezier(0.36, 0, 0.66, -0.56); } @keyframes kaigo-attention-bounce { 0%, 100% { transform: scale(1) translateY(0); box-shadow: 0 8px 24px rgba(229, 83, 37, 0.38); } 50% { transform: scale(1.05) translateY(-6px); box-shadow: 0 16px 36px rgba(229, 83, 37, 0.55), 0 0 0 6px rgba(255, 210, 0, 0.4); } } .kaigo-widget [data-region="panel"] { position: absolute; bottom: 68px; right: 0; width: 380px; max-width: calc(100vw - 32px); max-height: min(560px, calc(100vh - 96px)); background: #FFFFFF; border-radius: 24px; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.14), 0 4px 16px rgba(229, 83, 37, 0.08); border: 1.5px solid rgba(229, 83, 37, 0.18); display: flex; flex-direction: column; overflow: hidden; opacity: 0; visibility: hidden; transform: translateY(20px) scale(0.92); transition: opacity 0.35s cubic-bezier(0.18, 1.25, 0.3, 1), transform 0.35s cubic-bezier(0.18, 1.25, 0.3, 1), visibility 0.35s; pointer-events: none; } .kaigo-widget.kaigo-preview-open [data-region="panel"], .kaigo-widget [data-region="panel"][data-open] { opacity: 1; visibility: visible; transform: translateY(0) scale(1); pointer-events: auto; } .kaigo-widget__header { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; background: #FFFFFF; border-bottom: 1px solid #F0ECE6; } .kaigo-widget__header-info { display: flex; align-items: center; gap: 12px; } .kaigo-widget__avatar { width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: #E55325; box-shadow: 0 3px 10px rgba(229, 83, 37, 0.28); transition: transform 0.25s ease; } .kaigo-widget__header:hover .kaigo-widget__avatar { transform: rotate(-5deg) scale(1.05); } .kaigo-widget__header-text { display: flex; flex-direction: column; gap: 2px; } .kaigo-widget__title-row { display: flex; align-items: center; gap: 6px; } .kaigo-widget__title { font-size: 15px; font-weight: 700; text-transform: lowercase; color: #111111; line-height: 1.2; letter-spacing: -0.2px; } .kaigo-widget__badge { background: #FFD200; color: #111111; font-size: 10px; font-weight: 800; padding: 1px 6px; border-radius: 9999px; text-transform: uppercase; } .kaigo-widget__status { display: inline-flex; align-items: center; gap: 6px; background: #D7EEDD; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 600; color: #1E4D2B; width: fit-content; } .kaigo-widget__status-dot { width: 6px; height: 6px; border-radius: 50%; background-color: #2E7D32; animation: kaigo-status-pulse 2s infinite ease-in-out; } @keyframes kaigo-status-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.85); } } .kaigo-widget__close-btn { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; background: transparent; border: none; border-radius: 50%; color: #666666; cursor: pointer; transition: background-color 0.2s ease, color 0.2s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1); min-width: 44px; min-height: 44px; flex-shrink: 0; } .kaigo-widget__close-btn:hover { background: #F4F1EA; color: #222222; transform: rotate(90deg); } .kaigo-widget__messages { flex: 1; padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; background: #FAF8F5; min-height: 100px; max-height: 320px; } .kaigo-widget__messages::-webkit-scrollbar { width: 4px; } .kaigo-widget__messages::-webkit-scrollbar-thumb { background: #E0DDD7; border-radius: 4px; } .kaigo-widget__message, .kaigo-widget [data-kaigo-runtime-message] { display: flex; flex-direction: column; max-width: 85%; word-break: break-word; transition: transform 0.2s ease; } .kaigo-widget__message--assistant, .kaigo-widget [data-kaigo-runtime-message="assistant"] { align-self: flex-start; } .kaigo-widget__message--user, .kaigo-widget [data-kaigo-runtime-message="user"] { align-self: flex-end; } .kaigo-widget__message-label, .kaigo-widget [data-kaigo-runtime-label] { font-size: 11px; font-weight: 700; text-transform: lowercase; color: #888888; margin-bottom: 4px; padding: 0 4px; } .kaigo-widget__message--user .kaigo-widget__message-label, .kaigo-widget [data-kaigo-runtime-message="user"] [data-kaigo-runtime-label] { text-align: right; } .kaigo-widget__message-content, .kaigo-widget [data-kaigo-runtime-content] { padding: 12px 16px; border-radius: 18px; font-size: 14px; line-height: 1.45; transition: box-shadow 0.2s ease; } .kaigo-widget__message--assistant .kaigo-widget__message-content, .kaigo-widget [data-kaigo-runtime-message="assistant"] [data-kaigo-runtime-content] { background: #FFFFFF; color: #222222; border-top-left-radius: 4px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04); border: 1px solid #EFECE6; } .kaigo-widget__message--assistant:hover .kaigo-widget__message-content { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); } .kaigo-widget__message--user .kaigo-widget__message-content, .kaigo-widget [data-kaigo-runtime-message="user"] [data-kaigo-runtime-content] { background: #E55325; color: #FFFFFF; border-top-right-radius: 4px; box-shadow: 0 2px 8px rgba(229, 83, 37, 0.25); } .kaigo-widget__message--user:hover .kaigo-widget__message-content { box-shadow: 0 4px 14px rgba(229, 83, 37, 0.38); } .kaigo-widget [data-kaigo-runtime-status="pending"] { display: flex; align-items: center; gap: 6px; padding: 10px 16px; background: #FFFFFF; border-radius: 18px; border-top-left-radius: 4px; align-self: flex-start; color: #888888; font-size: 13px; border: 1px solid #EFECE6; } .kaigo-widget [data-kaigo-runtime-status="pending"]::after { content: '• • •'; letter-spacing: 2px; font-weight: 800; color: #E55325; animation: kaigo-dots 1.2s infinite ease-in-out; } @keyframes kaigo-dots { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } } .kaigo-widget [data-kaigo-runtime-status="error"] { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; background: #FDF2F2; border: 1px solid #F8D7DA; border-radius: 14px; color: #842029; font-size: 13px; align-self: stretch; margin: 6px 0; } .kaigo-widget [data-kaigo-runtime-retry="true"] { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; padding: 0 16px; background: #E55325; color: #FFFFFF; border: none; border-radius: 9999px; font-size: 12px; font-weight: 700; cursor: pointer; transition: background-color 0.2s ease, transform 0.2s ease; } .kaigo-widget [data-kaigo-runtime-retry="true"]:hover { background: #d4471e; transform: scale(1.03); } .kaigo-widget:has([data-kaigo-runtime-message="user"]) [data-region="suggestions"], .kaigo-widget:has([data-kaigo-runtime-status="error"]) [data-region="suggestions"] { display: none !important; } .kaigo-widget__suggestions { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 16px; background: #FAF8F5; border-top: 1px solid #F0ECE6; } .kaigo-widget__suggestion-btn { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; min-width: 44px; padding: 8px 16px; background: #FFFFFF; border: 1.5px solid #E55325; color: #E55325; border-radius: 9999px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background-color 0.2s ease, color 0.2s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease; text-align: center; line-height: 1.2; } .kaigo-widget__suggestion-btn:hover { background: #E55325; color: #FFFFFF; transform: translateY(-2px) scale(1.02); box-shadow: 0 4px 12px rgba(229, 83, 37, 0.25); } .kaigo-widget__suggestion-btn:active { transform: translateY(0) scale(0.98); } .kaigo-widget__composer { display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: #FFFFFF; border-top: 1px solid #F0ECE6; } .kaigo-widget__input { flex: 1; border: 1px solid #E2DDD5; border-radius: 20px; padding: 10px 14px; font-size: 14px; font-family: inherit; color: #222222; background: #FAF8F5; resize: none; outline: none; height: 44px; max-height: 100px; line-height: 1.4; transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease; } .kaigo-widget__input:focus { border-color: #E55325; background: #FFFFFF; box-shadow: 0 0 0 3px rgba(229, 83, 37, 0.12); } .kaigo-widget__send-btn { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; min-width: 44px; min-height: 44px; background: #E55325; color: #FFFFFF; border: none; border-radius: 50%; cursor: pointer; transition: background-color 0.2s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease; flex-shrink: 0; } .kaigo-widget__send-btn:hover { background: #d4471e; transform: scale(1.08) rotate(-4deg); box-shadow: 0 4px 12px rgba(229, 83, 37, 0.35); } .kaigo-widget__send-btn:active { transform: scale(0.94); } .kaigo-widget button:focus-visible, .kaigo-widget textarea:focus-visible { outline: 2px solid #FFD200; outline-offset: 2px; } @media (max-width: 600px) { .kaigo-widget { bottom: 16px; right: 16px; left: 16px; } .kaigo-widget [data-region="panel"] { position: fixed; bottom: 76px; right: 16px; left: 16px; width: auto; max-width: 100%; max-height: 72vh; } .kaigo-widget__launcher { margin-left: auto; } } @media (prefers-reduced-motion: reduce) { .kaigo-widget *, .kaigo-widget [data-region="panel"], .kaigo-widget.kaigo-preview-attention [data-region="launcher"], .kaigo-widget__status-dot, .kaigo-widget__steam-1, .kaigo-widget__steam-2, .kaigo-widget__steam-3 { animation: none !important; transition: none !important; } }
+    [data-region="root"] [hidden] { display: none !important; }
+    [data-region="root"] [data-kaigo-runtime-input] { resize: none; scrollbar-width: none; }
+    [data-region="root"] [data-kaigo-runtime-input]::-webkit-scrollbar,
+    [data-region="root"] [data-region="messages"]::-webkit-scrollbar { display: none; width: 0; height: 0; }
+    [data-region="root"] [data-region="messages"] { scrollbar-width: none; }
+  </style>
+</head>
+<body>
+<div class="kaigo-widget" data-region="root" data-state="closed"><button class="kaigo-widget__launcher" data-region="launcher" data-action="open" aria-label="Открыть чат с бариста Simple Coffee"><span class="kaigo-widget__launcher-badge">AI</span><svg class="kaigo-widget__launcher-icon" width="24" height="24" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="11" fill="#E55325"/><path d="M7 11H17V15C17 16.1 16.1 17 15 17H9C7.9 17 7 16.1 7 15V11Z" fill="#FFFFFF"/><path d="M17 12H18.5C19.3 12 20 12.7 20 13.5C20 14.3 19.3 15 18.5 15H17V12Z" stroke="#FFFFFF" stroke-width="1.5"/><path class="kaigo-widget__steam-1" d="M9 8C9 7 9.5 6.5 9.5 5.5" stroke="#FFD200" stroke-width="1.5" stroke-linecap="round"/><path class="kaigo-widget__steam-2" d="M12 8.5C12 7.5 12.5 7 12.5 6" stroke="#FFD200" stroke-width="1.5" stroke-linecap="round"/><path class="kaigo-widget__steam-3" d="M15 8C15 7 15.5 6.5 15.5 5.5" stroke="#FFD200" stroke-width="1.5" stroke-linecap="round"/></svg><span class="kaigo-widget__launcher-text">simple barista</span></button><div class="kaigo-widget__panel" data-region="panel"><header class="kaigo-widget__header" data-region="header"><div class="kaigo-widget__header-info"><div class="kaigo-widget__avatar"><svg width="38" height="38" viewBox="0 0 38 38" fill="none"><circle cx="19" cy="19" r="19" fill="#E55325"/><path d="M11 17H27V22C27 23.8 25.6 25.2 23.8 25.2H14.2C12.4 25.2 11 23.8 11 22V17Z" fill="#FFFFFF"/><path d="M27 19H29.5C30.3 19 31 19.7 31 20.5C31 21.3 30.3 22 29.5 22H27V19Z" stroke="#FFFFFF" stroke-width="1.5"/><circle cx="28" cy="10" r="4.5" fill="#FFD200"/><path class="kaigo-widget__steam-1" d="M14 14C14 12.8 14.5 12.2 14.5 11" stroke="#FFD200" stroke-width="1.5" stroke-linecap="round"/><path class="kaigo-widget__steam-2" d="M19 14.5C19 13.3 19.5 12.7 19.5 11.5" stroke="#FFD200" stroke-width="1.5" stroke-linecap="round"/><path class="kaigo-widget__steam-3" d="M24 14C24 12.8 24.5 12.2 24.5 11" stroke="#FFD200" stroke-width="1.5" stroke-linecap="round"/></svg></div><div class="kaigo-widget__header-text"><div class="kaigo-widget__title-row"><h2 class="kaigo-widget__title">simple barista</h2><span class="kaigo-widget__badge">AI</span></div><div class="kaigo-widget__status"><span class="kaigo-widget__status-dot"></span><span class="kaigo-widget__status-text">на связи • завтраки до 14:00</span></div></div></div><button class="kaigo-widget__close-btn" data-action="close" aria-label="Закрыть чат"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6L6 18"/><path d="M6 6L18 18"/></svg></button></header><div class="kaigo-widget__messages" data-region="messages"><div class="kaigo-widget__message kaigo-widget__message--assistant"><span class="kaigo-widget__message-label">simple barista</span><div class="kaigo-widget__message-content">Привет! Я помогу выбрать кофе, рассказать про свежие завтраки и комбо-обеды за 400 ₽.</div></div></div><div class="kaigo-widget__suggestions" data-region="suggestions"><button class="kaigo-widget__suggestion-btn" data-action="suggestion" data-suggestion="Про комбо за 400 ₽">Про комбо за 400 ₽</button><button class="kaigo-widget__suggestion-btn" data-action="suggestion" data-suggestion="Завтраки до 14:00">Завтраки до 14:00</button></div><div class="kaigo-widget__composer" data-region="composer" aria-label="Форма отправки сообщения"><textarea class="kaigo-widget__input" rows="1" placeholder="Задайте вопрос о меню..." aria-label="Задайте вопрос бариста"></textarea><button class="kaigo-widget__send-btn" data-action="send" aria-label="Отправить сообщение"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg></button></div></div></div>
+<script>
+(() => {
+  'use strict';
+  const channelId = "kaigo-public-simplecoffee-v1";
+  const revision = 5;
+  const root = document.querySelector('[data-region="root"]');
+  const assistantLabel = String(
+    (root && (root.dataset.assistantLabel || root.getAttribute('aria-label')))
+    || 'AI-КОНСУЛЬТАНТ'
+  ).trim().slice(0, 80) || 'AI-КОНСУЛЬТАНТ';
+  const launcher = document.querySelector('[data-region="launcher"]');
+  const panel = document.querySelector('[data-region="panel"]');
+  const composer = document.querySelector('[data-region="composer"]');
+  const messages = document.querySelector('[data-region="messages"]');
+  const suggestionsRegion = document.querySelector('[data-region="suggestions"]');
+  const suggestions = Array.from(document.querySelectorAll('[data-suggestion], [data-region="suggestions"] button'));
+  let input = composer && composer.querySelector('input, textarea');
+  const toggle = root && root.querySelector('.kaigo-toggle, [data-action="toggle"], input[type="checkbox"]');
+  const requestPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{7,95}$/;
+  const ATTENTION_DELAY_MS = 15000;
+  const reducedMotionQuery = matchMedia('(prefers-reduced-motion: reduce)');
+  let pendingRequest = null;
+  let failedRequest = null;
+  let attentionTimer = null;
+  let attentionCancelled = false;
+
+  if (input && input.tagName !== 'TEXTAREA') {
+    const replacement = document.createElement('textarea');
+    replacement.className = input.className;
+    replacement.placeholder = input.placeholder || '';
+    replacement.setAttribute('aria-label', input.getAttribute('aria-label') || 'Введите сообщение');
+    replacement.autocomplete = 'off';
+    input.replaceWith(replacement);
+    input = replacement;
+  }
+  if (input) {
+    input.rows = 1;
+    input.setAttribute('data-kaigo-runtime-input', 'true');
+  }
+  if (messages) {
+    messages.setAttribute('role', 'log');
+    messages.setAttribute('aria-live', 'polite');
+    messages.setAttribute('aria-relevant', 'additions');
+  }
+
+  function cancelAttention() {
+    if (attentionCancelled) return;
+    attentionCancelled = true;
+    if (attentionTimer !== null) clearTimeout(attentionTimer);
+    attentionTimer = null;
+    if (root) root.classList.remove('kaigo-preview-attention');
+  }
+
+  function scheduleAttention() {
+    if (
+      !root
+      || attentionCancelled
+      || attentionTimer !== null
+      || document.visibilityState !== 'visible'
+      || root.dataset.state !== 'closed'
+      || root.dataset.chatStarted === 'true'
+      || reducedMotionQuery.matches
+    ) return;
+    attentionTimer = setTimeout(() => {
+      attentionTimer = null;
+      if (
+        attentionCancelled
+        || document.visibilityState !== 'visible'
+        || root.dataset.state !== 'closed'
+        || root.dataset.chatStarted === 'true'
+        || reducedMotionQuery.matches
+      ) return;
+      root.classList.add('kaigo-preview-attention');
+    }, ATTENTION_DELAY_MS);
+  }
+
+  const setOpen = (open, returnFocus = false) => {
+    if (!root) return;
+    if (open) cancelAttention();
+    root.classList.toggle('kaigo-preview-open', Boolean(open));
+    root.dataset.state = open ? 'open' : 'closed';
+    if (panel) panel.toggleAttribute('data-open', Boolean(open));
+    if (toggle) toggle.checked = Boolean(open);
+    if (launcher) {
+      launcher.hidden = Boolean(open);
+      launcher.setAttribute('aria-hidden', open ? 'true' : 'false');
+      launcher.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    if (panel) panel.setAttribute('aria-hidden', open ? 'false' : 'true');
+    if (open && input && matchMedia('(hover: hover) and (pointer: fine)').matches) {
+      setTimeout(() => input.focus(), 0);
+    }
+    if (!open && returnFocus && launcher && document.activeElement !== launcher) launcher.focus();
+  };
+
+  if (launcher) launcher.addEventListener('click', (event) => {
+    if (toggle && event.target === toggle) return;
+    event.preventDefault();
+    const opening = !root || root.dataset.state !== 'open';
+    setOpen(opening, !opening);
+  });
+
+  if (toggle) toggle.addEventListener('change', () => setOpen(toggle.checked));
+
+  const closeButton = document.querySelector('[data-action="close"]');
+  if (closeButton) closeButton.addEventListener('click', (event) => {
+    event.preventDefault();
+    setOpen(false, true);
+  });
+
+  function appendMessage(role, text) {
+    if (!messages) return;
+    const message = document.createElement('article');
+    message.className = `kaigo-widget__message kaigo-widget__message--${role}`;
+    message.setAttribute('data-kaigo-runtime-message', role);
+    const label = document.createElement('span');
+    label.className = 'kaigo-widget__message-label';
+    label.setAttribute('data-kaigo-runtime-label', role);
+    label.textContent = role === 'user' ? 'ВЫ' : assistantLabel;
+    const content = document.createElement('p');
+    content.className = 'kaigo-widget__message-content';
+    content.setAttribute('data-kaigo-runtime-content', role);
+    content.textContent = text;
+    message.append(label, content);
+    messages.append(message);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function clearStatus() {
+    const status = messages && messages.querySelector('[data-kaigo-runtime-status]');
+    if (status) status.remove();
+  }
+
+  function showStatus(kind, text, retryable = false) {
+    if (!messages) return;
+    clearStatus();
+    const status = document.createElement('div');
+    status.className = `kaigo-widget__message-status kaigo-widget__message-status--${kind}`;
+    status.setAttribute('data-kaigo-runtime-status', kind);
+    status.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+    const copy = document.createElement('span');
+    copy.textContent = text;
+    status.append(copy);
+    if (retryable) {
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.setAttribute('data-kaigo-runtime-retry', 'true');
+      retry.textContent = 'ПОВТОРИТЬ';
+      retry.addEventListener('click', retryFailedRequest);
+      status.append(retry);
+    }
+    messages.append(status);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function setBusy(value) {
+    if (!composer) return;
+    composer.setAttribute('aria-busy', value ? 'true' : 'false');
+    const send = composer.querySelector('[data-action="send"], button');
+    if (send) send.disabled = Boolean(value);
+  }
+
+  function requestId() {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    return 'request-' + Array.from(crypto.getRandomValues(new Uint8Array(12)), value => value.toString(16).padStart(2, '0')).join('');
+  }
+
+  function postPendingRequest() {
+    if (!pendingRequest) return;
+    clearStatus();
+    setBusy(true);
+    showStatus('pending', 'Gemini готовит ответ');
+    window.parent.postMessage({
+      source: 'kaigo-builder-preview',
+      version: 2,
+      channel_id: channelId,
+      type: 'chat.request',
+      request_id: pendingRequest.requestId,
+      revision,
+      text: pendingRequest.text
+    }, '*');
+  }
+
+  function retryFailedRequest() {
+    if (!failedRequest || pendingRequest) return;
+    pendingRequest = failedRequest;
+    failedRequest = null;
+    postPendingRequest();
+  }
+
+  function sendText(text) {
+    const normalized = String(text || '').trim();
+    if (!normalized || normalized.length > 1000 || pendingRequest) return;
+    cancelAttention();
+    failedRequest = null;
+    clearStatus();
+    if (root) root.dataset.chatStarted = 'true';
+    if (suggestionsRegion) {
+      suggestionsRegion.hidden = true;
+      suggestionsRegion.setAttribute('aria-hidden', 'true');
+    }
+    suggestions.forEach(item => { item.disabled = true; });
+    pendingRequest = { requestId: requestId(), text: normalized };
+    appendMessage('user', normalized);
+    postPendingRequest();
+  }
+
+  suggestions.slice(2).forEach(item => { item.hidden = true; item.disabled = true; });
+  suggestions.slice(0, 2).forEach(suggestion => suggestion.addEventListener('click', event => {
+    event.preventDefault();
+    const text = suggestion.dataset.suggestion || suggestion.textContent.trim();
+    sendText(text);
+  }));
+
+  if (composer) composer.addEventListener('click', event => {
+    const button = event.target.closest('[data-action="send"], button');
+    if (!button || button.hasAttribute('data-kaigo-runtime-retry') || !input) return;
+    event.preventDefault();
+    sendText(input.value);
+  });
+
+  function autosize() {
+    if (!input) return;
+    input.style.height = 'auto';
+    const lineHeight = parseFloat(getComputedStyle(input).lineHeight) || 20;
+    const minHeight = Math.max(44, lineHeight + 8);
+    const maxHeight = lineHeight * 4 + 8;
+    input.style.height = `${Math.max(minHeight, Math.min(input.scrollHeight, maxHeight))}px`;
+    input.style.overflowY = input.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }
+  if (input) {
+    input.addEventListener('input', autosize);
+    input.addEventListener('keydown', event => {
+      if (event.isComposing) return;
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        sendText(input.value);
+      }
+    });
+    autosize();
+  }
+
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && root && root.dataset.state === 'open') {
+      event.preventDefault();
+      setOpen(false, true);
+      if (launcher) launcher.focus();
+    }
+  });
+
+  window.addEventListener('message', (event) => {
+    const data = event.data;
+    if (event.source !== window.parent || !data || data.source !== 'kaigo-builder-parent' || data.version !== 2 || data.channel_id !== channelId || data.revision !== revision) return;
+    if (data.type === 'set-open') { setOpen(Boolean(data.open)); return; }
+    if (!pendingRequest || !requestPattern.test(data.request_id) || data.request_id !== pendingRequest.requestId) return;
+    if (data.type === 'chat.response') {
+      if (typeof data.text !== 'string' || !data.text.trim() || data.text.length > 4000) return;
+      clearStatus();
+      appendMessage('assistant', data.text.trim());
+      if (input && input.value === pendingRequest.text) input.value = '';
+      pendingRequest = null;
+      setBusy(false);
+      autosize();
+      return;
+    }
+    if (data.type === 'chat.error') {
+      failedRequest = pendingRequest;
+      pendingRequest = null;
+      clearStatus();
+      setBusy(false);
+      showStatus('error', typeof data.message === 'string' ? data.message.slice(0, 320) : 'Связь прервалась. Текст сохранён.', data.retryable !== false);
+    }
+  });
+
+  document.addEventListener('pointerdown', cancelAttention, {capture: true, once: true});
+  document.addEventListener('keydown', cancelAttention, {capture: true, once: true});
+  document.addEventListener('visibilitychange', cancelAttention, {once: true});
+  reducedMotionQuery.addEventListener('change', event => {
+    if (event.matches) cancelAttention();
+  });
+  setOpen(false);
+  scheduleAttention();
+  window.parent.postMessage({
+    source: 'kaigo-builder-preview',
+    version: 2,
+    channel_id: channelId,
+    type: 'rendered',
+    revision
+  }, '*');
+})();
+</script>
+
+</body>
+</html>
