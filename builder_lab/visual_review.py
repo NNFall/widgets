@@ -396,6 +396,10 @@ def validate_visual_judgement(
                 raise VisualJudgeError(
                     "invalid_visual_judgement",
                     "Судья использовал непроходное замечание критика",
+                    diagnostic=(
+                        "ineligible critic finding: "
+                        f"{role.value}:{source['finding_id']}"
+                    ),
                 )
             roles.append(role)
         unique_roles = tuple(dict.fromkeys(roles))
@@ -500,7 +504,15 @@ class GeminiVisualJudge:
         semantic_attempts = 2 if self._model_router is not None else 3
         for attempt in range(semantic_attempts):
             role_payload = {
-                role.value: result.critique.to_dict()
+                role.value: {
+                    "eligible_findings": [
+                        finding.to_dict()
+                        for finding in result.critique.findings
+                        if finding.severity
+                        in {VisualSeverity.BLOCKER, VisualSeverity.MAJOR}
+                        and finding.confidence >= 0.75
+                    ]
+                }
                 for role, result in role_results.items()
             }
             contents = [
@@ -531,7 +543,9 @@ class GeminiVisualJudge:
                     "distinct critic roles. Every accepted issue must cite the exact role "
                     "and finding_id of each supporting critic. A blocker from one critic "
                     "alone never passes quorum. Do not invent source IDs. Consolidate each "
-                    "accepted issue into one concrete repair instruction and strict JSON."
+                    "accepted issue into one concrete repair instruction and strict JSON. "
+                    "The input contains only findings eligible for quorum: severity is "
+                    "blocker or major and confidence >= 0.75. Use only those exact IDs."
                     " Write summary, evidence, and repair instructions in Russian."
                 ),
                 response_mime_type="application/json",

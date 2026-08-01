@@ -41,10 +41,16 @@ from tests.builder_lab_cases.test_validation import artifact
 from tests.saas_cases.test_trial_service import _database
 
 
-def finding(finding_id, evidence):
+def finding(
+    finding_id,
+    evidence,
+    *,
+    severity=VisualSeverity.MAJOR,
+    confidence=0.93,
+):
     return VisualFinding(
         finding_id=finding_id,
-        severity=VisualSeverity.MAJOR,
+        severity=severity,
         category=VisualCategory.RESPONSIVE_INTEGRITY,
         screenshot_id="mobile.after_turn_2",
         evidence=evidence,
@@ -57,7 +63,7 @@ def finding(finding_id, evidence):
         ),
         artifact_fields=("css",),
         repair_instruction="Keep the composer fully inside the panel.",
-        confidence=0.93,
+        confidence=confidence,
     )
 
 
@@ -165,6 +171,143 @@ def test_judge_rejects_fabricated_source_ids():
             role_results(),
         )
     assert "unknown critic finding" in caught.value.diagnostic
+
+
+@pytest.mark.asyncio
+async def test_visual_judge_only_receives_findings_eligible_for_quorum() -> None:
+    mixed_results = {
+        VisualCriticRole.CONVERSATION_UX: VisualCriticResult(
+            critique=VisualCritique(
+                verdict=VisualVerdict.REPAIR,
+                summary="One eligible and one minor finding.",
+                findings=(
+                    finding("ux-major", "The composer is clipped."),
+                    finding(
+                        "ux-minor",
+                        "A decorative edge is slightly uneven.",
+                        severity=VisualSeverity.MINOR,
+                    ),
+                ),
+            ),
+            observations=(),
+            pixel_proof=None,
+            usage=TokenUsage(),
+        ),
+        VisualCriticRole.BRAND_MOTION: VisualCriticResult(
+            critique=VisualCritique(
+                verdict=VisualVerdict.REPAIR,
+                summary="One eligible and one low-confidence finding.",
+                findings=(
+                    finding("brand-major", "The same composer edge is clipped."),
+                    finding(
+                        "brand-low-confidence",
+                        "The launcher may be too quiet.",
+                        confidence=0.74,
+                    ),
+                ),
+            ),
+            observations=(),
+            pixel_proof=None,
+            usage=TokenUsage(),
+        ),
+        VisualCriticRole.ADVERSARIAL_CUSTOMER: VisualCriticResult(
+            critique=VisualCritique(
+                verdict=VisualVerdict.PASS,
+                summary="Only a non-blocking observation.",
+                findings=(
+                    finding(
+                        "customer-minor",
+                        "The avatar could be more expressive.",
+                        severity=VisualSeverity.MINOR,
+                    ),
+                ),
+            ),
+            observations=(),
+            pixel_proof=None,
+            usage=TokenUsage(),
+        ),
+    }
+
+    class Router:
+        def __init__(self) -> None:
+            self.request = None
+
+        async def generate(self, **kwargs) -> ModelResponse:
+            self.request = kwargs["request"]
+            return ModelResponse(
+                text="{}",
+                parsed=judgement_payload(
+                    [
+                        {"role": "conversation_ux", "finding_id": "ux-major"},
+                        {"role": "brand_motion", "finding_id": "brand-major"},
+                    ]
+                ),
+                usage=ModelUsage(input_tokens=5, output_tokens=2),
+            )
+
+    router = Router()
+    judge = GeminiVisualJudge(
+        model_router=router,
+        routing_mode="express",
+        timeout_seconds=0.2,
+        routing_timeout_seconds=0.2,
+    )
+
+    result = await judge.judge(role_results=mixed_results)
+
+    assert result.critique.verdict is VisualVerdict.REPAIR
+    prompt = router.request.prompt
+    role_payload = prompt.split("UNTRUSTED CRITIC RESULTS JSON:\n", 1)[1]
+    payload = __import__("json").loads(role_payload)
+    assert {
+        role: [item["finding_id"] for item in result["eligible_findings"]]
+        for role, result in payload.items()
+    } == {
+        "conversation_ux": ["ux-major"],
+        "brand_motion": ["brand-major"],
+        "adversarial_customer": [],
+    }
+    assert "confidence >= 0.75" in prompt
+    assert "ux-minor" not in prompt
+    assert "brand-low-confidence" not in prompt
+    assert "customer-minor" not in prompt
+
+
+def test_judge_rejects_source_that_is_not_eligible_for_quorum():
+    results = role_results()
+    weak = finding(
+        "weak-source",
+        "The launcher may be too quiet.",
+        confidence=0.74,
+    )
+    results[VisualCriticRole.ADVERSARIAL_CUSTOMER] = VisualCriticResult(
+        critique=VisualCritique(
+            verdict=VisualVerdict.PASS,
+            summary="No confident issue.",
+            findings=(weak,),
+        ),
+        observations=(),
+        pixel_proof=None,
+        usage=TokenUsage(),
+    )
+
+    with pytest.raises(VisualJudgeError) as caught:
+        validate_visual_judgement(
+            judgement_payload(
+                [
+                    {"role": "conversation_ux", "finding_id": "ux-edge"},
+                    {
+                        "role": "adversarial_customer",
+                        "finding_id": "weak-source",
+                    },
+                ]
+            ),
+            results,
+        )
+
+    assert caught.value.diagnostic == (
+        "ineligible critic finding: adversarial_customer:weak-source"
+    )
 
 
 @pytest.mark.asyncio
