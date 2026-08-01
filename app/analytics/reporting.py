@@ -15,7 +15,8 @@ from app.saas.models import FunnelEvent, FunnelJourney
 
 
 FUNNEL_REPORT_STAGES = (
-    ("composer_submitted", "Заявка создана"),
+    ("landing_entered", "Посетитель открыл лендинг"),
+    ("authenticated_project", "Создан проект после авторизации"),
     ("run_queued", "Генерация запущена"),
     ("free_result", "Получен бесплатный результат"),
     ("upgrade_started", "Начато оформление тарифа"),

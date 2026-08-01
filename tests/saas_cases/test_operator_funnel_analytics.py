@@ -63,8 +63,14 @@ async def test_operator_funnel_report_is_allowlisted_aggregate_only_and_no_store
         database.add_all(
             [
                 FunnelEvent(
-                    event_key="composer:private-event-key",
-                    event_type="composer_submitted",
+                    event_key="landing:private-event-key",
+                    event_type="landing_entered",
+                    journey_id=journey.id,
+                    occurred_at=datetime(2026, 7, 15, tzinfo=UTC),
+                ),
+                FunnelEvent(
+                    event_key="authenticated:private-event-key",
+                    event_type="authenticated_project",
                     journey_id=journey.id,
                     occurred_at=datetime(2026, 7, 15, tzinfo=UTC),
                 ),
@@ -113,8 +119,18 @@ async def test_operator_funnel_report_is_allowlisted_aggregate_only_and_no_store
         assert response.headers["Cache-Control"] == "no-store"
         assert "default-src 'none'" in page.headers["Content-Security-Policy"]
         payload = await response.json()
+        assert [stage["event_type"] for stage in payload["stages"]] == [
+            "landing_entered",
+            "authenticated_project",
+            "run_queued",
+            "free_result",
+            "upgrade_started",
+            "payment_completed",
+            "published",
+        ]
         assert payload["stages"][0]["journeys"] == 1
-        assert payload["stages"][2]["journeys"] == 1
+        assert payload["stages"][1]["journeys"] == 1
+        assert payload["stages"][3]["journeys"] == 1
         assert payload["filters"] == {"source": "telegram"}
         text = f"{payload} {await page.text()}"
         assert "private-event-key" not in text
