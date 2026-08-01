@@ -999,12 +999,14 @@ class PostgresWorkerQueue:
         )
 
     @staticmethod
-    async def _latest_attempt_id(
-        database: AsyncSession, run_id: UUID, stage: str
-    ) -> UUID:
-        payloads = (
+    async def _latest_stage_started_record(
+        database: AsyncSession,
+        run_id: UUID,
+        stage: str,
+    ) -> GenerationEvent:
+        records = (
             await database.execute(
-                select(GenerationEvent.payload)
+                select(GenerationEvent)
                 .where(
                     GenerationEvent.run_id == run_id,
                     GenerationEvent.event_type == "stage.started",
@@ -1013,34 +1015,69 @@ class PostgresWorkerQueue:
                 .limit(20)
             )
         ).scalars().all()
-        for payload in payloads:
-            if payload.get("stage") != stage:
-                continue
-            try:
-                return UUID(str(payload["attempt_id"]))
-            except (KeyError, TypeError, ValueError):
-                break
+        record = next(
+            (record for record in records if record.payload.get("stage") == stage),
+            None,
+        )
+        if record is None:
+            raise LeaseLostError(f"run {run_id} has no valid stage attempt")
+        return record
+
+    @classmethod
+    async def _latest_attempt_id(
+        cls, database: AsyncSession, run_id: UUID, stage: str
+    ) -> UUID:
+        record = await cls._latest_stage_started_record(database, run_id, stage)
+        try:
+            return UUID(str(record.payload["attempt_id"]))
+        except (KeyError, TypeError, ValueError):
+            pass
         raise LeaseLostError(f"run {run_id} has no valid stage attempt")
 
-    @staticmethod
+    @classmethod
     async def _stage_attempt(
+        cls,
         database: AsyncSession,
         *,
         run_id: UUID,
         stage: str,
         attempt_id: UUID,
     ) -> GenerationStageAttempt:
-        attempt = await database.scalar(
-            select(GenerationStageAttempt)
-            .where(
-                GenerationStageAttempt.id == attempt_id,
-                GenerationStageAttempt.run_id == run_id,
-                GenerationStageAttempt.stage == stage,
-            )
-            .with_for_update()
+        started = await cls._latest_stage_started_record(
+            database,
+            run_id,
+            stage,
         )
-        if attempt is None:
-            raise LeaseLostError(f"run {run_id} has no matching stage attempt")
+        try:
+            started_attempt_id = UUID(str(started.payload["attempt_id"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise LeaseLostError(f"run {run_id} has no valid stage attempt") from exc
+        if started_attempt_id != attempt_id:
+            raise LeaseLostError(f"attempt fence moved for run {run_id}")
+
+        attempt = await database.get(
+            GenerationStageAttempt,
+            attempt_id,
+            with_for_update=True,
+        )
+        if attempt is not None:
+            if attempt.run_id != run_id or attempt.stage != stage:
+                raise LeaseLostError(f"run {run_id} has no matching stage attempt")
+            return attempt
+
+        attempt = GenerationStageAttempt(
+            id=attempt_id,
+            run_id=run_id,
+            stage=stage,
+            ordinal=await cls._next_stage_attempt_ordinal(
+                database,
+                run_id=run_id,
+                stage=stage,
+            ),
+            status="running",
+            started_at=cls._utc(started.created_at),
+        )
+        database.add(attempt)
         return attempt
 
     @classmethod
@@ -2688,6 +2725,24 @@ class PostgresWorkerQueue:
                     stage=stage,
                     attempt_id=attempt_id,
                     now=now,
+                )
+                provider_dispatch_count = await self._provider_dispatch_count(
+                    database,
+                    run.id,
+                )
+                await self._append_event(
+                    database,
+                    run,
+                    event_type="stage.started",
+                    message=f"РќР°С‡Р°С‚ СЌС‚Р°Рї: {STAGE_PUBLIC_NAMES[stage]}",
+                    now=now,
+                    payload={
+                        "stage": stage,
+                        "status": "running",
+                        "worker_id": worker_id,
+                        "attempt_id": str(attempt_id),
+                        "provider_dispatch_count": provider_dispatch_count,
+                    },
                 )
             return await self._checkpoint_locked(
                 database,

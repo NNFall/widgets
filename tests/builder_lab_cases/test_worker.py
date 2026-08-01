@@ -1283,6 +1283,184 @@ async def test_claim_stages_and_completes_the_same_persisted_attempt(tmp_path) -
 
 
 @pytest.mark.asyncio
+async def test_legacy_ambiguous_dispatch_backfills_attempt_before_failure(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id, mode="antigravity")
+    legacy_claim = await queue.claim("legacy-worker")
+    assert isinstance(legacy_claim, RunClaim)
+    try:
+        async with factory() as database, database.begin():
+            attempt = await database.get(
+                GenerationStageAttempt,
+                legacy_claim.attempt_id,
+            )
+            assert attempt is not None
+            await database.delete(attempt)
+            database.add(
+                ModelCall(
+                    run_id=run_id,
+                    provider="paid-provider",
+                    model="paid-model",
+                    role="reference_analysis",
+                    mode="antigravity",
+                    prompt_version="paid-v1",
+                    request_id="legacy-provider-success",
+                    attempt=1,
+                    provider_dispatched=True,
+                    status="completed",
+                    input_tokens=100,
+                    output_tokens=50,
+                    thinking_tokens=0,
+                    latency_ms=25,
+                    cost_microusd=10,
+                    pricing_snapshot={"currency": "USD"},
+                )
+            )
+            run = await database.get(GenerationRun, run_id)
+            assert run is not None
+            run.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+
+        terminal = await queue.claim("replacement")
+
+        assert terminal is not None
+        assert not isinstance(terminal, RunClaim)
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_id)
+            attempt = await database.get(
+                GenerationStageAttempt,
+                legacy_claim.attempt_id,
+            )
+            assert run is not None
+            assert run.state == "failed"
+            assert run.error_code == "provider_dispatch_ambiguous"
+            assert attempt is not None
+            assert attempt.status == "accounting_failed"
+            assert attempt.finished_at is not None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_legacy_cancel_claim_backfills_attempt_before_cancellation(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id)
+    legacy_claim = await queue.claim("legacy-worker")
+    assert isinstance(legacy_claim, RunClaim)
+    try:
+        async with factory() as database, database.begin():
+            attempt = await database.get(
+                GenerationStageAttempt,
+                legacy_claim.attempt_id,
+            )
+            assert attempt is not None
+            await database.delete(attempt)
+
+        assert await queue.request_cancel(run_id)
+        await queue.cancel_claim(run_id, worker_id="legacy-worker")
+
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_id)
+            attempt = await database.get(
+                GenerationStageAttempt,
+                legacy_claim.attempt_id,
+            )
+            assert run is not None
+            assert run.state == "cancelled"
+            assert attempt is not None
+            assert attempt.status == "cancelled"
+            assert attempt.finished_at is not None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_legacy_compatibility_checkpoint_backfills_completed_attempt(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id)
+    legacy_claim = await queue.claim("legacy-worker")
+    assert isinstance(legacy_claim, RunClaim)
+    try:
+        async with factory() as database, database.begin():
+            attempt = await database.get(
+                GenerationStageAttempt,
+                legacy_claim.attempt_id,
+            )
+            assert attempt is not None
+            await database.delete(attempt)
+
+        next_stage = await queue.complete_stage(
+            run_id,
+            "reference_analysis",
+            worker_id="legacy-worker",
+        )
+
+        assert next_stage == "art_direction"
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_id)
+            attempt = await database.get(
+                GenerationStageAttempt,
+                legacy_claim.attempt_id,
+            )
+            assert run is not None
+            assert run.last_completed_stage == "reference_analysis"
+            assert attempt is not None
+            assert attempt.status == "completed"
+            assert attempt.finished_at is not None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_stage_attempt_transition_rejects_stale_started_attempt_id(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id)
+    stale = await queue.claim("stale-worker")
+    assert isinstance(stale, RunClaim)
+    try:
+        async with factory() as database, database.begin():
+            run = await database.get(GenerationRun, run_id)
+            assert run is not None
+            run.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        replacement = await queue.claim("replacement")
+        assert isinstance(replacement, RunClaim)
+        assert replacement.attempt_id != stale.attempt_id
+
+        async with factory() as database, database.begin():
+            stale_attempt = await database.get(
+                GenerationStageAttempt,
+                stale.attempt_id,
+            )
+            assert stale_attempt is not None
+            stale_attempt.status = "running"
+            stale_attempt.finished_at = None
+
+        async with factory() as database, database.begin():
+            with pytest.raises(LeaseLostError, match="attempt fence moved"):
+                await queue._transition_stage_attempt(
+                    database,
+                    run_id=run_id,
+                    stage="reference_analysis",
+                    attempt_id=stale.attempt_id,
+                    status="failed",
+                    now=datetime.now(timezone.utc),
+                )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_expired_lease_interrupts_attempt_before_replacement_claim(
     tmp_path,
 ) -> None:
