@@ -240,6 +240,7 @@ def test_runtime_router_maps_hybrid_roles_to_gpt_glm_and_gemini(
                 ("agentrouter", "gpt-5.5"),
                 ("zenmux", "deepseek/deepseek-v4-flash-free"),
                 ("gemini", "gemini-builder"),
+                ("gemini", "gemini-builder"),
             ]
             assert targets[0].provider != targets[1].provider
             assert targets[0].input_price_microusd_per_million == 7_000_000
@@ -256,6 +257,7 @@ def test_runtime_router_maps_hybrid_roles_to_gpt_glm_and_gemini(
             assert [(target.provider, target.model) for target in targets] == [
                 ("agentrouter", "glm-5.2"),
                 ("zenmux", "deepseek/deepseek-v4-flash-free"),
+                ("gemini", "gemini-builder"),
                 ("gemini", "gemini-builder"),
             ]
             assert targets[0].provider != targets[1].provider

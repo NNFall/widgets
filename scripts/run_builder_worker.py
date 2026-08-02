@@ -295,7 +295,7 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
     def text_fallbacks() -> tuple[ProviderTarget, ...]:
         return (
             *((zenmux_target(),) if "zenmux" in providers else ()),
-            gemini_target(config.direct_model),
+            *gemini_retry_targets(config.direct_model),
         )
 
     def gpt_targets() -> tuple[ProviderTarget, ...]:
