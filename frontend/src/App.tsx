@@ -1,8 +1,11 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 
 import { LandingPage } from './landing/LandingPage';
-import { StudioPage } from './studio/StudioPage';
-import { AuthGate } from './auth/AuthGate';
+
+const StudioRoute = lazy(async () => {
+  const module = await import('./studio/StudioRoute');
+  return { default: module.StudioRoute };
+});
 
 function currentPathname() {
   return window.location.pathname.replace(/\/+$/, '') || '/';
@@ -17,7 +20,13 @@ export function App() {
     return () => window.removeEventListener('popstate', syncPathname);
   }, []);
 
-  return pathname === '/studio'
-    ? <AuthGate><StudioPage /></AuthGate>
-    : <LandingPage />;
+  if (pathname !== '/studio') {
+    return <LandingPage />;
+  }
+
+  return (
+    <Suspense fallback={<main className="auth-gate auth-gate--loading" role="status">Загружаем студию…</main>}>
+      <StudioRoute />
+    </Suspense>
+  );
 }
