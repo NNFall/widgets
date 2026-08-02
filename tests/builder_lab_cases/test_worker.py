@@ -1321,6 +1321,101 @@ async def test_claim_stages_and_completes_the_same_persisted_attempt(tmp_path) -
 
 
 @pytest.mark.asyncio
+async def test_finalize_artifact_links_only_calls_from_exact_stage_attempt(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id)
+    try:
+        reference_claim = await queue.claim("artifact-worker")
+        assert isinstance(reference_claim, RunClaim)
+        await queue.stage_result(
+            reference_claim,
+            StageResult(public_message="analysis ready"),
+        )
+        assert await queue.finalize_stage(reference_claim) == "art_direction"
+
+        stale_attempt_id = uuid4()
+        async with factory() as database, database.begin():
+            database.add(
+                GenerationStageAttempt(
+                    id=stale_attempt_id,
+                    run_id=run_id,
+                    stage="art_direction",
+                    ordinal=1,
+                    status="interrupted",
+                    started_at=datetime.now(timezone.utc) - timedelta(minutes=2),
+                    finished_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+                )
+            )
+
+        claim = await queue.continue_claim(run_id, worker_id="artifact-worker")
+        assert claim.next_stage == "art_direction"
+        assert claim.attempt_id != stale_attempt_id
+
+        current_call_id = uuid4()
+        stale_call_id = uuid4()
+        async with factory() as database, database.begin():
+            for call_id, attempt_id in (
+                (current_call_id, claim.attempt_id),
+                (stale_call_id, stale_attempt_id),
+            ):
+                database.add(
+                    ModelCall(
+                        id=call_id,
+                        run_id=run_id,
+                        stage_attempt_id=attempt_id,
+                        logical_invocation_id=uuid4(),
+                        operation="direction_candidate",
+                        semantic_attempt=1,
+                        fallback_index=1,
+                        provider="test-provider",
+                        model="test-model",
+                        role="art_direction_generator",
+                        mode="direct",
+                        prompt_version="direction-v1",
+                        attempt=1,
+                        provider_dispatched=True,
+                        input_tokens=10,
+                        output_tokens=5,
+                        thinking_tokens=1,
+                        cache_read_tokens=2,
+                        cache_write_tokens=0,
+                        latency_ms=10,
+                        status="completed",
+                        cost_state="estimated",
+                        cost_microusd=10,
+                        pricing_snapshot={"currency": "USD"},
+                    )
+                )
+
+        candidate = artifact(revision=1, stage=Stage.ART_DIRECTION)
+        await queue.stage_result(
+            claim,
+            StageResult(public_message="direction ready", artifact=candidate),
+        )
+        assert await queue.finalize_stage(claim) == "composition"
+
+        async with factory() as database:
+            artifact_row = await database.scalar(
+                select(GenerationArtifact).where(
+                    GenerationArtifact.run_id == run_id,
+                    GenerationArtifact.revision == 1,
+                )
+            )
+            current_call = await database.get(ModelCall, current_call_id)
+            stale_call = await database.get(ModelCall, stale_call_id)
+            assert artifact_row is not None
+            assert current_call is not None
+            assert stale_call is not None
+            assert current_call.artifact_id == artifact_row.id
+            assert stale_call.artifact_id is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_legacy_ambiguous_dispatch_backfills_attempt_before_failure(
     tmp_path,
 ) -> None:

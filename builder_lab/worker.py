@@ -2307,7 +2307,8 @@ class PostgresWorkerQueue:
         run: GenerationRun,
         result: StageResult,
         now: datetime,
-    ) -> None:
+    ) -> GenerationArtifact | None:
+        artifact_record: GenerationArtifact | None = None
         if result.request is not None:
             created = (
                 await database.execute(
@@ -2417,6 +2418,7 @@ class PostgresWorkerQueue:
                     "output_refs": list(result.output_refs),
                 },
             )
+        return artifact_record
 
     async def _checkpoint_locked(
         self,
@@ -2680,7 +2682,16 @@ class PostgresWorkerQueue:
             if staged is None or not isinstance(staged.payload.get("result"), dict):
                 raise RuntimeError("stage result must be persisted before finalize")
             result = StageResult.from_dict(staged.payload["result"])
-            await self._materialize_result(database, run, result, now)
+            artifact_record = await self._materialize_result(database, run, result, now)
+            if artifact_record is not None:
+                await database.execute(
+                    update(ModelCall)
+                    .where(
+                        ModelCall.stage_attempt_id == claim.attempt_id,
+                        ModelCall.artifact_id.is_(None),
+                    )
+                    .values(artifact_id=artifact_record.id)
+                )
             return await self._checkpoint_locked(
                 database,
                 run,
