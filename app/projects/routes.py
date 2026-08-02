@@ -934,6 +934,11 @@ async def retry_run(request: web.Request) -> web.Response:
                     text=_error("idempotency_key_conflict"),
                     content_type="application/json",
                 )
+            if project.active_run_id != existing.id:
+                raise web.HTTPConflict(
+                    text=_error("run_is_not_active"),
+                    content_type="application/json",
+                )
             return web.json_response(serialize_run(existing), status=202)
         if project.active_run_id != source.id:
             raise web.HTTPConflict(

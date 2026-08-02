@@ -686,6 +686,70 @@ async def test_retry_compensated_project_run_is_idempotent_and_reserves_trial_on
 
 
 @pytest.mark.asyncio
+async def test_retry_replay_rejects_stale_replacement_after_newer_active_run(
+    tmp_path,
+) -> None:
+    engine, factory, client, project_id, _ = await _project_app(tmp_path)
+    try:
+        await client.post("/test/login/10")
+        created = await client.post(
+            f"/api/projects/{project_id}/runs",
+            json={"mode": "express"},
+            headers={
+                "Idempotency-Key": "stale-retry-source",
+                "X-CSRF-Token": "test-csrf",
+            },
+        )
+        source_run_id = UUID((await created.json())["id"])
+        async with factory() as database, database.begin():
+            source = await database.get(GenerationRun, source_run_id)
+            project = await database.get(Project, project_id)
+            assert source is not None and project is not None
+            source.state = "failed"
+            source.failure_category = "provider"
+            source.error_code = "provider_unavailable"
+            project.status = "failed"
+
+        headers = {
+            "Idempotency-Key": "stale-retry-key",
+            "X-CSRF-Token": "test-csrf",
+        }
+        first = await client.post(
+            f"/api/runs/{source_run_id}/retry", json={}, headers=headers
+        )
+        assert first.status == 202
+
+        newer_run_id = UUID("00000000-0000-0000-0000-000000000123")
+        async with factory() as database, database.begin():
+            project = await database.get(Project, project_id)
+            assert project is not None
+            database.add(
+                GenerationRun(
+                    id=newer_run_id,
+                    project_id=project.id,
+                    mode="express",
+                    state="running",
+                    progress=0,
+                    next_event_sequence=1,
+                    idempotency_key="newer-active-run",
+                )
+            )
+            await database.flush()
+            project.active_run_id = newer_run_id
+            project.status = "running"
+
+        replay = await client.post(
+            f"/api/runs/{source_run_id}/retry", json={}, headers=headers
+        )
+
+        assert replay.status == 409
+        assert (await replay.json())["error"]["code"] == "run_is_not_active"
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_retry_rejects_reusing_source_run_idempotency_key(tmp_path) -> None:
     engine, factory, client, project_id, _ = await _project_app(tmp_path)
     try:
