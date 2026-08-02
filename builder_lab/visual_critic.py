@@ -653,7 +653,23 @@ _RU_VISUAL_MARKER_LEXEMES: dict[str, frozenset[str]] = {
         "кнопка", "кнопки", "кнопке", "кнопку", "кнопкой", "кнопок",
         "кнопкам", "кнопками", "кнопках",
     }),
-    "launcher": frozenset({"запуск", "запуска", "запуску", "запуском", "запуске"}),
+    "launcher": frozenset({
+        "запуск",
+        "запуска",
+        "запуску",
+        "запуском",
+        "запуске",
+        "лаунчер",
+        "лаунчера",
+        "лаунчеру",
+        "лаунчером",
+        "лаунчере",
+        "лаунчеры",
+        "лаунчеров",
+        "лаунчерам",
+        "лаунчерами",
+        "лаунчерах",
+    }),
     "панель": frozenset({
         "панель", "панели", "панелью", "панелей", "панелям", "панелями",
         "панелях",
@@ -706,7 +722,11 @@ def _visual_specificity_signature(text: str, screenshot_id: str) -> frozenset[st
         " ",
         normalized,
     )
-    metric_pattern = r"(?<![\w.-])\d+(?:\.\d+)?\s*(?:px|%|rem|em|vh|vw|dvh|dvw)\b"
+    metric_pattern = (
+        r"(?<![\w.-])\d+(?:\.\d+)?"
+        r"(?:\s*[x×]\s*\d+(?:\.\d+)?)?\s*"
+        r"(?:px|%|rem|em|vh|vw|dvh|dvw)\b"
+    )
     signals: set[str] = (
         {"metric"} if re.search(metric_pattern, normalized, flags=re.IGNORECASE) else set()
     )
@@ -1219,10 +1239,17 @@ class GeminiVisualCritic:
                     "Gemini returned a repeated generic visual formula",
                     usage=usage,
                 )
-            if any(not signature for signature in specificity_by_id.values()):
+            missing_specificity = [
+                screenshot_id
+                for screenshot_id, signature in specificity_by_id.items()
+                if not signature
+            ]
+            if missing_specificity:
                 raise VisualCriticError(
                     "visual_evidence_unproven",
                     "Gemini returned an observation without an image-specific visual fact",
+                    diagnostic="missing image-specific fact: "
+                    + ", ".join(missing_specificity),
                     usage=usage,
                 )
             summary_parts = []

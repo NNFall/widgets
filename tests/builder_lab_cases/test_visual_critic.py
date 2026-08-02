@@ -900,6 +900,33 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(result.observations), 6)
 
+    async def test_common_russian_launcher_term_is_accepted(self):
+        payload = response_payload()
+        payload["observations"][3]["observation"] = (
+            "На мобильном состоянии closed компактный лаунчер расположен в нижней "
+            "правой части экрана, обеспечивая доступность зоны клика на смартфонах."
+        )
+
+        result = await GeminiVisualCritic(client=FakeClient(payload)).critique(
+            audit=report(), brief="Brief", art_direction="Direction"
+        )
+
+        self.assertEqual(result.critique.verdict.value, "pass")
+
+    async def test_compact_dimension_fact_is_accepted_as_image_specific(self):
+        payload = response_payload()
+        payload["observations"][1]["observation"] = (
+            "В состоянии desktop.open_initial отображается всплывающая панель размером "
+            "360x520px с заголовочной частью, приветственным сообщением и кнопками "
+            "быстрых ответов внизу."
+        )
+
+        result = await GeminiVisualCritic(client=FakeClient(payload)).critique(
+            audit=report(), brief="Brief", art_direction="Direction"
+        )
+
+        self.assertEqual(result.critique.verdict.value, "pass")
+
     async def test_one_coarse_pixel_estimate_may_differ_per_original_image(self):
         payload = response_payload()
         for item in payload["observations"]:
