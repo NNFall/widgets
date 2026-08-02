@@ -448,7 +448,9 @@ STAGE_GUIDANCE = {
     Stage.MOTION_POLISH: (
         "Добавь выразительные входные, hover, focus и ambient-анимации. Допускаются "
         "любые длительности, циклы, бесконечное движение и JavaScript-сценарии, если "
-        "они поддерживают выбранную идею и не ломают взаимодействие."
+        "они поддерживают выбранную идею и не ломают взаимодействие. Runtime добавляет "
+        "к корню класс .kaigo-preview-attention: обязательно создай через него заметное "
+        "движение launcher в нескольких последовательных кадрах."
     ),
     Stage.VALIDATION: (
         "Исправь только перечисленные детерминированные ошибки, сохранив сильную "
@@ -590,6 +592,12 @@ change_summary всегда входит в ALLOWED только как поль
 - reduced-motion обязателен: внутри `@media (prefers-reduced-motion: reduce)`
   отключи ambient и attention motion, сохранив мгновенную и понятную обратную связь
   состояний; это не ограничивает творческую версию для `no-preference`;
+- attention state принадлежит runtime: используй точный селектор
+  `.kaigo-widget.kaigo-preview-attention [data-region="launcher"]` или его видимого
+  потомка и задай finite animation/transition, whose transform, opacity, shadow or
+  geometry change across multiple rendered frames. Do not use `[data-attention]` or
+  `[data-attention="true"]`: runtime никогда не добавляет эти атрибуты. В reduced-motion
+  отключи эту анимацию; собственный таймер attention в JavaScript не создавай;
 - для нативных контролов разрешены безопасные атрибуты `for`, `name`, `checked`, `open`,
   `selected`, `autocomplete`, `inputmode`, `rows`, `cols`, `min`, `max`, `step`;
   inline `style` и event-атрибуты запрещены;

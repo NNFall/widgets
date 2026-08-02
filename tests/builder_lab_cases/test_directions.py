@@ -153,6 +153,21 @@ class DirectionBoardTests(unittest.IsolatedAsyncioTestCase):
             prompt,
         )
 
+    def test_motion_prompt_uses_the_runtime_attention_class_not_legacy_attributes(self):
+        prompt = build_stage_prompt(
+            request=BuilderRequest(engine=EngineName.DIRECT, brief="RAW BUREAU widget"),
+            stage=Stage.MOTION_POLISH,
+            revision=5,
+            previous_artifact=None,
+        )
+
+        self.assertIn(
+            ".kaigo-widget.kaigo-preview-attention [data-region=\"launcher\"]",
+            prompt,
+        )
+        self.assertIn("Do not use `[data-attention]`", prompt)
+        self.assertIn("change across multiple rendered frames", prompt)
+
     def test_prompts_isolate_grounded_reference_as_untrusted_data(self):
         request = BuilderRequest(
             engine=EngineName.DIRECT,
