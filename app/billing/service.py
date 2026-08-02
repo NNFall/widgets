@@ -801,19 +801,24 @@ class TrialService:
                 payload = {
                     "provider": call.provider,
                     "model": call.model,
+                    "actual_provider": call.actual_provider,
+                    "actual_model": call.actual_model,
                     "role": call.role,
                     "request_id": call.request_id,
                     "input_tokens": call.input_tokens,
                     "output_tokens": call.output_tokens,
                     "thinking_tokens": call.thinking_tokens,
+                    "cache_read_tokens": call.cache_read_tokens,
+                    "cache_write_tokens": call.cache_write_tokens,
                     "billable_tokens": billable_tokens,
+                    "cost_state": call.cost_state,
                     "cost_microusd": call.cost_microusd,
                     "pricing_snapshot": call.pricing_snapshot,
                 }
                 definitions = []
                 if billable_tokens > 0:
                     definitions.append((token_bucket, -billable_tokens))
-                if call.cost_microusd > 0:
+                if (call.cost_microusd or 0) > 0:
                     definitions.append(("cost_microusd", -call.cost_microusd))
                 entries = []
                 for bucket, amount in definitions:
@@ -917,7 +922,7 @@ class TrialSettlementReconciler:
             if (
                 call.provider_dispatched
                 or call.input_tokens + call.output_tokens + call.thinking_tokens > 0
-                or call.cost_microusd > 0
+                or (call.cost_microusd or 0) > 0
             ):
                 spent = True
             try:

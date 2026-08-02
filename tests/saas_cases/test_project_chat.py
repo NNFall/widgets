@@ -232,9 +232,13 @@ async def test_routed_chat_is_idempotent_and_persists_exact_usage_cost(tmp_path)
         assert call.cost_microusd == 50
         assert call.pricing_snapshot == {
             "currency": "USD",
+            "source": "model_policy",
+            "effective_version": "v1",
             "billing_unit_tokens": 1_000_000,
-            "input_price_microusd_per_million": 2_000_000,
-            "output_price_microusd_per_million": 4_000_000,
+            "input_rate_microusd_per_million": 2_000_000,
+            "cache_read_rate_microusd_per_million": 2_000_000,
+            "cache_write_rate_microusd_per_million": 2_000_000,
+            "output_rate_microusd_per_million": 4_000_000,
         }
     finally:
         await service.close()

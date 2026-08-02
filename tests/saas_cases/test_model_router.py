@@ -98,7 +98,10 @@ def _ledger_record(
         input_tokens=0,
         output_tokens=0,
         thinking_tokens=0,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
         latency_ms=0,
+        cost_state="not_billed",
         cost_microusd=0,
     )
 
@@ -140,7 +143,12 @@ async def test_sql_audit_finalizes_dispatched_row_with_cas(tmp_path) -> None:
         provider_dispatched=True,
         input_tokens=7,
         output_tokens=3,
+        cache_read_tokens=2,
         latency_ms=11,
+        actual_provider="agentrouter",
+        actual_model="gpt-5.5",
+        cost_state="reported",
+        cost_microusd=91,
     )
     try:
         await audit.record(dispatched)
@@ -152,6 +160,12 @@ async def test_sql_audit_finalizes_dispatched_row_with_cas(tmp_path) -> None:
         assert persisted.status == "completed"
         assert persisted.provider_dispatched is True
         assert (persisted.input_tokens, persisted.output_tokens) == (7, 3)
+        assert persisted.cache_read_tokens == 2
+        assert (persisted.actual_provider, persisted.actual_model) == (
+            "agentrouter",
+            "gpt-5.5",
+        )
+        assert (persisted.cost_state, persisted.cost_microusd) == ("reported", 91)
     finally:
         await engine.dispose()
 
@@ -582,7 +596,8 @@ async def test_provider_attempt_deadline_audits_timeout_then_falls_back() -> Non
         audit.calls[0].output_tokens,
         audit.calls[0].thinking_tokens,
         audit.calls[0].cost_microusd,
-    ) == (0, 0, 0, 0)
+    ) == (0, 0, 0, None)
+    assert audit.calls[0].cost_state == "unknown"
 
 
 @pytest.mark.asyncio
@@ -1760,6 +1775,7 @@ async def test_success_without_usage_report_marks_cost_state_unknown() -> None:
             self.requests.append(request)
             return ModelResponse(text="{}", parsed={})
 
+    audit = InMemoryModelCallAudit()
     router = ModelRouter(
         providers={"provider": NoUsageProvider()},
         policies={
@@ -1768,7 +1784,7 @@ async def test_success_without_usage_report_marks_cost_state_unknown() -> None:
                 targets=(ProviderTarget("provider", "model", 1, 1),),
             )
         },
-        audit=InMemoryModelCallAudit(),
+        audit=audit,
     )
 
     response = await router.generate(
@@ -1780,6 +1796,107 @@ async def test_success_without_usage_report_marks_cost_state_unknown() -> None:
 
     assert response.raw is not None
     assert response.raw["route_attempts"][0]["cost_state"] == "unknown"
+    assert audit.calls[0].cost_state == "unknown"
+    assert audit.calls[0].cost_microusd is None
+
+
+@pytest.mark.asyncio
+async def test_router_persists_reported_cost_actual_identity_and_cache_usage() -> None:
+    class ReportedProvider(FakeProvider):
+        async def generate(self, request: ModelRequest, *, model: str) -> ModelResponse:
+            return ModelResponse(
+                text="{}",
+                parsed={},
+                usage=ModelUsage(
+                    input_tokens=100,
+                    output_tokens=20,
+                    thinking_tokens=5,
+                    cache_read_tokens=40,
+                    cache_write_tokens=10,
+                ),
+                actual_provider="agentrouter",
+                actual_model="gpt-5.5-2026-07-28",
+                reported_cost_microusd=321,
+            )
+
+    audit = InMemoryModelCallAudit()
+    router = ModelRouter(
+        providers={"router": ReportedProvider()},
+        policies={
+            ("direction_candidate", "express"): ModelPolicy(
+                prompt_version="direction-v2",
+                targets=(ProviderTarget("router", "gpt-5.5", 2_000_000, 4_000_000),),
+            )
+        },
+        audit=audit,
+    )
+
+    response = await router.generate(
+        role="direction_candidate",
+        mode="express",
+        request=ModelRequest(prompt="Generate"),
+        context=_context("direction_candidate"),
+    )
+
+    call = audit.calls[0]
+    assert response.raw is not None
+    assert response.raw["route_attempts"][0]["cost_state"] == "reported"
+    assert (call.actual_provider, call.actual_model) == (
+        "agentrouter",
+        "gpt-5.5-2026-07-28",
+    )
+    assert (call.cache_read_tokens, call.cache_write_tokens) == (40, 10)
+    assert (call.cost_state, call.cost_microusd) == ("reported", 321)
+
+
+@pytest.mark.asyncio
+async def test_router_estimates_cache_buckets_with_target_rate_card() -> None:
+    class CachedProvider(FakeProvider):
+        async def generate(self, request: ModelRequest, *, model: str) -> ModelResponse:
+            return ModelResponse(
+                text="{}",
+                parsed={},
+                usage=ModelUsage(
+                    input_tokens=100,
+                    output_tokens=10,
+                    cache_read_tokens=40,
+                    cache_write_tokens=10,
+                ),
+            )
+
+    audit = InMemoryModelCallAudit()
+    router = ModelRouter(
+        providers={"provider": CachedProvider()},
+        policies={
+            ("direction_candidate", "express"): ModelPolicy(
+                prompt_version="direction-v2",
+                targets=(
+                    ProviderTarget(
+                        "provider",
+                        "model",
+                        1_000_000,
+                        4_000_000,
+                        cache_read_price_microusd_per_million=100_000,
+                        cache_write_price_microusd_per_million=2_000_000,
+                    ),
+                ),
+            )
+        },
+        audit=audit,
+    )
+
+    response = await router.generate(
+        role="direction_candidate",
+        mode="express",
+        request=ModelRequest(prompt="Generate"),
+        context=_context("direction_candidate"),
+    )
+
+    call = audit.calls[0]
+    # 50 uncached + 40 cache-read + 10 cache-write + 10 output = 114 microusd.
+    assert (call.cost_state, call.cost_microusd) == ("estimated", 114)
+    assert response.usage.cache_read_tokens == 40
+    assert response.usage.cache_write_tokens == 10
 
 
 @pytest.mark.asyncio

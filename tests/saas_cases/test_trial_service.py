@@ -654,9 +654,13 @@ async def test_express_stage_routes_and_persists_exact_model_call_then_ledgers_u
             )
             assert call.pricing_snapshot == {
                 "currency": "USD",
+                "source": "model_policy",
+                "effective_version": "v1",
                 "billing_unit_tokens": 1_000_000,
-                "input_price_microusd_per_million": 6_000_000,
-                "output_price_microusd_per_million": 6_000_000,
+                "input_rate_microusd_per_million": 6_000_000,
+                "cache_read_rate_microusd_per_million": 6_000_000,
+                "cache_write_rate_microusd_per_million": 6_000_000,
+                "output_rate_microusd_per_million": 6_000_000,
             }
             call_id = call.id
 

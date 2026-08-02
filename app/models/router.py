@@ -12,8 +12,6 @@ from uuid import UUID, uuid4
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.saas.models import ModelCall
-
 from app.models.contracts import (
     BilledModelProviderError,
     ModelProvider,
@@ -27,7 +25,13 @@ from app.models.contracts import (
     ProviderTimeout,
     UnsupportedModelRequest,
 )
+from app.models.costs import (
+    ModelPricingSnapshot,
+    ResolvedModelCost,
+    resolve_model_cost,
+)
 from app.models.lineage import ModelInvocationContext
+from app.saas.models import ModelCall
 
 
 _FALLBACK_ERROR_CODES = frozenset(
@@ -62,6 +66,8 @@ class ProviderTarget:
     input_price_microusd_per_million: int
     output_price_microusd_per_million: int
     capabilities: ProviderCapabilities | None = None
+    cache_read_price_microusd_per_million: int | None = None
+    cache_write_price_microusd_per_million: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,12 +102,17 @@ class ModelCallAuditRecord:
     input_tokens: int
     output_tokens: int
     thinking_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
     latency_ms: int
-    cost_microusd: int
+    cost_state: str
+    cost_microusd: int | None
+    actual_provider: str | None = None
+    actual_model: str | None = None
     request_id: str | None = None
     error_code: str | None = None
     error_message: str | None = None
-    pricing_snapshot: Mapping[str, int | str] | None = None
+    pricing_snapshot: Mapping[str, int | str | None] | None = None
 
 
 class ModelCallAudit(Protocol):
@@ -168,13 +179,18 @@ class SqlModelCallAudit:
             mutable_values = {
                 "request_id": call.request_id,
                 "provider_dispatched": call.provider_dispatched,
+                "actual_provider": call.actual_provider,
+                "actual_model": call.actual_model,
                 "input_tokens": call.input_tokens,
                 "output_tokens": call.output_tokens,
                 "thinking_tokens": call.thinking_tokens,
+                "cache_read_tokens": call.cache_read_tokens,
+                "cache_write_tokens": call.cache_write_tokens,
                 "latency_ms": call.latency_ms,
                 "status": call.status,
                 "error_code": call.error_code,
                 "error_message": call.error_message,
+                "cost_state": call.cost_state,
                 "cost_microusd": call.cost_microusd,
                 "pricing_snapshot": dict(call.pricing_snapshot or {}),
             }
@@ -209,6 +225,7 @@ class SqlModelCallAudit:
                             ModelCall.provider_dispatched.is_(False),
                         )
                         .values(provider_dispatched=True)
+                        .values(cost_state="unknown", cost_microusd=None)
                     )
                     if result.rowcount != 1:
                         raise ModelAccountingError(
@@ -293,11 +310,14 @@ def _is_provider_dispatch_promotion(
         return False
     mutable_fields = (
         "request_id",
+        "actual_provider",
+        "actual_model",
         "input_tokens",
         "output_tokens",
         "thinking_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
         "latency_ms",
-        "cost_microusd",
         "error_code",
         "error_message",
         "pricing_snapshot",
@@ -396,6 +416,8 @@ class ModelRouter:
                 dispatched_record = replace(
                     dispatched_record,
                     provider_dispatched=True,
+                    cost_state="unknown",
+                    cost_microusd=None,
                 )
                 if route_deadline is None:
                     await self._audit.record(dispatched_record)
@@ -467,10 +489,20 @@ class ModelRouter:
                 )
                 total_usage = _add_usage(total_usage, usage)
                 latency_ms = _elapsed_ms(started)
-                cost_microusd = _cost_microusd(
-                    target,
-                    usage.input_tokens,
-                    usage.output_tokens,
+                cost = _resolve_cost(
+                    target=target,
+                    provider_dispatched=provider_dispatched,
+                    usage=usage,
+                    reported_cost_microusd=(
+                        error.reported_cost_microusd
+                        if isinstance(error, BilledModelProviderError)
+                        else None
+                    ),
+                    no_charge_confirmed=(
+                        error.no_charge_confirmed
+                        if isinstance(error, BilledModelProviderError)
+                        else False
+                    ),
                 )
                 route_attempts.append(
                     ModelRouteAttempt(
@@ -479,12 +511,8 @@ class ModelRouter:
                         outcome="failed",
                         latency_ms=latency_ms,
                         usage=usage,
-                        cost_microusd=cost_microusd,
-                        cost_state=_failed_cost_state(
-                            error,
-                            provider_dispatched=provider_dispatched,
-                            usage=usage,
-                        ),
+                        cost_microusd=cost.cost_microusd or 0,
+                        cost_state=cost.state.value,
                         error_code=error.error_code,
                     )
                 )
@@ -514,8 +542,21 @@ class ModelRouter:
                             input_tokens=usage.input_tokens,
                             output_tokens=usage.output_tokens,
                             thinking_tokens=usage.thinking_tokens,
+                            cache_read_tokens=usage.cache_read_tokens,
+                            cache_write_tokens=usage.cache_write_tokens,
                             latency_ms=latency_ms,
-                            cost_microusd=cost_microusd,
+                            cost_state=cost.state.value,
+                            cost_microusd=cost.cost_microusd,
+                            actual_provider=(
+                                error.actual_provider
+                                if isinstance(error, BilledModelProviderError)
+                                else None
+                            ),
+                            actual_model=(
+                                error.actual_model
+                                if isinstance(error, BilledModelProviderError)
+                                else None
+                            ),
                             request_id=(
                                 error.request_id
                                 if isinstance(error, BilledModelProviderError)
@@ -523,7 +564,7 @@ class ModelRouter:
                             ),
                             error_code=error.error_code,
                             error_message=error.error_code,
-                            pricing_snapshot=_pricing_snapshot(target),
+                            pricing_snapshot=_pricing_snapshot_dict(cost),
                         )
                     failed_audit_recorded = await _record_terminal_safe(
                         self._audit,
@@ -546,7 +587,13 @@ class ModelRouter:
 
             usage = response.usage
             total_usage = _add_usage(total_usage, usage)
-            cost = _cost_microusd(target, usage.input_tokens, usage.output_tokens)
+            cost = _resolve_cost(
+                target=target,
+                provider_dispatched=True,
+                usage=usage,
+                reported_cost_microusd=response.reported_cost_microusd,
+                no_charge_confirmed=response.no_charge_confirmed,
+            )
             latency_ms = _elapsed_ms(started)
             route_attempts.append(
                 ModelRouteAttempt(
@@ -555,12 +602,8 @@ class ModelRouter:
                     outcome="completed",
                     latency_ms=latency_ms,
                     usage=usage,
-                    cost_microusd=cost,
-                    cost_state=(
-                        "estimated"
-                        if usage.input_tokens or usage.output_tokens
-                        else "unknown"
-                    ),
+                    cost_microusd=cost.cost_microusd or 0,
+                    cost_state=cost.state.value,
                 )
             )
             completed_record = ModelCallAuditRecord(
@@ -584,10 +627,15 @@ class ModelRouter:
                     input_tokens=usage.input_tokens,
                     output_tokens=usage.output_tokens,
                     thinking_tokens=usage.thinking_tokens,
+                    cache_read_tokens=usage.cache_read_tokens,
+                    cache_write_tokens=usage.cache_write_tokens,
                     latency_ms=latency_ms,
-                    cost_microusd=cost,
+                    cost_state=cost.state.value,
+                    cost_microusd=cost.cost_microusd,
+                    actual_provider=response.actual_provider,
+                    actual_model=response.actual_model,
                     request_id=response.request_id,
-                    pricing_snapshot=_pricing_snapshot(target),
+                    pricing_snapshot=_pricing_snapshot_dict(cost),
                 )
             terminal_audit_recorded = await _record_terminal_safe(
                 self._audit,
@@ -683,52 +731,72 @@ def _add_usage(left: ModelUsage, right: ModelUsage) -> ModelUsage:
         input_tokens=left.input_tokens + right.input_tokens,
         output_tokens=left.output_tokens + right.output_tokens,
         thinking_tokens=left.thinking_tokens + right.thinking_tokens,
+        cache_read_tokens=left.cache_read_tokens + right.cache_read_tokens,
+        cache_write_tokens=left.cache_write_tokens + right.cache_write_tokens,
     )
-
-
-def _failed_cost_state(
-    error: ModelProviderError,
-    *,
-    provider_dispatched: bool,
-    usage: ModelUsage,
-) -> str:
-    if not provider_dispatched:
-        return "not_billed"
-    if isinstance(error, BilledModelProviderError) and (
-        usage.input_tokens or usage.output_tokens
-    ):
-        return "estimated"
-    # A dispatched failure with no usage report is not proof of a free call.
-    return "unknown"
 
 
 def _elapsed_ms(started: float) -> int:
     return max(0, round((time.perf_counter() - started) * 1000))
 
 
-def _cost_microusd(
-    target: ProviderTarget,
-    input_tokens: int,
-    output_tokens: int,
-) -> int:
-    numerator = (
-        input_tokens * target.input_price_microusd_per_million
-        + output_tokens * target.output_price_microusd_per_million
-    )
-    return round(numerator / 1_000_000)
-
-
-def _pricing_snapshot(target: ProviderTarget) -> dict[str, int | str]:
-    return {
-        "currency": "USD",
-        "billing_unit_tokens": 1_000_000,
-        "input_price_microusd_per_million": (
+def _pricing_snapshot(target: ProviderTarget) -> ModelPricingSnapshot:
+    return ModelPricingSnapshot(
+        source="model_policy",
+        effective_version="v1",
+        currency="USD",
+        billing_unit_tokens=1_000_000,
+        input_rate_microusd_per_million=(
             target.input_price_microusd_per_million
         ),
-        "output_price_microusd_per_million": (
+        cache_read_rate_microusd_per_million=(
+            target.cache_read_price_microusd_per_million
+            if target.cache_read_price_microusd_per_million is not None
+            else target.input_price_microusd_per_million
+        ),
+        cache_write_rate_microusd_per_million=(
+            target.cache_write_price_microusd_per_million
+            if target.cache_write_price_microusd_per_million is not None
+            else target.input_price_microusd_per_million
+        ),
+        output_rate_microusd_per_million=(
             target.output_price_microusd_per_million
         ),
-    }
+    )
+
+
+def _resolve_cost(
+    *,
+    target: ProviderTarget,
+    provider_dispatched: bool,
+    usage: ModelUsage,
+    reported_cost_microusd: int | None = None,
+    no_charge_confirmed: bool = False,
+) -> ResolvedModelCost:
+    usage_reported = usage if any(
+        (
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.thinking_tokens,
+            usage.cache_read_tokens,
+            usage.cache_write_tokens,
+        )
+    ) else None
+    return resolve_model_cost(
+        provider_dispatched=provider_dispatched,
+        usage=usage_reported,
+        pricing_snapshot=_pricing_snapshot(target),
+        reported_cost_microusd=reported_cost_microusd,
+        no_charge_confirmed=no_charge_confirmed,
+    )
+
+
+def _pricing_snapshot_dict(
+    resolution: ResolvedModelCost,
+) -> dict[str, int | str | None]:
+    if resolution.pricing_snapshot is None:
+        return {}
+    return resolution.pricing_snapshot.to_dict()
 
 
 def _audit_record(
@@ -769,11 +837,14 @@ def _audit_record(
         input_tokens=0,
         output_tokens=0,
         thinking_tokens=0,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
         latency_ms=_elapsed_ms(started),
-        cost_microusd=0,
+        cost_state="not_billed" if not provider_dispatched else "unknown",
+        cost_microusd=0 if not provider_dispatched else None,
         error_code=error_code,
         error_message=error_message,
-        pricing_snapshot=_pricing_snapshot(target),
+        pricing_snapshot=_pricing_snapshot(target).to_dict(),
     )
 
 
