@@ -1089,6 +1089,43 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
             caught.exception.public_message,
         )
 
+    async def test_inconclusive_ai_review_can_finish_with_working_draft(self):
+        critic_error = BuilderEngineError(
+            "visual_review_inconclusive",
+            "critic response did not prove all states",
+            diagnostic="private model response detail",
+            usage=TokenUsage(prompt_tokens=13),
+        )
+        critic_instance = FakeCritic([], error=critic_error)
+        gate = VisualRepairGate(
+            store=self.store,
+            audit_factory=FakeAuditor,
+            critic_factory=lambda: critic_instance,
+            fail_open_on_inconclusive=True,
+        )
+
+        result = await gate.evaluate(
+            run_id=self.run_id,
+            request=self.request,
+            engine=FakeEngine(),
+            candidate=self.candidate,
+            previous=self.previous,
+            selected_direction=self.direction,
+        )
+
+        self.assertEqual(result, self.candidate)
+        self.assertEqual(len(critic_instance.calls), 1)
+        events = await self.store.events_after(self.run_id, 0)
+        completed = [
+            event
+            for event in events
+            if event.event_type == "visual_audit.completed"
+        ]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0].status, "completed")
+        self.assertIn("рабочая версия", completed[0].message)
+        self.assertNotIn("private model response detail", completed[0].message)
+
     async def test_route_exhaustion_is_terminal_without_committee_retry_and_keeps_usage(self):
         diagnostic = (
             '{"terminal_reason":"all_generation_timeout",'

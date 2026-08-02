@@ -363,6 +363,7 @@ class VisualRepairGate:
         critic_factory: Callable[[], VisualCritic],
         verifier_factory: Callable[[], RepairVerifier] | None = None,
         critic_close_timeout_seconds: float = 5.0,
+        fail_open_on_inconclusive: bool = False,
     ) -> None:
         if not 0 < critic_close_timeout_seconds <= 30:
             raise ValueError("critic_close_timeout_seconds is invalid")
@@ -371,6 +372,7 @@ class VisualRepairGate:
         self._critic_factory = critic_factory
         self._verifier_factory = verifier_factory
         self._critic_close_timeout_seconds = critic_close_timeout_seconds
+        self._fail_open_on_inconclusive = fail_open_on_inconclusive
 
     async def _close_critic(self, critic: VisualCritic) -> None:
         cleanup = asyncio.create_task(critic.aclose())
@@ -955,6 +957,36 @@ class VisualRepairGate:
                         ai_review_attempt,
                         getattr(exc, "error_code", type(exc).__name__),
                     )
+                    if (
+                        self._fail_open_on_inconclusive
+                        and route_error_code
+                        in {
+                            "route_exhausted",
+                            "invalid_response",
+                            "visual_evidence_unproven",
+                            "invalid_visual_critique",
+                            "visual_critic_unavailable",
+                            "visual_critic_timeout",
+                            "visual_review_inconclusive",
+                        }
+                    ):
+                        await self._store.append_event(
+                            run_id,
+                            event_type="visual_audit.completed",
+                            stage=Stage.MOTION_POLISH,
+                            status="completed",
+                            message=(
+                                "AI-критики не завершили формальный отчёт; "
+                                "рабочая версия виджета сохранена"
+                            ),
+                            revision=candidate.revision,
+                            usage=usage,
+                            forensic_payload=_failure_forensic_evidence(
+                                "visual_critic",
+                                exc,
+                            ),
+                        )
+                        return candidate
                     await self._store.append_event(
                         run_id,
                         event_type="visual_audit.completed",

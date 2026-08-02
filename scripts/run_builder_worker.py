@@ -515,6 +515,7 @@ async def run() -> None:
                             operation="repair_verification",
                         ),
                     ),
+                    fail_open_on_inconclusive=True,
                 ),
             )
         handler = load_stage_handler(
