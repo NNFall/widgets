@@ -2333,6 +2333,52 @@ class VisualReferenceCrawler:
             max_page_bytes=self.limits.max_page_bytes,
         )
 
+    async def _capture_single_page_viewports(
+        self,
+        home_url: str,
+        *,
+        robots_policy: GuardedRobotsPolicy,
+        byte_budget: CrawlByteBudget,
+        remaining_timeout: Callable[[], float],
+    ) -> tuple[
+        ReferencePageEvidence | Exception,
+        ReferencePageEvidence | Exception,
+    ]:
+        async def capture(
+            *,
+            page_id: str,
+            viewport: str,
+        ) -> ReferencePageEvidence | Exception:
+            last_error: Exception | None = None
+            for _attempt in range(self.limits.max_retries + 1):
+                try:
+                    return await asyncio.wait_for(
+                        capture_reference_page(
+                            home_url,
+                            page_id=page_id,
+                            category="home",
+                            viewport=viewport,
+                            settings=self._settings(viewport),
+                            guard=self.guard,
+                            robots_policy=robots_policy,
+                            byte_budget=byte_budget,
+                            trace_ttl_seconds=self.limits.trace_ttl_seconds,
+                        ),
+                        timeout=remaining_timeout(),
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    last_error = exc
+            assert last_error is not None
+            return last_error
+
+        desktop, mobile = await asyncio.gather(
+            capture(page_id="home", viewport="desktop"),
+            capture(page_id="home-mobile", viewport="mobile"),
+        )
+        return desktop, mobile
+
     async def crawl(self, source_url: str) -> ReferenceCrawlResult:
         from crawlee import ConcurrencySettings, Request
         from crawlee.crawlers import PlaywrightCrawler, PlaywrightCrawlingContext
@@ -2394,6 +2440,49 @@ class VisualReferenceCrawler:
                 sitemap = ()
         failure_trace: TraceEvidence | None = None
         byte_budget = CrawlByteBudget(self.limits.max_total_bytes)
+
+        if self.limits.max_pages == 1:
+            captures = await self._capture_single_page_viewports(
+                home_url,
+                robots_policy=robots,
+                byte_budget=byte_budget,
+                remaining_timeout=remaining_timeout,
+            )
+            pages = tuple(
+                capture
+                for capture in captures
+                if isinstance(capture, ReferencePageEvidence)
+            )
+            failures = tuple(
+                capture
+                for capture in captures
+                if isinstance(capture, Exception)
+            )
+            if failures:
+                first_failure = failures[0]
+                trace = getattr(first_failure, "trace", None)
+                return ReferenceCrawlResult.failed(
+                    source_url=home_url,
+                    failure=CrawlFailure(
+                        code="crawl_failed",
+                        message=_exception_text(first_failure),
+                    ),
+                    trace=trace if isinstance(trace, TraceEvidence) else None,
+                    pages=pages,
+                    started_at=started_at,
+                )
+            if any(page.coverage_status != "complete" for page in pages):
+                return ReferenceCrawlResult.partial(
+                    source_url=home_url,
+                    pages=pages,
+                    started_at=started_at,
+                )
+            return ReferenceCrawlResult.succeeded(
+                source_url=home_url,
+                pages=pages,
+                started_at=started_at,
+            )
+
         accumulator = CrawlAccumulator(
             max_total_bytes=self.limits.max_total_bytes,
             selected_urls={home_url},

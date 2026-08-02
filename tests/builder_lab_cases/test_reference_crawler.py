@@ -1141,8 +1141,9 @@ class BrowserLifecycleTests(unittest.TestCase):
                 "_sitemap_candidates",
                 record_sitemap,
             ),
-            patch(
-                "crawlee.storages.RequestQueue.open",
+            patch.object(
+                crawler,
+                "_capture_single_page_viewports",
                 stop_after_discovery,
             ),
             self.assertRaises(StopAfterDiscovery),
@@ -1150,6 +1151,53 @@ class BrowserLifecycleTests(unittest.TestCase):
             asyncio.run(crawler.crawl("http://127.0.0.1/"))
 
         self.assertFalse(sitemap_called)
+
+    def test_single_page_viewports_start_concurrently(self):
+        crawler = VisualReferenceCrawler(
+            guard=PermissiveLocalGuard(),
+            limits=ReferenceCrawlLimits(max_pages=1, max_retries=0),
+        )
+        started: set[str] = set()
+        both_started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def capture(_url, *, page_id, category, viewport, **_kwargs):
+            started.add(viewport)
+            if started == {"desktop", "mobile"}:
+                both_started.set()
+            await release.wait()
+            return ReferencePageEvidence(
+                page_id=page_id,
+                category=category,
+                requested_url="https://example.com/",
+                final_url="https://example.com/",
+                depth=0,
+            )
+
+        async def run():
+            with patch.object(
+                reference_crawler_module,
+                "capture_reference_page",
+                capture,
+            ):
+                task = asyncio.create_task(
+                    crawler._capture_single_page_viewports(
+                        "https://example.com/",
+                        robots_policy=object(),
+                        byte_budget=CrawlByteBudget(1024),
+                        remaining_timeout=lambda: 5.0,
+                    )
+                )
+                await asyncio.wait_for(both_started.wait(), timeout=1)
+                self.assertFalse(task.done())
+                release.set()
+                return await task
+
+        desktop, mobile = asyncio.run(run())
+
+        self.assertEqual(started, {"desktop", "mobile"})
+        self.assertEqual(desktop.page_id, "home")
+        self.assertEqual(mobile.page_id, "home-mobile")
 
     def test_chunked_response_is_aborted_near_byte_cap_without_full_buffering(self):
         reason = browser_unavailable_reason()
