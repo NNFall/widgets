@@ -113,3 +113,16 @@ def test_stage_prompt_exposes_exact_html_element_and_attribute_allowlists():
     assert '"data-action"' in prompt
     assert "foreignObject, use, mask, filter, style, form" in prompt
     assert "xmlns, focusable, event attributes and arbitrary data-*" in prompt
+
+
+def test_stage_prompt_exposes_numeric_mobile_safe_inset_contract():
+    prompt = build_stage_prompt(
+        request=_request(),
+        stage=Stage.FOUNDATION,
+        revision=2,
+        previous_artifact=_artifact(),
+    )
+
+    assert "не меньше 8px с каждой стороны" in prompt
+    assert "calc(100vw - 16px)" in prompt
+    assert "390x844" in prompt

@@ -617,8 +617,11 @@ change_summary всегда входит в ALLOWED только как поль
   соблюдать no fullscreen и не создавать горизонтальный overflow;
 - desktop panel обычно хорошо работает примерно в диапазоне 320–440px, но это рекомендация,
   а не hardcoded requirement: обоснованный layout_contract может выбрать другую ширину;
-- mobile layout адаптируется к доступному месту и оставляет безопасные поля вокруг panel;
-  обычно держи open panel roughly 64–78% of the viewport height, сохраняя видимый
+- mobile layout адаптируется к доступному месту и оставляет вокруг panel inset
+  не меньше 8px с каждой стороны; при viewport 390x844 фактическая ширина panel
+  не превышает `calc(100vw - 16px)`, а x остаётся не меньше 8px; это граничный
+  контракт, а не фиксированная ширина или готовый шаблон;
+- обычно держи open panel roughly 64–78% of the viewport height, сохраняя видимый
   контекст страницы; это диапазон-композиционная рекомендация, а не hardcoded size;
 - launcher и panel могут использовать fixed, absolute, sticky или другой механизм,
   если фактические bounding boxes остаются внутри viewport и все действия доступны;
