@@ -80,6 +80,9 @@ class BuilderLabConfig:
     agentrouter_gpt_output_price_microusd_per_million: int
     agentrouter_glm_input_price_microusd_per_million: int
     agentrouter_glm_output_price_microusd_per_million: int
+    zenmux_api_key: str | None
+    zenmux_base_url: str
+    zenmux_deepseek_model: str
     enable_antigravity: bool
     gemini_api_key: str | None
     gemini_base_url: str
@@ -225,6 +228,13 @@ class BuilderLabConfig:
                 1,
                 100_000_000,
             ),
+            zenmux_api_key=_first_nonblank("ZENMUX_API_KEY"),
+            zenmux_base_url=os.getenv(
+                "ZENMUX_BASE_URL", "https://zenmux.ai/api/v1"
+            ).strip().rstrip("/"),
+            zenmux_deepseek_model=os.getenv(
+                "ZENMUX_DEEPSEEK_MODEL", "deepseek/deepseek-v4-flash-free"
+            ).strip(),
             enable_antigravity=_bool("KAIGO_BUILDER_ENABLE_ANTIGRAVITY", True),
             gemini_api_key=api_key,
             gemini_base_url=os.getenv(

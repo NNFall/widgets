@@ -6,7 +6,6 @@ import inspect
 import logging
 import os
 import signal
-import shutil
 import socket
 import sys
 from collections.abc import Awaitable, Callable
@@ -21,7 +20,7 @@ from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models.providers.gemini import GeminiModelProvider
-from app.models.providers.agentrouter_qwen import AgentRouterQwenProvider
+from app.models.providers.openai_compatible import OpenAICompatibleProvider
 from app.models.lineage import ModelInvocationContext
 from app.models.router import (
     ModelPolicy,
@@ -250,17 +249,23 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
             raise RuntimeError(
                 "AgentRouter GPT and GLM model names are required for hybrid routing"
             )
-        if shutil.which(config.agentrouter_qwen_executable) is None:
-            raise RuntimeError(
-                "AGENTROUTER_QWEN_EXECUTABLE is not available in the worker image"
-            )
-        providers["agentrouter"] = AgentRouterQwenProvider(
+        providers["agentrouter"] = OpenAICompatibleProvider(
             api_key=config.agentrouter_api_key,
             base_url=config.agentrouter_base_url,
+            provider_name="agentrouter",
             timeout_seconds=config.agentrouter_timeout_seconds,
-            working_directory="/tmp",
-            executable=config.agentrouter_qwen_executable,
         )
+        if config.zenmux_api_key:
+            if not config.zenmux_base_url.startswith("https://"):
+                raise RuntimeError(
+                    "ZENMUX_BASE_URL must use HTTPS when hybrid routing is enabled"
+                )
+            providers["zenmux"] = OpenAICompatibleProvider(
+                api_key=config.zenmux_api_key,
+                base_url=config.zenmux_base_url,
+                provider_name="zenmux",
+                timeout_seconds=config.agentrouter_timeout_seconds,
+            )
 
     def gemini_target(model: str) -> ProviderTarget:
         return ProviderTarget("gemini", model, input_rate, output_rate)
@@ -284,11 +289,20 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
             config.agentrouter_glm_output_price_microusd_per_million,
         )
 
+    def zenmux_target() -> ProviderTarget:
+        return ProviderTarget("zenmux", config.zenmux_deepseek_model, 0, 0)
+
+    def text_fallbacks() -> tuple[ProviderTarget, ...]:
+        return (
+            *((zenmux_target(),) if "zenmux" in providers else ()),
+            gemini_target(config.direct_model),
+        )
+
     def gpt_targets() -> tuple[ProviderTarget, ...]:
-        return (gpt_target(), gemini_target(config.direct_model))
+        return (gpt_target(), *text_fallbacks())
 
     def glm_targets() -> tuple[ProviderTarget, ...]:
-        return (glm_target(), gemini_target(config.direct_model))
+        return (glm_target(), *text_fallbacks())
 
     gpt_roles = {
         "direction_candidate",

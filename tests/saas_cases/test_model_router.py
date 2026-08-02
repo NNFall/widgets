@@ -427,7 +427,7 @@ async def test_in_memory_audit_rejects_conflicting_immutable_lineage() -> None:
 
 
 @pytest.mark.asyncio
-async def test_permission_denial_is_preserved_and_never_falls_back() -> None:
+async def test_permission_denial_is_audited_and_falls_back() -> None:
     class PermissionDeniedProvider(FakeProvider):
         async def generate(self, request: ModelRequest, *, model: str) -> ModelResponse:
             self.requests.append(request)
@@ -450,18 +450,20 @@ async def test_permission_denial_is_preserved_and_never_falls_back() -> None:
         audit=audit,
     )
 
-    with pytest.raises(ProviderPermissionDenied) as caught:
-        await router.generate(
-            role="reference_analyzer",
-            mode="standard",
-            request=ModelRequest(prompt="Analyze"),
-            context=_context("reference_analysis"),
-        )
+    response = await router.generate(
+        role="reference_analyzer",
+        mode="standard",
+        request=ModelRequest(prompt="Analyze"),
+        context=_context("reference_analysis"),
+    )
 
-    assert caught.value.error_code == "provider_permission_denied"
+    assert response.text == '{"ok":true}'
     assert len(primary.requests) == 1
-    assert fallback.requests == []
-    assert [call.error_code for call in audit.calls] == ["provider_permission_denied"]
+    assert len(fallback.requests) == 1
+    assert [call.error_code for call in audit.calls] == [
+        "provider_permission_denied",
+        None,
+    ]
 
 
 @pytest.mark.asyncio

@@ -169,6 +169,9 @@ class BuilderLabPackagingTests(unittest.TestCase):
             "AGENTROUTER_GPT_OUTPUT_PRICE_MICROUSD_PER_MILLION",
             "AGENTROUTER_GLM_INPUT_PRICE_MICROUSD_PER_MILLION",
             "AGENTROUTER_GLM_OUTPUT_PRICE_MICROUSD_PER_MILLION",
+            "ZENMUX_API_KEY",
+            "ZENMUX_BASE_URL",
+            "ZENMUX_DEEPSEEK_MODEL",
         ):
             self.assertIn(f"      {name}:", worker)
             self.assertRegex(env_example, rf"(?m)^{name}=")

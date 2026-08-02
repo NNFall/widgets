@@ -203,7 +203,6 @@ def test_runtime_router_maps_hybrid_roles_to_gpt_glm_and_gemini(
 ) -> None:
     monkeypatch.setenv("GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION", "100")
     monkeypatch.setenv("GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION", "200")
-    monkeypatch.setattr(run_builder_worker.shutil, "which", lambda executable: executable)
     config = SimpleNamespace(
         gemini_api_key="gemini-key",
         gemini_base_url="https://gemini.example",
@@ -221,6 +220,9 @@ def test_runtime_router_maps_hybrid_roles_to_gpt_glm_and_gemini(
         agentrouter_gpt_output_price_microusd_per_million=7_000_000,
         agentrouter_glm_input_price_microusd_per_million=6_000_000,
         agentrouter_glm_output_price_microusd_per_million=6_000_000,
+        zenmux_api_key="zenmux-key",
+        zenmux_base_url="https://zenmux.example/api/v1",
+        zenmux_deepseek_model="deepseek/deepseek-v4-flash-free",
     )
 
     router = run_builder_worker.make_runtime_model_router(config, None)
@@ -236,6 +238,7 @@ def test_runtime_router_maps_hybrid_roles_to_gpt_glm_and_gemini(
             targets = router._policies[(role, mode)].targets
             assert [(target.provider, target.model) for target in targets] == [
                 ("agentrouter", "gpt-5.5"),
+                ("zenmux", "deepseek/deepseek-v4-flash-free"),
                 ("gemini", "gemini-builder"),
             ]
             assert targets[0].provider != targets[1].provider
@@ -252,6 +255,7 @@ def test_runtime_router_maps_hybrid_roles_to_gpt_glm_and_gemini(
             targets = router._policies[(role, mode)].targets
             assert [(target.provider, target.model) for target in targets] == [
                 ("agentrouter", "glm-5.2"),
+                ("zenmux", "deepseek/deepseek-v4-flash-free"),
                 ("gemini", "gemini-builder"),
             ]
             assert targets[0].provider != targets[1].provider
@@ -270,6 +274,10 @@ def test_runtime_router_maps_hybrid_roles_to_gpt_glm_and_gemini(
             ]
 
     assert router._providers["agentrouter"]._timeout_seconds == 180
+    assert router._providers["zenmux"]._timeout_seconds == 180
+    zenmux_target = router._policies[("direction_candidate", "direct")].targets[1]
+    assert zenmux_target.input_price_microusd_per_million == 0
+    assert zenmux_target.output_price_microusd_per_million == 0
 
 
 def test_provider_diverse_runtime_uses_short_default_but_benchmark_can_opt_in_to_900(

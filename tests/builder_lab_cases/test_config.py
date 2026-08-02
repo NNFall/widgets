@@ -27,6 +27,9 @@ class BuilderLabConfigTests(unittest.TestCase):
             "AGENTROUTER_GPT_OUTPUT_PRICE_MICROUSD_PER_MILLION": None,
             "AGENTROUTER_GLM_INPUT_PRICE_MICROUSD_PER_MILLION": None,
             "AGENTROUTER_GLM_OUTPUT_PRICE_MICROUSD_PER_MILLION": None,
+            "ZENMUX_API_KEY": None,
+            "ZENMUX_BASE_URL": None,
+            "ZENMUX_DEEPSEEK_MODEL": None,
             "GEMINI_API_KEY": None,
             "GOOGLE_AI_API_KEY": None,
             "GOOGLE_AI_NATIVE_BASE_URL": None,
@@ -95,6 +98,9 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertEqual(config.agentrouter_gpt_output_price_microusd_per_million, 7_000_000)
         self.assertEqual(config.agentrouter_glm_input_price_microusd_per_million, 6_000_000)
         self.assertEqual(config.agentrouter_glm_output_price_microusd_per_million, 6_000_000)
+        self.assertIsNone(config.zenmux_api_key)
+        self.assertEqual(config.zenmux_base_url, "https://zenmux.ai/api/v1")
+        self.assertEqual(config.zenmux_deepseek_model, "deepseek/deepseek-v4-flash-free")
         self.assertEqual(config.chat_model, "gemini-3.5-flash-lite")
         self.assertEqual(config.chat_thinking_level, "medium")
         self.assertEqual(config.chat_timeout_seconds, 45)
@@ -135,6 +141,9 @@ class BuilderLabConfigTests(unittest.TestCase):
             AGENTROUTER_GPT_OUTPUT_PRICE_MICROUSD_PER_MILLION="7200000",
             AGENTROUTER_GLM_INPUT_PRICE_MICROUSD_PER_MILLION="6100000",
             AGENTROUTER_GLM_OUTPUT_PRICE_MICROUSD_PER_MILLION="6200000",
+            ZENMUX_API_KEY="zenmux-secret",
+            ZENMUX_BASE_URL="https://zenmux.example/api/v1/",
+            ZENMUX_DEEPSEEK_MODEL="deepseek-test",
             GEMINI_API_KEY="secret",
             GOOGLE_AI_NATIVE_BASE_URL="https://example.test/v1beta",
             GEMINI_VISUAL_CRITIC_MODEL="gemini-3.5-flash",
@@ -171,6 +180,9 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertEqual(config.agentrouter_gpt_output_price_microusd_per_million, 7_200_000)
         self.assertEqual(config.agentrouter_glm_input_price_microusd_per_million, 6_100_000)
         self.assertEqual(config.agentrouter_glm_output_price_microusd_per_million, 6_200_000)
+        self.assertEqual(config.zenmux_api_key, "zenmux-secret")
+        self.assertEqual(config.zenmux_base_url, "https://zenmux.example/api/v1")
+        self.assertEqual(config.zenmux_deepseek_model, "deepseek-test")
         self.assertEqual(config.gemini_base_url, "https://example.test/v1beta")
         self.assertEqual(config.visual_critic_timeout_seconds, 75)
         self.assertEqual(config.visual_critic_thinking_level, "medium")

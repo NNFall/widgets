@@ -41,6 +41,7 @@ _FALLBACK_ERROR_CODES = frozenset(
         "quota_exceeded",
         "model_unavailable",
         "invalid_response",
+        "provider_permission_denied",
         # Capability failures are target-specific, so a capable target may continue.
         "unsupported_request",
     }
