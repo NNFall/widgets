@@ -20,6 +20,7 @@ from app.generation_timeline import (
     load_operator_recent_runs,
     load_operator_timeline_summary,
 )
+from app.models.accounting import load_admin_model_waterfall
 from app.saas.models import (
     GenerationEvent,
     GenerationForensicAccessLog,
@@ -789,6 +790,11 @@ async def operator_run_json(request: web.Request) -> web.Response:
     factory = get_session_factory(request.app)
     async with factory() as database:
         summary = await load_operator_timeline_summary(database, run_id=run_id)
+        if summary is not None:
+            summary["model_waterfall"] = await load_admin_model_waterfall(
+                database,
+                run_id=run_id,
+            )
     if summary is None:
         raise web.HTTPNotFound(headers=_NO_STORE)
     LOGGER.info(
@@ -837,6 +843,11 @@ async def operator_run_page(request: web.Request) -> web.Response:
     factory = get_session_factory(request.app)
     async with factory() as database:
         summary = await load_operator_timeline_summary(database, run_id=run_id)
+        if summary is not None:
+            summary["model_waterfall"] = await load_admin_model_waterfall(
+                database,
+                run_id=run_id,
+            )
     if summary is None:
         raise web.HTTPNotFound(headers=_NO_STORE)
     encoded = escape(json.dumps(summary, ensure_ascii=False, indent=2))

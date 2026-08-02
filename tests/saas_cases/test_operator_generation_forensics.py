@@ -8,13 +8,21 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from aiohttp_session import SimpleCookieStorage, get_session, setup as setup_session
+from sqlalchemy import null
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.admin.generation_forensics import setup_operator_forensics_routes
 from app.db.base import Base
 from app.db.models import Tenant, User
 from app.db.session import SESSION_FACTORY_KEY
-from app.saas.models import GenerationEvent, GenerationRun, Project, UserIdentity
+from app.saas.models import (
+    GenerationEvent,
+    GenerationRun,
+    GenerationStageAttempt,
+    ModelCall,
+    Project,
+    UserIdentity,
+)
 from builder_lab.forensics.config import GenerationForensicsConfig
 
 
@@ -98,6 +106,47 @@ async def test_operator_timeline_requires_verified_oauth_allowlist_and_leaks_no_
                 forensic_ref="C:/private/evidence.jsonl",
             )
         )
+        stage_attempt = GenerationStageAttempt(
+            run_id=RUN_ID,
+            stage="art_direction",
+            ordinal=1,
+            status="failed",
+            started_at=datetime(2026, 7, 30, 12, 1, tzinfo=timezone.utc),
+            finished_at=datetime(2026, 7, 30, 12, 2, tzinfo=timezone.utc),
+        )
+        database.add(stage_attempt)
+        await database.flush()
+        database.add(
+            ModelCall(
+                run_id=RUN_ID,
+                stage_attempt_id=stage_attempt.id,
+                logical_invocation_id=UUID(
+                    "72000000-0000-0000-0000-000000000001"
+                ),
+                operation="direction_candidate",
+                semantic_attempt=1,
+                fallback_index=1,
+                provider="agentrouter",
+                model="gpt-5.5",
+                role="direction_candidate",
+                mode="express",
+                prompt_version="direction-v1",
+                attempt=1,
+                provider_dispatched=True,
+                input_tokens=0,
+                output_tokens=0,
+                thinking_tokens=0,
+                cache_read_tokens=0,
+                cache_write_tokens=0,
+                latency_ms=1500,
+                status="failed",
+                error_code="provider_permission_denied",
+                error_message="private-provider-response-with-secret",
+                cost_state="unknown",
+                cost_microusd=null(),
+                pricing_snapshot={"secret": "private-price"},
+            )
+        )
 
     app = web.Application()
     app[SESSION_FACTORY_KEY] = factory
@@ -156,9 +205,17 @@ async def test_operator_timeline_requires_verified_oauth_allowlist_and_leaks_no_
                 }
             ]
         }
-        detail_text = await detail.text()
+        detail_payload = await detail.json()
+        detail_text = str(detail_payload)
         page_text = await page.text()
         assert str(RUN_ID) in detail_text and str(RUN_ID) in page_text
+        fallback = detail_payload["model_waterfall"]["stage_attempts"][0][
+            "logical_invocations"
+        ][0]["fallbacks"][0]
+        assert fallback["target_provider"] == "agentrouter"
+        assert fallback["target_model"] == "gpt-5.5"
+        assert fallback["status"] == "failed"
+        assert fallback["error_code"] == "provider_permission_denied"
         for private_value in (
             "private-customer",
             "private-idempotency",
@@ -166,6 +223,8 @@ async def test_operator_timeline_requires_verified_oauth_allowlist_and_leaks_no_
             "private-prompt",
             "private-key",
             "evidence.jsonl",
+            "private-provider-response-with-secret",
+            "private-price",
             "Безопасное публичное сообщение",
         ):
             assert private_value not in detail_text

@@ -103,6 +103,7 @@ def _call(
     cache_write_tokens: int = 0,
     role: str = "art_direction_generator",
     artifact_id: UUID | None = None,
+    error_code: str | None = None,
 ) -> ModelCall:
     return ModelCall(
         run_id=run_id,
@@ -131,7 +132,7 @@ def _call(
         cache_write_tokens=cache_write_tokens,
         latency_ms=10 * fallback_index,
         status=status,
-        error_code="private-error-code" if status != "completed" else None,
+        error_code=error_code,
         error_message="private-error-message" if status != "completed" else None,
         cost_state=cost_state,
         cost_microusd=null() if cost_microusd is None else cost_microusd,
@@ -157,6 +158,7 @@ async def _seed_calls(factory, ids) -> None:
                     thinking_tokens=1,
                     cache_read_tokens=2,
                     cache_write_tokens=1,
+                    error_code="provider_permission_denied",
                 ),
                 _call(
                     run_id=ids["run"],
@@ -180,6 +182,7 @@ async def _seed_calls(factory, ids) -> None:
                     status="timed_out",
                     cost_state="unknown",
                     cost_microusd=None,
+                    error_code="generation_timeout",
                 ),
                 _call(
                     run_id=ids["run"],
@@ -189,6 +192,7 @@ async def _seed_calls(factory, ids) -> None:
                     status="cancelled",
                     cost_state="not_billed",
                     cost_microusd=0,
+                    error_code="cancelled",
                 ),
                 _call(
                     run_id=ids["run"],
@@ -267,6 +271,9 @@ async def test_admin_waterfall_is_ordered_nested_and_allowlisted(tmp_path) -> No
         assert first["logical_invocations"][0]["fallbacks"][1]["artifact_id"] == str(
             ids["artifact"]
         )
+        first_fallbacks = first["logical_invocations"][0]["fallbacks"]
+        assert first_fallbacks[0]["error_code"] == "provider_permission_denied"
+        assert first_fallbacks[1]["error_code"] is None
         serialized = json.dumps(waterfall, ensure_ascii=False)
         for forbidden in (
             "private-request-id",

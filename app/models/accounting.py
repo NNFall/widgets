@@ -22,6 +22,21 @@ from app.saas.models import (
 )
 
 _OUTCOMES = ("completed", "failed", "timed_out", "cancelled")
+_OPERATOR_SAFE_ERROR_CODES = frozenset(
+    {
+        "cancelled",
+        "generation_timeout",
+        "invalid_response",
+        "model_unavailable",
+        "provider_cleanup_incomplete",
+        "provider_error",
+        "provider_permission_denied",
+        "provider_unavailable",
+        "quota_exceeded",
+        "route_exhausted",
+        "unsupported_request",
+    }
+)
 
 
 async def aggregate_owner_run_usage(
@@ -98,6 +113,9 @@ async def aggregate_owner_run_usage(
 
 
 def _fallback_projection(call: ModelCall) -> dict[str, Any]:
+    error_code = call.error_code
+    if error_code not in _OPERATOR_SAFE_ERROR_CODES:
+        error_code = "provider_error" if call.status in {"failed", "timed_out"} else None
     return {
         "model_call_id": str(call.id),
         "fallback_index": call.fallback_index,
@@ -106,6 +124,7 @@ def _fallback_projection(call: ModelCall) -> dict[str, Any]:
         "actual_provider": call.actual_provider,
         "actual_model": call.actual_model,
         "status": call.status,
+        "error_code": error_code,
         "provider_dispatched": call.provider_dispatched,
         "latency_ms": call.latency_ms,
         "tokens": {
