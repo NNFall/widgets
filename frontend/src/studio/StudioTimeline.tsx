@@ -54,6 +54,25 @@ const CHANGE_LABELS: Record<string, string> = {
   theme_tokens: 'палитра',
 };
 
+function safeIssueMessage(issue: BuilderEvent['issues'][number]) {
+  if (issue.code !== 'browser_gate_failed') return issue.message;
+
+  const diagnostic = issue.message.toLowerCase();
+  if (diagnostic.includes('attention') || diagnostic.includes('visual cue')) {
+    return 'Анимация кнопки виджета недостаточно заметна.';
+  }
+  if (diagnostic.includes('overflow') || diagnostic.includes('scroll')) {
+    return 'Виджет не помещается в доступную область без лишней прокрутки.';
+  }
+  if (diagnostic.includes('chat') || diagnostic.includes('request') || diagnostic.includes('response')) {
+    return 'Тестовый диалог виджета работает нестабильно.';
+  }
+  if (diagnostic.includes('open') || diagnostic.includes('close') || diagnostic.includes('launcher')) {
+    return 'Открытие или закрытие виджета работает некорректно.';
+  }
+  return 'Автоматическая проверка нашла проблему в отображении или поведении виджета.';
+}
+
 function StatusIcon({ status }: { status: string }) {
   if (status === 'completed') return <CheckCircle aria-hidden size={18} weight="fill" />;
   if (status === 'failed' || status === 'cancelled') return <WarningCircle aria-hidden size={18} weight="fill" />;
@@ -120,7 +139,9 @@ export function StudioTimeline({ events, running }: { events: BuilderEvent[]; ru
                   )}
                   {item.issues.length > 0 && (
                     <ul>
-                      {item.issues.map((issue) => <li key={`${issue.code}-${issue.field}-${issue.message}`}>{issue.message}</li>)}
+                      {item.issues.map((issue) => (
+                        <li key={`${issue.code}-${issue.field}-${issue.message}`}>{safeIssueMessage(issue)}</li>
+                      ))}
                     </ul>
                   )}
                 </div>

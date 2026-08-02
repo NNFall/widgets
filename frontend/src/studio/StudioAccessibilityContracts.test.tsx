@@ -92,4 +92,28 @@ describe('Studio accessibility contracts', () => {
     expect(article).not.toHaveStyle({ opacity: '0' });
     expect(article).not.toHaveStyle({ transform: 'translateY(10px)' });
   });
+
+  it('does not expose technical browser-audit diagnostics to the user', () => {
+    render(<StudioTimeline events={[{
+      run_id: 'run-visual-repair',
+      sequence: 12,
+      timestamp: '2026-08-02T15:24:00Z',
+      type: 'visual_repair.started',
+      stage: 'motion_polish',
+      status: 'running',
+      message: 'Исправление после браузерной проверки: попытка 1/4',
+      revision: 4,
+      usage: { prompt_tokens: 0, output_tokens: 0, thinking_tokens: 0, total_tokens: 0 },
+      issues: [{
+        code: 'browser_gate_failed',
+        field: 'body_html/css',
+        message: "ValueError: no-preference attention state has no visible visual cue; evidence={'changing': False}",
+      }],
+      changes: [],
+      error_code: null,
+    }]} running />);
+
+    expect(screen.getByText('Анимация кнопки виджета недостаточно заметна.')).toBeInTheDocument();
+    expect(screen.queryByText(/ValueError|evidence=|no-preference/)).not.toBeInTheDocument();
+  });
 });
