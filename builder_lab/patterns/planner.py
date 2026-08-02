@@ -5,7 +5,7 @@ from typing import Protocol
 
 from ..engines.base import CompositionPlanResult
 from ..models import BuilderRequest, DirectionProposal, TokenUsage
-from .models import CompositionPlan, JSONValue
+from .models import CompositionPlan, JSONValue, PatternCategory, PatternSelection
 from .registry import PatternRegistry
 from .resolver import PatternResolutionError, ResolvedComposition, resolve_composition
 
@@ -33,6 +33,34 @@ class PlannedComposition:
     resolved: ResolvedComposition
     usage: TokenUsage = TokenUsage()
     provider_request_ids: tuple[str, ...] = ()
+
+
+_VERIFIED_FALLBACK_PATTERNS = (
+    (PatternCategory.LAUNCHER, "orb-pulse"),
+    (PatternCategory.SHELL, "compact-chat"),
+    (PatternCategory.MESSAGES, "paired-bubbles"),
+    (PatternCategory.COMPOSER, "single-line-pill"),
+    (PatternCategory.MOTION, "spring-reveal"),
+)
+
+
+def _verified_fallback_plan(selected_direction: DirectionProposal) -> CompositionPlan:
+    return CompositionPlan(
+        schema_version=1,
+        direction_id=selected_direction.proposal_id,
+        selections=tuple(
+            PatternSelection(
+                slot=slot,
+                pattern_id=pattern_id,
+                version=1,
+                parameters={},
+                reason="Проверенный резервный паттерн",
+            )
+            for slot, pattern_id in _VERIFIED_FALLBACK_PATTERNS
+        ),
+        custom_escape=None,
+        summary="Использована резервная проверенная композиция для продолжения сборки.",
+    )
 
 
 async def plan_composition(
@@ -71,10 +99,20 @@ async def plan_composition(
             diagnostic = str(exc)[:1_000]
             if attempt == 0:
                 continue
-            raise CompositionPlanningError(
-                f"composition plan is invalid: {diagnostic}",
+            try:
+                plan = _verified_fallback_plan(selected_direction)
+                resolved = resolve_composition(plan, registry)
+            except (PatternResolutionError, TypeError, ValueError) as fallback_exc:
+                raise CompositionPlanningError(
+                    f"composition plan is invalid: {diagnostic}",
+                    usage=total_usage,
+                ) from fallback_exc
+            return PlannedComposition(
+                plan=plan,
+                resolved=resolved,
                 usage=total_usage,
-            ) from exc
+                provider_request_ids=tuple(request_ids),
+            )
         return PlannedComposition(
             plan=plan,
             resolved=resolved,

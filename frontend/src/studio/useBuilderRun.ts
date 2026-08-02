@@ -773,16 +773,14 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     lastSequenceRef.current = Math.max(lastSequenceRef.current, hydratedSequence);
     setRunId(run.id);
     setSnapshot(adaptSaasRun(owner, run));
-    if (run.events) {
-      setEvents((current) => {
-        const unique = new Map<number, BuilderEvent>();
-        if (previous?.id === run.id) {
-          for (const item of current) unique.set(item.sequence, item);
-        }
-        for (const item of run.events ?? []) unique.set(item.sequence, adaptSaasEvent(run.id, item));
-        return [...unique.values()].sort((left, right) => left.sequence - right.sequence);
-      });
-    }
+    setEvents((current) => {
+      const unique = new Map<number, BuilderEvent>();
+      if (previous?.id === run.id) {
+        for (const item of current) unique.set(item.sequence, item);
+      }
+      for (const item of run.events ?? []) unique.set(item.sequence, adaptSaasEvent(run.id, item));
+      return [...unique.values()].sort((left, right) => left.sequence - right.sequence);
+    });
     const status = saasStatus(run);
     setActivityMessage(activityFor(status));
     if (status === 'failed') {

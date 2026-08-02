@@ -269,6 +269,14 @@ describe('durable SaaS Studio flow', () => {
       state: 'failed',
       error_code: 'provider_unavailable',
       error_message: 'Provider unavailable',
+      latest_sequence: 1,
+      events: [{
+        sequence: 1,
+        type: 'run.failed',
+        message: 'Старая ошибка предыдущего запуска',
+        payload: { status: 'failed', error_code: 'provider_unavailable' },
+        created_at: '2026-07-28T10:00:00+00:00',
+      }],
     });
     const replacement = run({
       id: '2d44e96d-6e52-43b7-ada4-dc88d625a9e7',
@@ -276,6 +284,8 @@ describe('durable SaaS Studio flow', () => {
       state: 'queued',
       error_code: null,
       error_message: null,
+      latest_sequence: 0,
+      events: undefined,
     });
     const requests: Array<{ url: string; init?: RequestInit }> = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -292,6 +302,8 @@ describe('durable SaaS Studio flow', () => {
     const user = userEvent.setup();
 
     render(<StudioPage />);
+    const timeline = await screen.findByRole('region', { name: 'Диалог с генератором' });
+    expect(await within(timeline).findByText('Запуск остановлен с ошибкой')).toBeVisible();
     await user.click(await screen.findByRole('button', { name: 'Повторить запуск' }));
 
     await waitFor(() => expect(requests.some(({ url }) => url === `/api/runs/${RUN_ID}/retry`)).toBe(true));
@@ -304,6 +316,7 @@ describe('durable SaaS Studio flow', () => {
       `studio-retry-${RUN_ID}`,
     );
     expect((await screen.findAllByText('Запуск в очереди'))[0]).toBeVisible();
+    expect(within(timeline).queryByText('Запуск остановлен с ошибкой')).not.toBeInTheDocument();
   });
 
   it('explains that a consumed free generation cannot be retried', async () => {

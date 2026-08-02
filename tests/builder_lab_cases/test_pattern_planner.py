@@ -96,18 +96,28 @@ async def test_planner_repairs_invalid_model_contract_once() -> None:
 
 
 @pytest.mark.asyncio
-async def test_planner_fails_closed_after_one_contract_repair() -> None:
+async def test_planner_uses_verified_fallback_after_one_contract_repair() -> None:
     engine = FakeEngine([{"selections": []}, {"selections": []}])
 
-    with pytest.raises(ValueError, match="composition plan"):
-        await plan_composition(
-            engine,
-            request(),
-            direction(),
-            load_builtin_registry(),
-        )
+    result = await plan_composition(
+        engine,
+        request(),
+        direction(),
+        load_builtin_registry(),
+    )
 
     assert engine.plan_attempts == 2
+    assert result.resolved.pattern_ids == (
+        "orb-pulse",
+        "compact-chat",
+        "paired-bubbles",
+        "single-line-pill",
+        "spring-reveal",
+    )
+    assert result.plan.direction_id == "candidate-2"
+    assert result.usage == TokenUsage(prompt_tokens=20, output_tokens=8)
+    assert result.provider_request_ids == ("plan-1", "plan-2")
+    assert "резерв" in result.plan.summary.lower()
 
 
 def test_planner_prompt_exposes_catalog_metadata_but_not_assets() -> None:
