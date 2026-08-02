@@ -408,6 +408,57 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("архитектурного бюро", call["contents"])
         self.assertIn('"revision":1', call["contents"])
 
+    async def test_direct_malformed_usage_is_normalized_with_partial_billing(self):
+        response = fake_response()
+        response.usage_metadata.prompt_token_count = -1
+        client = FakeClient(response=response)
+        engine = GeminiDirectEngine(
+            api_key="secret",
+            model="gemini-3.5-flash",
+            client=client,
+        )
+
+        with self.assertRaises(BuilderEngineError) as caught:
+            await engine.generate(
+                request=self.request,
+                stage=Stage.FOUNDATION,
+                revision=2,
+                previous_artifact=artifact(revision=1, stage=Stage.ART_DIRECTION),
+            )
+
+        self.assertEqual(caught.exception.error_code, "invalid_response")
+        self.assertEqual(caught.exception.usage.prompt_tokens, 0)
+        self.assertEqual(caught.exception.usage.output_tokens, 40)
+        self.assertEqual(caught.exception.usage.thinking_tokens, 10)
+        self.assertEqual(len(client.models.calls), 1)
+
+    async def test_direct_malformed_retry_usage_keeps_prior_attempt_billing(self):
+        first = fake_response(
+            candidate=artifact(revision=99, stage=Stage.FOUNDATION)
+        )
+        second = fake_response()
+        second.usage_metadata.prompt_token_count = -1
+        client = FakeClient(response=[first, second])
+        engine = GeminiDirectEngine(
+            api_key="secret",
+            model="gemini-3.5-flash",
+            client=client,
+        )
+
+        with self.assertRaises(BuilderEngineError) as caught:
+            await engine.generate(
+                request=self.request,
+                stage=Stage.FOUNDATION,
+                revision=2,
+                previous_artifact=artifact(revision=1, stage=Stage.ART_DIRECTION),
+            )
+
+        self.assertEqual(caught.exception.error_code, "invalid_response")
+        self.assertEqual(caught.exception.usage.prompt_tokens, 120)
+        self.assertEqual(caught.exception.usage.output_tokens, 80)
+        self.assertEqual(caught.exception.usage.thinking_tokens, 20)
+        self.assertEqual(len(client.models.calls), 2)
+
     async def test_gemini_36_uses_high_thinking_without_sampling(self):
         client = FakeClient(response=fake_response())
         engine = GeminiDirectEngine(

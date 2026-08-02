@@ -121,7 +121,15 @@ def _usage(response: Any) -> TokenUsage:
             ),
             thinking_tokens=usage.thinking_tokens,
         )
-    counts = gemini_usage_counts(response)
+    try:
+        counts = gemini_usage_counts(response)
+    except BilledModelProviderError as exc:
+        raise BuilderEngineError(
+            exc.error_code,
+            "Сервис генерации вернул некорректный ответ",
+            diagnostic=f"{type(exc).__name__}: {exc}",
+            usage=_usage(exc.usage),
+        ) from exc
     # Builder Lab's historical TokenUsage adds thinking_tokens in total_tokens,
     # unlike ModelUsage where thinking is already a subset of output_tokens.
     return TokenUsage(
@@ -129,6 +137,14 @@ def _usage(response: Any) -> TokenUsage:
         output_tokens=counts.candidate_tokens,
         thinking_tokens=counts.thinking_tokens,
     )
+
+
+def _accumulate_usage(total: TokenUsage, response: Any) -> TokenUsage:
+    try:
+        return total + _usage(response)
+    except BuilderEngineError as exc:
+        exc.usage = total + exc.usage
+        raise
 
 
 def _response_diagnostic(response: Any, *, fallback_model: str) -> str:
@@ -356,7 +372,7 @@ class GeminiDirectEngine:
             except BuilderEngineError as exc:
                 exc.usage = total_usage + exc.usage
                 raise
-            total_usage = total_usage + _usage(response)
+            total_usage = _accumulate_usage(total_usage, response)
             try:
                 payload = _response_payload(response)
                 _require_exact_keys(
@@ -434,7 +450,7 @@ class GeminiDirectEngine:
             except BuilderEngineError as exc:
                 exc.usage = total_usage + exc.usage
                 raise
-            total_usage = total_usage + _usage(response)
+            total_usage = _accumulate_usage(total_usage, response)
             try:
                 payload = _response_payload(response)
                 _require_exact_keys(
@@ -625,7 +641,7 @@ class GeminiDirectEngine:
             except BuilderEngineError as exc:
                 exc.usage = total_usage + exc.usage
                 raise
-            total_usage = total_usage + _usage(response)
+            total_usage = _accumulate_usage(total_usage, response)
             try:
                 payload = {**_response_payload(response), "schema_version": "1.0"}
                 artifact = WidgetArtifact.from_dict(payload)

@@ -50,6 +50,12 @@ _HOST_ENVIRONMENT_ALLOWLIST = (
 )
 
 
+class _InvalidUsageMetadata(ValueError):
+    def __init__(self, message: str, *, usage: ModelUsage) -> None:
+        super().__init__(message)
+        self.usage = usage
+
+
 class AgentRouterQwenProvider:
     """AgentRouter adapter executed through its supported Qwen Code client."""
 
@@ -226,6 +232,12 @@ def parse_qwen_json_output(
     events = json.loads(raw)
     if not isinstance(events, list):
         raise ValueError("Qwen output must be an event array")
+    actual_model = _confirmed_model(events)
+    actual_identity = (
+        {"actual_provider": "agentrouter", "actual_model": actual_model}
+        if actual_model is not None
+        else {}
+    )
     result = next(
         (
             event
@@ -240,19 +252,37 @@ def parse_qwen_json_output(
         error = result.get("error")
         message = error.get("message") if isinstance(error, dict) else result.get("result")
         raise _cli_error(str(message or "AgentRouter request failed"))
+    request_id = str(result.get("session_id")) if result.get("session_id") else None
+    raw_usage = result.get("usage")
+    if raw_usage is None:
+        usage: Mapping[str, Any] = {}
+    elif isinstance(raw_usage, Mapping):
+        usage = raw_usage
+    else:
+        raise InvalidModelResponse(
+            "Qwen Code returned invalid usage metadata",
+            request_id=request_id,
+            **actual_identity,
+        )
+    try:
+        model_usage = _normalized_usage(result, usage, actual_model or model)
+    except _InvalidUsageMetadata as error:
+        raise InvalidModelResponse(
+            "Qwen Code returned invalid usage metadata",
+            usage=error.usage,
+            request_id=request_id,
+            **actual_identity,
+        ) from error
     text = result.get("result")
     if not isinstance(text, str):
-        raise ValueError("Qwen result text is missing")
+        raise InvalidModelResponse(
+            "Qwen Code result text is missing",
+            usage=model_usage,
+            request_id=request_id,
+            **actual_identity,
+        )
     if "[API Error:" in text:
         raise _cli_error(text)
-    usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
-    thinking = _thinking_tokens(result, model)
-    model_usage = ModelUsage(
-        input_tokens=_integer(usage.get("input_tokens")),
-        output_tokens=_integer(usage.get("output_tokens")),
-        thinking_tokens=thinking,
-    )
-    request_id = str(result.get("session_id")) if result.get("session_id") else None
     parsed = _parse_optional_json(text)
     if response_schema is not None:
         try:
@@ -262,12 +292,14 @@ def parse_qwen_json_output(
                 "Qwen Code did not return exact structured JSON",
                 usage=model_usage,
                 request_id=request_id,
+                **actual_identity,
             ) from error
         if not isinstance(parsed, (dict, list)):
             raise InvalidModelResponse(
                 "Qwen Code structured output is not JSON data",
                 usage=model_usage,
                 request_id=request_id,
+                **actual_identity,
             )
         try:
             Draft202012Validator.check_schema(response_schema)
@@ -277,6 +309,7 @@ def parse_qwen_json_output(
                 "Qwen Code structured output does not match the response schema",
                 usage=model_usage,
                 request_id=request_id,
+                **actual_identity,
             ) from error
         except SchemaError as error:
             raise ValueError("response schema is invalid") from error
@@ -286,6 +319,7 @@ def parse_qwen_json_output(
         usage=model_usage,
         request_id=request_id,
         raw={"result": result},
+        **actual_identity,
     )
 
 
@@ -330,22 +364,96 @@ def _parse_optional_json(text: str) -> Mapping[str, Any] | list[Any] | None:
     return parsed if isinstance(parsed, (dict, list)) else None
 
 
-def _thinking_tokens(result: Mapping[str, Any], model: str) -> int:
+def _confirmed_model(events: list[Any]) -> str | None:
+    for event in events:
+        if not isinstance(event, Mapping):
+            continue
+        if event.get("type") != "system" or event.get("subtype") != "init":
+            continue
+        model = event.get("model")
+        if isinstance(model, str) and model.strip():
+            return model.strip()
+    return None
+
+
+def _normalized_usage(
+    result: Mapping[str, Any],
+    usage: Mapping[str, Any],
+    model: str,
+) -> ModelUsage:
+    input_tokens, input_valid = _partial_usage_integer(usage, "input_tokens")
+    output_tokens, output_valid = _partial_usage_integer(usage, "output_tokens")
+    cache_read_tokens, cache_read_valid = _partial_usage_integer(
+        usage,
+        "cache_read_input_tokens",
+    )
+    cache_write_tokens, cache_write_valid = _partial_usage_integer(
+        usage,
+        "cache_creation_input_tokens",
+    )
+    thinking_tokens, thinking_valid = _thinking_tokens(result, model)
+    valid = all(
+        (
+            input_valid,
+            output_valid,
+            cache_read_valid,
+            cache_write_valid,
+            thinking_valid,
+        )
+    )
+    if thinking_tokens > output_tokens:
+        valid = False
+        thinking_tokens = 0
+    if cache_read_tokens + cache_write_tokens > input_tokens:
+        valid = False
+        cache_read_tokens = 0
+        cache_write_tokens = 0
+    normalized = ModelUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        thinking_tokens=thinking_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
+    )
+    if not valid:
+        raise _InvalidUsageMetadata("invalid Qwen usage metadata", usage=normalized)
+    return normalized
+
+
+def _thinking_tokens(result: Mapping[str, Any], model: str) -> tuple[int, bool]:
     stats = result.get("stats")
-    if not isinstance(stats, dict):
-        return 0
+    if stats is None:
+        return 0, True
+    if not isinstance(stats, Mapping):
+        return 0, False
     models = stats.get("models")
-    if not isinstance(models, dict):
-        return 0
+    if models is None:
+        return 0, True
+    if not isinstance(models, Mapping):
+        return 0, False
     model_stats = models.get(model)
-    if not isinstance(model_stats, dict):
-        return 0
+    if model_stats is None:
+        return 0, True
+    if not isinstance(model_stats, Mapping):
+        return 0, False
     tokens = model_stats.get("tokens")
-    return _integer(tokens.get("thoughts")) if isinstance(tokens, dict) else 0
+    if tokens is None:
+        return 0, True
+    if not isinstance(tokens, Mapping):
+        return 0, False
+    return _partial_usage_integer(tokens, "thoughts")
 
 
-def _integer(value: object) -> int:
-    return value if isinstance(value, int) and value >= 0 else 0
+def _partial_usage_integer(
+    usage: Mapping[str, Any],
+    field: str,
+) -> tuple[int, bool]:
+    value = usage.get(field)
+    if value is None:
+        return 0, True
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0, False
+    return value, True
 
 
 def _cli_error(message: str) -> Exception:

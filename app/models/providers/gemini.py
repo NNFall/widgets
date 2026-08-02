@@ -29,6 +29,13 @@ class GeminiUsageCounts:
     input_tokens: int = 0
     candidate_tokens: int = 0
     thinking_tokens: int = 0
+    cache_read_tokens: int = 0
+
+
+class _InvalidUsageMetadata(ValueError):
+    def __init__(self, message: str, *, usage: ModelUsage) -> None:
+        super().__init__(message)
+        self.usage = usage
 
 
 def build_http_options(base_url: str) -> types.HttpOptions:
@@ -52,18 +59,69 @@ def build_http_options(base_url: str) -> types.HttpOptions:
 
 
 def gemini_usage_counts(response: Any) -> GeminiUsageCounts:
+    try:
+        return _gemini_usage_counts(response)
+    except _InvalidUsageMetadata as error:
+        request_id = _optional_string(getattr(response, "response_id", None))
+        actual_model = _confirmed_string(getattr(response, "model_version", None))
+        actual_identity = (
+            {"actual_provider": "gemini", "actual_model": actual_model}
+            if actual_model is not None
+            else {}
+        )
+        raise InvalidModelResponse(
+            "Gemini returned invalid usage metadata",
+            usage=error.usage,
+            request_id=request_id,
+            **actual_identity,
+        ) from error
+
+
+def _gemini_usage_counts(response: Any) -> GeminiUsageCounts:
     metadata = getattr(response, "usage_metadata", None)
     if metadata is None:
         return GeminiUsageCounts()
-    return GeminiUsageCounts(
-        input_tokens=_nonnegative_integer(getattr(metadata, "prompt_token_count", 0)),
-        candidate_tokens=_nonnegative_integer(
-            getattr(metadata, "candidates_token_count", 0)
-        ),
-        thinking_tokens=_nonnegative_integer(
-            getattr(metadata, "thoughts_token_count", 0)
-        ),
+    fields = (
+        "prompt_token_count",
+        "candidates_token_count",
+        "thoughts_token_count",
+        "cached_content_token_count",
     )
+    if not any(hasattr(metadata, field) for field in fields):
+        raise _InvalidUsageMetadata(
+            "invalid Gemini usage metadata container",
+            usage=ModelUsage(),
+        )
+    input_tokens, input_valid = _partial_usage_integer(
+        getattr(metadata, "prompt_token_count", None)
+    )
+    candidate_tokens, candidate_valid = _partial_usage_integer(
+        getattr(metadata, "candidates_token_count", None)
+    )
+    thinking_tokens, thinking_valid = _partial_usage_integer(
+        getattr(metadata, "thoughts_token_count", None)
+    )
+    cache_read_tokens, cache_read_valid = _partial_usage_integer(
+        getattr(metadata, "cached_content_token_count", None)
+    )
+    valid = all(
+        (input_valid, candidate_valid, thinking_valid, cache_read_valid)
+    )
+    if cache_read_tokens > input_tokens:
+        valid = False
+        cache_read_tokens = 0
+    counts = GeminiUsageCounts(
+        input_tokens=input_tokens,
+        candidate_tokens=candidate_tokens,
+        thinking_tokens=thinking_tokens,
+        cache_read_tokens=cache_read_tokens,
+    )
+    if not valid:
+        raise _InvalidUsageMetadata(
+            "invalid Gemini usage metadata",
+            usage=_usage_from_counts(counts),
+        )
+    return counts
 
 
 _GEMINI_25_SCHEMA_CONSTRAINTS = frozenset(
@@ -282,14 +340,21 @@ class GeminiModelProvider:
 
 
 def _normalize_response(response: Any, *, structured: bool) -> ModelResponse:
-    usage = _normalized_usage(response)
     request_id = _optional_string(getattr(response, "response_id", None))
+    actual_model = _confirmed_string(getattr(response, "model_version", None))
+    actual_identity = (
+        {"actual_provider": "gemini", "actual_model": actual_model}
+        if actual_model is not None
+        else {}
+    )
+    usage = _normalized_usage(response)
     text = getattr(response, "text", None)
     if not isinstance(text, str) or not text.strip():
         raise InvalidModelResponse(
             "Gemini returned an empty response",
             usage=usage,
             request_id=request_id,
+            **actual_identity,
         )
 
     parsed: Mapping[str, Any] | list[Any] | None = None
@@ -305,12 +370,14 @@ def _normalize_response(response: Any, *, structured: bool) -> ModelResponse:
                     "Gemini returned invalid structured JSON",
                     usage=usage,
                     request_id=request_id,
+                    **actual_identity,
                 ) from error
             if not isinstance(decoded, (dict, list)):
                 raise InvalidModelResponse(
                     "Gemini structured response is not JSON data",
                     usage=usage,
                     request_id=request_id,
+                    **actual_identity,
                 )
             parsed = decoded
 
@@ -320,15 +387,20 @@ def _normalize_response(response: Any, *, structured: bool) -> ModelResponse:
         usage=usage,
         request_id=request_id,
         raw=_raw_response(response),
+        **actual_identity,
     )
 
 
 def _normalized_usage(response: Any) -> ModelUsage:
-    counts = gemini_usage_counts(response)
+    return _usage_from_counts(gemini_usage_counts(response))
+
+
+def _usage_from_counts(counts: GeminiUsageCounts) -> ModelUsage:
     return ModelUsage(
         input_tokens=counts.input_tokens,
         output_tokens=counts.candidate_tokens + counts.thinking_tokens,
         thinking_tokens=counts.thinking_tokens,
+        cache_read_tokens=counts.cache_read_tokens,
     )
 
 
@@ -367,8 +439,16 @@ def _image_mime_type(image: bytes) -> str:
     return "application/octet-stream"
 
 
-def _nonnegative_integer(value: object) -> int:
-    return value if isinstance(value, int) and value >= 0 else 0
+def _partial_usage_integer(value: object) -> tuple[int, bool]:
+    if value is None:
+        return 0, True
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0, False
+    return value, True
+
+
+def _confirmed_string(value: object) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def _optional_string(value: object) -> str | None:

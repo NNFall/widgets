@@ -11,6 +11,7 @@ from app.models.contracts import (
     InvalidModelResponse,
     ModelRequest,
     ModelResponse,
+    ModelUsage,
     ModelUnavailable,
     ProviderCapabilities,
     ProviderPermissionDenied,
@@ -64,6 +65,7 @@ def fake_response(
             prompt_token_count=120,
             candidates_token_count=40,
             thoughts_token_count=10,
+            cached_content_token_count=20,
             total_token_count=170,
         ),
     )
@@ -110,6 +112,11 @@ async def test_structured_request_preserves_images_and_normalizes_billable_usage
     # diagnostic subset of that output total.
     assert result.usage.output_tokens == 50
     assert result.usage.thinking_tokens == 10
+    assert result.usage.cache_read_tokens == 20
+    assert result.usage.cache_write_tokens == 0
+    assert result.actual_provider == "gemini"
+    assert result.actual_model == "gemini-3.5-flash"
+    assert result.reported_cost_microusd is None
 
     call = client.models.calls[0]
     assert call["model"] == "gemini-3.5-flash"
@@ -188,11 +195,105 @@ async def test_invalid_structured_response_is_normalized() -> None:
         client=FakeClient(response=fake_response(text="not json")),
     )
 
-    with pytest.raises(InvalidModelResponse):
+    with pytest.raises(InvalidModelResponse) as caught:
         await provider.generate(
             ModelRequest(prompt="Return JSON", response_schema={"type": "object"}),
             model="gemini-3.5-flash",
         )
+
+    assert caught.value.request_id == "gemini-response-1"
+    assert caught.value.usage.cache_read_tokens == 20
+    assert caught.value.actual_provider == "gemini"
+    assert caught.value.actual_model == "gemini-3.5-flash"
+
+
+@pytest.mark.asyncio
+async def test_gemini_without_model_version_keeps_actual_identity_unknown() -> None:
+    response = fake_response()
+    response.model_version = None
+    provider = GeminiModelProvider(api_key="secret", client=FakeClient(response=response))
+
+    result = await provider.generate(
+        ModelRequest(prompt="Generate"),
+        model="gemini-requested-model",
+    )
+
+    assert result.actual_provider is None
+    assert result.actual_model is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value", "expected_usage"),
+    [
+        (
+            "prompt_token_count",
+            -1,
+            ModelUsage(output_tokens=50, thinking_tokens=10),
+        ),
+        (
+            "prompt_token_count",
+            True,
+            ModelUsage(output_tokens=50, thinking_tokens=10),
+        ),
+        (
+            "candidates_token_count",
+            "40",
+            ModelUsage(
+                input_tokens=120,
+                output_tokens=10,
+                thinking_tokens=10,
+                cache_read_tokens=20,
+            ),
+        ),
+        (
+            "cached_content_token_count",
+            -1,
+            ModelUsage(input_tokens=120, output_tokens=50, thinking_tokens=10),
+        ),
+    ],
+)
+async def test_gemini_rejects_malformed_usage(
+    field: str,
+    value: object,
+    expected_usage: ModelUsage,
+) -> None:
+    response = fake_response()
+    setattr(response.usage_metadata, field, value)
+    provider = GeminiModelProvider(api_key="secret", client=FakeClient(response=response))
+
+    with pytest.raises(InvalidModelResponse) as caught:
+        await provider.generate(ModelRequest(prompt="Generate"), model="gemini-3.5-flash")
+
+    assert caught.value.request_id == "gemini-response-1"
+    assert caught.value.actual_provider == "gemini"
+    assert caught.value.actual_model == "gemini-3.5-flash"
+    assert caught.value.usage == expected_usage
+
+
+@pytest.mark.asyncio
+async def test_gemini_rejects_malformed_usage_metadata_container() -> None:
+    response = fake_response()
+    response.usage_metadata = "not metadata"
+    provider = GeminiModelProvider(api_key="secret", client=FakeClient(response=response))
+
+    with pytest.raises(InvalidModelResponse) as caught:
+        await provider.generate(ModelRequest(prompt="Generate"), model="gemini-3.5-flash")
+
+    assert caught.value.request_id == "gemini-response-1"
+    assert caught.value.actual_provider == "gemini"
+    assert caught.value.actual_model == "gemini-3.5-flash"
+    assert caught.value.usage == ModelUsage()
+
+
+@pytest.mark.asyncio
+async def test_gemini_rejects_cache_bucket_larger_than_input() -> None:
+    response = fake_response()
+    response.usage_metadata.cached_content_token_count = 121
+    provider = GeminiModelProvider(api_key="secret", client=FakeClient(response=response))
+
+    with pytest.raises(InvalidModelResponse):
+        await provider.generate(ModelRequest(prompt="Generate"), model="gemini-3.5-flash")
 
 
 @pytest.mark.asyncio

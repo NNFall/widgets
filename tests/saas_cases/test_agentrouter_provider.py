@@ -11,6 +11,7 @@ from app.models.contracts import (
     InvalidModelResponse,
     ModelRequest,
     ModelResponse,
+    ModelUsage,
     ProviderCapabilities,
     ProviderTimeout,
     ProviderUnavailable,
@@ -109,6 +110,177 @@ def test_qwen_event_stream_result_is_normalized() -> None:
     assert response.usage.input_tokens == 8013
     assert response.usage.output_tokens == 122
     assert response.usage.thinking_tokens == 41
+    assert response.usage.cache_read_tokens == 200
+    assert response.usage.cache_write_tokens == 0
+    assert response.actual_provider == "agentrouter"
+    assert response.actual_model == "glm-5.2"
+    assert response.reported_cost_microusd is None
+
+
+def test_qwen_without_confirmed_init_model_keeps_actual_identity_unknown() -> None:
+    payload = [{
+        "type": "result",
+        "subtype": "success",
+        "session_id": "session-unknown-model",
+        "result": "ok",
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }]
+
+    response = parse_qwen_json_output(json.dumps(payload), model="requested-model")
+
+    assert response.actual_provider is None
+    assert response.actual_model is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_usage"),
+    [
+        ("input_tokens", -1, ModelUsage(output_tokens=5)),
+        ("input_tokens", True, ModelUsage(output_tokens=5)),
+        ("output_tokens", "5", ModelUsage(input_tokens=10)),
+        (
+            "cache_read_input_tokens",
+            -1,
+            ModelUsage(input_tokens=10, output_tokens=5),
+        ),
+    ],
+)
+def test_qwen_rejects_malformed_usage(
+    field: str,
+    value: object,
+    expected_usage: ModelUsage,
+) -> None:
+    usage: dict[str, object] = {"input_tokens": 10, "output_tokens": 5}
+    usage[field] = value
+    payload = [
+        {"type": "system", "subtype": "init", "model": "glm-5.2"},
+        {
+            "type": "result",
+            "subtype": "success",
+            "session_id": "session-bad-usage",
+            "result": "ok",
+            "usage": usage,
+        },
+    ]
+
+    with pytest.raises(InvalidModelResponse) as caught:
+        parse_qwen_json_output(json.dumps(payload), model="glm-5.2")
+
+    assert caught.value.request_id == "session-bad-usage"
+    assert caught.value.actual_provider == "agentrouter"
+    assert caught.value.actual_model == "glm-5.2"
+    assert caught.value.usage == expected_usage
+
+
+def test_qwen_non_string_success_result_preserves_billed_metadata() -> None:
+    payload = [
+        {"type": "system", "subtype": "init", "model": "glm-5.2"},
+        {
+            "type": "result",
+            "subtype": "success",
+            "session_id": "session-non-string",
+            "result": {"unexpected": "object"},
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cache_read_input_tokens": 40,
+            },
+        },
+    ]
+
+    with pytest.raises(InvalidModelResponse) as caught:
+        parse_qwen_json_output(json.dumps(payload), model="glm-5.2")
+
+    assert caught.value.request_id == "session-non-string"
+    assert caught.value.usage == ModelUsage(
+        input_tokens=100,
+        output_tokens=20,
+        cache_read_tokens=40,
+    )
+    assert caught.value.actual_provider == "agentrouter"
+    assert caught.value.actual_model == "glm-5.2"
+
+
+@pytest.mark.parametrize("malformed_stats", [True, {"models": "bad"}, {"models": {"glm-5.2": {"tokens": True}}}])
+def test_qwen_rejects_malformed_thinking_usage_containers(
+    malformed_stats: object,
+) -> None:
+    payload = [
+        {"type": "system", "subtype": "init", "model": "glm-5.2"},
+        {
+            "type": "result",
+            "subtype": "success",
+            "session_id": "session-bad-thinking-container",
+            "result": "ok",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cache_read_input_tokens": 40,
+            },
+            "stats": malformed_stats,
+        },
+    ]
+
+    with pytest.raises(InvalidModelResponse) as caught:
+        parse_qwen_json_output(json.dumps(payload), model="glm-5.2")
+
+    assert caught.value.request_id == "session-bad-thinking-container"
+    assert caught.value.usage == ModelUsage(
+        input_tokens=100,
+        output_tokens=20,
+        cache_read_tokens=40,
+    )
+    assert caught.value.actual_provider == "agentrouter"
+    assert caught.value.actual_model == "glm-5.2"
+
+
+def test_qwen_rejects_cache_buckets_larger_than_input() -> None:
+    payload = [
+        {"type": "system", "subtype": "init", "model": "glm-5.2"},
+        {
+            "type": "result",
+            "subtype": "success",
+            "session_id": "session-cross-bucket",
+            "result": "ok",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "cache_read_input_tokens": 11,
+            },
+        },
+    ]
+
+    with pytest.raises(InvalidModelResponse):
+        parse_qwen_json_output(json.dumps(payload), model="glm-5.2")
+
+
+def test_qwen_structured_error_preserves_usage_and_actual_identity() -> None:
+    payload = [
+        {"type": "system", "subtype": "init", "model": "glm-5.2"},
+        {
+            "type": "result",
+            "subtype": "success",
+            "session_id": "session-invalid-json",
+            "result": "not json",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cache_read_input_tokens": 40,
+            },
+        },
+    ]
+
+    with pytest.raises(InvalidModelResponse) as caught:
+        parse_qwen_json_output(
+            json.dumps(payload),
+            model="glm-5.2",
+            response_schema={"type": "object"},
+        )
+
+    assert caught.value.request_id == "session-invalid-json"
+    assert caught.value.usage.cache_read_tokens == 40
+    assert caught.value.actual_provider == "agentrouter"
+    assert caught.value.actual_model == "glm-5.2"
 
 
 def test_markdown_fenced_json_is_parsed_without_losing_text() -> None:
