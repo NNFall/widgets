@@ -17,5 +17,6 @@ aiohttp-session
 SQLAlchemy
 alembic
 bcrypt
+Pillow>=11.0.0,<13.0.0
 # Browser-only crawler dependencies live in requirements.builder-lab.txt so the
 # production application image remains free of Chromium/Crawlee.

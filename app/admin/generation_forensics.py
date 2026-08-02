@@ -5,7 +5,7 @@ import base64
 from html import escape
 import json
 import logging
-from typing import Any
+from typing import Any, Protocol
 from uuid import UUID
 
 from aiohttp import web
@@ -30,7 +30,6 @@ from app.saas.models import (
 )
 from builder_lab.forensics.config import GenerationForensicsConfig
 from builder_lab.forensics.models import ForensicEntry, ForensicManifest
-from builder_lab.forensics.storage import GenerationForensicStorage
 from builder_lab.redaction import redact_private_data
 from core.config import settings as core_settings
 
@@ -55,6 +54,16 @@ _FORENSICS_STORAGE_KEY = web.AppKey(
     object,
 )
 _MAX_EXPORT_BLOB_BYTES = 1_000_000
+
+
+class _ForensicStorage(Protocol):
+    available: bool
+
+    def load_manifest(self, run_id: UUID) -> ForensicManifest: ...
+
+    def manifest_digest(self, run_id: UUID) -> str: ...
+
+    def read_manifest_entry(self, run_id: UUID, entry: ForensicEntry) -> bytes: ...
 
 
 def _run_id(value: str) -> UUID:
@@ -277,9 +286,12 @@ async def _run_scope(
     return row[0], row[1], row[2]
 
 
-def _storage(request: web.Request) -> GenerationForensicStorage | None:
+def _storage(request: web.Request) -> _ForensicStorage | None:
     value = request.app.get(_FORENSICS_STORAGE_KEY)
-    return value if isinstance(value, GenerationForensicStorage) else None
+    if value is None:
+        return None
+    required = ("available", "load_manifest", "manifest_digest", "read_manifest_entry")
+    return value if all(hasattr(value, name) for name in required) else None
 
 
 async def _evidence_snapshot(
@@ -334,7 +346,7 @@ async def _evidence_snapshot(
 
 
 async def _read_json_evidence(
-    storage: GenerationForensicStorage,
+    storage: _ForensicStorage,
     *,
     run_id: UUID,
     entry: ForensicEntry,
@@ -860,11 +872,13 @@ def setup_generation_forensics_routes(
             else GenerationForensicsConfig.disabled()
         )
     app[_FORENSICS_CONFIG_KEY] = config
-    storage: GenerationForensicStorage | None = None
+    storage: _ForensicStorage | None = None
     if config.enabled:
         try:
+            from builder_lab.forensics.storage import GenerationForensicStorage
+
             storage = GenerationForensicStorage.open(config, writable=False)
-        except (OSError, RuntimeError, ValueError):
+        except (ImportError, OSError, RuntimeError, ValueError):
             storage = None
     app[_FORENSICS_STORAGE_KEY] = storage
     app.router.add_get("/admin/generation-runs", admin_generation_runs_page)

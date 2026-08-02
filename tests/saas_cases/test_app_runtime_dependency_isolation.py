@@ -8,6 +8,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_production_image_includes_forensic_jpeg_validator() -> None:
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+
+    assert "Pillow>=11.0.0,<13.0.0" in requirements
+
+
 def test_production_app_import_does_not_require_builder_browser_dependencies() -> None:
     script = """
 import importlib.abc
