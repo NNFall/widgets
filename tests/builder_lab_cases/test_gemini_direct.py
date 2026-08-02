@@ -3,6 +3,7 @@ import json
 import types as std_types
 import unittest
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 from app.models.contracts import (
     BilledModelProviderError,
@@ -13,6 +14,7 @@ from app.models.contracts import (
     ProviderPermissionDenied,
     ProviderTimeout,
 )
+from app.models.lineage import ModelInvocationContext
 from builder_lab.engines.base import BuilderEngineError
 from builder_lab.engines.gemini_direct import (
     GeminiDirectEngine,
@@ -312,6 +314,69 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(timeouts[0], timeouts[1])
         self.assertLessEqual(timeouts[0], 180)
         self.assertGreater(timeouts[1], 0)
+
+    async def test_routed_artifact_retry_preserves_stage_and_selected_context(self):
+        class Router:
+            def __init__(self):
+                self.contexts = []
+
+            async def generate(self, **kwargs):
+                self.contexts.append(kwargs["context"])
+                candidate = artifact(
+                    revision=99 if len(self.contexts) == 1 else 2,
+                    stage=Stage.FOUNDATION,
+                ).to_dict()
+                return ModelResponse(
+                    text=json.dumps(candidate),
+                    parsed=candidate,
+                    usage=ModelUsage(input_tokens=4, output_tokens=2),
+                )
+
+        router = Router()
+        stage_attempt_id = uuid4()
+        engine = GeminiDirectEngine(
+            model_router=router,
+            routing_role="widget_generator",
+            routing_timeout_seconds=180,
+            invocation_context=ModelInvocationContext(
+                stage_attempt_id=stage_attempt_id,
+                stage=Stage.FOUNDATION.value,
+                operation="artifact_generation",
+                candidate_id="candidate-2",
+                persona=DirectionRole.INTERACTION_INVENTOR.value,
+            ),
+        )
+
+        result = await engine.generate(
+            request=self.request,
+            stage=Stage.FOUNDATION,
+            revision=2,
+        )
+
+        self.assertEqual(result.artifact.revision, 2)
+        self.assertEqual(
+            [context.operation for context in router.contexts],
+            ["artifact_generation", "validation_repair"],
+        )
+        self.assertEqual(
+            [context.semantic_attempt for context in router.contexts],
+            [1, 2],
+        )
+        self.assertTrue(
+            all(context.stage_attempt_id == stage_attempt_id for context in router.contexts)
+        )
+        self.assertTrue(
+            all(context.stage == Stage.FOUNDATION.value for context in router.contexts)
+        )
+        self.assertTrue(
+            all(context.candidate_id == "candidate-2" for context in router.contexts)
+        )
+        self.assertTrue(
+            all(
+                context.persona == DirectionRole.INTERACTION_INVENTOR.value
+                for context in router.contexts
+            )
+        )
 
     async def test_builds_structured_async_request_and_parses_usage(self):
         client = FakeClient(response=fake_response())

@@ -4,7 +4,7 @@ import asyncio
 import inspect
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping
 from uuid import UUID
 
@@ -17,6 +17,7 @@ from app.models.contracts import (
     ModelRouteExhausted,
     ModelUsage,
 )
+from app.models.lineage import ModelInvocationContext
 from app.models.router import ModelRouter
 
 from .engines.gemini_direct import (
@@ -467,6 +468,7 @@ class GeminiVisualJudge:
         routing_mode: str = "direct",
         routing_role: str = "visual_judge",
         run_id: UUID | None = None,
+        invocation_context: ModelInvocationContext | None = None,
     ) -> None:
         if model_router is None and client is None and (not api_key or not api_key.strip()):
             raise VisualJudgeError(
@@ -481,6 +483,7 @@ class GeminiVisualJudge:
         self._routing_mode = routing_mode
         self._routing_role = routing_role
         self._run_id = run_id
+        self._invocation_context = invocation_context
         self._owned_client = model_router is None and client is None
         self._client = None
         if model_router is None:
@@ -563,6 +566,16 @@ class GeminiVisualJudge:
                         role=self._routing_role,
                         mode=self._routing_mode,
                         run_id=self._run_id,
+                        context=replace(
+                            self._invocation_context
+                            or ModelInvocationContext(
+                                stage_attempt_id=None,
+                                stage=None,
+                                operation="visual_judge",
+                            ),
+                            operation="visual_judge",
+                            semantic_attempt=attempt + 1,
+                        ),
                         request=ModelRequest(
                             prompt=config.system_instruction + "\n\n" + contents[0].text,
                             response_schema=VISUAL_JUDGE_SCHEMA,
@@ -669,6 +682,7 @@ class GeminiRepairVerifier:
         routing_mode: str = "direct",
         routing_role: str = "code_review",
         run_id: UUID | None = None,
+        invocation_context: ModelInvocationContext | None = None,
     ) -> None:
         if (
             model_router is None
@@ -687,6 +701,7 @@ class GeminiRepairVerifier:
         self._routing_mode = routing_mode
         self._routing_role = routing_role
         self._run_id = run_id
+        self._invocation_context = invocation_context
         self._owned_client = model_router is None and client is None
         self._client = None
         if model_router is None:
@@ -765,6 +780,16 @@ class GeminiRepairVerifier:
                         role=self._routing_role,
                         mode=self._routing_mode,
                         run_id=self._run_id,
+                        context=replace(
+                            self._invocation_context
+                            or ModelInvocationContext(
+                                stage_attempt_id=None,
+                                stage=None,
+                                operation="repair_verification",
+                            ),
+                            operation="repair_verification",
+                            semantic_attempt=attempt + 1,
+                        ),
                         request=ModelRequest(
                             prompt=config.system_instruction + "\n\n" + evidence_prompt,
                             response_schema=REPAIR_VERIFICATION_SCHEMA,

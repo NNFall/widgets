@@ -18,6 +18,7 @@ from app.billing.service import (
 from app.db.base import Base
 from app.db.models import Tenant, User
 from app.models.contracts import ModelRequest, ProviderCapabilities
+from app.models.lineage import ModelInvocationContext
 from app.models.router import ModelPolicy, ModelRouter, ProviderTarget, SqlModelCallAudit
 from app.saas.models import (
     GenerationEvent,
@@ -518,6 +519,11 @@ async def test_provider_dispatch_survives_worker_cancellation_and_consumes_trial
                 mode="express",
                 request=ModelRequest(prompt="dispatch before blocking"),
                 run_id=claim.run_id,
+                context=ModelInvocationContext(
+                    stage_attempt_id=claim.attempt_id,
+                    stage=claim.next_stage,
+                    operation="widget_generator",
+                ),
             )
             return StageResult(public_message="unreachable")
 

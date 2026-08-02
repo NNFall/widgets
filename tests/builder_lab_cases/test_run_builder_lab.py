@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from unittest.mock import patch
+from uuid import uuid4
 
+from app.models.lineage import ModelInvocationContext
 from builder_lab.visual_critic import VisualCriticRole
 from builder_lab.visual_committee import VisualCriticCommittee
 from builder_lab.modes import EXPRESS_MODE_POLICY
@@ -60,6 +62,11 @@ def test_express_visual_factory_routes_every_critic_and_judge_through_router():
     )
     router = SimpleNamespace(generate=object())
     run_id = object()
+    invocation_context = ModelInvocationContext(
+        stage_attempt_id=uuid4(),
+        stage="foundation",
+        operation="visual_critic",
+    )
     created = []
     judges = []
 
@@ -82,6 +89,7 @@ def test_express_visual_factory_routes_every_critic_and_judge_through_router():
             policy=EXPRESS_MODE_POLICY,
             model_router=router,
             run_id=run_id,
+            invocation_context=invocation_context,
         )()
 
     assert {item.role.value for item in created} == set(
@@ -91,8 +99,10 @@ def test_express_visual_factory_routes_every_critic_and_judge_through_router():
     assert all(item.routing_mode == "express" for item in created)
     assert all(item.routing_timeout_seconds == 120 for item in created)
     assert all(item.run_id is run_id for item in created)
+    assert all(item.invocation_context is invocation_context for item in created)
     assert len(judges) == 1
     assert judges[0].model_router is router
     assert judges[0].routing_role == "visual_judge"
     assert judges[0].routing_mode == "express"
     assert judges[0].routing_timeout_seconds == 120
+    assert judges[0].invocation_context is invocation_context

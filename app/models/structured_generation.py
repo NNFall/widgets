@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import Protocol
 from uuid import UUID
 
 from app.models.contracts import ModelRequest, ModelResponse, ProviderUnavailable
+from app.models.lineage import ModelInvocationContext
 from app.models.providers.gemini import GeminiModelProvider
 from app.models.router import ModelRouter
 
@@ -26,12 +28,15 @@ class RoutedStructuredGenerationBackend:
         role: str,
         mode: str,
         run_id: UUID,
+        context: ModelInvocationContext,
         timeout_seconds: float | None = None,
     ) -> None:
         self._router = router
         self._role = role
         self._mode = mode
         self._run_id = run_id
+        self._context = context
+        self._semantic_invocations = 0
         self._timeout_seconds = timeout_seconds
 
     @property
@@ -39,11 +44,24 @@ class RoutedStructuredGenerationBackend:
         return "routed"
 
     async def generate(self, request: ModelRequest) -> ModelResponse:
+        semantic_offset = self._semantic_invocations
+        self._semantic_invocations += 1
+        context = replace(
+            self._context,
+            operation=(
+                "schema_correction"
+                if self._context.operation == "reference_analysis"
+                and semantic_offset > 0
+                else self._context.operation
+            ),
+            semantic_attempt=self._context.semantic_attempt + semantic_offset,
+        )
         return await self._router.generate(
             role=self._role,
             mode=self._mode,
             run_id=self._run_id,
             request=request,
+            context=context,
             timeout_seconds=self._timeout_seconds,
         )
 

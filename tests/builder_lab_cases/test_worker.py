@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.db.base import Base
 from app.db.models import Tenant, User
 from app.models.providers.agentrouter_qwen import AgentRouterQwenProvider
+from app.models.lineage import ModelInvocationContext
 from app.saas.models import (
     GenerationArtifact,
     GenerationEvent,
@@ -93,7 +94,12 @@ async def test_routed_reference_analyzer_awaits_pipeline_result() -> None:
             return expected
 
     pipeline = FakeReferencePipeline()
-    claim = SimpleNamespace(mode="direct", run_id=uuid4())
+    claim = SimpleNamespace(
+        mode="direct",
+        run_id=uuid4(),
+        attempt_id=uuid4(),
+        next_stage="reference_analysis",
+    )
     config = SimpleNamespace(reference_timeout_seconds=60)
 
     analyzer = run_builder_worker.make_routed_reference_analyzer(
@@ -104,6 +110,13 @@ async def test_routed_reference_analyzer_awaits_pipeline_result() -> None:
 
     assert await analyzer(claim, expected["source_url"]) == expected
     assert pipeline.backend is not None
+    context = pipeline.backend._context
+    assert context.stage_attempt_id == claim.attempt_id
+    assert context.stage == claim.next_stage
+    assert context.operation == "reference_analysis"
+    assert context.semantic_attempt == 1
+    assert context.candidate_id is None
+    assert context.persona is None
 
 
 def test_worker_cli_uses_configured_builtin_handler_by_default(
@@ -320,21 +333,46 @@ def test_production_repair_verifier_factory_uses_router_not_direct_gemini() -> N
     )
     router = SimpleNamespace(generate=object())
     run_id = uuid4()
+    invocation_context = ModelInvocationContext(
+        stage_attempt_id=uuid4(),
+        stage="foundation",
+        operation="repair_verification",
+    )
 
     verifier = make_factory(
         config,
         mode="express",
         model_router=router,
         run_id=run_id,
+        invocation_context=invocation_context,
     )()
 
     assert verifier._model_router is router
     assert verifier._routing_role == "code_review"
     assert verifier._routing_mode == "express"
     assert verifier._run_id == run_id
+    assert verifier._invocation_context is invocation_context
     assert verifier._client is None
     assert verifier.timeout_seconds == 12
     assert verifier.routing_timeout_seconds == 180
+
+
+def test_worker_derives_model_context_from_claim_attempt_and_stage() -> None:
+    claim = SimpleNamespace(
+        attempt_id=uuid4(),
+        next_stage="foundation",
+    )
+
+    context = run_builder_worker.make_model_invocation_context(
+        claim,
+        operation="artifact_generation",
+    )
+
+    assert context == ModelInvocationContext(
+        stage_attempt_id=claim.attempt_id,
+        stage="foundation",
+        operation="artifact_generation",
+    )
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 from google import genai
@@ -22,6 +23,7 @@ from app.models.contracts import (
     ModelResponse,
     ModelUsage,
 )
+from app.models.lineage import ModelInvocationContext
 from app.models.router import ModelRouter
 
 from ..model_config import generation_policy, normalize_thinking_level
@@ -172,6 +174,7 @@ class GeminiDirectEngine:
         routing_mode: str = "direct",
         routing_timeout_seconds: float | None = None,
         run_id: Any | None = None,
+        invocation_context: ModelInvocationContext | None = None,
     ) -> None:
         if model_router is None and (not api_key or not api_key.strip()):
             raise BuilderEngineError(
@@ -186,6 +189,7 @@ class GeminiDirectEngine:
         self._routing_mode = routing_mode
         self._routing_timeout_seconds = routing_timeout_seconds
         self._run_id = run_id
+        self._invocation_context = invocation_context
         self._owned_client = model_router is None and client is None
         self._client = None
         if model_router is None:
@@ -201,6 +205,7 @@ class GeminiDirectEngine:
         schema: dict[str, Any],
         temperature: float,
         routing_deadline: float | None = None,
+        context: ModelInvocationContext | None = None,
     ) -> Any:
         if self._model_router is not None:
             routing_timeout_seconds = self._routing_timeout_seconds
@@ -210,10 +215,16 @@ class GeminiDirectEngine:
                     1e-6,
                 )
             try:
+                if context is None:
+                    context = self._context(
+                        operation=str(self._routing_role),
+                        semantic_attempt=1,
+                    )
                 return await self._model_router.generate(
                     role=str(self._routing_role),
                     mode=self._routing_mode,
                     run_id=self._run_id,
+                    context=context,
                     request=ModelRequest(
                         prompt=prompt,
                         response_schema=schema,
@@ -287,6 +298,29 @@ class GeminiDirectEngine:
             return None
         return time.monotonic() + self._routing_timeout_seconds
 
+    def _context(
+        self,
+        *,
+        operation: str,
+        semantic_attempt: int,
+        candidate_id: str | None = None,
+        persona: str | None = None,
+    ) -> ModelInvocationContext:
+        base = self._invocation_context or ModelInvocationContext(
+            stage_attempt_id=None,
+            stage=None,
+            operation=operation,
+        )
+        return replace(
+            base,
+            operation=operation,
+            semantic_attempt=semantic_attempt,
+            candidate_id=(
+                base.candidate_id if candidate_id is None else candidate_id
+            ),
+            persona=base.persona if persona is None else persona,
+        )
+
     async def propose_direction(
         self,
         *,
@@ -312,6 +346,12 @@ class GeminiDirectEngine:
                     schema=DIRECTION_PROPOSAL_JSON_SCHEMA,
                     temperature=request.creativity,
                     routing_deadline=routing_deadline,
+                    context=self._context(
+                        operation="direction_candidate",
+                        semantic_attempt=attempt + 1,
+                        candidate_id=proposal_id,
+                        persona=role.value,
+                    ),
                 )
             except BuilderEngineError as exc:
                 exc.usage = total_usage + exc.usage
@@ -385,6 +425,11 @@ class GeminiDirectEngine:
                     schema=CONCEPT_ROLE_BRIEF_JSON_SCHEMA,
                     temperature=request.creativity,
                     routing_deadline=routing_deadline,
+                    context=self._context(
+                        operation=str(self._routing_role),
+                        semantic_attempt=attempt + 1,
+                        persona=role.value,
+                    ),
                 )
             except BuilderEngineError as exc:
                 exc.usage = total_usage + exc.usage
@@ -431,6 +476,10 @@ class GeminiDirectEngine:
             schema=DIRECTION_JUDGE_JSON_SCHEMA,
             temperature=0.2,
             routing_deadline=self._new_routing_deadline(),
+            context=self._context(
+                operation="direction_judge",
+                semantic_attempt=1,
+            ),
         )
         try:
             payload = _response_payload(response)
@@ -479,6 +528,12 @@ class GeminiDirectEngine:
             schema=COMPOSITION_PLAN_JSON_SCHEMA,
             temperature=0.25,
             routing_deadline=self._new_routing_deadline(),
+            context=self._context(
+                operation="composition_plan",
+                semantic_attempt=1,
+                candidate_id=selected_direction.proposal_id,
+                persona=selected_direction.role.value,
+            ),
         )
         try:
             payload = _response_payload(response)
@@ -528,6 +583,19 @@ class GeminiDirectEngine:
         )
         total_usage = TokenUsage()
         routing_deadline = self._new_routing_deadline()
+        operation = (
+            "visual_repair"
+            if visual_findings
+            else "validation_repair"
+            if repair_issues
+            else "artifact_generation"
+        )
+        candidate_id = (
+            selected_direction.proposal_id if selected_direction is not None else None
+        )
+        persona = (
+            selected_direction.role.value if selected_direction is not None else None
+        )
         for attempt in range(2):
             attempt_prompt = prompt
             if attempt:
@@ -543,6 +611,16 @@ class GeminiDirectEngine:
                     schema=ARTIFACT_JSON_SCHEMA,
                     temperature=temperature,
                     routing_deadline=routing_deadline,
+                    context=self._context(
+                        operation=(
+                            "validation_repair"
+                            if attempt and operation == "artifact_generation"
+                            else operation
+                        ),
+                        semantic_attempt=attempt + 1,
+                        candidate_id=candidate_id,
+                        persona=persona,
+                    ),
                 )
             except BuilderEngineError as exc:
                 exc.usage = total_usage + exc.usage

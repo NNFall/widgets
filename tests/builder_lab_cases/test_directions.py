@@ -322,7 +322,7 @@ class DirectionBoardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fallback.proposal_calls, 3)
         self.assertEqual(fallback.judge_calls, 1)
         self.assertEqual(
-            [call.status for call in audit.calls].count("failed"),
+            [call.status for call in audit.calls].count("timed_out"),
             4,
         )
         self.assertEqual(

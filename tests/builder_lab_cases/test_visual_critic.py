@@ -6,6 +6,7 @@ import unittest
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
+from uuid import uuid4
 
 from PIL import Image
 
@@ -17,6 +18,7 @@ from app.models.contracts import (
     ModelUsage,
     ProviderCapabilities,
 )
+from app.models.lineage import ModelInvocationContext
 from app.models.router import (
     InMemoryModelCallAudit,
     ModelPolicy,
@@ -375,6 +377,61 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(router.calls), 1)
         self.assertGreater(router.calls[0]["timeout_seconds"], 119)
         self.assertLessEqual(router.calls[0]["timeout_seconds"], 120)
+
+    async def test_routed_critique_retry_preserves_stage_candidate_and_persona(self):
+        invalid = response_payload()
+        invalid["observations"][0]["observation"] = "Generic answer."
+
+        class Router:
+            def __init__(self):
+                self.calls = []
+
+            async def generate(self, **kwargs):
+                self.calls.append(kwargs)
+                payload = invalid if len(self.calls) == 1 else response_payload()
+                return ModelResponse(
+                    text=json.dumps(payload),
+                    parsed=payload,
+                    usage=ModelUsage(input_tokens=10, output_tokens=3),
+                )
+
+        router = Router()
+        stage_attempt_id = uuid4()
+        critic = GeminiVisualCritic(
+            model_router=router,
+            routing_mode="express",
+            routing_timeout_seconds=120,
+            role=VisualCriticRole.CONVERSATION_UX,
+            invocation_context=ModelInvocationContext(
+                stage_attempt_id=stage_attempt_id,
+                stage="foundation",
+                operation="visual_critic",
+                candidate_id="candidate-2",
+                persona="stale-persona",
+            ),
+        )
+
+        result = await critic.critique(
+            audit=report(),
+            brief="Compact AI assistant.",
+            art_direction="Brand-matched chat.",
+        )
+
+        self.assertEqual(result.critique.verdict.value, "pass")
+        contexts = [call["context"] for call in router.calls]
+        self.assertEqual([context.operation for context in contexts], [
+            "visual_critic",
+            "visual_critic",
+        ])
+        self.assertEqual([context.semantic_attempt for context in contexts], [1, 2])
+        self.assertTrue(
+            all(context.stage_attempt_id == stage_attempt_id for context in contexts)
+        )
+        self.assertTrue(all(context.stage == "foundation" for context in contexts))
+        self.assertTrue(all(context.candidate_id == "candidate-2" for context in contexts))
+        self.assertTrue(
+            all(context.persona == VisualCriticRole.CONVERSATION_UX.value for context in contexts)
+        )
 
     async def test_role_instruction_and_contract_retry_are_independent(self):
         invalid = response_payload()

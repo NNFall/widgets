@@ -15,6 +15,7 @@ from app.models.contracts import (
     ProviderTimeout,
     ProviderUnavailable,
 )
+from app.models.lineage import ModelInvocationContext
 from app.models.providers import agentrouter_qwen
 from app.models.providers.agentrouter_qwen import (
     AgentRouterQwenProvider,
@@ -174,6 +175,11 @@ async def test_structured_failure_is_audited_before_router_fallback() -> None:
             role="code_review",
             mode="standard",
             request=request,
+            context=ModelInvocationContext(
+                stage_attempt_id=None,
+                stage=None,
+                operation="code_review",
+            ),
         )
 
     assert response.parsed == {"ok": True}

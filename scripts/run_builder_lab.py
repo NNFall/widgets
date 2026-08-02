@@ -10,6 +10,7 @@ if __package__ in {None, ""}:
 from aiohttp import web
 from dotenv import load_dotenv
 
+from app.models.lineage import ModelInvocationContext
 from builder_lab.config import BuilderLabConfig
 from builder_lab.browser_audit import BrowserAudit
 from builder_lab.chat import GeminiDemoChatService
@@ -60,6 +61,7 @@ def make_visual_critic_factory(
     model_router=None,
     mode: str = "direct",
     run_id=None,
+    invocation_context: ModelInvocationContext | None = None,
 ):
     selected_policy = policy or get_mode_policy(mode)
     critic_roles = tuple(
@@ -81,6 +83,7 @@ def make_visual_critic_factory(
                         model_router=model_router,
                         routing_mode=selected_policy.name,
                         run_id=run_id,
+                        invocation_context=invocation_context,
                     )
                 )
                 for role in critic_roles
@@ -96,6 +99,7 @@ def make_visual_critic_factory(
                 routing_mode=selected_policy.name,
                 routing_role=selected_policy.judge_role or "visual_judge",
                 run_id=run_id,
+                invocation_context=invocation_context,
             ),
         )
 

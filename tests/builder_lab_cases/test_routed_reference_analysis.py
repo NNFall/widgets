@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
@@ -16,6 +18,7 @@ from app.models.contracts import (
     ModelUsage,
     ProviderCapabilities,
 )
+from app.models.lineage import ModelInvocationContext
 from app.models.router import (
     ModelPolicy,
     ModelRouter,
@@ -23,7 +26,7 @@ from app.models.router import (
     SqlModelCallAudit,
 )
 from app.models.structured_generation import RoutedStructuredGenerationBackend
-from app.saas.models import ModelCall
+from app.saas.models import GenerationStageAttempt, ModelCall
 from scripts.analyze_reference_site import (
     REFERENCE_ANALYSIS_SCHEMA,
     ReferenceAnalysisError,
@@ -168,6 +171,11 @@ async def test_routed_reference_backend_forwards_analyzer_deadline() -> None:
         role="reference_analyst",
         mode="express",
         run_id=__import__("uuid").uuid4(),
+        context=ModelInvocationContext(
+            stage_attempt_id=uuid4(),
+            stage="reference_analysis",
+            operation="reference_analysis",
+        ),
         timeout_seconds=17,
     )
 
@@ -199,6 +207,18 @@ async def test_reference_analysis_routes_images_schema_retries_and_sql_audit(
         tmp_path,
         database_url=database_url,
     )
+    stage_attempt_id = uuid4()
+    async with factory() as database, database.begin():
+        database.add(
+            GenerationStageAttempt(
+                id=stage_attempt_id,
+                run_id=run_ids[0],
+                stage="reference_analysis",
+                ordinal=1,
+                status="running",
+                started_at=datetime.now(UTC),
+            )
+        )
 
     class Provider:
         capabilities = ProviderCapabilities(images=True, structured_output=True)
@@ -246,6 +266,11 @@ async def test_reference_analysis_routes_images_schema_retries_and_sql_audit(
         role="reference_analyst",
         mode="express",
         run_id=run_ids[0],
+        context=ModelInvocationContext(
+            stage_attempt_id=stage_attempt_id,
+            stage="reference_analysis",
+            operation="reference_analysis",
+        ),
     )
     try:
         with tempfile.TemporaryDirectory() as temporary:
@@ -281,10 +306,20 @@ async def test_reference_analysis_routes_images_schema_retries_and_sql_audit(
 
         async with factory() as database:
             calls = (
-                await database.execute(select(ModelCall).order_by(ModelCall.created_at, ModelCall.id))
+                await database.execute(
+                    select(ModelCall).order_by(ModelCall.semantic_attempt)
+                )
             ).scalars().all()
         assert len(calls) == 2
         assert all(call.run_id == run_ids[0] for call in calls)
+        assert all(call.stage_attempt_id == stage_attempt_id for call in calls)
+        assert [call.operation for call in calls] == [
+            "reference_analysis",
+            "schema_correction",
+        ]
+        assert [call.semantic_attempt for call in calls] == [1, 2]
+        assert all(call.fallback_index == 1 for call in calls)
+        assert len({call.logical_invocation_id for call in calls}) == 2
         assert all((call.role, call.mode) == ("reference_analyst", "express") for call in calls)
         assert all((call.provider, call.model) == ("agentrouter", "glm-5.2-reference") for call in calls)
         assert all(

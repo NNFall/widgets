@@ -13,6 +13,7 @@ from typing import Callable, Protocol
 from uuid import UUID
 
 from app.models.contracts import ModelProviderError, ModelRequest, ModelUsage
+from app.models.lineage import ModelInvocationContext
 from app.models.router import ModelRouter
 
 
@@ -331,6 +332,11 @@ class RoutedChatService:
                         role="chat_visitor",
                         mode="express",
                         run_id=run_id,
+                        context=ModelInvocationContext(
+                            stage_attempt_id=None,
+                            stage=None,
+                            operation="chat",
+                        ),
                         request=ModelRequest(
                             prompt=_prompt(context, history, request_text),
                             temperature=0.35,

@@ -223,6 +223,11 @@ async def test_routed_chat_is_idempotent_and_persists_exact_usage_cost(tmp_path)
             call = (await database.execute(select(ModelCall))).scalar_one()
         assert call.role == "chat_visitor"
         assert call.run_id == run_id
+        assert call.operation == "chat"
+        assert call.stage_attempt_id is None
+        assert call.candidate_id is None
+        assert call.persona is None
+        assert call.fallback_index == 1
         assert (call.input_tokens, call.output_tokens, call.thinking_tokens) == (11, 7, 2)
         assert call.cost_microusd == 50
         assert call.pricing_snapshot == {

@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.models.providers.gemini import GeminiModelProvider
 from app.models.providers.agentrouter_qwen import AgentRouterQwenProvider
+from app.models.lineage import ModelInvocationContext
 from app.models.router import (
     ModelPolicy,
     ModelRouter,
@@ -53,6 +54,18 @@ from scripts.run_builder_lab import make_engine_factories, make_visual_critic_fa
 
 StageHandler = Callable[[RunClaim], Awaitable[StageResult]]
 BUILTIN_STAGE_HANDLER = "builtin:orchestrator"
+
+
+def make_model_invocation_context(
+    claim: RunClaim,
+    *,
+    operation: str,
+) -> ModelInvocationContext:
+    return ModelInvocationContext(
+        stage_attempt_id=claim.attempt_id,
+        stage=str(claim.next_stage),
+        operation=operation,
+    )
 
 
 def install_signal_handlers(
@@ -104,6 +117,10 @@ def make_routed_reference_analyzer(
                 role="reference_analyst",
                 mode=get_mode_policy(claim.mode).name,
                 run_id=claim.run_id,
+                context=make_model_invocation_context(
+                    claim,
+                    operation="reference_analysis",
+                ),
                 timeout_seconds=min(
                     180,
                     config.reference_timeout_seconds,
@@ -368,6 +385,7 @@ def make_repair_verifier_factory(
     mode: str,
     model_router: ModelRouter,
     run_id: UUID | None,
+    invocation_context: ModelInvocationContext,
 ):
     return lambda: GeminiRepairVerifier(
         model=config.visual_critic_model,
@@ -378,6 +396,7 @@ def make_repair_verifier_factory(
         routing_mode=mode,
         routing_role="code_review",
         run_id=run_id,
+        invocation_context=invocation_context,
     )
 
 
@@ -449,6 +468,10 @@ async def run() -> None:
                     routing_timeout_seconds=config.agentrouter_timeout_seconds,
                     model=config.direct_model,
                     thinking_level=config.builder_thinking_level,
+                    invocation_context=make_model_invocation_context(
+                        claim,
+                        operation=role,
+                    ),
                 ),
                 visual_gate_factory=lambda claim: VisualRepairGate(
                     store=DurableVisualStore(queue, claim),
@@ -463,12 +486,20 @@ async def run() -> None:
                         policy=get_mode_policy(claim.mode),
                         model_router=model_router,
                         run_id=claim.run_id,
+                        invocation_context=make_model_invocation_context(
+                            claim,
+                            operation="visual_critic",
+                        ),
                     ),
                     verifier_factory=make_repair_verifier_factory(
                         config,
                         mode=get_mode_policy(claim.mode).name,
                         model_router=model_router,
                         run_id=claim.run_id,
+                        invocation_context=make_model_invocation_context(
+                            claim,
+                            operation="repair_verification",
+                        ),
                     ),
                 ),
             )

@@ -20,6 +20,7 @@ from google.genai import types
 from PIL import Image, ImageDraw, ImageFont
 
 from app.models.contracts import ModelRequest, ModelResponse, ModelRouteExhausted
+from app.models.lineage import ModelInvocationContext
 from app.models.router import ModelRouter
 
 from .browser_audit import (
@@ -781,6 +782,7 @@ class GeminiVisualCritic:
         model_router: ModelRouter | None = None,
         routing_mode: str = "direct",
         run_id: Any | None = None,
+        invocation_context: ModelInvocationContext | None = None,
     ) -> None:
         if model_router is None and client is None and (not api_key or not api_key.strip()):
             raise VisualCriticError(
@@ -794,6 +796,7 @@ class GeminiVisualCritic:
         self._model_router = model_router
         self._routing_mode = routing_mode
         self._run_id = run_id
+        self._invocation_context = invocation_context
         self._proof_code_factory = proof_code_factory
         self._owned_client = model_router is None and client is None
         self._client = None
@@ -824,6 +827,7 @@ class GeminiVisualCritic:
                     art_direction=art_direction,
                     validation_correction=correction,
                     routing_deadline=routing_deadline,
+                    semantic_attempt=attempt + 1,
                 )
             except asyncio.CancelledError:
                 raise
@@ -853,6 +857,7 @@ class GeminiVisualCritic:
         art_direction: str,
         validation_correction: str | None = None,
         routing_deadline: float | None = None,
+        semantic_attempt: int = 1,
     ) -> VisualCriticResult:
         if not isinstance(audit, BrowserAuditReport):
             raise TypeError("audit must be BrowserAuditReport")
@@ -985,6 +990,17 @@ class GeminiVisualCritic:
                     role=self.role.value,
                     mode=self._routing_mode,
                     run_id=self._run_id,
+                    context=replace(
+                        self._invocation_context
+                        or ModelInvocationContext(
+                            stage_attempt_id=None,
+                            stage=None,
+                            operation="visual_critic",
+                        ),
+                        operation="visual_critic",
+                        semantic_attempt=semantic_attempt,
+                        persona=self.role.value,
+                    ),
                     request=ModelRequest(
                         prompt=config.system_instruction + "\n\n" + "\n".join(router_text),
                         images=tuple(router_images),

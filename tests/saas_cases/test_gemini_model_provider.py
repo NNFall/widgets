@@ -18,6 +18,7 @@ from app.models.contracts import (
     ProviderTimeout,
     ProviderUnavailable,
 )
+from app.models.lineage import ModelInvocationContext
 from app.models.providers.gemini import GeminiModelProvider
 from app.models.router import InMemoryModelCallAudit, ModelPolicy, ModelRouter, ProviderTarget
 from builder_lab.prompts import ARTIFACT_JSON_SCHEMA
@@ -219,6 +220,11 @@ async def test_invalid_structured_response_audits_billed_usage_before_fallback()
         role="artifact",
         mode="standard",
         request=ModelRequest(prompt="Return JSON", response_schema={"type": "object"}),
+        context=ModelInvocationContext(
+            stage_attempt_id=None,
+            stage=None,
+            operation="artifact_generation",
+        ),
     )
 
     assert response.parsed == {"ok": True}

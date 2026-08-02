@@ -1,4 +1,6 @@
 import asyncio
+from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
@@ -11,6 +13,7 @@ from app.models.contracts import (
     ModelUsage,
     ProviderCapabilities,
 )
+from app.models.lineage import ModelInvocationContext
 from app.models.router import (
     InMemoryModelCallAudit,
     ModelPolicy,
@@ -18,7 +21,7 @@ from app.models.router import (
     ProviderTarget,
     SqlModelCallAudit,
 )
-from app.saas.models import ModelCall
+from app.saas.models import GenerationStageAttempt, ModelCall
 from builder_lab.models import TokenUsage
 from builder_lab.visual_critic import VisualCriticResult, VisualCriticRole
 from builder_lab.visual_models import (
@@ -365,7 +368,7 @@ async def test_routed_visual_judge_reserves_time_for_fallback() -> None:
 
     assert result.critique.verdict is VisualVerdict.REPAIR
     assert fallback.calls == 1
-    assert [call.status for call in audit.calls] == ["failed", "completed"]
+    assert [call.status for call in audit.calls] == ["timed_out", "completed"]
     assert audit.calls[0].error_code == "generation_timeout"
 
 
@@ -374,9 +377,11 @@ async def test_routed_visual_judge_semantic_correction_shares_one_deadline() -> 
     class Router:
         def __init__(self) -> None:
             self.timeouts: list[float] = []
+            self.contexts: list[ModelInvocationContext] = []
 
         async def generate(self, **kwargs) -> ModelResponse:
             self.timeouts.append(kwargs["timeout_seconds"])
+            self.contexts.append(kwargs["context"])
             sources = (
                 [{"role": "conversation_ux", "finding_id": "ux-edge"}]
                 if len(self.timeouts) == 1
@@ -392,11 +397,19 @@ async def test_routed_visual_judge_semantic_correction_shares_one_deadline() -> 
             )
 
     router = Router()
+    stage_attempt_id = uuid4()
     judge = GeminiVisualJudge(
         model_router=router,
         routing_mode="express",
         timeout_seconds=0.2,
         routing_timeout_seconds=0.2,
+        invocation_context=ModelInvocationContext(
+            stage_attempt_id=stage_attempt_id,
+            stage="foundation",
+            operation="visual_judge",
+            candidate_id="candidate-2",
+            persona="brand_motion",
+        ),
     )
 
     result = await judge.judge(role_results=role_results())
@@ -404,6 +417,15 @@ async def test_routed_visual_judge_semantic_correction_shares_one_deadline() -> 
     assert result.critique.verdict is VisualVerdict.REPAIR
     assert len(router.timeouts) == 2
     assert 0 < router.timeouts[1] < router.timeouts[0] <= 0.2
+    assert [context.operation for context in router.contexts] == [
+        "visual_judge",
+        "visual_judge",
+    ]
+    assert [context.semantic_attempt for context in router.contexts] == [1, 2]
+    assert all(context.stage_attempt_id == stage_attempt_id for context in router.contexts)
+    assert all(context.stage == "foundation" for context in router.contexts)
+    assert all(context.candidate_id == "candidate-2" for context in router.contexts)
+    assert all(context.persona == "brand_motion" for context in router.contexts)
 
 
 @pytest.mark.asyncio
@@ -506,6 +528,18 @@ async def test_repair_verifier_routes_every_semantic_attempt_as_code_review(
 ) -> None:
     engine, factory, _, run_ids = await _database(tmp_path)
     original = finding("judge-1", "The mobile composer is clipped.")
+    stage_attempt_id = uuid4()
+    async with factory() as database, database.begin():
+        database.add(
+            GenerationStageAttempt(
+                id=stage_attempt_id,
+                run_id=run_ids[0],
+                stage="foundation",
+                ordinal=1,
+                status="running",
+                started_at=datetime.now(UTC),
+            )
+        )
 
     class Provider:
         capabilities = ProviderCapabilities(structured_output=True)
@@ -550,6 +584,13 @@ async def test_repair_verifier_routes_every_semantic_attempt_as_code_review(
         routing_role="code_review",
         run_id=run_ids[0],
         timeout_seconds=5,
+        invocation_context=ModelInvocationContext(
+            stage_attempt_id=stage_attempt_id,
+            stage="foundation",
+            operation="repair_verification",
+            candidate_id="candidate-2",
+            persona="code_reviewer",
+        ),
     )
     try:
         result = await verifier.verify(
@@ -576,5 +617,14 @@ async def test_repair_verifier_routes_every_semantic_attempt_as_code_review(
             ("code_review", "express"),
         ]
         assert [call.request_id for call in calls] == ["review-1", "review-2"]
+        assert [call.operation for call in calls] == [
+            "repair_verification",
+            "repair_verification",
+        ]
+        assert [call.semantic_attempt for call in calls] == [1, 2]
+        assert all(call.stage_attempt_id == stage_attempt_id for call in calls)
+        assert all(call.candidate_id == "candidate-2" for call in calls)
+        assert all(call.persona == "code_reviewer" for call in calls)
+        assert len({call.logical_invocation_id for call in calls}) == 2
     finally:
         await engine.dispose()
