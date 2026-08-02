@@ -927,6 +927,32 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.critique.verdict.value, "pass")
 
+    async def test_chat_bubbles_and_author_labels_are_image_specific(self):
+        payload = response_payload()
+        payload["observations"][5]["observation"] = (
+            "В истории переписки на мобильном экране диалог структурирован в виде "
+            "раздельных пузырей сообщений с понятными метками авторов."
+        )
+
+        result = await GeminiVisualCritic(client=FakeClient(payload)).critique(
+            audit=report(), brief="Brief", art_direction="Direction"
+        )
+
+        self.assertEqual(result.critique.verdict.value, "pass")
+
+    async def test_compound_russian_launcher_control_is_accepted(self):
+        payload = response_payload()
+        payload["observations"][0]["observation"] = (
+            "На закрытом десктопном экране отображается фирменный ланчер-контрол "
+            "розового цвета в правом нижнем углу на белом фоне."
+        )
+
+        result = await GeminiVisualCritic(client=FakeClient(payload)).critique(
+            audit=report(), brief="Brief", art_direction="Direction"
+        )
+
+        self.assertEqual(result.critique.verdict.value, "pass")
+
     async def test_one_coarse_pixel_estimate_may_differ_per_original_image(self):
         payload = response_payload()
         for item in payload["observations"]:

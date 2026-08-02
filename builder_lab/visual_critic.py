@@ -483,6 +483,9 @@ _VISUAL_SIGNAL_ALIASES: dict[str, tuple[str, ...]] = {
     "truncate": ("truncate", "clamp"), "border": ("border",),
     "divider": ("divider", "separator"), "radius": ("radius", "rounded"),
     "shadow": ("shadow",), "spacing": ("spacing", "gap", "padding"),
+    "bubble": ("bubble", "bubbles", "surface", "surfaces"),
+    "authorship": ("author", "authors", "authorship", "label", "labels"),
+    "separation": ("distinct", "separate", "separated"),
     "vertical": ("vertical",), "horizontal": ("horizontal",),
     "scroll": ("scroll",), "contrast": ("contrast",),
     "font": ("font", "typography"), "pale": ("pale",),
@@ -556,6 +559,19 @@ _RU_VISUAL_SIGNAL_LEXEMES: dict[str, frozenset[str]] = {
     "radius": frozenset({"радиус", "радиуса", "радиусом", "скругление", "скругления"}),
     "shadow": frozenset({"тень", "тени", "тенью", "теней"}),
     "spacing": frozenset({"интервал", "интервала", "интервалы", "интервалов", "зазор", "зазора", "зазоры"}),
+    "bubble": frozenset({
+        "пузырь", "пузыря", "пузырю", "пузырём", "пузырем", "пузыре",
+        "пузыри", "пузырей", "пузырям", "пузырями", "пузырях",
+        "поверхность", "поверхности", "поверхностью", "поверхностей",
+    }),
+    "authorship": frozenset({
+        "автор", "автора", "автору", "автором", "авторе", "авторы", "авторов",
+        "авторам", "авторами", "авторах", "метка", "метки", "метке", "метку",
+        "меткой", "меток", "меткам", "метками", "метках",
+    }),
+    "separation": frozenset({
+        "разделение", "разделения", "разделением", "разделены", "разведены",
+    }),
     "vertical": frozenset({"вертикальный", "вертикальная", "вертикальное", "вертикальные", "вертикально"}),
     "horizontal": frozenset({"горизонтальный", "горизонтальная", "горизонтальное", "горизонтальные", "горизонтально"}),
     "scroll": frozenset({"прокрутка", "прокрутки", "прокрутке", "прокрутку", "прокруткой"}),
@@ -611,6 +627,11 @@ _RU_VISUAL_SIGNAL_LEXEMES.update({
     "vertical": _RU_VISUAL_SIGNAL_LEXEMES["vertical"] | _ru_hard_adjective("вертикальн"),
     "horizontal": _RU_VISUAL_SIGNAL_LEXEMES["horizontal"] | _ru_hard_adjective("горизонтальн"),
     "contrast": _RU_VISUAL_SIGNAL_LEXEMES["contrast"] | _ru_hard_adjective("контрастн"),
+    "separation": (
+        _RU_VISUAL_SIGNAL_LEXEMES["separation"]
+        | _ru_hard_adjective("раздельн")
+        | _ru_hard_adjective("различим")
+    ),
     "pale": _RU_VISUAL_SIGNAL_LEXEMES["pale"] | _ru_hard_adjective("бледн"),
     "dark": (
         _RU_VISUAL_SIGNAL_LEXEMES["dark"]
@@ -669,6 +690,16 @@ _RU_VISUAL_MARKER_LEXEMES: dict[str, frozenset[str]] = {
         "лаунчерам",
         "лаунчерами",
         "лаунчерах",
+        "ланчер",
+        "ланчера",
+        "ланчеру",
+        "ланчером",
+        "ланчере",
+        "ланчеры",
+        "ланчеров",
+        "ланчерам",
+        "ланчерами",
+        "ланчерах",
     }),
     "панель": frozenset({
         "панель", "панели", "панелью", "панелей", "панелям", "панелями",
@@ -1132,9 +1163,15 @@ class GeminiVisualCritic:
                 "цвет", "шрифт",
             }
             def visual_marker_tokens(text: str) -> set[str]:
-                tokens = {
+                raw_tokens = {
                     token.casefold()
                     for token in re.findall(r"[A-Za-zА-Яа-яЁё0-9_-]+", text)
+                }
+                tokens = raw_tokens | {
+                    part
+                    for token in raw_tokens
+                    for part in re.split(r"[-_]", token)
+                    if part
                 }
                 found = marker_terms.intersection(tokens)
                 for token in tokens:
