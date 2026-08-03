@@ -116,8 +116,10 @@ def _raise_for_status(response: httpx.Response, *, provider_name: str) -> None:
     status = response.status_code
     if status < 400:
         return
-    if status in {401, 403} or status == 402:
+    if status in {401, 403}:
         raise ProviderPermissionDenied(f"{provider_name} request is not permitted")
+    if status == 402:
+        raise ProviderQuotaExceeded(f"{provider_name} balance is unavailable")
     if status == 404:
         raise ModelUnavailable(f"{provider_name} model is unavailable")
     if status == 429:

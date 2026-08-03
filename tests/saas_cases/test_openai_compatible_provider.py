@@ -80,7 +80,7 @@ async def test_openai_compatible_provider_sends_schema_and_normalizes_usage() ->
     ("status", "expected"),
     [
         (401, ProviderPermissionDenied),
-        (402, ProviderPermissionDenied),
+        (402, ProviderQuotaExceeded),
         (429, ProviderQuotaExceeded),
     ],
 )
