@@ -2227,6 +2227,7 @@ class PostgresWorkerQueue:
             await self._validate_stage_result_boundary(
                 database,
                 claim=claim,
+                run=run,
                 result=result,
             )
             await self._transition_stage_attempt(
@@ -2258,6 +2259,7 @@ class PostgresWorkerQueue:
         database: AsyncSession,
         *,
         claim: RunClaim,
+        run: GenerationRun,
         result: StageResult,
     ) -> None:
         if claim.next_stage == "reference_analysis":
@@ -2288,6 +2290,23 @@ class PostgresWorkerQueue:
                 .limit(1)
             )
         ).scalar_one_or_none()
+        if previous is None and run.source_version_id is not None:
+            previous = (
+                await database.execute(
+                    select(GenerationArtifact)
+                    .join(
+                        ProjectVersion,
+                        (ProjectVersion.artifact_id == GenerationArtifact.id)
+                        & (ProjectVersion.run_id == GenerationArtifact.run_id),
+                    )
+                    .where(
+                        ProjectVersion.id == run.source_version_id,
+                        ProjectVersion.project_id == run.project_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if previous is None:
+                raise ValueError("refinement source artifact is unavailable")
         previous_revision = previous.revision if previous is not None else 0
         if result.artifact.revision != previous_revision + 1:
             raise ValueError(

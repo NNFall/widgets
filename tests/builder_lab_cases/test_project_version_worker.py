@@ -28,7 +28,7 @@ from builder_lab.patterns.models import (
     PatternSelection,
 )
 from builder_lab.patterns.registry import load_builtin_registry
-from builder_lab.worker import PostgresWorkerQueue
+from builder_lab.worker import PostgresWorkerQueue, StageResult
 from tests.builder_lab_cases.test_validation import artifact
 
 
@@ -274,6 +274,41 @@ async def test_refinement_stage_input_survives_restart_and_uses_exact_version(
         )
     finally:
         await restarted_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_refinement_stages_revision_after_exact_source_version(tmp_path) -> None:
+    _, engine, factory, project_id = await _database(tmp_path / "stage-result.db")
+    source = await _seed_source(factory, project_id)
+    refinement_id = await _seed_refinement(factory, source)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    candidate = artifact(
+        revision=6,
+        stage=Stage.MOTION_POLISH,
+        art_direction="Refined accepted art direction",
+    )
+    try:
+        claim = await queue.claim("refinement-worker")
+        assert claim is not None
+        assert claim.run_id == refinement_id
+
+        staged = await queue.stage_result(
+            claim,
+            StageResult(public_message="Refinement ready", artifact=candidate),
+        )
+
+        assert staged.artifact == candidate
+        async with factory() as database:
+            staged_event = await database.scalar(
+                select(GenerationEvent).where(
+                    GenerationEvent.run_id == refinement_id,
+                    GenerationEvent.event_type == "stage.result_staged",
+                )
+            )
+            assert staged_event is not None
+            assert staged_event.payload["result"]["artifact"]["revision"] == 6
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
