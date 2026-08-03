@@ -146,8 +146,7 @@ def render_runtime(
   const sessionId='public-'+Array.from(crypto.getRandomValues(new Uint8Array(16)),value=>value.toString(16).padStart(2,'0')).join('');
   const frame=document.getElementById('kaigo-generated-widget');
   const bytes=Uint8Array.from(atob({encoded_inner!r}),c=>c.charCodeAt(0));
-  const url=URL.createObjectURL(new Blob([bytes],{{type:'text/html;charset=utf-8'}}));
-  frame.src=url;
+  frame.srcdoc=new TextDecoder().decode(bytes);
   let state='loading';
   addEventListener('message',event=>{{
     const data=event.data;
@@ -191,7 +190,6 @@ def render_runtime(
       height:Math.max(1,Math.min(640,Math.ceil(height)))
     }},'*');
   }});
-  addEventListener('pagehide',()=>URL.revokeObjectURL(url),{{once:true}});
 }})();</script>
 <span hidden data-kaigo-release="{release.stable_key}"
  data-kaigo-release-id="{release.release_id}"

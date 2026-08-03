@@ -621,7 +621,7 @@ async def runtime(request: web.Request) -> web.Response:
         "default-src 'none'; style-src 'unsafe-inline' data:; "
         "script-src 'unsafe-inline' data:; img-src data: blob:; font-src data:; "
         "connect-src 'self'; media-src 'none'; object-src 'none'; "
-        "base-uri 'none'; form-action 'none'; frame-src blob:; navigate-to 'none'; "
+        "base-uri 'none'; form-action 'none'; frame-src 'none'; navigate-to 'none'; "
         f"frame-ancestors {ancestors}"
     )
     return web.Response(

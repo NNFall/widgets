@@ -1282,9 +1282,13 @@ async def test_loader_and_runtime_are_secure_stable_and_network_free(tmp_path) -
         runtime = await client.get(f"/runtime/{key}")
         runtime_text = await runtime.text()
         assert runtime.status == 200
+        assert "frame.srcdoc=" in runtime_text
+        assert "URL.createObjectURL" not in runtime_text
+        assert "new Blob" not in runtime_text
+        assert 'sandbox="allow-scripts"' in runtime_text
         assert "default-src 'none'" in runtime.headers["Content-Security-Policy"]
         assert "connect-src 'self'" in runtime.headers["Content-Security-Policy"]
-        assert "frame-src blob:" in runtime.headers["Content-Security-Policy"]
+        assert "frame-src 'none'" in runtime.headers["Content-Security-Policy"]
         assert "frame-ancestors https://example.com" in runtime.headers["Content-Security-Policy"]
         assert "X-Frame-Options" not in runtime.headers
         assert runtime.headers["Cache-Control"] == "no-store"
