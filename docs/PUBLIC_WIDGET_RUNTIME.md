@@ -19,7 +19,7 @@ immutable release, revision и нормализованным origin. `/runtime/
 тот же `KAIGO_PUBLICATION_CHAT_SIGNING_SECRET` длиной не менее 32 байт на всех
 workers. Параметры:
 
-- `KAIGO_PUBLICATION_CHAT_CAPABILITY_TTL_SECONDS` — 30–3600, по умолчанию 300;
+- `KAIGO_PUBLICATION_CHAT_CAPABILITY_TTL_SECONDS` — 30–3600, по умолчанию 3600;
 - `KAIGO_PUBLICATION_CHAT_KEY_RATE_LIMIT_REQUESTS` — лимит публикации в общем
   окне `KAIGO_CHAT_RATE_LIMIT_WINDOW_SECONDS`;
 - `KAIGO_PUBLICATION_CHAT_IP_RATE_LIMIT_REQUESTS` — лимит удалённого IP в том же

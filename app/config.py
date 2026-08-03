@@ -55,7 +55,7 @@ class AppConfig:
     project_versions_enabled: bool = False
     publication_allow_insecure_origins: bool = False
     publication_chat_signing_secret: str | None = field(default=None, repr=False)
-    publication_chat_capability_ttl_seconds: int = 300
+    publication_chat_capability_ttl_seconds: int = 3_600
     publication_chat_key_rate_limit_requests: int = 120
     publication_chat_ip_rate_limit_requests: int = 60
     publication_chat_trusted_proxy_cidrs: tuple[str, ...] = ()
@@ -507,7 +507,7 @@ def load_config() -> AppConfig:
             "KAIGO_PUBLICATION_CHAT_SIGNING_SECRET"
         ),
         publication_chat_capability_ttl_seconds=_env_int(
-            "KAIGO_PUBLICATION_CHAT_CAPABILITY_TTL_SECONDS", 300
+            "KAIGO_PUBLICATION_CHAT_CAPABILITY_TTL_SECONDS", 3_600
         ),
         publication_chat_key_rate_limit_requests=_env_int(
             "KAIGO_PUBLICATION_CHAT_KEY_RATE_LIMIT_REQUESTS", 120

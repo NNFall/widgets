@@ -64,6 +64,19 @@ def test_project_versions_flag_is_strict_and_defaults_off(
         load_config()
 
 
+def test_publication_chat_capability_defaults_to_one_hour(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _database(monkeypatch)
+    monkeypatch.setenv("KAIGO_ENVIRONMENT", "test")
+    monkeypatch.delenv(
+        "KAIGO_PUBLICATION_CHAT_CAPABILITY_TTL_SECONDS",
+        raising=False,
+    )
+
+    assert load_config().publication_chat_capability_ttl_seconds == 3_600
+
+
 def test_app_config_revalidates_direct_production_forensics_config() -> None:
     unsafe = GenerationForensicsConfig(
         enabled=True,
