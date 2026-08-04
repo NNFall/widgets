@@ -103,6 +103,12 @@ def _database_url() -> str:
     return database_url
 
 
+def model_routing_timeout_seconds(config) -> int:
+    if bool(getattr(config, "codex_bridge_enabled", False)):
+        return int(config.codex_bridge_timeout_seconds)
+    return int(config.agentrouter_timeout_seconds)
+
+
 def make_routed_reference_analyzer(
     *,
     reference_pipeline: GeminiReferencePipeline,
@@ -122,7 +128,7 @@ def make_routed_reference_analyzer(
                     operation="reference_analysis",
                 ),
                 timeout_seconds=min(
-                    180,
+                    model_routing_timeout_seconds(config),
                     config.reference_timeout_seconds,
                 ),
             ),
@@ -453,7 +459,7 @@ def make_repair_verifier_factory(
         model=config.visual_critic_model,
         thinking_level=config.visual_critic_thinking_level,
         timeout_seconds=config.visual_critic_timeout_seconds,
-        routing_timeout_seconds=config.agentrouter_timeout_seconds,
+        routing_timeout_seconds=model_routing_timeout_seconds(config),
         model_router=model_router,
         routing_mode=mode,
         routing_role="code_review",
@@ -548,7 +554,7 @@ async def run() -> None:
                     run_id=claim.run_id,
                     routing_role=role,
                     routing_mode=get_mode_policy(claim.mode).name,
-                    routing_timeout_seconds=config.agentrouter_timeout_seconds,
+                    routing_timeout_seconds=model_routing_timeout_seconds(config),
                     model=config.direct_model,
                     thinking_level=config.builder_thinking_level,
                     invocation_context=make_model_invocation_context(

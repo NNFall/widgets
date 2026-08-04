@@ -100,7 +100,12 @@ async def test_routed_reference_analyzer_awaits_pipeline_result() -> None:
         attempt_id=uuid4(),
         next_stage="reference_analysis",
     )
-    config = SimpleNamespace(reference_timeout_seconds=60)
+    config = SimpleNamespace(
+        reference_timeout_seconds=600,
+        codex_bridge_enabled=True,
+        codex_bridge_timeout_seconds=900,
+        agentrouter_timeout_seconds=180,
+    )
 
     analyzer = run_builder_worker.make_routed_reference_analyzer(
         reference_pipeline=pipeline,
@@ -110,6 +115,7 @@ async def test_routed_reference_analyzer_awaits_pipeline_result() -> None:
 
     assert await analyzer(claim, expected["source_url"]) == expected
     assert pipeline.backend is not None
+    assert pipeline.backend._timeout_seconds == 600
     context = pipeline.backend._context
     assert context.stage_attempt_id == claim.attempt_id
     assert context.stage == claim.next_stage
@@ -403,6 +409,26 @@ def test_provider_diverse_runtime_uses_short_default_but_benchmark_can_opt_in_to
     assert benchmark.timeout == 900
 
 
+def test_codex_runtime_uses_codex_budget_for_routed_generation() -> None:
+    config = SimpleNamespace(
+        codex_bridge_enabled=True,
+        codex_bridge_timeout_seconds=900,
+        agentrouter_timeout_seconds=180,
+    )
+
+    assert run_builder_worker.model_routing_timeout_seconds(config) == 900
+
+
+def test_non_codex_runtime_keeps_agentrouter_budget() -> None:
+    config = SimpleNamespace(
+        codex_bridge_enabled=False,
+        codex_bridge_timeout_seconds=900,
+        agentrouter_timeout_seconds=180,
+    )
+
+    assert run_builder_worker.model_routing_timeout_seconds(config) == 180
+
+
 def test_runtime_router_fails_closed_when_hybrid_configuration_is_missing(
     monkeypatch,
 ) -> None:
@@ -438,6 +464,8 @@ def test_production_repair_verifier_factory_uses_router_not_direct_gemini() -> N
         visual_critic_model="gemini-review",
         visual_critic_thinking_level="high",
         visual_critic_timeout_seconds=12,
+        codex_bridge_enabled=True,
+        codex_bridge_timeout_seconds=900,
         agentrouter_timeout_seconds=180,
     )
     router = SimpleNamespace(generate=object())
@@ -463,7 +491,7 @@ def test_production_repair_verifier_factory_uses_router_not_direct_gemini() -> N
     assert verifier._invocation_context is invocation_context
     assert verifier._client is None
     assert verifier.timeout_seconds == 12
-    assert verifier.routing_timeout_seconds == 180
+    assert verifier.routing_timeout_seconds == 900
 
 
 def test_worker_derives_model_context_from_claim_attempt_and_stage() -> None:
