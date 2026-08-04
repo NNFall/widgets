@@ -171,7 +171,9 @@ class CodexRunner:
                 process = await self._spawn(command, directory)
                 try:
                     stdout, _stderr = await asyncio.wait_for(
-                        process.communicate(input=request.prompt.encode("utf-8")),
+                        process.communicate(
+                            input=_turn_prompt(request).encode("utf-8")
+                        ),
                         timeout=self.config.timeout_seconds,
                     )
                 except TimeoutError as error:
@@ -274,7 +276,9 @@ class CodexRunner:
         ]
         for feature in _DISABLED_FEATURES:
             command.extend(("--disable", feature))
-        if request.response_schema is not None:
+        if request.response_schema is not None and _cli_schema_supported(
+            request.response_schema
+        ):
             schema_path = directory / "response-schema.json"
             schema_path.write_text(
                 json.dumps(request.response_schema, ensure_ascii=False),
@@ -414,6 +418,41 @@ def _safe_token_count(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return 0
     return value
+
+
+def _cli_schema_supported(value: object) -> bool:
+    """Return whether Codex strict output-schema can represent this schema."""
+    if isinstance(value, Mapping):
+        if value.get("type") == "object":
+            properties = value.get("properties")
+            required = value.get("required")
+            if not isinstance(properties, Mapping) or not isinstance(required, list):
+                return False
+            if set(required) != set(properties):
+                return False
+            if value.get("additionalProperties") is not False:
+                return False
+        return all(_cli_schema_supported(item) for item in value.values())
+    if isinstance(value, list):
+        return all(_cli_schema_supported(item) for item in value)
+    return True
+
+
+def _turn_prompt(request: CodexTurnRequest) -> str:
+    schema = request.response_schema
+    if schema is None or _cli_schema_supported(schema):
+        return request.prompt
+    compact_schema = json.dumps(
+        schema,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return (
+        request.prompt.rstrip()
+        + "\n\nOUTPUT CONTRACT: Return exactly one JSON value and no Markdown or "
+        "explanation. The JSON must satisfy this schema:\n"
+        + compact_schema
+    )
 
 
 def _image_suffix(image: bytes) -> str:

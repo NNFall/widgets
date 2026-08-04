@@ -208,6 +208,59 @@ async def test_runner_rejects_invalid_json_for_structured_turn(tmp_path) -> None
 
 
 @pytest.mark.asyncio
+async def test_runner_uses_prompt_json_contract_for_dynamic_object_schema(
+    tmp_path,
+) -> None:
+    thread_id = str(uuid4())
+    process = FakeProcess(
+        _event_stream(thread_id, text='{"tokens":{"accent":"#ff6900"}}')
+    )
+    captured: dict[str, object] = {}
+
+    async def spawn(command: tuple[str, ...], cwd: Path):
+        captured["command"] = command
+        return process
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "tokens": {
+                "type": "object",
+                "additionalProperties": {"type": "string"},
+            }
+        },
+        "required": ["tokens"],
+        "additionalProperties": False,
+    }
+    runner = CodexRunner(
+        config=_config(tmp_path),
+        state=BridgeStateStore(tmp_path / "state"),
+        spawn=spawn,
+    )
+
+    result = await runner.run_turn(
+        CodexTurnRequest(
+            run_id=str(uuid4()),
+            conversation_key="build",
+            prompt="Build the widget artifact.",
+            response_schema=schema,
+        )
+    )
+
+    command = captured["command"]
+    assert isinstance(command, tuple)
+    assert "--output-schema" not in command
+    assert process.stdin_payload is not None
+    decoded_prompt = process.stdin_payload.decode("utf-8")
+    assert decoded_prompt.startswith("Build the widget artifact.")
+    assert "Return exactly one JSON value" in decoded_prompt
+    assert json.dumps(schema, ensure_ascii=False, separators=(",", ":")) in (
+        decoded_prompt
+    )
+    assert result.parsed == {"tokens": {"accent": "#ff6900"}}
+
+
+@pytest.mark.asyncio
 async def test_runner_caps_global_concurrency_at_three(tmp_path) -> None:
     release = asyncio.Event()
     three_started = asyncio.Event()
