@@ -318,7 +318,7 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
     def with_codex(
         targets: tuple[ProviderTarget, ...],
     ) -> tuple[ProviderTarget, ...]:
-        routed = ((codex_target(),) + targets) if codex_enabled else targets
+        routed = (codex_target(),) if codex_enabled else targets
         if not routed:
             raise RuntimeError("no model provider is configured for builder stages")
         return routed

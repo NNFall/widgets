@@ -196,7 +196,34 @@ def test_runtime_router_can_use_codex_without_gemini_or_price_env(
         assert policy.targets[0].output_price_microusd_per_million is None
 
 
-def test_codex_runtime_keeps_configured_agentrouter_as_text_fallback(
+def test_codex_runtime_does_not_split_timeout_with_external_fallbacks(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION", "100")
+    monkeypatch.setenv("GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION", "200")
+    config = SimpleNamespace(
+        codex_bridge_enabled=True,
+        codex_bridge_socket_path="/run/kaigo-codex/bridge.sock",
+        codex_bridge_timeout_seconds=900,
+        codex_bridge_model="gpt-5.6-luna",
+        gemini_api_key="test-gemini-key",
+        gemini_base_url="https://gemini.example",
+        direct_model="gemini-builder",
+        reference_analyzer_model="gemini-reference",
+        visual_critic_model="gemini-vision",
+        hybrid_routing_enabled=False,
+    )
+
+    router = run_builder_worker.make_runtime_model_router(config, None)
+
+    assert all(
+        [(target.provider, target.model) for target in policy.targets]
+        == [("codex_bridge", "gpt-5.6-luna")]
+        for policy in router._policies.values()
+    )
+
+
+def test_codex_runtime_keeps_agentrouter_configured_but_out_of_active_route(
     monkeypatch,
 ) -> None:
     config = SimpleNamespace(
@@ -230,12 +257,11 @@ def test_codex_runtime_keeps_configured_agentrouter_as_text_fallback(
     builder = router._policies[("widget_generator", "direct")].targets
     assert [(target.provider, target.model) for target in direction] == [
         ("codex_bridge", "gpt-5.6-luna"),
-        ("agentrouter", "gpt-5.5"),
     ]
     assert [(target.provider, target.model) for target in builder] == [
         ("codex_bridge", "gpt-5.6-luna"),
-        ("agentrouter", "glm-5.2"),
     ]
+    assert "agentrouter" in router._providers
 
 
 @pytest.mark.asyncio
