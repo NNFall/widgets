@@ -2046,3 +2046,33 @@ async def test_router_closes_each_unique_provider_once_and_is_idempotent() -> No
     await router.aclose()
 
     assert shared.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_router_finalizes_each_unique_provider_session_once() -> None:
+    class FinalizingProvider(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.finalized: list[str] = []
+
+        async def finalize_run(self, run_id: str):
+            self.finalized.append(run_id)
+            return ("archived",)
+
+    shared = FinalizingProvider()
+    router = ModelRouter(
+        providers={"codex": shared, "alias": shared, "plain": FakeProvider()},
+        policies={
+            ("widget_generator", "express"): ModelPolicy(
+                prompt_version="builder-v1",
+                targets=(ProviderTarget("codex", "model", None, None),),
+            )
+        },
+        audit=InMemoryModelCallAudit(),
+    )
+    run_id = uuid4()
+
+    results = await router.finalize_run(run_id)
+
+    assert shared.finalized == [str(run_id)]
+    assert results == (("archived",),)

@@ -17,6 +17,10 @@ class BuilderLabConfigTests(unittest.TestCase):
             "GEMINI_BUILDER_TEMPERATURE": None,
             "GEMINI_BUILDER_MAX_REPAIRS": None,
             "KAIGO_BUILDER_HYBRID_ROUTING_ENABLED": None,
+            "KAIGO_CODEX_BRIDGE_ENABLED": None,
+            "KAIGO_CODEX_BRIDGE_SOCKET_PATH": None,
+            "KAIGO_CODEX_BRIDGE_TIMEOUT_SECONDS": None,
+            "KAIGO_CODEX_BRIDGE_MODEL": None,
             "AGENTROUTER_API_KEY": None,
             "AGENTROUTER_BASE_URL": None,
             "AGENTROUTER_TIMEOUT_SECONDS": None,
@@ -88,6 +92,13 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertEqual(config.temperature, 0.9)
         self.assertEqual(config.max_repairs, 3)
         self.assertFalse(config.hybrid_routing_enabled)
+        self.assertFalse(config.codex_bridge_enabled)
+        self.assertEqual(
+            config.codex_bridge_socket_path,
+            "/run/kaigo-codex/bridge.sock",
+        )
+        self.assertEqual(config.codex_bridge_timeout_seconds, 900)
+        self.assertEqual(config.codex_bridge_model, "gpt-5.6-luna")
         self.assertIsNone(config.agentrouter_api_key)
         self.assertEqual(config.agentrouter_base_url, "https://co.agentrouter.org/v1")
         self.assertEqual(config.agentrouter_timeout_seconds, 180)
@@ -131,6 +142,10 @@ class BuilderLabConfigTests(unittest.TestCase):
             GEMINI_BUILDER_THINKING_LEVEL="medium",
             GEMINI_BUILDER_MAX_REPAIRS="1",
             KAIGO_BUILDER_HYBRID_ROUTING_ENABLED="true",
+            KAIGO_CODEX_BRIDGE_ENABLED="true",
+            KAIGO_CODEX_BRIDGE_SOCKET_PATH="/run/custom/codex.sock",
+            KAIGO_CODEX_BRIDGE_TIMEOUT_SECONDS="1200",
+            KAIGO_CODEX_BRIDGE_MODEL="gpt-5.6-luna-test",
             AGENTROUTER_API_KEY="router-secret",
             AGENTROUTER_BASE_URL="https://router.example/v1/",
             AGENTROUTER_TIMEOUT_SECONDS="321",
@@ -170,6 +185,13 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertEqual(config.builder_thinking_level, "medium")
         self.assertEqual(config.max_repairs, 1)
         self.assertTrue(config.hybrid_routing_enabled)
+        self.assertTrue(config.codex_bridge_enabled)
+        self.assertEqual(
+            config.codex_bridge_socket_path,
+            "/run/custom/codex.sock",
+        )
+        self.assertEqual(config.codex_bridge_timeout_seconds, 1200)
+        self.assertEqual(config.codex_bridge_model, "gpt-5.6-luna-test")
         self.assertEqual(config.agentrouter_api_key, "router-secret")
         self.assertEqual(config.agentrouter_base_url, "https://router.example/v1")
         self.assertEqual(config.agentrouter_timeout_seconds, 321)
@@ -251,9 +273,23 @@ class BuilderLabConfigTests(unittest.TestCase):
             ("KAIGO_CHAT_IP_RATE_LIMIT_REQUESTS", "0"),
             ("KAIGO_CHAT_GLOBAL_CONCURRENCY", "33"),
             ("KAIGO_CHAT_SESSION_SECRET", "too-short"),
+            ("KAIGO_CODEX_BRIDGE_TIMEOUT_SECONDS", "29"),
+            ("KAIGO_CODEX_BRIDGE_TIMEOUT_SECONDS", "1801"),
         ):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 self.load(**{name: value})
+
+    def test_codex_bridge_rejects_relative_socket_and_blank_model(self):
+        with self.assertRaisesRegex(ValueError, "SOCKET_PATH"):
+            self.load(
+                KAIGO_CODEX_BRIDGE_ENABLED="true",
+                KAIGO_CODEX_BRIDGE_SOCKET_PATH="relative/bridge.sock",
+            )
+        with self.assertRaisesRegex(ValueError, "MODEL"):
+            self.load(
+                KAIGO_CODEX_BRIDGE_ENABLED="true",
+                KAIGO_CODEX_BRIDGE_MODEL="   ",
+            )
 
     def test_existing_google_ai_key_alias_is_supported(self):
         config = self.load(GOOGLE_AI_API_KEY="existing-key")

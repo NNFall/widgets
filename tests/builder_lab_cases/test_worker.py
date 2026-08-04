@@ -156,6 +156,105 @@ def test_runtime_router_has_explicit_repair_and_code_review_policies(
     assert ("code_review", "express") in router._policies
 
 
+def test_runtime_router_can_use_codex_without_gemini_or_price_env(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION", raising=False)
+    monkeypatch.delenv("GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION", raising=False)
+    monkeypatch.delenv(
+        "GEMINI_BUILDER_INPUT_PRICE_MICROUSD_PER_MILLION", raising=False
+    )
+    monkeypatch.delenv(
+        "GEMINI_BUILDER_OUTPUT_PRICE_MICROUSD_PER_MILLION", raising=False
+    )
+    config = SimpleNamespace(
+        codex_bridge_enabled=True,
+        codex_bridge_socket_path="/run/kaigo-codex/bridge.sock",
+        codex_bridge_timeout_seconds=900,
+        codex_bridge_model="gpt-5.6-luna",
+        gemini_api_key=None,
+        gemini_base_url="https://gemini.example",
+        direct_model="gemini-builder",
+        reference_analyzer_model="gemini-reference",
+        visual_critic_model="gemini-vision",
+        hybrid_routing_enabled=False,
+    )
+
+    router = run_builder_worker.make_runtime_model_router(config, None)
+
+    assert set(router._providers) == {"codex_bridge"}
+    for policy in router._policies.values():
+        assert policy.targets[0].provider == "codex_bridge"
+        assert policy.targets[0].model == "gpt-5.6-luna"
+        assert policy.targets[0].input_price_microusd_per_million is None
+        assert policy.targets[0].output_price_microusd_per_million is None
+
+
+def test_codex_runtime_keeps_configured_agentrouter_as_text_fallback(
+    monkeypatch,
+) -> None:
+    config = SimpleNamespace(
+        codex_bridge_enabled=True,
+        codex_bridge_socket_path="/run/kaigo-codex/bridge.sock",
+        codex_bridge_timeout_seconds=900,
+        codex_bridge_model="gpt-5.6-luna",
+        gemini_api_key=None,
+        gemini_base_url="https://gemini.example",
+        direct_model="gemini-builder",
+        reference_analyzer_model="gemini-reference",
+        visual_critic_model="gemini-vision",
+        hybrid_routing_enabled=True,
+        agentrouter_api_key="router-key",
+        agentrouter_base_url="https://agentrouter.example/v1",
+        agentrouter_timeout_seconds=180,
+        agentrouter_gpt_model="gpt-5.5",
+        agentrouter_glm_model="glm-5.2",
+        agentrouter_gpt_input_price_microusd_per_million=7_000_000,
+        agentrouter_gpt_output_price_microusd_per_million=7_000_000,
+        agentrouter_glm_input_price_microusd_per_million=6_000_000,
+        agentrouter_glm_output_price_microusd_per_million=6_000_000,
+        zenmux_api_key=None,
+        zenmux_base_url="https://zenmux.example/v1",
+        zenmux_deepseek_model="deepseek-free",
+    )
+
+    router = run_builder_worker.make_runtime_model_router(config, None)
+
+    direction = router._policies[("direction_candidate", "direct")].targets
+    builder = router._policies[("widget_generator", "direct")].targets
+    assert [(target.provider, target.model) for target in direction] == [
+        ("codex_bridge", "gpt-5.6-luna"),
+        ("agentrouter", "gpt-5.5"),
+    ]
+    assert [(target.provider, target.model) for target in builder] == [
+        ("codex_bridge", "gpt-5.6-luna"),
+        ("agentrouter", "glm-5.2"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_terminal_hook_settles_trial_then_archives_provider_sessions() -> None:
+    calls: list[tuple[str, object]] = []
+    run_id = uuid4()
+
+    async def settle(candidate):
+        calls.append(("settle", candidate))
+        return "paid"
+
+    class Router:
+        async def finalize_run(self, candidate):
+            calls.append(("finalize", candidate))
+            return (("thread",),)
+
+    hook = run_builder_worker.make_terminal_hook(
+        settle_run=settle,
+        model_router=Router(),
+    )
+
+    assert await hook(run_id) == "paid"
+    assert calls == [("settle", run_id), ("finalize", run_id)]
+
+
 def test_runtime_router_retries_transient_direct_gemini_builder_failure(
     monkeypatch,
 ) -> None:

@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.models.providers.gemini import GeminiModelProvider
+from app.models.providers.codex_bridge import CodexBridgeProvider
 from app.models.providers.openai_compatible import OpenAICompatibleProvider
 from app.models.lineage import ModelInvocationContext
 from app.models.router import (
@@ -226,21 +227,41 @@ def worker_service_identity() -> tuple[str, str, str]:
 
 
 def make_runtime_model_router(config, factory) -> ModelRouter:
-    if not config.gemini_api_key:
+    codex_enabled = bool(getattr(config, "codex_bridge_enabled", False))
+    if not config.gemini_api_key and not codex_enabled:
         raise RuntimeError("GEMINI_API_KEY is required for routed builder stages")
-    input_rate, output_rate = runtime_model_prices()
     hybrid_enabled = bool(getattr(config, "hybrid_routing_enabled", False))
-    providers = {
-        "gemini": GeminiModelProvider(
+    providers = {}
+    input_rate: int | None = None
+    output_rate: int | None = None
+    if config.gemini_api_key:
+        if codex_enabled:
+            try:
+                input_rate, output_rate = runtime_model_prices()
+            except RuntimeError:
+                # A ChatGPT subscription does not expose a per-token bill, and
+                # optional Gemini fallbacks may also lack a current rate card.
+                # Preserve the call as unknown cost instead of inventing zero.
+                input_rate, output_rate = None, None
+        else:
+            input_rate, output_rate = runtime_model_prices()
+        providers["gemini"] = GeminiModelProvider(
             api_key=config.gemini_api_key,
             base_url=config.gemini_base_url,
         )
-    }
-    if hybrid_enabled:
+    if codex_enabled:
+        providers["codex_bridge"] = CodexBridgeProvider(
+            socket_path=config.codex_bridge_socket_path,
+            timeout_seconds=config.codex_bridge_timeout_seconds,
+        )
+    hybrid_available = hybrid_enabled and bool(config.agentrouter_api_key)
+    if hybrid_enabled and not hybrid_available and not codex_enabled:
+        raise RuntimeError(
+            "AGENTROUTER_API_KEY is required when hybrid routing is enabled"
+        )
+    if hybrid_available:
         if not config.agentrouter_api_key:
-            raise RuntimeError(
-                "AGENTROUTER_API_KEY is required when hybrid routing is enabled"
-            )
+            raise AssertionError("hybrid availability requires an API key")
         if not config.agentrouter_base_url.startswith("https://"):
             raise RuntimeError(
                 "AGENTROUTER_BASE_URL must use HTTPS when hybrid routing is enabled"
@@ -268,10 +289,33 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
             )
 
     def gemini_target(model: str) -> ProviderTarget:
+        if "gemini" not in providers:
+            raise RuntimeError("Gemini fallback is not configured")
         return ProviderTarget("gemini", model, input_rate, output_rate)
 
     def gemini_retry_targets(model: str) -> tuple[ProviderTarget, ...]:
+        if "gemini" not in providers:
+            return ()
         return (gemini_target(model), gemini_target(model))
+
+    def gemini_single_target(model: str) -> tuple[ProviderTarget, ...]:
+        return (gemini_target(model),) if "gemini" in providers else ()
+
+    def codex_target() -> ProviderTarget:
+        return ProviderTarget(
+            "codex_bridge",
+            config.codex_bridge_model,
+            None,
+            None,
+        )
+
+    def with_codex(
+        targets: tuple[ProviderTarget, ...],
+    ) -> tuple[ProviderTarget, ...]:
+        routed = ((codex_target(),) + targets) if codex_enabled else targets
+        if not routed:
+            raise RuntimeError("no model provider is configured for builder stages")
+        return routed
 
     def gpt_target() -> ProviderTarget:
         return ProviderTarget(
@@ -299,10 +343,12 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
         )
 
     def gpt_targets() -> tuple[ProviderTarget, ...]:
-        return (gpt_target(), *text_fallbacks())
+        primary = (gpt_target(),) if "agentrouter" in providers else ()
+        return (*primary, *text_fallbacks())
 
     def glm_targets() -> tuple[ProviderTarget, ...]:
-        return (glm_target(), *text_fallbacks())
+        primary = (glm_target(),) if "agentrouter" in providers else ()
+        return (*primary, *text_fallbacks())
 
     gpt_roles = {
         "direction_candidate",
@@ -325,11 +371,11 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
         for role in set(policy.model_roles.values()):
             targets = (
                 gpt_targets()
-                if hybrid_enabled and role in gpt_roles
+                if hybrid_available and role in gpt_roles
                 else glm_targets()
-                if hybrid_enabled and role in glm_roles
+                if hybrid_available and role in glm_roles
                 else (
-                    (gemini_target(config.reference_analyzer_model),)
+                    gemini_single_target(config.reference_analyzer_model)
                     if role == "reference_analyst"
                     else gemini_retry_targets(config.direct_model)
                 )
@@ -341,50 +387,52 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
             )
             policies[(role, policy.name)] = ModelPolicy(
                 prompt_version=prompt_version,
-                targets=targets,
+                targets=with_codex(targets),
             )
         for role in policy.critic_roles:
             policies[(role, policy.name)] = ModelPolicy(
                 prompt_version="visual-v1",
-                targets=(gemini_target(config.visual_critic_model),),
+                targets=with_codex(
+                    gemini_single_target(config.visual_critic_model)
+                ),
             )
         if policy.judge_role is not None:
             judge_targets = (
                 gpt_targets()
-                if hybrid_enabled
-                else (gemini_target(config.visual_critic_model),)
+                if hybrid_available
+                else gemini_single_target(config.visual_critic_model)
             )
             policies[(policy.judge_role, policy.name)] = ModelPolicy(
                 prompt_version="visual-judge-v1",
-                targets=judge_targets,
+                targets=with_codex(judge_targets),
             )
         direction_targets = (
             gpt_targets()
-            if hybrid_enabled
+            if hybrid_available
             else gemini_retry_targets(config.direct_model)
         )
         for role in ("direction_candidate", "direction_judge"):
             policies[(role, policy.name)] = ModelPolicy(
                 prompt_version="direction-v1",
-                targets=direction_targets,
+                targets=with_codex(direction_targets),
             )
         repair_targets = (
             glm_targets()
-            if hybrid_enabled
+            if hybrid_available
             else gemini_retry_targets(config.direct_model)
         )
         policies[("repair", policy.name)] = ModelPolicy(
             prompt_version="repair-v1",
-            targets=repair_targets,
+            targets=with_codex(repair_targets),
         )
         review_targets = (
             gpt_targets()
-            if hybrid_enabled
+            if hybrid_available
             else gemini_retry_targets(config.visual_critic_model)
         )
         policies[("code_review", policy.name)] = ModelPolicy(
             prompt_version="code-review-v1",
-            targets=review_targets,
+            targets=with_codex(review_targets),
         )
     return ModelRouter(
         providers=providers,
@@ -412,6 +460,27 @@ def make_repair_verifier_factory(
         run_id=run_id,
         invocation_context=invocation_context,
     )
+
+
+def make_terminal_hook(
+    *,
+    settle_run: Callable[[UUID], Awaitable[object]],
+    model_router: ModelRouter,
+) -> Callable[[UUID], Awaitable[object]]:
+    async def settle_and_finalize(run_id: UUID) -> object:
+        outcome = await settle_run(run_id)
+        try:
+            await model_router.finalize_run(run_id)
+        except Exception:
+            # Archival must not roll back billing/trial settlement or wedge the
+            # worker. Active mappings remain durable for the next reconciliation.
+            logging.getLogger(__name__).exception(
+                "model provider session finalization failed for run %s",
+                run_id,
+            )
+        return outcome
+
+    return settle_and_finalize
 
 
 async def run() -> None:
@@ -460,7 +529,7 @@ async def run() -> None:
             assert config is not None
             model_router = make_runtime_model_router(config, factory)
             engine_factories = make_engine_factories(config)
-            if not engine_factories:
+            if not engine_factories and not config.codex_bridge_enabled:
                 raise RuntimeError(
                     "GEMINI_API_KEY (or GOOGLE_AI_API_KEY) is required for the builder worker"
                 )
@@ -528,7 +597,14 @@ async def run() -> None:
             stage_handler=handler,
             heartbeat_interval=heartbeat_interval,
             idle_poll_interval=_positive_float("KAIGO_BUILDER_POLL_SECONDS", "0.5"),
-            terminal_hook=trial_settlements.settle_run,
+            terminal_hook=(
+                make_terminal_hook(
+                    settle_run=trial_settlements.settle_run,
+                    model_router=model_router,
+                )
+                if model_router is not None
+                else trial_settlements.settle_run
+            ),
             terminal_reconciler=trial_settlements.reconcile,
             service_heartbeat=lambda: queue.publish_service_heartbeat(
                 worker_id=worker_id,

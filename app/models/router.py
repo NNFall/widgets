@@ -675,6 +675,21 @@ class ModelRouter:
             )
         raise RuntimeError("model policy contained no executable targets")
 
+    async def finalize_run(self, run_id: UUID) -> tuple[object, ...]:
+        providers = tuple(
+            {id(provider): provider for provider in self._providers.values()}.values()
+        )
+        results: list[object] = []
+        for provider in providers:
+            finalize = getattr(provider, "finalize_run", None)
+            if not callable(finalize):
+                continue
+            result = finalize(str(run_id))
+            if inspect.isawaitable(result):
+                result = await result
+            results.append(result)
+        return tuple(results)
+
     async def aclose(self) -> None:
         async with self._close_lock:
             if self._closed:

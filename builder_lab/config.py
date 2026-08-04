@@ -4,6 +4,7 @@ import ipaddress
 import os
 import re
 from dataclasses import dataclass
+from pathlib import PurePosixPath, PureWindowsPath
 
 from .forensics.config import GenerationForensicsConfig
 from .model_config import normalize_thinking_level
@@ -70,6 +71,10 @@ class BuilderLabConfig:
     temperature: float
     max_repairs: int
     hybrid_routing_enabled: bool
+    codex_bridge_enabled: bool
+    codex_bridge_socket_path: str
+    codex_bridge_timeout_seconds: int
+    codex_bridge_model: str
     agentrouter_api_key: str | None
     agentrouter_base_url: str
     agentrouter_timeout_seconds: int
@@ -130,6 +135,16 @@ class BuilderLabConfig:
     generation_forensics: GenerationForensicsConfig
 
     def __post_init__(self) -> None:
+        if self.codex_bridge_enabled:
+            if not (
+                PurePosixPath(self.codex_bridge_socket_path).is_absolute()
+                or PureWindowsPath(self.codex_bridge_socket_path).is_absolute()
+            ):
+                raise ValueError(
+                    "KAIGO_CODEX_BRIDGE_SOCKET_PATH must be absolute"
+                )
+            if not self.codex_bridge_model:
+                raise ValueError("KAIGO_CODEX_BRIDGE_MODEL must be non-empty")
         if self.chat_session_secret is not None and (
             len(self.chat_session_secret.encode("ascii", "ignore")) < 32
             or re.fullmatch(r"[A-Za-z0-9_-]+", self.chat_session_secret) is None
@@ -181,6 +196,21 @@ class BuilderLabConfig:
                 "KAIGO_BUILDER_HYBRID_ROUTING_ENABLED",
                 False,
             ),
+            codex_bridge_enabled=_bool("KAIGO_CODEX_BRIDGE_ENABLED", False),
+            codex_bridge_socket_path=os.getenv(
+                "KAIGO_CODEX_BRIDGE_SOCKET_PATH",
+                "/run/kaigo-codex/bridge.sock",
+            ).strip(),
+            codex_bridge_timeout_seconds=_int(
+                "KAIGO_CODEX_BRIDGE_TIMEOUT_SECONDS",
+                900,
+                30,
+                1800,
+            ),
+            codex_bridge_model=os.getenv(
+                "KAIGO_CODEX_BRIDGE_MODEL",
+                "gpt-5.6-luna",
+            ).strip(),
             agentrouter_api_key=_first_nonblank("AGENTROUTER_API_KEY"),
             agentrouter_base_url=os.getenv(
                 "AGENTROUTER_BASE_URL",
