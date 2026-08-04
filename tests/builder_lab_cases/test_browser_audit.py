@@ -514,6 +514,39 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(report.screenshots), 6)
         self.assertEqual(len(report.layouts), 8)
 
+    async def test_fullscreen_pointer_passthrough_root_allows_interactive_panel(self):
+        passthrough_css = AUDIT_CSS + """
+        .kaigo {
+          inset: 0;
+          width: 100%;
+          height: 100%;
+          pointer-events: none;
+        }
+        [data-region="launcher"] {
+          position: fixed;
+          right: 20px;
+          bottom: 20px;
+          pointer-events: auto;
+        }
+        [data-region="panel"] {
+          position: fixed;
+          right: 20px;
+          bottom: 20px;
+          pointer-events: auto;
+        }
+        @media (max-width: 600px) {
+          [data-region="launcher"], [data-region="panel"] {
+            right: 12px;
+            bottom: 12px;
+          }
+        }
+        """
+
+        report = await BrowserAudit().audit(audit_artifact(css=passthrough_css))
+
+        self.assertEqual(len(report.screenshots), 6)
+        self.assertEqual(len(report.layouts), 8)
+
     async def test_motion_is_disabled_before_every_evidence_capture(self):
         class InspectingAudit(BrowserAudit):
             def __init__(self):

@@ -2430,7 +2430,6 @@ class BrowserAudit:
                   clipPathApplied = clipPathApplied
                     || (style.clipPath && style.clipPath !== 'none')
                     || (style.webkitClipPath && style.webkitClipPath !== 'none');
-                  interactionBlocked = interactionBlocked || style.pointerEvents === 'none';
                 }
                 for (let ancestor = composedParent(geometry.clipNode); ancestor; ancestor = composedParent(ancestor)) {
                   const style = getComputedStyle(ancestor);
