@@ -52,3 +52,16 @@ def test_systemd_unit_runs_host_bridge_with_bounded_state_paths() -> None:
     assert "ReadWritePaths=/run/kaigo-codex" in unit
     assert "/var/lib/kaigo-codex-bridge" in unit
     assert "0.0.0.0" not in unit
+
+
+def test_builder_worker_drop_in_enables_and_orders_private_bridge() -> None:
+    drop_in = (
+        ROOT / "deploy/systemd/kaigo-builder-worker-codex-bridge.conf"
+    ).read_text(encoding="utf-8")
+
+    assert "Requires=kaigo-codex-bridge.service" in drop_in
+    assert "After=kaigo-codex-bridge.service" in drop_in
+    assert "KAIGO_CODEX_BRIDGE_ENABLED=true" in drop_in
+    assert "KAIGO_CODEX_BRIDGE_SOCKET_PATH=/run/kaigo-codex/bridge.sock" in drop_in
+    assert "KAIGO_CODEX_BRIDGE_SOCKET_DIR=/run/kaigo-codex" in drop_in
+    assert "KAIGO_CODEX_BRIDGE_MODEL=gpt-5.6-luna" in drop_in
