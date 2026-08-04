@@ -397,6 +397,42 @@ async def test_runner_serializes_same_conversation(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_finalize_waits_for_inflight_turn_and_archives_late_thread(
+    tmp_path,
+) -> None:
+    turn_started = asyncio.Event()
+    release_turn = asyncio.Event()
+    thread_id = str(uuid4())
+
+    async def spawn(command: tuple[str, ...], cwd: Path):
+        if "archive" in command:
+            return FakeProcess(b"")
+        turn_started.set()
+        return FakeProcess(_event_stream(thread_id), blocker=release_turn)
+
+    state = BridgeStateStore(tmp_path / "state")
+    runner = CodexRunner(
+        config=_config(tmp_path),
+        state=state,
+        spawn=spawn,
+    )
+    run_id = str(uuid4())
+    turn = asyncio.create_task(
+        runner.run_turn(CodexTurnRequest(run_id, "build", "Build it"))
+    )
+    await turn_started.wait()
+
+    finalize = asyncio.create_task(runner.finalize_run(run_id))
+    await asyncio.sleep(0)
+    assert not finalize.done()
+
+    release_turn.set()
+    await turn
+    assert await finalize == (thread_id,)
+    assert state.list_active_threads(run_id) == ()
+
+
+@pytest.mark.asyncio
 async def test_runner_terminates_timed_out_process(tmp_path) -> None:
     process = FakeProcess(b"", blocker=asyncio.Event())
     terminated: list[int] = []

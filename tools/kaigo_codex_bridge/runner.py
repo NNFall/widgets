@@ -122,10 +122,26 @@ class CodexRunner:
                 return await self._run_locked(request, model=model)
 
     async def finalize_run(self, run_id: str) -> tuple[str, ...]:
+        active_records = self.state.list_active_threads(run_id)
+        async with self._lock_guard:
+            inflight_keys = {
+                conversation_key
+                for candidate_run_id, conversation_key in self._conversation_locks
+                if candidate_run_id == run_id
+            }
+        conversation_keys = inflight_keys | {
+            record.conversation_key for record in active_records
+        }
         archived: list[str] = []
-        for record in self.state.list_active_threads(run_id):
-            lock = await self._conversation_lock(run_id, record.conversation_key)
+        for conversation_key in sorted(conversation_keys):
+            lock = await self._conversation_lock(run_id, conversation_key)
             async with lock:
+                record = self.state.get_active_thread(
+                    run_id=run_id,
+                    conversation_key=conversation_key,
+                )
+                if record is None:
+                    continue
                 async with self._semaphore:
                     await self._archive(record)
                 archived.append(record.thread_id)
