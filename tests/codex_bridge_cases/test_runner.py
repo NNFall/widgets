@@ -261,6 +261,56 @@ async def test_runner_uses_prompt_json_contract_for_dynamic_object_schema(
 
 
 @pytest.mark.asyncio
+async def test_runner_removes_cli_unsupported_unique_items_keyword(tmp_path) -> None:
+    thread_id = str(uuid4())
+    process = FakeProcess(_event_stream(thread_id, text='{"items":["one"]}'))
+    captured: dict[str, object] = {}
+
+    async def spawn(command: tuple[str, ...], cwd: Path):
+        schema_path = Path(command[command.index("--output-schema") + 1])
+        captured["schema"] = json.loads(schema_path.read_text(encoding="utf-8"))
+        return process
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {"type": "string"},
+                "uniqueItems": True,
+            }
+        },
+        "required": ["items"],
+        "additionalProperties": False,
+    }
+    runner = CodexRunner(
+        config=_config(tmp_path),
+        state=BridgeStateStore(tmp_path / "state"),
+        spawn=spawn,
+    )
+
+    result = await runner.run_turn(
+        CodexTurnRequest(
+            run_id=str(uuid4()),
+            conversation_key="reference",
+            prompt="Analyze reference.",
+            response_schema=schema,
+        )
+    )
+
+    assert captured["schema"] == {
+        "type": "object",
+        "properties": {
+            "items": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["items"],
+        "additionalProperties": False,
+    }
+    assert process.stdin_payload == b"Analyze reference."
+    assert result.parsed == {"items": ["one"]}
+
+
+@pytest.mark.asyncio
 async def test_runner_caps_global_concurrency_at_three(tmp_path) -> None:
     release = asyncio.Event()
     three_started = asyncio.Event()

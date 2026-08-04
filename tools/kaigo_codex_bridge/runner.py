@@ -281,7 +281,10 @@ class CodexRunner:
         ):
             schema_path = directory / "response-schema.json"
             schema_path.write_text(
-                json.dumps(request.response_schema, ensure_ascii=False),
+                json.dumps(
+                    _cli_schema_payload(request.response_schema),
+                    ensure_ascii=False,
+                ),
                 encoding="utf-8",
             )
             command.extend(("--output-schema", str(schema_path)))
@@ -436,6 +439,18 @@ def _cli_schema_supported(value: object) -> bool:
     if isinstance(value, list):
         return all(_cli_schema_supported(item) for item in value)
     return True
+
+
+def _cli_schema_payload(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {
+            key: _cli_schema_payload(item)
+            for key, item in value.items()
+            if key != "uniqueItems"
+        }
+    if isinstance(value, list):
+        return [_cli_schema_payload(item) for item in value]
+    return value
 
 
 def _turn_prompt(request: CodexTurnRequest) -> str:
