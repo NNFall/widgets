@@ -18,6 +18,7 @@ class CodexBridgeConfig:
     state_root: Path
     work_root: Path
     socket_path: Path
+    socket_gid: int = 10001
     max_images: int = 6
     max_image_bytes: int = 10 * 1024 * 1024
     max_request_bytes: int = 64 * 1024 * 1024
@@ -45,6 +46,10 @@ class CodexBridgeConfig:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"{name} must be a positive integer")
+        if isinstance(self.socket_gid, bool) or not isinstance(self.socket_gid, int):
+            raise ValueError("socket_gid must be an integer")
+        if self.socket_gid < 0:
+            raise ValueError("socket_gid cannot be negative")
 
     @classmethod
     def from_env(cls) -> "CodexBridgeConfig":
@@ -76,6 +81,7 @@ class CodexBridgeConfig:
                     "/run/kaigo-codex/bridge.sock",
                 )
             ),
+            socket_gid=_env_int("KAIGO_CODEX_BRIDGE_SOCKET_GID", 10001),
             max_images=_env_int("KAIGO_CODEX_BRIDGE_MAX_IMAGES", 6),
             max_image_bytes=_env_int(
                 "KAIGO_CODEX_BRIDGE_MAX_IMAGE_BYTES", 10 * 1024 * 1024
