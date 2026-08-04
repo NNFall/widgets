@@ -64,8 +64,8 @@ class ModelAccountingError(RuntimeError):
 class ProviderTarget:
     provider: str
     model: str
-    input_price_microusd_per_million: int
-    output_price_microusd_per_million: int
+    input_price_microusd_per_million: int | None
+    output_price_microusd_per_million: int | None
     capabilities: ProviderCapabilities | None = None
     cache_read_price_microusd_per_million: int | None = None
     cache_write_price_microusd_per_million: int | None = None
@@ -365,6 +365,14 @@ class ModelRouter:
         except KeyError as error:
             raise ValueError(f"no model policy for {role}:{mode}") from error
 
+        provider_request = _with_invocation_metadata(
+            request,
+            run_id=run_id,
+            role=role,
+            mode=mode,
+            context=context,
+        )
+
         route_deadline = (
             time.monotonic() + timeout_seconds
             if timeout_seconds is not None
@@ -413,7 +421,7 @@ class ModelRouter:
                         raise ProviderTimeout(
                             "model route deadline expired during audit"
                         ) from error
-                _ensure_supported(provider, target, request)
+                _ensure_supported(provider, target, provider_request)
                 dispatched_record = replace(
                     dispatched_record,
                     provider_dispatched=True,
@@ -443,7 +451,7 @@ class ModelRouter:
                 try:
                     response = await _bounded_provider_generate(
                         provider,
-                        request,
+                        provider_request,
                         model=target.model,
                         timeout_seconds=attempt_timeout,
                         finalization_deadline=finalization_deadline,
@@ -725,6 +733,30 @@ def _ensure_supported(
         raise UnsupportedModelRequest(
             f"{target.provider} does not support structured output"
         )
+
+
+def _with_invocation_metadata(
+    request: ModelRequest,
+    *,
+    run_id: UUID | None,
+    role: str,
+    mode: str,
+    context: ModelInvocationContext,
+) -> ModelRequest:
+    metadata = dict(request.metadata)
+    metadata.update(
+        {
+            "_kaigo_run_id": str(run_id) if run_id is not None else None,
+            "_kaigo_role": role,
+            "_kaigo_mode": mode,
+            "_kaigo_stage": context.stage,
+            "_kaigo_operation": context.operation,
+            "_kaigo_semantic_attempt": context.semantic_attempt,
+            "_kaigo_candidate_id": context.candidate_id,
+            "_kaigo_persona": context.persona,
+        }
+    )
+    return replace(request, metadata=metadata)
 
 
 def _add_usage(left: ModelUsage, right: ModelUsage) -> ModelUsage:

@@ -395,6 +395,86 @@ async def test_fallback_attempts_share_explicit_invocation_lineage() -> None:
 
 
 @pytest.mark.asyncio
+async def test_router_injects_safe_lineage_metadata_without_mutating_request() -> None:
+    provider = FakeProvider()
+    router = ModelRouter(
+        providers={"provider": provider},
+        policies={
+            ("direction_candidate", "express"): ModelPolicy(
+                prompt_version="direction-v2",
+                targets=(ProviderTarget("provider", "model", 1, 1),),
+            )
+        },
+        audit=InMemoryModelCallAudit(),
+    )
+    run_id = uuid4()
+    request = ModelRequest(
+        prompt="Generate",
+        metadata={"thinking_level": "high", "_kaigo_role": "spoofed"},
+    )
+    context = ModelInvocationContext(
+        stage_attempt_id=uuid4(),
+        stage="art_direction",
+        operation="direction_proposal",
+        semantic_attempt=2,
+        candidate_id="candidate-b",
+        persona="bold",
+    )
+
+    await router.generate(
+        role="direction_candidate",
+        mode="express",
+        request=request,
+        context=context,
+        run_id=run_id,
+    )
+
+    assert request.metadata == {
+        "thinking_level": "high",
+        "_kaigo_role": "spoofed",
+    }
+    assert provider.requests[0] is not request
+    assert provider.requests[0].metadata == {
+        "thinking_level": "high",
+        "_kaigo_run_id": str(run_id),
+        "_kaigo_role": "direction_candidate",
+        "_kaigo_mode": "express",
+        "_kaigo_stage": "art_direction",
+        "_kaigo_operation": "direction_proposal",
+        "_kaigo_semantic_attempt": 2,
+        "_kaigo_candidate_id": "candidate-b",
+        "_kaigo_persona": "bold",
+    }
+
+
+@pytest.mark.asyncio
+async def test_router_records_unknown_pricing_without_false_zero_cost() -> None:
+    audit = InMemoryModelCallAudit()
+    router = ModelRouter(
+        providers={"codex": FakeProvider()},
+        policies={
+            ("widget_generator", "express"): ModelPolicy(
+                prompt_version="builder-v1",
+                targets=(ProviderTarget("codex", "gpt-5.6-luna", None, None),),
+            )
+        },
+        audit=audit,
+    )
+
+    response = await router.generate(
+        role="widget_generator",
+        mode="express",
+        request=ModelRequest(prompt="Generate"),
+        context=_context("widget_generation"),
+    )
+
+    assert audit.calls[0].cost_state == "unknown"
+    assert audit.calls[0].cost_microusd is None
+    assert response.raw is not None
+    assert response.raw["route_attempts"][0]["cost_state"] == "unknown"
+
+
+@pytest.mark.asyncio
 async def test_in_memory_audit_rejects_conflicting_immutable_lineage() -> None:
     provider = FakeProvider()
     audit = InMemoryModelCallAudit()
@@ -506,7 +586,11 @@ async def test_image_request_skips_incapable_primary_and_audits_failure() -> Non
 
     assert response.request_id == "request-gemini-3.5-flash"
     assert primary.requests == []
-    assert fallback.requests == [request]
+    assert len(fallback.requests) == 1
+    assert fallback.requests[0].prompt == request.prompt
+    assert fallback.requests[0].images == request.images
+    assert fallback.requests[0].metadata["_kaigo_role"] == "visual_critic"
+    assert fallback.requests[0].metadata["_kaigo_operation"] == "visual_critic"
     assert [call.status for call in audit.calls] == ["failed", "completed"]
     assert audit.calls[0].error_code == "unsupported_request"
     assert [call.status for call in audit.history[:2]] == ["dispatched", "failed"]
