@@ -43,7 +43,12 @@ def test_systemd_unit_runs_host_bridge_with_bounded_state_paths() -> None:
     assert "KAIGO_CODEX_BRIDGE_REASONING_EFFORT=max" in unit
     assert "NoNewPrivileges=true" in unit
     assert "ProtectSystem=strict" in unit
+    assert "RuntimeDirectory=kaigo-codex" in unit
+    assert "RuntimeDirectoryMode=0770" in unit
+    assert "StateDirectory=kaigo-codex-bridge" in unit
+    assert "StateDirectoryMode=0700" in unit
+    assert "ExecStartPre=/usr/bin/install" not in unit
+    assert "Group=10001" not in unit
     assert "ReadWritePaths=/run/kaigo-codex" in unit
-    assert "/var/lib/kaigo/codex-bridge" in unit
+    assert "/var/lib/kaigo-codex-bridge" in unit
     assert "0.0.0.0" not in unit
-

@@ -16,10 +16,12 @@ Environment=KAIGO_CODEX_BRIDGE_MAX_CONCURRENCY=3
 Environment=KAIGO_CODEX_BRIDGE_TIMEOUT_SECONDS=900
 Environment=KAIGO_CODEX_BRIDGE_SOCKET_PATH=/run/kaigo-codex/bridge.sock
 Environment=KAIGO_CODEX_BRIDGE_SOCKET_GID=10001
-Environment=KAIGO_CODEX_BRIDGE_STATE_ROOT=/var/lib/kaigo/codex-bridge
-Environment=KAIGO_CODEX_BRIDGE_WORK_ROOT=/var/lib/kaigo/codex-bridge/work
-ExecStartPre=/usr/bin/install -d -o root -g 10001 -m 0770 /run/kaigo-codex
-ExecStartPre=/usr/bin/install -d -o root -g root -m 0700 /var/lib/kaigo/codex-bridge
+Environment=KAIGO_CODEX_BRIDGE_STATE_ROOT=/var/lib/kaigo-codex-bridge
+Environment=KAIGO_CODEX_BRIDGE_WORK_ROOT=/var/lib/kaigo-codex-bridge/work
+RuntimeDirectory=kaigo-codex
+RuntimeDirectoryMode=0770
+StateDirectory=kaigo-codex-bridge
+StateDirectoryMode=0700
 ExecStart=/opt/kaigo/codex-bridge-venv/bin/python /opt/kaigo/current/scripts/run_codex_bridge.py
 Restart=on-failure
 RestartSec=5
@@ -37,7 +39,7 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/run/kaigo-codex /var/lib/kaigo/codex-bridge /root/.codex
+ReadWritePaths=/run/kaigo-codex /var/lib/kaigo-codex-bridge /root/.codex
 
 [Install]
 WantedBy=multi-user.target
