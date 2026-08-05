@@ -1,4 +1,5 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { AuthGate } from './AuthGate';
@@ -161,4 +162,33 @@ it('renders Studio immediately for an authenticated browser session', async () =
   render(<AuthGate><h1>Студия доступна</h1></AuthGate>);
 
   await waitFor(() => expect(screen.getByRole('heading', { name: 'Студия доступна' })).toBeInTheDocument());
+});
+
+it('recovers from a temporary session error without exposing raw failure text', async () => {
+  let sessionAttempt = 0;
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === '/api/analytics/entry') return new Response(null, { status: 204 });
+    if (url === '/api/auth/session') {
+      sessionAttempt += 1;
+      if (sessionAttempt === 1) return new Response(null, { status: 502 });
+      return new Response(JSON.stringify({
+        enabled: true,
+        authenticated: true,
+        email: 'owner@example.com',
+      }));
+    }
+    throw new Error(`unexpected request: ${url}`);
+  }));
+  const user = userEvent.setup();
+
+  render(<AuthGate><h1>Студия доступна</h1></AuthGate>);
+
+  expect(await screen.findByRole('heading', { name: 'Студия сейчас не открылась' })).toBeVisible();
+  expect(screen.queryByText('session:502')).not.toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Вернуться на главную' })).toHaveAttribute('href', '/');
+
+  await user.click(screen.getByRole('button', { name: 'Повторить' }));
+  expect(await screen.findByRole('heading', { name: 'Студия доступна' })).toBeVisible();
+  expect(sessionAttempt).toBe(2);
 });

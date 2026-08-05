@@ -340,7 +340,7 @@ git commit -m "feat: add studio widget library"
 - Modify: `frontend/src/auth/AuthGate.tsx`
 - Modify: `frontend/src/auth/AuthGate.test.tsx`
 
-- [ ] **Step 1: Write the failing recovery test**
+- [x] **Step 1: Write the failing recovery test**
 
 Mock `/api/auth/session` to return 502 once and an authenticated session on retry. Assert the friendly heading, hidden `session:502`, `Повторить`, `Вернуться на главную`, and successful child render after the retry click.
 
@@ -351,23 +351,23 @@ await user.click(screen.getByRole('button', { name: 'Повторить' }));
 expect(await screen.findByRole('heading', { name: 'Студия доступна' })).toBeVisible();
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `.\frontend\node_modules\.bin\vitest.cmd run --root frontend src/auth/AuthGate.test.tsx --maxWorkers=1`
 
 Expected: FAIL because the error state has no recovery actions and exposes raw content.
 
-- [ ] **Step 3: Implement retryable hydration**
+- [x] **Step 3: Implement retryable hydration**
 
 Add `attempt` state and include it in the hydration effect dependency. Use `Студия сейчас не открылась`, a sentence that the user's work is safe, retry button, home link, and raw error only inside a closed `Технические детали` disclosure.
 
-- [ ] **Step 4: Run and verify GREEN**
+- [x] **Step 4: Run and verify GREEN**
 
 Run: `.\frontend\node_modules\.bin\vitest.cmd run --root frontend src/auth/AuthGate.test.tsx --maxWorkers=1`
 
 Expected: draft, OAuth, authenticated-session, and recovery tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add frontend/src/auth/AuthGate.tsx frontend/src/auth/AuthGate.test.tsx

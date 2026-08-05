@@ -3793,6 +3793,13 @@ a {
 .auth-gate__actions a { min-height: 54px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; border: 1px solid rgba(7, 27, 47, .14); border-radius: 14px; color: var(--ink); background: #fff; font-weight: 800; text-decoration: none; }
 .auth-gate__actions a:first-child { color: white; border-color: var(--ink); background: var(--ink); }
 .auth-gate__card small { color: #7a858c; }
+.auth-gate__recovery { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+.auth-gate__recovery button,
+.auth-gate__recovery a { min-height: 48px; padding: 0 18px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid rgba(7, 27, 47, .15); border-radius: 12px; color: var(--ink); background: #fff; font: inherit; font-weight: 800; text-decoration: none; }
+.auth-gate__recovery button { color: #fff; border-color: var(--ink); background: var(--ink); cursor: pointer; }
+.auth-gate__details { margin-top: 18px; border-top: 1px solid rgba(7, 27, 47, .1); }
+.auth-gate__details summary { min-height: 44px; display: flex; align-items: center; color: #667680; cursor: pointer; font-size: 13px; font-weight: 700; }
+.auth-gate__details p { margin: 0 0 4px; color: #77858d; font-size: 13px; }
 
 .free-result-section {
   min-height: auto;

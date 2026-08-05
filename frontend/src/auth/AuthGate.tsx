@@ -1,4 +1,4 @@
-import { ArrowRight, LockKey, SpinnerGap } from '@phosphor-icons/react';
+import { ArrowClockwise, ArrowRight, LockKey, SpinnerGap } from '@phosphor-icons/react';
 import { type ReactNode, useEffect, useState } from 'react';
 
 import { ensureLandingJourney } from '../shared/journey';
@@ -35,8 +35,16 @@ function requestedAuthErrorMessage() {
   return OAUTH_ERROR_MESSAGES[code] ?? OAUTH_ERROR_MESSAGES.oauth_failed;
 }
 
+function safeErrorDetail(message: string) {
+  const responseCode = message.match(/^(?:session|claim):(\d{3})$/)?.[1];
+  if (responseCode) return `Код ответа сервиса: ${responseCode}`;
+  if (message.startsWith('draft:')) return 'Не удалось подтвердить сохранённый черновик.';
+  return 'Не удалось подтвердить текущую сессию.';
+}
+
 export function AuthGate({ children }: { children: ReactNode }) {
   const [state, setState] = useState<GateState>({ status: 'loading' });
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -98,7 +106,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
     void hydrate();
     return () => controller.abort();
-  }, []);
+  }, [attempt]);
 
   if (state.status === 'open') return <>{children}</>;
 
@@ -113,11 +121,27 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (state.status === 'error') {
     return (
       <main className="auth-gate">
-        <section className="auth-gate__card" role="alert">
+        <section className="auth-gate__card auth-gate__card--error" role="alert">
           <LockKey size={34} aria-hidden />
-          <h1>Студия временно недоступна</h1>
-          <p>Мы не запускаем дорогую генерацию без подтверждённой сессии. Обновите страницу через минуту.</p>
-          <small>{state.message}</small>
+          <h1>Студия сейчас не открылась</h1>
+          <p>Ваши проекты и сохранённая работа в безопасности. Попробуйте подключиться ещё раз.</p>
+          <div className="auth-gate__recovery">
+            <button
+              type="button"
+              onClick={() => {
+                setState({ status: 'loading' });
+                setAttempt((value) => value + 1);
+              }}
+            >
+              <ArrowClockwise aria-hidden size={18} />
+              Повторить
+            </button>
+            <a href="/">Вернуться на главную</a>
+          </div>
+          <details className="auth-gate__details">
+            <summary>Технические детали</summary>
+            <p>{safeErrorDetail(state.message)}</p>
+          </details>
         </section>
       </main>
     );
