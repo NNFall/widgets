@@ -454,7 +454,7 @@ describe('durable SaaS Studio flow', () => {
     expect(previewUrl.searchParams.get('channel')).toMatch(/^[a-f0-9]{36}$/);
     expect(frame).not.toHaveAttribute('srcdoc');
     expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
-    expect(screen.queryByText('Бесплатный результат готов')).not.toBeInTheDocument();
+    expect(screen.queryByText('Подключите виджет к сайту')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Опубликовать и подключить' })).not.toBeInTheDocument();
     expect(screen.queryByText(/тариф/i)).not.toBeInTheDocument();
     expect(fetch).not.toHaveBeenCalledWith('/api/billing/subscription', expect.anything());
@@ -892,7 +892,7 @@ describe('durable SaaS Studio flow', () => {
     render(<StudioPage />);
 
     expect((await screen.findAllByText('Проверено')).length).toBeGreaterThanOrEqual(1);
-    expect(await screen.findByText('Бесплатный результат готов')).toBeVisible();
+    expect(await screen.findByText('Подключите виджет к сайту')).toBeVisible();
     expect(await screen.findByRole('button', { name: 'Опубликовать и подключить' })).toBeEnabled();
     expect(screen.getByLabelText('Что изменить в виджете?')).toBeVisible();
     expect(screen.getByText(
@@ -1295,7 +1295,7 @@ describe('durable SaaS Studio flow', () => {
     expect(screen.getByText('Виджет готов к просмотру. Проверьте его на компьютере и телефоне.')).toBeVisible();
     expect(screen.queryByText('Точная историческая концепция')).not.toBeInTheDocument();
     expect(requests.some(({ url }) => url === '/api/artifacts/artifact-version-1')).toBe(true);
-    const domains = await screen.findByLabelText('Разрешённые домены');
+    const domains = await screen.findByLabelText('На каких сайтах разрешить виджет');
     await user.type(domains, 'https://example.com');
     const publishButton = await screen.findByRole('button', { name: 'Опубликовать виджет' });
     await waitFor(() => expect(publishButton).toBeEnabled());

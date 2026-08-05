@@ -64,4 +64,12 @@ describe('Studio accessibility contracts', () => {
     const reducedMotionRules = stylesSource.slice(stylesSource.lastIndexOf('@media (prefers-reduced-motion: reduce)'));
     expect(reducedMotionRules).toMatch(/\.studio-activity__message[\s\S]*animation:\s*none !important/);
   });
+
+  it('uses page scrolling, readable controls, and a compact responsive shell', () => {
+    expect(stylesSource).toMatch(/\.studio-shell\s*\{[^}]*max-width:\s*1480px/s);
+    expect(stylesSource).toMatch(/\.studio-rail\s*\{[^}]*overflow-y:\s*visible/s);
+    expect(stylesSource).not.toMatch(/\.studio-timeline__list\s*\{[^}]*max-height:\s*330px/s);
+    expect(stylesSource).toMatch(/min-height:\s*44px/);
+    expect(stylesSource).toMatch(/@media \(max-width:\s*390px\)/);
+  });
 });

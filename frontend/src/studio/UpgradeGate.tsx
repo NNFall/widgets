@@ -72,7 +72,7 @@ function subscriptionEndLabel(value: string | undefined) {
     day: 'numeric',
     month: 'long',
     year: 'numeric',
-  }).format(date);
+  }).format(date).replace(/\.$/, '');
 }
 
 export function UpgradeGate({
@@ -459,6 +459,14 @@ export function UpgradeGate({
   const embedSnippet = publication
     ? `<script src="${publication.embed_url}" async></script>`
     : null;
+  const heading = active
+    ? publication ? 'Виджет опубликован' : 'Всё готово к публикации'
+    : 'Подключите виджет к сайту';
+  const description = active
+    ? publication
+      ? 'Виджет уже доступен на разрешённых сайтах. Новую версию можно опубликовать здесь же.'
+      : 'Укажите сайты, проверьте виджет и опубликуйте его. Код подключения появится после публикации.'
+    : 'Первая версия сохранена. Тариф открывает публикацию, доработки и подключение виджета к сайту.';
 
   return (
     <aside id="studio-publication" className="studio-upgrade" aria-labelledby="studio-upgrade-title">
@@ -466,14 +474,8 @@ export function UpgradeGate({
         ? <CheckCircle aria-hidden size={22} weight="fill" />
         : <Sparkle aria-hidden size={22} weight="fill" />}
       <div>
-        <h2 id="studio-upgrade-title">
-          {active ? 'Тариф активирован' : 'Бесплатный результат готов'}
-        </h2>
-        <p>
-          {active
-            ? 'Чат в предпросмотре нужен для проверки ответов посетителю. Он не изменяет сам виджет.'
-            : 'Он останется доступен в проекте. Тариф открывает публикацию и подключение виджета к вашему сайту.'}
-        </p>
+        <h2 id="studio-upgrade-title">{heading}</h2>
+        <p>{description}</p>
         {!active && (
           <label className="studio-upgrade__renewal-consent">
             <input
@@ -515,17 +517,17 @@ export function UpgradeGate({
           <div className="studio-upgrade__publication">
             <p className="studio-upgrade__renewal-status">
               {subscription?.auto_renew
-                ? 'Автопродление включено.'
-                : `Автопродление выключено. Доступ сохранится до ${subscriptionEndLabel(subscription?.current_period_end)}.`}
+                ? `Следующее продление — ${subscriptionEndLabel(subscription.next_renewal_at ?? subscription.current_period_end)}. Автопродление включено.`
+                : `Тариф действует до ${subscriptionEndLabel(subscription?.current_period_end)}. Автопродление выключено.`}
             </p>
             {typeof subscription?.generation_tokens_remaining === 'number' && (
               <p className="studio-upgrade__renewal-status">
-                Осталось токенов генерации: {new Intl.NumberFormat('ru-RU').format(
+                Доступный объём доработок: {new Intl.NumberFormat('ru-RU').format(
                   Math.max(0, subscription.generation_tokens_remaining),
-                )}
+                )} токенов
               </p>
             )}
-            <label htmlFor="studio-publication-domains">Разрешённые домены</label>
+            <label htmlFor="studio-publication-domains">На каких сайтах разрешить виджет</label>
             <textarea
               id="studio-publication-domains"
               value={allowedDomains}
@@ -533,17 +535,40 @@ export function UpgradeGate({
               placeholder="https://example.com"
               disabled={publicationPending}
             />
-            <p>По одному HTTPS origin в строке. Если оставить поле пустым, сервер разрешит домен исходного сайта.</p>
+            <p>Укажите каждый адрес с новой строки, например https://example.com. Если поле пустое, будет использован сайт проекта.</p>
             {publicationError && <p className="studio-upgrade__error" role="alert">{publicationError}</p>}
             {embedSnippet && publication && (
               <>
                 <p role="status">
                   {versionsEnabled && publishedVersionOrdinal
-                    ? `Версия проекта ${publishedVersionOrdinal}, ревизия артефакта ${publication.revision} опубликована.`
-                    : `Ревизия ${publication.revision} опубликована.`}
-                  {' '}Stable embed URL не меняется при обновлениях.
+                    ? `Версия ${publishedVersionOrdinal} опубликована и доступна на разрешённых сайтах.`
+                    : 'Виджет опубликован и доступен на разрешённых сайтах.'}
                 </p>
-                <code>{embedSnippet}</code>
+                <details className="studio-upgrade__developer">
+                  <summary>Код для разработчика</summary>
+                  <div>
+                    <p>Передайте этот код человеку, который управляет сайтом.</p>
+                    <code>{embedSnippet}</code>
+                    <dl>
+                      <div>
+                        <dt>Постоянный адрес подключения</dt>
+                        <dd>{publication.embed_url}</dd>
+                      </div>
+                      <div>
+                        <dt>Версия файла</dt>
+                        <dd>{publication.revision}</dd>
+                      </div>
+                      <div>
+                        <dt>Публикация</dt>
+                        <dd>{publication.release_id}</dd>
+                      </div>
+                      <div>
+                        <dt>Сборка</dt>
+                        <dd>{publication.artifact_id}</dd>
+                      </div>
+                    </dl>
+                  </div>
+                </details>
               </>
             )}
           </div>
@@ -558,8 +583,8 @@ export function UpgradeGate({
           {rollbackTarget && (
             <button type="button" onClick={() => void rollback()} disabled={publicationPending}>
               {versionsEnabled && rollbackVersionOrdinal
-                ? `Откатить к версии проекта ${rollbackVersionOrdinal}, ревизии артефакта ${rollbackTarget.revision}`
-                : `Откатить к ревизии ${rollbackTarget.revision}`}
+                ? `Вернуть версию ${rollbackVersionOrdinal}`
+                : 'Вернуть предыдущую публикацию'}
             </button>
           )}
           {subscription?.auto_renew && (

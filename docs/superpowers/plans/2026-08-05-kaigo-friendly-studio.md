@@ -430,17 +430,17 @@ git commit -m "feat: simplify studio workspace for business owners"
 - Modify: `frontend/src/studio/StudioAccessibilityContracts.test.tsx`
 - Modify: `frontend/src/styles.css`
 
-- [ ] **Step 1: Write failing publication disclosure tests**
+- [x] **Step 1: Write failing publication disclosure tests**
 
 For an active published subscription, assert `Виджет опубликован` and `Код для разработчика`, and assert the script snippet is hidden until the disclosure opens. Assert `Stable embed URL`, `HTTPS origin`, and the raw plan code are absent from the default copy.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `.\frontend\node_modules\.bin\vitest.cmd run --root frontend src/studio/UpgradeGate.test.tsx --maxWorkers=1`
 
 Expected: FAIL because developer content is visible and English terminology remains.
 
-- [ ] **Step 3: Implement friendly subscription and publication copy**
+- [x] **Step 3: Implement friendly subscription and publication copy**
 
 ```ts
 const heading = active
@@ -450,7 +450,7 @@ const heading = active
 
 Describe auto-renewal with the next renewal or access-end date. Rename the origin field to `На каких сайтах разрешить виджет`. Move the snippet, stable URL, release and artifact identities, and revision details into a closed `Код для разработчика` disclosure. Keep existing handlers unchanged.
 
-- [ ] **Step 4: Write failing CSS contract assertions**
+- [x] **Step 4: Write failing CSS contract assertions**
 
 ```ts
 expect(stylesSource).toMatch(/\.studio-rail\s*\{[^}]*overflow-y:\s*visible/s);
@@ -460,17 +460,17 @@ expect(stylesSource.slice(stylesSource.lastIndexOf('@media (prefers-reduced-moti
   .toMatch(/\.studio-activity__message[\s\S]*animation:\s*none !important/);
 ```
 
-- [ ] **Step 5: Implement responsive Studio CSS**
+- [x] **Step 5: Implement responsive Studio CSS**
 
 Use a maximum 1480 px shell and `minmax(300px, 340px) minmax(0, 1fr)` desktop grid. Remove rail and timeline max-height scrolling. Set ordinary text to at least 14 px, secondary text to at least 12 px, and controls to at least 44 px. At 860 px use one column with progress before preview. At 390 px keep 16 px gutters and full-width actions. Animate only opacity and transform for at most 160 ms; remove nonessential motion under reduced motion.
 
-- [ ] **Step 6: Run focused tests and verify GREEN**
+- [x] **Step 6: Run focused tests and verify GREEN**
 
 Run: `.\frontend\node_modules\.bin\vitest.cmd run --root frontend src/studio/UpgradeGate.test.tsx src/studio/StudioAccessibilityContracts.test.tsx --maxWorkers=1`
 
 Expected: publication and CSS contracts pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add frontend/src/studio/UpgradeGate.tsx frontend/src/studio/UpgradeGate.test.tsx frontend/src/studio/StudioAccessibilityContracts.test.tsx frontend/src/styles.css

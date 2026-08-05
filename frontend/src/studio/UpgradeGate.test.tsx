@@ -230,8 +230,8 @@ describe('UpgradeGate', () => {
       await Promise.resolve();
     });
     expect(api.getBillingSubscription).toHaveBeenCalledTimes(2);
-    expect(screen.getByText(/тариф активирован/i)).toBeVisible();
-    expect(screen.getByText(/Осталось токенов генерации: 750[\s ]000/)).toBeVisible();
+    expect(screen.getByText(/всё готово к публикации/i)).toBeVisible();
+    expect(screen.getByText(/Доступный объём доработок: 750[\s ]000 токенов/)).toBeVisible();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
@@ -372,7 +372,7 @@ describe('UpgradeGate', () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByText('Тариф активирован')).toBeVisible();
+    expect(screen.getByText('Всё готово к публикации')).toBeVisible();
     expect(screen.queryByRole('button', { name: /опубликовать и подключить/i })).not.toBeInTheDocument();
     expect(api.createBillingCheckout).not.toHaveBeenCalled();
   });
@@ -404,8 +404,8 @@ describe('UpgradeGate', () => {
       'csrf-billing',
     );
     expect(screen.getByText(/автопродление выключено/i)).toBeVisible();
-    expect(screen.getByText(/доступ сохранится до/i)).toBeVisible();
-    expect(screen.getByText('Тариф активирован')).toBeVisible();
+    expect(screen.getByText(/тариф действует до/i)).toBeVisible();
+    expect(screen.getByText('Всё готово к публикации')).toBeVisible();
   });
 
   it('publishes the selected accepted artifact, shows a stable embed snippet, and rolls back a known prior release', async () => {
@@ -454,7 +454,7 @@ describe('UpgradeGate', () => {
     await act(async () => {
       await Promise.resolve();
     });
-    fireEvent.change(screen.getByLabelText('Разрешённые домены'), {
+    fireEvent.change(screen.getByLabelText('На каких сайтах разрешить виджет'), {
       target: { value: 'https://example.com' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Опубликовать виджет' }));
@@ -472,11 +472,14 @@ describe('UpgradeGate', () => {
       },
       'csrf-billing',
     );
-    expect(screen.getByText(
+    const firstSnippet = screen.getByText(
       '<script src="https://widgets.kaigo.space/embed/stable-widget.js" async></script>',
-    )).toBeVisible();
+    );
+    expect(firstSnippet).not.toBeVisible();
+    fireEvent.click(screen.getByText('Код для разработчика'));
+    expect(firstSnippet).toBeVisible();
     expect(screen.getByText(
-      'Чат в предпросмотре нужен для проверки ответов посетителю. Он не изменяет сам виджет.',
+      'Виджет уже доступен на разрешённых сайтах. Новую версию можно опубликовать здесь же.',
     )).toBeVisible();
     expect(screen.queryByText(/дорабат/i)).not.toBeInTheDocument();
 
@@ -489,7 +492,7 @@ describe('UpgradeGate', () => {
         revision={5}
       />,
     );
-    fireEvent.change(screen.getByLabelText('Разрешённые домены'), {
+    fireEvent.change(screen.getByLabelText('На каких сайтах разрешить виджет'), {
       target: { value: 'https://example.com\nhttps://shop.example.com' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Обновить публикацию' }));
@@ -507,7 +510,7 @@ describe('UpgradeGate', () => {
       'csrf-billing',
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Откатить к ревизии 4' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Вернуть предыдущую публикацию' }));
     await act(async () => {
       await Promise.resolve();
     });
@@ -585,18 +588,21 @@ describe('UpgradeGate', () => {
         ]}
       />,
     );
-    expect(await screen.findByText(
+    const hydratedSnippet = await screen.findByText(
       '<script src="https://widgets.kaigo.space/embed/stable-widget.js" async></script>',
-    )).toBeVisible();
-    expect(screen.getByLabelText('Разрешённые домены')).toHaveValue(
+    );
+    expect(hydratedSnippet).not.toBeVisible();
+    fireEvent.click(screen.getByText('Код для разработчика'));
+    expect(hydratedSnippet).toBeVisible();
+    expect(screen.getByLabelText('На каких сайтах разрешить виджет')).toHaveValue(
       'https://example.com\nhttps://shop.example.com',
     );
 
     expect(screen.getByRole('status')).toHaveTextContent(
-      'Версия проекта 5, ревизия артефакта 7 опубликована.',
+      'Версия 5 опубликована и доступна на разрешённых сайтах.',
     );
     fireEvent.click(screen.getByRole('button', {
-      name: 'Откатить к версии проекта 4, ревизии артефакта 7',
+      name: 'Вернуть версию 4',
     }));
     await act(async () => {
       await Promise.resolve();
@@ -607,6 +613,56 @@ describe('UpgradeGate', () => {
       'release-5',
       'csrf-billing',
     );
+  });
+
+  it('keeps developer publication details collapsed for a business owner', async () => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
+    vi.mocked(api.getProjectPublication).mockResolvedValue({
+      publication: {
+        publication_id: 'publication-123',
+        stable_key: 'stable-widget',
+        state: 'published',
+        allowed_domains: ['https://example.com'],
+        embed_url: 'https://widgets.kaigo.space/embed/stable-widget.js',
+        runtime_url: 'https://widgets.kaigo.space/runtime/stable-widget',
+        active_release: {
+          release_id: 'release-5',
+          artifact_id: 'artifact-456',
+          project_version_id: 'version-5',
+          previous_release_id: null,
+          revision: 7,
+          checksum: 'checksum-5',
+          created_at: '2026-07-28T13:00:00Z',
+        },
+        releases: [],
+      },
+    });
+
+    render(
+      <UpgradeGate
+        {...gateProps}
+        projectVersionId="version-5"
+        projectVersionOrdinal={5}
+        projectVersions={[{ id: 'version-5', ordinal: 5 }]}
+      />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+    expect(screen.getByLabelText('На каких сайтах разрешить виджет')).toBeVisible();
+    expect(screen.queryByText(/Stable embed URL/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/HTTPS origin/i)).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent('starter_monthly');
+
+    const developerDisclosure = screen.getByText('Код для разработчика').closest('details');
+    const snippet = screen.getByText(
+      '<script src="https://widgets.kaigo.space/embed/stable-widget.js" async></script>',
+    );
+    expect(developerDisclosure).not.toHaveAttribute('open');
+    expect(snippet).not.toBeVisible();
+
+    fireEvent.click(screen.getByText('Код для разработчика'));
+    expect(snippet).toBeVisible();
   });
 
   it('reloads authoritative publication state after a CAS conflict without retrying', async () => {
@@ -644,7 +700,7 @@ describe('UpgradeGate', () => {
     ));
 
     render(<UpgradeGate {...gateProps} />);
-    const domains = await screen.findByLabelText('Разрешённые домены');
+    const domains = await screen.findByLabelText('На каких сайтах разрешить виджет');
     await waitFor(() => expect(api.getProjectPublication).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Опубликовать виджет' })).toBeEnabled());
     fireEvent.change(domains, { target: { value: 'https://example.com' } });
@@ -657,7 +713,7 @@ describe('UpgradeGate', () => {
     );
     expect(screen.getByText(
       '<script src="https://widgets.kaigo.space/embed/stable-widget.js" async></script>',
-    )).toBeVisible();
+    )).not.toBeVisible();
     expect(domains).toHaveValue('https://other.example.com');
   });
 
@@ -685,7 +741,7 @@ describe('UpgradeGate', () => {
         projectVersionOrdinal={undefined}
       />,
     );
-    const domains = await screen.findByLabelText('Разрешённые домены');
+    const domains = await screen.findByLabelText('На каких сайтах разрешить виджет');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Опубликовать виджет' })).toBeEnabled());
     fireEvent.change(domains, { target: { value: 'https://example.com' } });
     fireEvent.click(screen.getByRole('button', { name: 'Опубликовать виджет' }));
