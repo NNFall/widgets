@@ -9,6 +9,7 @@ import type {
   BuilderRunSnapshot,
   SaasEvent,
   SaasProject,
+  SaasProjectList,
   SaasProjectVersionList,
   SaasPreviewArtifact,
   SaasRunSnapshot,
@@ -210,6 +211,10 @@ export function disableBillingAutoRenew(
 
 export function getProject(projectId: string) {
   return saasRequestJson<SaasProject>(`/api/projects/${encodeURIComponent(projectId)}`);
+}
+
+export function getProjects(signal?: AbortSignal) {
+  return saasRequestJson<SaasProjectList>('/api/projects', { signal });
 }
 
 export function getProjectVersions(projectId: string, signal?: AbortSignal) {

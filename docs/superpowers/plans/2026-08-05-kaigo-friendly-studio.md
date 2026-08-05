@@ -262,7 +262,7 @@ git commit -m "feat: replace event log with friendly progress"
 - Modify: `frontend/src/studio/StudioComposer.tsx`
 - Modify: `frontend/src/studio/StudioPage.tsx`
 
-- [ ] **Step 1: Write the failing API test**
+- [x] **Step 1: Write the failing API test**
 
 ```ts
 it('lists the authenticated owner projects', async () => {
@@ -276,13 +276,13 @@ it('lists the authenticated owner projects', async () => {
 });
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `.\frontend\node_modules\.bin\vitest.cmd run --root frontend src/studio/api.test.ts --maxWorkers=1`
 
 Expected: FAIL because `getProjects` is not exported.
 
-- [ ] **Step 3: Add the typed API**
+- [x] **Step 3: Add the typed API**
 
 ```ts
 export interface SaasProjectList { projects: SaasProject[] }
@@ -292,15 +292,15 @@ export function getProjects(signal?: AbortSignal) {
 }
 ```
 
-- [ ] **Step 4: Write failing library tests**
+- [x] **Step 4: Write failing library tests**
 
 Cover completed and running rows with Russian labels, local date and domain, `Открыть`, the empty-state `Создать первый виджет`, retry after failed fetch, and an unknown status that never leaks its raw value.
 
-- [ ] **Step 5: Implement `StudioLibrary`**
+- [x] **Step 5: Implement `StudioLibrary`**
 
 Load with `AbortController`, retry with a request counter, and render divider-separated rows. Derive the domain with `new URL(source_url).hostname`, falling back to `Сайт проекта`. Provide one heading `Мои виджеты` and one primary `Новый виджет` action.
 
-- [ ] **Step 6: Compose the Studio home**
+- [x] **Step 6: Compose the Studio home**
 
 When there is no project query, render `StudioLibrary` followed by `StudioComposer` configured as:
 
@@ -321,13 +321,13 @@ When there is no project query, render `StudioLibrary` followed by `StudioCompos
 
 `onOpenProject` writes `/studio?project=<id>` and calls `setProjectId(id)`. Add a `popstate` effect that synchronizes `projectId` with the URL.
 
-- [ ] **Step 7: Run and verify GREEN**
+- [x] **Step 7: Run and verify GREEN**
 
 Run: `.\frontend\node_modules\.bin\vitest.cmd run --root frontend src/studio/api.test.ts src/studio/StudioLibrary.test.tsx src/studio/StudioPage.test.tsx --maxWorkers=1`
 
 Expected: library, project creation, and legacy Builder tests pass.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add frontend/src/studio/StudioLibrary.tsx frontend/src/studio/StudioLibrary.test.tsx frontend/src/studio/types.ts frontend/src/studio/api.ts frontend/src/studio/api.test.ts frontend/src/studio/StudioComposer.tsx frontend/src/studio/StudioPage.tsx frontend/src/studio/StudioPage.test.tsx

@@ -148,6 +148,10 @@ export interface SaasProject {
   updated_at: string;
 }
 
+export interface SaasProjectList {
+  projects: SaasProject[];
+}
+
 export interface SaasProjectVersion {
   id: string;
   project_id: string;

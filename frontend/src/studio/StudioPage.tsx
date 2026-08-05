@@ -20,6 +20,7 @@ import { canonicalWebsiteUrl } from '../shared/UrlComposer';
 import { StudioPreview } from './StudioPreview';
 import { StudioTimeline } from './StudioTimeline';
 import { StudioComposer } from './StudioComposer';
+import { StudioLibrary } from './StudioLibrary';
 import { ProjectVersionHistory } from './ProjectVersionHistory';
 import { UpgradeGate } from './UpgradeGate';
 import type {
@@ -171,6 +172,12 @@ export function StudioPage() {
     setBrief(controller.project.brief ?? '');
   }, [controller.project, controller.snapshot]);
 
+  useEffect(() => {
+    const syncProjectFromLocation = () => setProjectId(queryProjectId());
+    window.addEventListener('popstate', syncProjectFromLocation);
+    return () => window.removeEventListener('popstate', syncProjectFromLocation);
+  }, []);
+
   const formattedSession = useMemo(() => {
     if (!controller.runId) return 'Новая сессия';
     const suffix = controller.runId.length > 10 ? controller.runId.slice(-8) : controller.runId;
@@ -245,47 +252,47 @@ export function StudioPage() {
     previewAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  const openProject = (nextProjectId: string) => {
+    window.history.pushState({}, '', `/studio?project=${encodeURIComponent(nextProjectId)}`);
+    setProjectId(nextProjectId);
+  };
+
+  const scrollToNewProject = () => {
+    document.getElementById('studio-new-widget')?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    });
+  };
+
   if (!projectId && !legacyBuilder) {
     return (
-      <div className="studio-app studio-app--composer">
+      <div className="studio-app studio-app--home">
         <header className="studio-header">
           <a className="studio-header__logo" href="/" aria-label="Kaigo — на главную">
             <KaigoLogo />
           </a>
           <div className="studio-header__session">
             <span>Kaigo Studio</span>
-            <strong>Новый проект</strong>
+            <strong>Ваши проекты</strong>
           </div>
         </header>
-        <main className="studio-shell studio-shell--composer">
-          <section className="studio-composer" aria-labelledby="new-project-title">
-            <div className="studio-composer__card">
-              <p className="studio-kicker">Бесплатная экспресс-версия</p>
-              <h1 id="new-project-title">Новый проект в Kaigo Studio</h1>
-              <p>Добавьте сайт и пожелание. Проект сохранится в вашем аккаунте до запуска.</p>
-              <form onSubmit={submitProject}>
-                <label htmlFor="new-project-url">Ссылка на сайт</label>
-                <input
-                  id="new-project-url"
-                  type="url"
-                  value={sourceUrl}
-                  onChange={(event) => setSourceUrl(event.target.value)}
-                />
-                <label htmlFor="new-project-brief">Пожелание к AI-виджету</label>
-                <textarea
-                  id="new-project-brief"
-                  maxLength={4_000}
-                  value={brief}
-                  onChange={(event) => setBrief(event.target.value)}
-                />
-                {formError && <p className="studio-form__error" role="alert">{formError}</p>}
-                <button type="submit" className="studio-create" disabled={projectPending}>
-                  {projectPending ? <Clock aria-hidden size={20} /> : <PaperPlaneTilt aria-hidden size={20} weight="fill" />}
-                  Создать проект
-                </button>
-              </form>
-            </div>
-          </section>
+        <main className="studio-home">
+          <StudioLibrary onOpenProject={openProject} onCreateProject={scrollToNewProject} />
+          <div id="studio-new-widget" className="studio-home__composer">
+            <StudioComposer
+              title="Создайте новый виджет"
+              description="Добавьте сайт и коротко опишите, чем виджет должен помогать посетителям."
+              submitLabel="Создать проект"
+              headingLevel="h2"
+              sourceUrl={sourceUrl}
+              brief={brief}
+              pending={projectPending}
+              error={formError}
+              onSourceUrlChange={setSourceUrl}
+              onBriefChange={setBrief}
+              onSubmit={submitProject}
+            />
+          </div>
         </main>
       </div>
     );

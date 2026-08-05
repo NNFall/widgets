@@ -2,6 +2,10 @@ import { Clock, PaperPlaneTilt } from '@phosphor-icons/react';
 import type { FormEvent } from 'react';
 
 interface StudioComposerProps {
+  title?: string;
+  description?: string;
+  submitLabel?: string;
+  headingLevel?: 'h1' | 'h2';
   sourceUrl: string;
   brief: string;
   pending: boolean;
@@ -12,6 +16,10 @@ interface StudioComposerProps {
 }
 
 export function StudioComposer({
+  title = 'Создайте первый AI-виджет',
+  description = 'Сначала получите рабочий результат бесплатно. Публикация и подключение готового виджета доступны по тарифу.',
+  submitLabel = 'Создать AI-виджет',
+  headingLevel = 'h1',
   sourceUrl,
   brief,
   pending,
@@ -20,12 +28,14 @@ export function StudioComposer({
   onBriefChange,
   onSubmit,
 }: StudioComposerProps) {
+  const Heading = headingLevel;
+
   return (
     <section className="studio-composer" aria-labelledby="studio-composer-title">
       <div className="studio-composer__card">
         <p className="studio-kicker">Бесплатная экспресс-версия</p>
-        <h1 id="studio-composer-title">Создайте первый AI-виджет</h1>
-        <p>Сначала получите рабочий результат бесплатно. Публикация и подключение готового виджета доступны по тарифу.</p>
+        <Heading id="studio-composer-title">{title}</Heading>
+        <p>{description}</p>
         <form onSubmit={onSubmit}>
           <label htmlFor="saas-studio-url">Ссылка на сайт</label>
           <input
@@ -46,7 +56,7 @@ export function StudioComposer({
           {error && <p className="studio-form__error" role="alert">{error}</p>}
           <button type="submit" className="studio-create" disabled={pending}>
             {pending ? <Clock aria-hidden size={20} /> : <PaperPlaneTilt aria-hidden size={20} weight="fill" />}
-            Создать AI-виджет
+            {submitLabel}
           </button>
         </form>
       </div>

@@ -6,6 +6,7 @@ import {
   getBillingPayment,
   getPendingBillingPayment,
   getBillingSubscription,
+  getProjects,
   getProjectPublication,
   getProjectVersions,
   publishProject,
@@ -15,6 +16,26 @@ import {
   resumeBillingPayment,
   sendPreviewChat,
 } from './api';
+
+it('lists the authenticated owner projects', async () => {
+  const payload = {
+    projects: [{
+      id: 'project-1',
+      source_url: 'https://atelier.ru/',
+      status: 'completed',
+    }],
+  };
+  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  }));
+  vi.stubGlobal('fetch', fetchMock);
+
+  await expect(getProjects()).resolves.toEqual(payload);
+  expect(fetchMock).toHaveBeenCalledWith('/api/projects', expect.objectContaining({
+    credentials: 'include',
+  }));
+});
 
 it('lists versions and sends CSRF-protected refinement and restore requests', async () => {
   const versions = {

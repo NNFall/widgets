@@ -43,16 +43,22 @@ export const STUDIO_STAGES: ReadonlyArray<{
 ];
 
 const PROJECT_STATUS_LABELS: Record<string, string> = {
+  draft: 'Черновик',
   created: 'Можно начинать',
   queued: 'Ожидает запуска',
+  generating: 'Создаётся сейчас',
   running: 'Создаётся сейчас',
+  free_result_ready: 'Готов к просмотру',
   completed: 'Готов к работе',
+  published: 'Опубликован на сайте',
   failed: 'Нужен повторный запуск',
   cancelled: 'Создание остановлено',
 };
 
 const EVENT_ACTIVITY: Record<string, string> = {
   'run.created': 'Готовим проект к запуску',
+  'run.failed': 'Создание остановлено — можно повторить запуск',
+  'run.cancelled': 'Создание остановлено по вашему запросу',
   'reference.started': 'Изучаем структуру и содержание сайта',
   'reference.completed': 'Сайт изучен, переходим к виджету',
   'direction.judged': 'Выбрали подходящий образ виджета',

@@ -170,7 +170,8 @@ describe('durable SaaS Studio flow', () => {
       const url = String(input);
       requests.push({ url, init });
       if (url === '/api/auth/session') return sessionResponse();
-      if (url === '/api/projects') return jsonResponse(project(), 201);
+      if (url === '/api/projects' && !init?.method) return jsonResponse({ projects: [] });
+      if (url === '/api/projects' && init?.method === 'POST') return jsonResponse(project(), 201);
       if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project());
       throw new Error(`unexpected request: ${url}`);
     });
@@ -179,7 +180,8 @@ describe('durable SaaS Studio flow', () => {
 
     render(<StudioPage />);
 
-    expect(await screen.findByRole('heading', { name: 'Новый проект в Kaigo Studio' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Мои виджеты' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Создайте новый виджет' })).toBeVisible();
     expect(screen.getByLabelText('Ссылка на сайт')).toHaveValue('https://fresh.example.com');
     await user.type(
       screen.getByRole('textbox', { name: 'Пожелание к AI-виджету' }),
@@ -187,8 +189,8 @@ describe('durable SaaS Studio flow', () => {
     );
     await user.click(screen.getByRole('button', { name: 'Создать проект' }));
 
-    await waitFor(() => expect(requests.some(({ url }) => url === '/api/projects')).toBe(true));
-    const create = requests.find(({ url }) => url === '/api/projects')!;
+    await waitFor(() => expect(requests.some(({ url, init }) => url === '/api/projects' && init?.method === 'POST')).toBe(true));
+    const create = requests.find(({ url, init }) => url === '/api/projects' && init?.method === 'POST')!;
     const headers = new Headers(create.init?.headers);
     expect(create.init?.method).toBe('POST');
     expect(headers.get('X-CSRF-Token')).toBe('csrf-for-studio');
@@ -205,6 +207,35 @@ describe('durable SaaS Studio flow', () => {
     });
     expect(requests.some(({ url }) => url.includes('/builder'))).toBe(false);
     await waitFor(() => expect(new URLSearchParams(window.location.search).get('project')).toBe(PROJECT_ID));
+  });
+
+  it('opens a library project and follows browser navigation back to the Studio home', async () => {
+    window.history.replaceState({}, '', '/studio');
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/projects') return jsonResponse({ projects: [project()] });
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project());
+      if (url === `/api/projects/${PROJECT_ID}/versions`) {
+        return jsonResponse({ active_version_id: null, versions: [] });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<StudioPage />);
+
+    expect(await screen.findByText('example.com')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Открыть' }));
+
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get('project')).toBe(PROJECT_ID));
+    expect(await screen.findByText('Проект готов к запуску')).toBeVisible();
+    expect(screen.getByDisplayValue('https://example.com')).toBeVisible();
+
+    window.history.pushState({}, '', '/studio');
+    act(() => window.dispatchEvent(new PopStateEvent('popstate')));
+    expect(await screen.findByRole('heading', { name: 'Мои виджеты' })).toBeVisible();
   });
 
   it('restores an authenticated queued run from the project API after reload', async () => {
@@ -271,7 +302,7 @@ describe('durable SaaS Studio flow', () => {
     expect(localStorage.getItem(`kaigo.saas.project.${PROJECT_ID}.idempotency-key`)).toBe(headers.get('Idempotency-Key'));
     const streamRequest = requests.find(({ url }) => url === `/api/runs/${RUN_ID}/events`)!;
     expect(new Headers(streamRequest.init?.headers).get('Last-Event-ID')).toBeNull();
-    expect(await screen.findByText('Запуск поставлен в очередь')).toBeVisible();
+    expect(await screen.findByText('Готовим проект к запуску')).toBeInTheDocument();
   });
 
   it('lets the project owner request safe cancellation with session CSRF', async () => {
@@ -340,8 +371,9 @@ describe('durable SaaS Studio flow', () => {
     const user = userEvent.setup();
 
     render(<StudioPage />);
-    const timeline = await screen.findByRole('region', { name: 'Диалог с генератором' });
-    expect(await within(timeline).findByText('Запуск остановлен с ошибкой')).toBeVisible();
+    const timeline = (await screen.findByText('Технические детали')).closest('details');
+    expect(timeline).not.toBeNull();
+    expect(await within(timeline!).findByText('Создание остановлено — можно повторить запуск')).toBeInTheDocument();
     await user.click(await screen.findByRole('button', { name: 'Повторить запуск' }));
 
     await waitFor(() => expect(requests.some(({ url }) => url === `/api/runs/${RUN_ID}/retry`)).toBe(true));
@@ -354,7 +386,7 @@ describe('durable SaaS Studio flow', () => {
       `studio-retry-${RUN_ID}`,
     );
     expect((await screen.findAllByText('Запуск в очереди'))[0]).toBeVisible();
-    expect(within(timeline).queryByText('Запуск остановлен с ошибкой')).not.toBeInTheDocument();
+    expect(within(timeline!).queryByText('Создание остановлено — можно повторить запуск')).not.toBeInTheDocument();
   });
 
   it('explains that a consumed free generation cannot be retried', async () => {
@@ -530,10 +562,10 @@ describe('durable SaaS Studio flow', () => {
 
     render(<StudioPage />);
 
-    expect((await screen.findAllByText('Собираем основу'))[0]).toBeVisible();
+    expect(await screen.findByText('Собираем основу будущего виджета')).toBeInTheDocument();
     expect(screen.queryByText('Дубликат')).not.toBeInTheDocument();
     expect(screen.queryByText('Старое событие')).not.toBeInTheDocument();
-    expect(document.querySelectorAll('.studio-event')).toHaveLength(2);
+    expect(document.querySelectorAll('.studio-technical__body li')).toHaveLength(2);
   });
 
   it.each([

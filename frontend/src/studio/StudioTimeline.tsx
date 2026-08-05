@@ -10,6 +10,15 @@ function eventTime(timestamp: string) {
   }).format(value);
 }
 
+function eventCountLabel(count: number) {
+  const mod100 = count % 100;
+  const mod10 = count % 10;
+  if (mod100 >= 11 && mod100 <= 14) return `${count} событий`;
+  if (mod10 === 1) return `${count} событие`;
+  if (mod10 >= 2 && mod10 <= 4) return `${count} события`;
+  return `${count} событий`;
+}
+
 export function StudioTimeline({ events, running }: { events: BuilderEvent[]; running: boolean }) {
   const visibleEvents = events.slice(-8);
 
@@ -17,7 +26,7 @@ export function StudioTimeline({ events, running }: { events: BuilderEvent[]; ru
     <details className="studio-technical" data-running={running ? 'true' : 'false'}>
       <summary>
         <span>Технические детали</span>
-        <small>{events.length > 0 ? `${events.length} событий` : 'пока нет событий'}</small>
+        <small>{events.length > 0 ? eventCountLabel(events.length) : 'пока нет событий'}</small>
       </summary>
       <div className="studio-technical__body">
         <p>Краткая история выполнения — без внутренних данных и служебных сообщений.</p>

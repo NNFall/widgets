@@ -365,7 +365,7 @@ describe('StudioPage', () => {
     expect(alert).not.toHaveTextContent('Последняя доступная версия и история запуска сохранены.');
     const timeline = screen.getByText('Технические детали').closest('details');
     expect(timeline).not.toBeNull();
-    expect(within(timeline!).getByText('Дорабатываем движения и детали')).toBeInTheDocument();
+    expect(within(timeline!).getByText('Создание остановлено — можно повторить запуск')).toBeInTheDocument();
     expect(within(timeline!).queryByText('Gemini returned an invalid grounded reference')).not.toBeInTheDocument();
     const details = within(alert).getByText('Детали');
     expect(details.closest('details')).not.toHaveAttribute('open');
