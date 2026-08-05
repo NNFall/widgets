@@ -894,6 +894,7 @@ class PatternCandidateGroupRecord(Base):
             "category",
             name="uq_pattern_candidate_group_plan_category",
         ),
+        Index("ix_pattern_candidate_groups_category", "category"),
     )
 
     id: Mapped[UUID] = _uuid_pk()
@@ -987,6 +988,15 @@ class PatternStageExposure(Base):
             "stage IN ('foundation', 'identity', 'conversation', 'motion_polish')",
             name="ck_pattern_stage_exposure_stage",
         ),
+        Index(
+            "uq_pattern_stage_exposure_null_model_call",
+            "run_id",
+            "stage",
+            "candidate_item_id",
+            unique=True,
+            postgresql_where=text("model_call_id IS NULL"),
+            sqlite_where=text("model_call_id IS NULL"),
+        ),
     )
 
     id: Mapped[UUID] = _uuid_pk()
@@ -1077,6 +1087,7 @@ class PatternReview(Base):
             "pattern_version_id",
             "created_at",
         ),
+        Index("ix_pattern_reviews_status", "status"),
     )
 
     id: Mapped[UUID] = _uuid_pk()

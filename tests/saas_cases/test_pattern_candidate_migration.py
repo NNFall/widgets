@@ -163,6 +163,10 @@ def test_pattern_candidate_migration_has_named_fk_ondelete_and_indexes(monkeypat
         "pattern_candidate_groups",
         ("plan_id",),
     )
+    assert indexes["ix_pattern_candidate_groups_category"] == (
+        "pattern_candidate_groups",
+        ("category",),
+    )
     assert indexes["ix_pattern_candidate_items_pattern_version_id"] == (
         "pattern_candidate_items",
         ("pattern_version_id",),
@@ -171,10 +175,19 @@ def test_pattern_candidate_migration_has_named_fk_ondelete_and_indexes(monkeypat
         "pattern_stage_exposures",
         ("model_call_id",),
     )
+    partial = next(
+        call for call in calls if call[0] == "create_index" and call[1] == "uq_pattern_stage_exposure_null_model_call"
+    )
+    assert partial[2] == "pattern_stage_exposures"
+    assert partial[3] == ("run_id", "stage", "candidate_item_id")
+    assert partial[4]["unique"] is True
+    assert str(partial[4]["postgresql_where"]) == "model_call_id IS NULL"
+    assert str(partial[4]["sqlite_where"]) == "model_call_id IS NULL"
     assert indexes["ix_pattern_stage_usage_claims_model_call_id"] == (
         "pattern_stage_usage_claims",
         ("model_call_id",),
     )
+    assert indexes["ix_pattern_reviews_status"] == ("pattern_reviews", ("status",))
     assert indexes["ix_pattern_reviews_pattern_version_created_at"] == (
         "pattern_reviews",
         ("pattern_version_id", "created_at"),

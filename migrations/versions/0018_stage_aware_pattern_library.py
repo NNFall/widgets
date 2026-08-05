@@ -79,6 +79,7 @@ def upgrade() -> None:
         sa.UniqueConstraint("plan_id", "category", name="uq_pattern_candidate_group_plan_category"),
     )
     op.create_index("ix_pattern_candidate_groups_plan_id", "pattern_candidate_groups", ["plan_id"])
+    op.create_index("ix_pattern_candidate_groups_category", "pattern_candidate_groups", ["category"])
 
     op.create_table(
         "pattern_candidate_items",
@@ -137,6 +138,14 @@ def upgrade() -> None:
     op.create_index("ix_pattern_stage_exposures_run_id", "pattern_stage_exposures", ["run_id"])
     op.create_index("ix_pattern_stage_exposures_candidate_item_id", "pattern_stage_exposures", ["candidate_item_id"])
     op.create_index("ix_pattern_stage_exposures_model_call_id", "pattern_stage_exposures", ["model_call_id"])
+    op.create_index(
+        "uq_pattern_stage_exposure_null_model_call",
+        "pattern_stage_exposures",
+        ["run_id", "stage", "candidate_item_id"],
+        unique=True,
+        postgresql_where=sa.text("model_call_id IS NULL"),
+        sqlite_where=sa.text("model_call_id IS NULL"),
+    )
 
     op.create_table(
         "pattern_stage_usage_claims",
@@ -180,16 +189,19 @@ def upgrade() -> None:
     )
     op.create_index("ix_pattern_reviews_pattern_version_id", "pattern_reviews", ["pattern_version_id"])
     op.create_index("ix_pattern_reviews_pattern_version_created_at", "pattern_reviews", ["pattern_version_id", "created_at"])
+    op.create_index("ix_pattern_reviews_status", "pattern_reviews", ["status"])
 
 
 def downgrade() -> None:
     op.drop_index("ix_pattern_reviews_pattern_version_created_at", table_name="pattern_reviews")
+    op.drop_index("ix_pattern_reviews_status", table_name="pattern_reviews")
     op.drop_index("ix_pattern_reviews_pattern_version_id", table_name="pattern_reviews")
     op.drop_table("pattern_reviews")
     op.drop_index("ix_pattern_stage_usage_claims_model_call_id", table_name="pattern_stage_usage_claims")
     op.drop_index("ix_pattern_stage_usage_claims_exposure_id", table_name="pattern_stage_usage_claims")
     op.drop_table("pattern_stage_usage_claims")
     op.drop_index("ix_pattern_stage_exposures_model_call_id", table_name="pattern_stage_exposures")
+    op.drop_index("uq_pattern_stage_exposure_null_model_call", table_name="pattern_stage_exposures")
     op.drop_index("ix_pattern_stage_exposures_candidate_item_id", table_name="pattern_stage_exposures")
     op.drop_index("ix_pattern_stage_exposures_run_id", table_name="pattern_stage_exposures")
     op.drop_table("pattern_stage_exposures")
@@ -197,6 +209,7 @@ def downgrade() -> None:
     op.drop_index("ix_pattern_candidate_items_group_id", table_name="pattern_candidate_items")
     op.drop_table("pattern_candidate_items")
     op.drop_index("ix_pattern_candidate_groups_plan_id", table_name="pattern_candidate_groups")
+    op.drop_index("ix_pattern_candidate_groups_category", table_name="pattern_candidate_groups")
     op.drop_table("pattern_candidate_groups")
     op.drop_index("ix_pattern_candidate_plans_selector_model_call_id", table_name="pattern_candidate_plans")
     op.drop_index("ix_pattern_candidate_plans_direction_artifact_id", table_name="pattern_candidate_plans")

@@ -13,11 +13,13 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.saas.models import (
     GenerationArtifact,
     GenerationRun,
+    GenerationStageAttempt,
     ModelCall,
     PatternCandidateGroupRecord,
     PatternCandidateItemRecord,
@@ -418,12 +420,27 @@ class PatternCandidateRepository:
             raise ValueError("unknown candidate item")
         return row
 
-    async def _validate_model_call(self, model_call_id: UUID | None, run_id: UUID) -> None:
+    async def _validate_model_call(
+        self,
+        model_call_id: UUID | None,
+        run_id: UUID,
+        stage_value: str,
+    ) -> None:
         if model_call_id is None:
             return
         call = await self._session.scalar(select(ModelCall).where(ModelCall.id == model_call_id))
         if call is None or call.run_id != run_id:
             raise ValueError("model call does not belong to run")
+        if call.stage_attempt_id is None:
+            raise ValueError("model call stage is missing")
+        attempt = await self._session.scalar(
+            select(GenerationStageAttempt).where(
+                GenerationStageAttempt.id == call.stage_attempt_id,
+                GenerationStageAttempt.run_id == run_id,
+            )
+        )
+        if attempt is None or attempt.stage != stage_value:
+            raise ValueError("model call stage does not match exposure")
 
     async def record_exposure(
         self,
@@ -439,15 +456,27 @@ class PatternCandidateRepository:
             raise ValueError("candidate item does not belong to run")
         if stage_value not in tuple(group.stage_mapping or ()):
             raise ValueError("candidate category is not permitted for stage")
-        await self._validate_model_call(model_call_id, run_id)
+        await self._validate_model_call(model_call_id, run_id, stage_value)
         filters = [PatternStageExposure.run_id == run_id, PatternStageExposure.stage == stage_value, PatternStageExposure.candidate_item_id == candidate_item_id]
         filters.append(PatternStageExposure.model_call_id.is_(None) if model_call_id is None else PatternStageExposure.model_call_id == model_call_id)
         existing = await self._session.scalar(select(PatternStageExposure).where(and_(*filters)))
         if existing is not None:
             return existing
         exposure = PatternStageExposure(id=uuid4(), run_id=run_id, stage=stage_value, candidate_item_id=candidate_item_id, model_call_id=model_call_id)
-        self._session.add(exposure)
-        await self._session.flush()
+        try:
+            async with self._session.begin_nested():
+                self._session.add(exposure)
+                await self._session.flush()
+        except IntegrityError:
+            # Another worker may have won the same idempotency key between
+            # the pre-read and insert.  The savepoint keeps the caller's
+            # transaction usable while we reload the winner.
+            winner = await self._session.scalar(
+                select(PatternStageExposure).where(and_(*filters))
+            )
+            if winner is not None:
+                return winner
+            raise
         return exposure
 
     async def record_usage_claim(
@@ -490,17 +519,30 @@ class PatternCandidateRepository:
             exposure = matching[0]
         if candidate_item_id is not None and exposure.candidate_item_id != candidate_item_id:
             raise ValueError("exposure candidate does not match")
+        await self._validate_model_call(model_call_id, run_id, stage_value)
         if exposure.model_call_id != model_call_id:
             raise ValueError("model call does not match exposure")
-        await self._validate_model_call(model_call_id, run_id)
         existing = await self._session.scalar(select(PatternStageUsageClaim).where(PatternStageUsageClaim.exposure_id == exposure.id))
         if existing is not None:
             if existing.usage_mode == usage_mode and existing.model_call_id == model_call_id:
                 return existing
             raise ValueError("exposure already has a different usage claim")
         claim = PatternStageUsageClaim(id=uuid4(), exposure_id=exposure.id, usage_mode=usage_mode, model_call_id=model_call_id)
-        self._session.add(claim)
-        await self._session.flush()
+        try:
+            async with self._session.begin_nested():
+                self._session.add(claim)
+                await self._session.flush()
+        except IntegrityError:
+            winner = await self._session.scalar(
+                select(PatternStageUsageClaim).where(
+                    PatternStageUsageClaim.exposure_id == exposure.id
+                )
+            )
+            if winner is not None:
+                if winner.usage_mode == usage_mode and winner.model_call_id == model_call_id:
+                    return winner
+                raise ValueError("exposure already has a different usage claim")
+            raise
         return claim
 
 

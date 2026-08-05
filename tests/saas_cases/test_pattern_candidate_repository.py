@@ -6,12 +6,14 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db.base import Base
 from app.db.models import Tenant, User
 from app.patterns.candidate_repository import PatternCandidateRepository
 from app.saas.models import (
+    GenerationStageAttempt,
     GenerationRun,
     ModelCall,
     PatternCandidateGroupRecord,
@@ -112,6 +114,44 @@ async def model_call(factory, run_id):
         call = ModelCall(
             id=uuid4(),
             run_id=run_id,
+            provider="test",
+            model="test-model",
+            role="builder",
+            mode="direct",
+            prompt_version="test-v1",
+            status="completed",
+            cost_state="not_billed",
+            cost_microusd=0,
+            provider_dispatched=False,
+            input_tokens=0,
+            output_tokens=0,
+            thinking_tokens=0,
+            cache_read_tokens=0,
+            cache_write_tokens=0,
+            latency_ms=0,
+            pricing_snapshot={},
+        )
+        session.add(call)
+        await session.flush()
+        return call.id
+
+
+async def staged_model_call(factory, run_id, stage: Stage):
+    async with factory() as session, session.begin():
+        attempt = GenerationStageAttempt(
+            id=uuid4(),
+            run_id=run_id,
+            stage=stage.value,
+            ordinal=1,
+            status="running",
+            started_at=datetime.now(timezone.utc),
+        )
+        session.add(attempt)
+        await session.flush()
+        call = ModelCall(
+            id=uuid4(),
+            run_id=run_id,
+            stage_attempt_id=attempt.id,
             provider="test",
             model="test-model",
             role="builder",
@@ -382,8 +422,8 @@ async def test_exposure_rejects_cross_run_item_wrong_stage_and_model_call() -> N
                     stage=Stage.CONVERSATION,
                     candidate_item_id=other_item.id,
                 )
-        same_call = await model_call(factory, run_id)
-        other_call = await model_call(factory, run_b)
+        same_call = await staged_model_call(factory, run_id, Stage.CONVERSATION)
+        other_call = await staged_model_call(factory, run_b, Stage.CONVERSATION)
         async with factory() as session, session.begin():
             repository = PatternCandidateRepository(session)
             first = await repository.load_plan(run_id)
@@ -417,7 +457,7 @@ async def test_exposure_rejects_cross_run_item_wrong_stage_and_model_call() -> N
 async def test_usage_claim_modes_are_exclusive_and_model_call_consistent() -> None:
     engine, factory, run_id = await database()
     try:
-        call_id = await model_call(factory, run_id)
+        call_id = await staged_model_call(factory, run_id, Stage.CONVERSATION)
         async with factory() as session, session.begin():
             repository = PatternCandidateRepository(session)
             await repository.create_plan(
@@ -481,12 +521,95 @@ async def test_usage_claim_modes_are_exclusive_and_model_call_consistent() -> No
 def test_candidate_models_expose_named_indexes_and_constraints() -> None:
     for model, required in (
         (PatternCandidatePlanRecord, {"uq_pattern_candidate_plan_run", "ck_pattern_candidate_plan_schema_version"}),
-        (PatternCandidateGroupRecord, {"uq_pattern_candidate_group_plan_category"}),
+        (PatternCandidateGroupRecord, {"uq_pattern_candidate_group_plan_category", "ix_pattern_candidate_groups_category"}),
         (PatternCandidateItemRecord, {"uq_pattern_candidate_item_group_rank", "uq_pattern_candidate_item_group_pattern_version", "ck_pattern_candidate_item_rank"}),
-        (PatternStageExposure, {"uq_pattern_stage_exposure_idempotency", "ck_pattern_stage_exposure_stage"}),
+        (PatternStageExposure, {"uq_pattern_stage_exposure_idempotency", "uq_pattern_stage_exposure_null_model_call", "ck_pattern_stage_exposure_stage"}),
         (PatternStageUsageClaim, {"uq_pattern_stage_usage_claim_exposure", "ck_pattern_stage_usage_mode"}),
-        (PatternReview, {"ck_pattern_review_status", "ix_pattern_reviews_pattern_version_created_at"}),
+        (PatternReview, {"ck_pattern_review_status", "ix_pattern_reviews_status", "ix_pattern_reviews_pattern_version_created_at"}),
     ):
         constraint_names = {constraint.name for constraint in model.__table__.constraints if constraint.name}
         index_names = {index.name for index in model.__table__.indexes if index.name}
         assert required & (constraint_names | index_names) == required
+
+
+@pytest.mark.asyncio
+async def test_model_call_must_have_same_run_stage_attempt_for_exposure_and_claim() -> None:
+    engine, factory, run_id = await database()
+    try:
+        stage_less = await model_call(factory, run_id)
+        wrong_stage = await staged_model_call(factory, run_id, Stage.IDENTITY)
+        same_stage = await staged_model_call(factory, run_id, Stage.CONVERSATION)
+        async with factory() as session, session.begin():
+            repository = PatternCandidateRepository(session)
+            await repository.create_plan(
+                run_id=run_id,
+                plan=complete_candidate_plan(),
+                registry=load_builtin_atomic_registry(),
+            )
+            loaded = await repository.load_plan(run_id)
+            assert loaded is not None
+            item = next(item for item in loaded.items if item.category.value == "assistant_message_enter")
+            with pytest.raises(ValueError, match="stage"):
+                await repository.record_exposure(
+                    run_id=run_id,
+                    stage=Stage.CONVERSATION,
+                    candidate_item_id=item.id,
+                    model_call_id=stage_less,
+                )
+            with pytest.raises(ValueError, match="stage"):
+                await repository.record_exposure(
+                    run_id=run_id,
+                    stage=Stage.CONVERSATION,
+                    candidate_item_id=item.id,
+                    model_call_id=wrong_stage,
+                )
+            exposure = await repository.record_exposure(
+                run_id=run_id,
+                stage=Stage.CONVERSATION,
+                candidate_item_id=item.id,
+                model_call_id=same_stage,
+            )
+            with pytest.raises(ValueError, match="stage"):
+                await repository.record_usage_claim(
+                    run_id=run_id,
+                    stage=Stage.CONVERSATION,
+                    exposure_id=exposure.id,
+                    usage_mode="primary",
+                    model_call_id=wrong_stage,
+                )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_database_partial_index_rejects_duplicate_null_model_call_exposure() -> None:
+    engine, factory, run_id = await database()
+    try:
+        async with factory() as session, session.begin():
+            repository = PatternCandidateRepository(session)
+            await repository.create_plan(
+                run_id=run_id,
+                plan=complete_candidate_plan(),
+                registry=load_builtin_atomic_registry(),
+            )
+            loaded = await repository.load_plan(run_id)
+            assert loaded is not None
+            item = next(item for item in loaded.items if item.category.value == "assistant_message_enter")
+            first = await repository.record_exposure(
+                run_id=run_id,
+                stage=Stage.CONVERSATION,
+                candidate_item_id=item.id,
+            )
+            duplicate = PatternStageExposure(
+                id=uuid4(),
+                run_id=run_id,
+                stage=Stage.CONVERSATION.value,
+                candidate_item_id=item.id,
+                model_call_id=None,
+            )
+            session.add(duplicate)
+            with pytest.raises(IntegrityError):
+                await session.flush()
+            assert first.id != duplicate.id
+    finally:
+        await engine.dispose()
