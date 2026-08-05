@@ -17,7 +17,7 @@ from .atomic_models import (
     AtomicPatternCategory,
     AtomicPatternDefinition,
     AtomicPatternStatus,
-    JSONValue,
+    SerializedJSONValue,
 )
 
 
@@ -50,6 +50,12 @@ _EXTERNAL_URL_RE = re.compile(
     re.IGNORECASE,
 )
 _CSS_IMPORT_RE = re.compile(r"(?:^|[^\w])@import\b", re.IGNORECASE)
+_CSS_URL_RE = re.compile(r"\burl\s*\(", re.IGNORECASE)
+_HTML_ACTIVE_ELEMENTS = frozenset(
+    {"base", "embed", "iframe", "link", "meta", "object", "script", "style"}
+)
+_HTML_FORBIDDEN_ATTRIBUTES = frozenset({"srcdoc"})
+_HTML_LOCAL_FRAGMENT_RE = re.compile(r"^#[^\s]*$")
 _HTML_URL_ATTRIBUTES = frozenset(
     {
         "action",
@@ -96,6 +102,19 @@ _DANGEROUS_MEMBER_STRINGS = _DANGEROUS_IDENTIFIERS | {
     "post",
     "put",
     "delete",
+    "src",
+    "href",
+    "srcdoc",
+    "constructor",
+    "write",
+    "writeln",
+    "location",
+    "assign",
+    "replace",
+    "setattribute",
+    "insertadjacenthtml",
+    "innerhtml",
+    "outerhtml",
 }
 
 
@@ -126,9 +145,9 @@ class _FragmentHTMLValidator(HTMLParser):
         tag: str,
         attrs: list[tuple[str, str | None]],
     ) -> None:
-        if tag.casefold() == "script":
+        if tag.casefold() in _HTML_ACTIVE_ELEMENTS:
             raise AtomicPatternRegistryError(
-                "forbidden implementation capability: inline code"
+                "forbidden implementation capability: active HTML element"
             )
         for raw_name, raw_value in attrs:
             name = "".join(raw_name.split()).casefold()
@@ -136,9 +155,14 @@ class _FragmentHTMLValidator(HTMLParser):
                 raise AtomicPatternRegistryError(
                     "forbidden implementation capability: inline code"
                 )
+            if name in _HTML_FORBIDDEN_ATTRIBUTES:
+                raise AtomicPatternRegistryError(
+                    "forbidden implementation capability: active HTML attribute"
+                )
             if raw_value is None or name not in _HTML_URL_ATTRIBUTES:
                 continue
-            if _EXTERNAL_URL_RE.search(unescape(raw_value)):
+            value = unescape(raw_value).strip()
+            if value and not _HTML_LOCAL_FRAGMENT_RE.fullmatch(value):
                 raise AtomicPatternRegistryError(
                     "forbidden implementation capability: external URL"
                 )
@@ -176,6 +200,16 @@ class AtomicPatternRegistry:
         for definition in definitions:
             if not isinstance(definition, AtomicPatternDefinition):
                 raise AtomicPatternRegistryError("definitions contain an invalid value")
+            actual_hash = _implementation_sha256(
+                html=definition.html,
+                css=definition.css,
+                javascript=definition.javascript,
+            )
+            if actual_hash != definition.implementation_sha256:
+                raise AtomicPatternRegistryError(
+                    "implementation hash mismatch for "
+                    f"{definition.pattern_id}@{definition.version}"
+                )
             key = (definition.pattern_id, definition.version)
             if key in index:
                 raise AtomicPatternRegistryError(
@@ -306,7 +340,7 @@ class AtomicPatternRegistry:
         self,
         *,
         effective_review_states: Mapping[tuple[str, int], str] | None = None,
-    ) -> tuple[dict[str, JSONValue], ...]:
+    ) -> tuple[dict[str, SerializedJSONValue], ...]:
         """Return active metadata using optional effective review overrides."""
 
         return tuple(
@@ -392,12 +426,10 @@ def _load_atomic_definition(
     css = _decode_asset(css_bytes, "styles.css")
     javascript = _decode_asset(js_bytes, "behavior.js")
     _validate_implementation((html, css, javascript))
-    actual_hash = _implementation_hash_bytes(
-        (
-            ("fragment.html", html_bytes),
-            ("styles.css", css_bytes),
-            ("behavior.js", js_bytes),
-        )
+    actual_hash = _implementation_sha256(
+        html=html,
+        css=css,
+        javascript=javascript,
     )
     if actual_hash != expected_hash:
         pattern_id = manifest.get("pattern_id", "<unknown>")
@@ -476,6 +508,10 @@ def _validate_external_urls(
     )
     if not line_comments and not html_comments and _CSS_IMPORT_RE.search(uncommented):
         raise AtomicPatternRegistryError("forbidden implementation capability: CSS import")
+    if not line_comments and not html_comments and _CSS_URL_RE.search(uncommented):
+        raise AtomicPatternRegistryError(
+            "forbidden implementation capability: CSS resource URL"
+        )
     if _EXTERNAL_URL_RE.search(uncommented):
         raise AtomicPatternRegistryError("forbidden implementation capability: external URL")
 
@@ -485,9 +521,18 @@ def _scan_javascript_capabilities(source: str) -> None:
     for index, token in enumerate(tokens):
         if token.kind == "identifier":
             normalized = token.value.casefold()
+            previous = tokens[index - 1] if index else None
             if normalized in _DANGEROUS_IDENTIFIERS or token.value == "Function":
                 raise AtomicPatternRegistryError(
                     f"forbidden implementation capability: {token.value}"
+                )
+            if (
+                previous is not None
+                and previous.value == "."
+                and normalized in _DANGEROUS_MEMBER_STRINGS
+            ):
+                raise AtomicPatternRegistryError(
+                    f"forbidden implementation capability: member {token.value}"
                 )
             continue
         if token.kind != "string":
@@ -557,7 +602,20 @@ def _tokenize(source: str, *, line_comments: bool) -> tuple[_ImplementationToken
             while index < length:
                 current = source[index]
                 if current == "\\" and index + 1 < length:
-                    value.append(source[index + 1])
+                    escaped = source[index + 1]
+                    if escaped == "x" and index + 3 < length:
+                        digits = source[index + 2 : index + 4]
+                        if all(character in "0123456789abcdefABCDEF" for character in digits):
+                            value.append(chr(int(digits, 16)))
+                            index += 4
+                            continue
+                    if escaped == "u" and index + 5 < length:
+                        digits = source[index + 2 : index + 6]
+                        if all(character in "0123456789abcdefABCDEF" for character in digits):
+                            value.append(chr(int(digits, 16)))
+                            index += 6
+                            continue
+                    value.append(escaped)
                     index += 2
                     continue
                 if current == quote:
@@ -646,6 +704,19 @@ def _implementation_hash_bytes(assets: tuple[tuple[str, bytes], ...]) -> str:
         digest.update(len(asset).to_bytes(8, "big"))
         digest.update(asset)
     return digest.hexdigest()
+
+
+def _implementation_sha256(*, html: str, css: str, javascript: str) -> str:
+    return _implementation_hash_bytes(
+        tuple(
+            (name, asset.encode("utf-8"))
+            for name, asset in (
+                ("fragment.html", html),
+                ("styles.css", css),
+                ("behavior.js", javascript),
+            )
+        )
+    )
 
 
 def _reject_json_constant(value: str) -> None:

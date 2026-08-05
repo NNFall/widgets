@@ -13,11 +13,14 @@ from dataclasses import dataclass
 from enum import Enum
 from math import log2
 from types import MappingProxyType
-from typing import Any, Mapping, TypeAlias
+from typing import Mapping, TypeAlias
 
 
 JSONScalar: TypeAlias = str | int | float | bool | None
 JSONValue: TypeAlias = JSONScalar | tuple["JSONValue", ...] | Mapping[str, "JSONValue"]
+SerializedJSONValue: TypeAlias = (
+    JSONScalar | list["SerializedJSONValue"] | dict[str, "SerializedJSONValue"]
+)
 
 _IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -102,7 +105,7 @@ def _freeze_json(value: object, *, depth: int = 0) -> JSONValue:
     raise ValueError("provenance must be plain JSON")
 
 
-def _thaw_json(value: JSONValue) -> Any:
+def _thaw_json(value: JSONValue) -> SerializedJSONValue:
     if isinstance(value, Mapping):
         return {key: _thaw_json(item) for key, item in value.items()}
     if isinstance(value, tuple):
@@ -323,7 +326,7 @@ class AtomicPatternDefinition:
         object.__setattr__(self, "incompatible_with", incompatible)
         object.__setattr__(self, "provenance", frozen_provenance)
 
-    def selector_dict(self) -> dict[str, JSONValue]:
+    def selector_dict(self) -> dict[str, SerializedJSONValue]:
         """Return the metadata safe to expose to an AI selector.
 
         Implementation assets are intentionally absent.  The complete natural
@@ -364,4 +367,5 @@ __all__ = [
     "AtomicPatternDefinition",
     "AtomicPatternStatus",
     "JSONValue",
+    "SerializedJSONValue",
 ]

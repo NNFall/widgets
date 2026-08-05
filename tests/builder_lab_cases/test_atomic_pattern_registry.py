@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
@@ -266,6 +267,65 @@ def test_v3_registry_rejects_function_constructor_eval_capability(tmp_path: Path
         AtomicPatternRegistry.load(root)
 
 
+@pytest.mark.parametrize(
+    "behavior",
+    [
+        "window.open('/target')",
+        "new Image().src = '/pixel'",
+        "document.write('unsafe')",
+        "document.location = '/next'",
+        "(() => {}).constructor('return 1')",
+    ],
+)
+def test_v3_registry_rejects_dot_member_browser_sinks(
+    tmp_path: Path,
+    behavior: str,
+) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "behavior.js").write_text(behavior, encoding="utf-8")
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
+@pytest.mark.parametrize(
+    "behavior",
+    [
+        r'globalThis["f\x65tch"]("x")',
+        r'globalThis["f\u0065tch"]("x")',
+    ],
+)
+def test_v3_registry_rejects_escaped_computed_dangerous_member(
+    tmp_path: Path,
+    behavior: str,
+) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "behavior.js").write_text(behavior, encoding="utf-8")
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
+def test_v3_registry_allows_safe_dom_manipulation_and_comments(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    behavior = (
+        "// window.open and document.location stay inert in comments\n"
+        "const node = document.querySelector('#panel');\n"
+        "node.classList.add('active');"
+    )
+    (pattern / "behavior.js").write_text(behavior, encoding="utf-8")
+    rewrite_raw_asset_hash(pattern)
+
+    definition = AtomicPatternRegistry.load(root).resolve("widget-open-technical", 1)
+
+    assert definition.javascript.replace("\r\n", "\n").strip() == behavior.strip()
+
+
 def test_v3_registry_rejects_static_import_without_spacing(tmp_path: Path) -> None:
     root = valid_atomic_catalog(tmp_path)
     pattern = root / "widget-open-technical-v1"
@@ -289,6 +349,57 @@ def test_v3_registry_rejects_protocol_relative_url(tmp_path: Path) -> None:
 
     with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
         AtomicPatternRegistry.load(root)
+
+
+@pytest.mark.parametrize(
+    "fragment",
+    [
+        '<img src="/telemetry">',
+        '<style>@import url("/theme.css");</style>',
+        '<iframe srcdoc="<p>unsafe</p>"></iframe>',
+    ],
+)
+def test_v3_registry_rejects_active_html_sinks(
+    tmp_path: Path,
+    fragment: str,
+) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "fragment.html").write_text(fragment, encoding="utf-8")
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
+def test_v3_registry_rejects_relative_css_url(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "styles.css").write_text(
+        ".fixture { background: url(/telemetry); }", encoding="utf-8"
+    )
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
+def test_v3_registry_allows_safe_html_and_css_without_resource_urls(
+    tmp_path: Path,
+) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "fragment.html").write_text(
+        '<div data-state="closed" aria-label="safe"><a href="#panel">safe</a></div>',
+        encoding="utf-8",
+    )
+    (pattern / "styles.css").write_text(
+        ".fixture { background: linear-gradient(90deg, #fff, #eee); }",
+        encoding="utf-8",
+    )
+    rewrite_raw_asset_hash(pattern)
+
+    assert AtomicPatternRegistry.load(root).resolve("widget-open-technical", 1)
 
 
 def test_v3_registry_rejects_comment_spaced_fetch_call(tmp_path: Path) -> None:
@@ -485,6 +596,14 @@ def test_v3_hash_uses_unambiguous_asset_framing(tmp_path: Path) -> None:
     from builder_lab.patterns.atomic_registry import compute_implementation_hash
 
     assert compute_implementation_hash(first) != compute_implementation_hash(second)
+
+
+def test_v3_registry_direct_constructor_rejects_hash_mismatch() -> None:
+    definition = load_builtin_atomic_registry().resolve("widget-open-technical", 1)
+    mismatched = replace(definition, implementation_sha256="0" * 64)
+
+    with pytest.raises(AtomicPatternRegistryError, match="implementation hash"):
+        AtomicPatternRegistry((mismatched,))
 
 
 def test_selector_catalog_requires_active_approved_definition(tmp_path: Path) -> None:
