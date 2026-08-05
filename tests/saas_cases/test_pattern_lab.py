@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from aiohttp_session import SimpleCookieStorage, get_session, setup as setup_session
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.admin.auth import SESSION_EMAIL_KEY, SESSION_TENANT_KEY
@@ -87,7 +88,36 @@ async def test_pattern_lab_list_syncs_registry_and_escapes_filters_and_descripti
         ):
             invalid = await client.get(f"/admin/pattern-lab?{query}")
             assert invalid.status == 400
+        for query in (
+            "category=launcher_shape&category=not-a-category",
+            "status=active&status=active",
+        ):
+            duplicate = await client.get(f"/admin/pattern-lab?{query}")
+            assert duplicate.status == 400
     finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pattern_lab_list_loads_review_states_with_one_bounded_query(
+    tmp_path, monkeypatch
+):
+    client, factory, engine = await _client(tmp_path, monkeypatch, email="operator@example.com")
+    review_selects: list[str] = []
+
+    def _track_review_select(_connection, _cursor, statement, _parameters, _context, _executemany):
+        normalized = statement.lstrip().lower()
+        if normalized.startswith("select") and "pattern_reviews" in normalized:
+            review_selects.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", _track_review_select)
+    try:
+        response = await client.get("/admin/pattern-lab")
+        assert response.status == 200
+        assert len(review_selects) == 1
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", _track_review_select)
         await client.close()
         await engine.dispose()
 
@@ -110,7 +140,10 @@ async def test_pattern_lab_preview_is_opaque_sandbox_and_fixed_bridge(
             f"/admin/pattern-lab/{row.pattern_id}/{row.version}/preview"
         )
         assert preview.status == 200
-        assert "default-src 'none'" in preview.headers["Content-Security-Policy"]
+        csp = preview.headers["Content-Security-Policy"]
+        assert "default-src 'none'" in csp
+        assert "sandbox allow-scripts" in csp
+        assert "frame-ancestors 'self'" in csp
         preview_html = await preview.text()
         assert "event.source !== window.parent" in preview_html
         for command in (
@@ -127,6 +160,42 @@ async def test_pattern_lab_preview_is_opaque_sandbox_and_fixed_bridge(
             assert command in detail_html
         assert "localStorage" not in preview_html
         assert "fetch(" not in preview_html
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pattern_lab_review_history_is_bounded_with_truncation_indicator(
+    tmp_path, monkeypatch
+):
+    client, factory, engine = await _client(tmp_path, monkeypatch, email="operator@example.com")
+    try:
+        await client.get("/admin/pattern-lab")
+        async with factory() as database:
+            row = await database.scalar(select(WidgetPatternVersion))
+            assert row is not None
+            now = datetime.now(timezone.utc)
+            database.add_all(
+                [
+                    PatternReview(
+                        pattern_version_id=row.id,
+                        reviewer_email=f"reviewer-{index}@example.com",
+                        status="approved",
+                        comment=f"review {index}",
+                        created_at=now + timedelta(seconds=index),
+                    )
+                    for index in range(101)
+                ]
+            )
+            await database.commit()
+            pattern_id, version = row.pattern_id, row.version
+        detail = await client.get(f"/admin/pattern-lab/{pattern_id}/{version}")
+        assert detail.status == 200
+        html = await detail.text()
+        assert "Showing latest 100 reviews" in html
+        assert "reviewer-0@example.com" not in html
+        assert "reviewer-100@example.com" in html
     finally:
         await client.close()
         await engine.dispose()

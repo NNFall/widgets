@@ -35,6 +35,7 @@ _CSRF_SESSION_KEY = "pattern_lab_csrf"
 _CSRF_MIN_LENGTH = 32
 _MAX_COMMENT = 4_000
 _MAX_FILTER_LENGTH = 64
+_MAX_REVIEW_HISTORY = 100
 _REVIEW_STATES = frozenset({"ready_for_review", "approved", "rejected"})
 _STATUSES = frozenset(item.value for item in AtomicPatternStatus)
 _CATEGORIES = frozenset(item.value for item in AtomicPatternCategory)
@@ -86,7 +87,10 @@ def _version(request: web.Request) -> int:
 
 
 def _query_filter(request: web.Request, name: str, allowed: frozenset[str]) -> str | None:
-    raw = request.query.get(name)
+    values = request.query.getall(name, [])
+    if len(values) > 1:
+        raise web.HTTPBadRequest(headers=_NO_STORE)
+    raw = values[0] if values else None
     if raw is None or raw == "":
         return None
     if not isinstance(raw, str) or len(raw) > _MAX_FILTER_LENGTH or raw not in allowed:
@@ -140,9 +144,40 @@ async def _rows(request: web.Request) -> list[tuple[WidgetPatternVersion, str]]:
         if status is not None:
             statement = statement.where(WidgetPatternVersion.status == status)
         records = list((await database.scalars(statement)).all())
+        latest_reviews: dict[object, str] = {}
+        if records:
+            review_rows = list(
+                (
+                    await database.scalars(
+                        select(PatternReview)
+                        .where(
+                            PatternReview.pattern_version_id.in_(
+                                [row.id for row in records]
+                            )
+                        )
+                        .order_by(
+                            PatternReview.pattern_version_id,
+                            PatternReview.created_at.desc(),
+                            PatternReview.id.desc(),
+                        )
+                    )
+                ).all()
+            )
+            for review_row in review_rows:
+                latest_reviews.setdefault(
+                    review_row.pattern_version_id, review_row.status
+                )
         result: list[tuple[WidgetPatternVersion, str]] = []
         for row in records:
-            effective = await _effective_review(database, row)
+            effective = latest_reviews.get(row.id)
+            if effective is None:
+                provenance = _snapshot(row).get("provenance")
+                if isinstance(provenance, dict) and provenance.get(
+                    "review_state"
+                ) in _REVIEW_STATES:
+                    effective = str(provenance["review_state"])
+                else:
+                    effective = "ready_for_review"
             if review is None or effective == review:
                 result.append((row, effective))
         return result
@@ -292,9 +327,12 @@ async def pattern_lab_detail(request: web.Request) -> web.Response:
                     select(PatternReview)
                     .where(PatternReview.pattern_version_id == row.id)
                     .order_by(PatternReview.created_at.desc(), PatternReview.id.desc())
+                    .limit(_MAX_REVIEW_HISTORY + 1)
                 )
             ).all()
         )
+    review_history_truncated = len(reviews) > _MAX_REVIEW_HISTORY
+    reviews = reviews[:_MAX_REVIEW_HISTORY]
     token = await _csrf_token(request)
     snapshot = _snapshot(row)
     title = _field(row, "title", row.pattern_id)
@@ -309,6 +347,12 @@ async def pattern_lab_detail(request: web.Request) -> web.Response:
         f"<td>{escape(review.comment)}</td><td>{escape(str(review.created_at))}</td></tr>"
         for review in reviews
     ) or "<tr><td colspan='4'>Рецензий пока нет.</td></tr>"
+    review_history_note = (
+        "<p class='muted'>Showing latest 100 reviews; older entries remain in the "
+        "append-only history.</p>"
+        if review_history_truncated
+        else ""
+    )
     buttons = "".join(
         f"<button type='button' data-pattern-command='{escape(command)}'>{escape(command)}</button>"
         for command in _COMMANDS
@@ -342,7 +386,7 @@ async def pattern_lab_detail(request: web.Request) -> web.Response:
         "<button type='submit'>Append review</button></form></section>"
         "<section class='card'><h2>Review history</h2><table><thead><tr>"
         "<th>Reviewer</th><th>Status</th><th>Comment</th><th>Created</th>"
-        f"</tr></thead><tbody>{review_rows}</tbody></table></section>"
+        f"</tr></thead><tbody>{review_rows}</tbody></table>{review_history_note}</section>"
         + _parent_bridge()
     )
     response = render_layout(f"Pattern {title}", content)
@@ -353,7 +397,8 @@ async def pattern_lab_detail(request: web.Request) -> web.Response:
 _PREVIEW_CSP = (
     "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
     "connect-src 'none'; img-src 'none'; font-src 'none'; media-src 'none'; "
-    "worker-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'"
+    "worker-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'; "
+    "object-src 'none'; sandbox allow-scripts; frame-ancestors 'self'"
 )
 
 
