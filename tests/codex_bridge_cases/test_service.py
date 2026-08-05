@@ -127,6 +127,32 @@ async def test_turn_decodes_images_and_returns_normalized_result(tmp_path) -> No
 
 
 @pytest.mark.asyncio
+async def test_turn_accepts_complete_visual_critic_evidence_set(tmp_path) -> None:
+    runner = FakeRunner()
+    client = await _client(tmp_path, runner)
+    image = b"\x89PNG\r\n\x1a\nvisual"
+    encoded = base64.b64encode(image).decode("ascii")
+    try:
+        response = await client.post(
+            "/v1/turn",
+            json={
+                "run_id": str(uuid4()),
+                "conversation_key": "critic:conversation_ux",
+                "prompt": "Review six states and three detail crops",
+                "images": [
+                    {"media_type": "image/png", "data": encoded}
+                    for _ in range(9)
+                ],
+            },
+        )
+    finally:
+        await client.close()
+
+    assert response.status == 200
+    assert runner.requests[0].images == (image,) * 9
+
+
+@pytest.mark.asyncio
 async def test_turn_rejects_invalid_base64_without_running_codex(tmp_path) -> None:
     runner = FakeRunner()
     client = await _client(tmp_path, runner)

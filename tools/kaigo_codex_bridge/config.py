@@ -19,7 +19,7 @@ class CodexBridgeConfig:
     work_root: Path
     socket_path: Path
     socket_gid: int = 10001
-    max_images: int = 6
+    max_images: int = 9
     max_image_bytes: int = 10 * 1024 * 1024
     max_request_bytes: int = 64 * 1024 * 1024
 
@@ -82,7 +82,7 @@ class CodexBridgeConfig:
                 )
             ),
             socket_gid=_env_int("KAIGO_CODEX_BRIDGE_SOCKET_GID", 10001),
-            max_images=_env_int("KAIGO_CODEX_BRIDGE_MAX_IMAGES", 6),
+            max_images=_env_int("KAIGO_CODEX_BRIDGE_MAX_IMAGES", 9),
             max_image_bytes=_env_int(
                 "KAIGO_CODEX_BRIDGE_MAX_IMAGE_BYTES", 10 * 1024 * 1024
             ),
