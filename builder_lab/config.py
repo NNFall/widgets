@@ -71,6 +71,7 @@ class BuilderLabConfig:
     temperature: float
     max_repairs: int
     hybrid_routing_enabled: bool
+    pattern_candidate_plan_v2_enabled: bool
     codex_bridge_enabled: bool
     codex_bridge_socket_path: str
     codex_bridge_timeout_seconds: int
@@ -194,6 +195,10 @@ class BuilderLabConfig:
             max_repairs=_int("GEMINI_BUILDER_MAX_REPAIRS", 3, 0, 4),
             hybrid_routing_enabled=_bool(
                 "KAIGO_BUILDER_HYBRID_ROUTING_ENABLED",
+                False,
+            ),
+            pattern_candidate_plan_v2_enabled=_bool(
+                "KAIGO_PATTERN_CANDIDATE_PLAN_V2_ENABLED",
                 False,
             ),
             codex_bridge_enabled=_bool("KAIGO_CODEX_BRIDGE_ENABLED", False),

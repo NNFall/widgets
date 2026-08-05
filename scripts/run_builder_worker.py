@@ -592,6 +592,11 @@ async def run() -> None:
                     ),
                     fail_open_on_inconclusive=True,
                 ),
+                pattern_candidate_plan_v2_enabled=getattr(
+                    config,
+                    "pattern_candidate_plan_v2_enabled",
+                    False,
+                ),
             )
         handler = load_stage_handler(
             configured_handler,

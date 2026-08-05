@@ -565,6 +565,7 @@ class VisualRepairGate:
         previous: WidgetArtifact,
         selected_direction: DirectionProposal,
         composition: Any | None = None,
+        pattern_candidate_pack: Any | None = None,
     ) -> WidgetArtifact:
         if candidate.stage is not Stage.MOTION_POLISH:
             raise ValueError("visual gate accepts only motion_polish artifacts")
@@ -704,6 +705,7 @@ class VisualRepairGate:
                             visual_findings=(),
                             selected_direction=selected_direction,
                             composition=composition,
+                            pattern_candidate_pack=pattern_candidate_pack,
                         )
                     except asyncio.CancelledError:
                         raise
@@ -815,6 +817,7 @@ class VisualRepairGate:
                                 visual_findings=(),
                                 selected_direction=selected_direction,
                                 composition=composition,
+                                pattern_candidate_pack=pattern_candidate_pack,
                             )
                         except asyncio.CancelledError:
                             raise
@@ -1267,6 +1270,7 @@ class VisualRepairGate:
                         visual_findings=findings,
                         selected_direction=selected_direction,
                         composition=composition,
+                        pattern_candidate_pack=pattern_candidate_pack,
                     )
                 except asyncio.CancelledError:
                     raise
@@ -1384,6 +1388,7 @@ class VisualRepairGate:
                             visual_findings=(),
                             selected_direction=selected_direction,
                             composition=composition,
+                            pattern_candidate_pack=pattern_candidate_pack,
                         )
                     except asyncio.CancelledError:
                         raise
