@@ -10,6 +10,7 @@ from app.admin.auth import login_page, login_submit, logout, require_admin_sessi
 from app.admin.generation_forensics import setup_generation_forensics_routes
 from app.admin.funnel import setup_funnel_admin_routes
 from app.admin.layout import render_layout as _render_layout
+from app.admin.pattern_lab import setup_pattern_lab_routes
 from app.admin.tenants import setup_tenant_admin_routes
 
 from app.db import models
@@ -1027,6 +1028,8 @@ def setup_admin_routes(
     app.router.add_get('/admin/widgets/{widget_id}/assets/{version}/preview', widget_assets_preview)
 
     setup_tenant_admin_routes(app)
+
+    setup_pattern_lab_routes(app)
 
     setup_generation_forensics_routes(app, config=generation_forensics)
 
