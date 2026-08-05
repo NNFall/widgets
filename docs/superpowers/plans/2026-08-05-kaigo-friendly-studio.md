@@ -149,7 +149,7 @@ git commit -m "feat: add friendly studio presentation contracts"
 - Create: `frontend/src/studio/StudioActivity.tsx`
 - Create: `frontend/src/studio/StudioActivity.test.tsx`
 
-- [ ] **Step 1: Write the failing timer test**
+- [x] **Step 1: Write the failing timer test**
 
 ```tsx
 it('keeps a visible activity for two seconds and then shows the newest safe event', () => {
@@ -170,27 +170,27 @@ it('keeps a visible activity for two seconds and then shows the newest safe even
 });
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `.\frontend\node_modules\.bin\vitest.cmd run --root frontend src/studio/StudioActivity.test.tsx --maxWorkers=1`
 
 Expected: FAIL because `StudioActivity` does not exist.
 
-- [ ] **Step 3: Implement the activity queue**
+- [x] **Step 3: Implement the activity queue**
 
 Use `MIN_VISIBLE_MS = 2_000`, `visibleAtRef`, and one cleanup-safe timeout. Store `{ key, text }`. For bursts, replace the pending value with the newest event; when no event arrives, keep the current text. Render one atomic polite status. Set `data-motion="reduced"` from `useReducedMotion` and leave animation to CSS.
 
-- [ ] **Step 4: Add cleanup and reduced-motion assertions**
+- [x] **Step 4: Add cleanup and reduced-motion assertions**
 
 Unmount with a pending update and assert the timer is cleared. Mock reduced motion and assert `data-motion="reduced"` while the text remains truthful.
 
-- [ ] **Step 5: Run and verify GREEN**
+- [x] **Step 5: Run and verify GREEN**
 
 Run: `.\frontend\node_modules\.bin\vitest.cmd run --root frontend src/studio/StudioActivity.test.tsx --maxWorkers=1`
 
 Expected: all tests pass and fake timers are restored.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/src/studio/StudioActivity.tsx frontend/src/studio/StudioActivity.test.tsx
