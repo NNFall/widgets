@@ -5,6 +5,9 @@ from .atomic_models import (
     AtomicPatternCategory,
     AtomicPatternDefinition,
     AtomicPatternStatus,
+    PatternCandidate,
+    PatternCandidateGroup,
+    PatternCandidatePlan,
 )
 from .atomic_registry import (
     AtomicPatternRegistry,
@@ -48,6 +51,12 @@ from .planner import (
     PlannedComposition,
     plan_composition,
 )
+from .candidate_planner import (
+    PatternCandidatePlanResult,
+    PatternCandidateValidationError,
+    plan_pattern_candidates,
+    validate_pattern_candidate_plan,
+)
 
 __all__ = [
     "AdaptationPolicy",
@@ -62,6 +71,11 @@ __all__ = [
     "CustomPatternEscape",
     "CssParameterBinding",
     "PatternCategory",
+    "PatternCandidate",
+    "PatternCandidateGroup",
+    "PatternCandidatePlan",
+    "PatternCandidatePlanResult",
+    "PatternCandidateValidationError",
     "PatternBrowserAuditContract",
     "PatternCompilationError",
     "PatternDefinition",
@@ -82,5 +96,7 @@ __all__ = [
     "load_builtin_atomic_registry",
     "load_builtin_registry",
     "plan_composition",
+    "plan_pattern_candidates",
     "resolve_composition",
+    "validate_pattern_candidate_plan",
 ]

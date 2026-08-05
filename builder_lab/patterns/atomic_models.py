@@ -361,11 +361,179 @@ class AtomicPatternDefinition:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class PatternCandidate:
+    """One exact, selector-facing pattern version in a shortlist."""
+
+    pattern_id: str
+    version: int
+    rank: int
+    reason: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "pattern_id",
+            _identifier(self.pattern_id, name="pattern_id"),
+        )
+        if (
+            isinstance(self.version, bool)
+            or not isinstance(self.version, int)
+            or not 1 <= self.version <= 9_999
+        ):
+            raise ValueError("version is invalid")
+        if (
+            isinstance(self.rank, bool)
+            or not isinstance(self.rank, int)
+            or self.rank < 1
+            or self.rank > 5
+        ):
+            raise ValueError("rank is invalid")
+        object.__setattr__(
+            self,
+            "reason",
+            _text(self.reason, name="reason", maximum=500),
+        )
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> "PatternCandidate":
+        if not isinstance(payload, Mapping):
+            raise ValueError("candidate must be an object")
+        expected = {"pattern_id", "version", "rank", "reason"}
+        if set(payload) != expected:
+            raise ValueError("candidate fields do not match the contract")
+        return cls(
+            pattern_id=payload["pattern_id"],  # type: ignore[arg-type]
+            version=payload["version"],  # type: ignore[arg-type]
+            rank=payload["rank"],  # type: ignore[arg-type]
+            reason=payload["reason"],  # type: ignore[arg-type]
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "pattern_id": self.pattern_id,
+            "version": self.version,
+            "rank": self.rank,
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PatternCandidateGroup:
+    """Candidates for one atomic category, ordered by canonical rank."""
+
+    category: AtomicPatternCategory
+    candidates: tuple[PatternCandidate, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.category, AtomicPatternCategory):
+            raise ValueError("category is invalid")
+        candidates = tuple(self.candidates)
+        if len(candidates) > 5:
+            raise ValueError("a candidate group may contain at most five candidates")
+        if any(not isinstance(item, PatternCandidate) for item in candidates):
+            raise ValueError("candidates contain an invalid value")
+        exact_versions = [(item.pattern_id, item.version) for item in candidates]
+        if len(set(exact_versions)) != len(exact_versions):
+            raise ValueError("candidate group contains duplicate candidates")
+        if candidates and tuple(item.rank for item in candidates) != tuple(
+            range(1, len(candidates) + 1)
+        ):
+            raise ValueError("candidate ranks must be canonical")
+        object.__setattr__(self, "candidates", candidates)
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> "PatternCandidateGroup":
+        if not isinstance(payload, Mapping):
+            raise ValueError("candidate group must be an object")
+        expected = {"category", "candidates"}
+        if set(payload) != expected:
+            raise ValueError("candidate group fields do not match the contract")
+        try:
+            category = AtomicPatternCategory(payload["category"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("category is invalid") from exc
+        raw_candidates = payload["candidates"]
+        if not isinstance(raw_candidates, (list, tuple)):
+            raise ValueError("candidates must be an array")
+        return cls(
+            category=category,
+            candidates=tuple(PatternCandidate.from_dict(item) for item in raw_candidates),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "category": self.category.value,
+            "candidates": [item.to_dict() for item in self.candidates],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PatternCandidatePlan:
+    """Versioned AI shortlist persisted before stage generation begins."""
+
+    schema_version: int
+    direction_id: str
+    groups: tuple[PatternCandidateGroup, ...]
+    summary: str
+
+    def __post_init__(self) -> None:
+        if self.schema_version != 2:
+            raise ValueError("schema_version must be 2")
+        object.__setattr__(
+            self,
+            "direction_id",
+            _identifier(self.direction_id, name="direction_id"),
+        )
+        groups = tuple(self.groups)
+        if not 1 <= len(groups) <= len(AtomicPatternCategory):
+            raise ValueError("groups must contain between one and fourteen categories")
+        if any(not isinstance(item, PatternCandidateGroup) for item in groups):
+            raise ValueError("groups contain an invalid value")
+        categories = [item.category for item in groups]
+        if len(set(categories)) != len(categories):
+            raise ValueError("plan contains duplicate categories")
+        object.__setattr__(self, "groups", groups)
+        object.__setattr__(
+            self,
+            "summary",
+            _text(self.summary, name="summary", maximum=1_000),
+        )
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> "PatternCandidatePlan":
+        if not isinstance(payload, Mapping):
+            raise ValueError("candidate plan must be an object")
+        expected = {"schema_version", "direction_id", "groups", "summary"}
+        if set(payload) != expected:
+            raise ValueError("candidate plan fields do not match the contract")
+        raw_groups = payload["groups"]
+        if not isinstance(raw_groups, (list, tuple)):
+            raise ValueError("groups must be an array")
+        return cls(
+            schema_version=payload["schema_version"],  # type: ignore[arg-type]
+            direction_id=payload["direction_id"],  # type: ignore[arg-type]
+            groups=tuple(PatternCandidateGroup.from_dict(item) for item in raw_groups),
+            summary=payload["summary"],  # type: ignore[arg-type]
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "direction_id": self.direction_id,
+            "groups": [item.to_dict() for item in self.groups],
+            "summary": self.summary,
+        }
+
+
 __all__ = [
     "AdaptationPolicy",
     "AtomicPatternCategory",
     "AtomicPatternDefinition",
     "AtomicPatternStatus",
     "JSONValue",
+    "PatternCandidate",
+    "PatternCandidateGroup",
+    "PatternCandidatePlan",
     "SerializedJSONValue",
 ]

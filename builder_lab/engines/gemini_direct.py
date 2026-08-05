@@ -46,10 +46,12 @@ from ..prompts import (
     CONCEPT_ROLE_BRIEF_JSON_SCHEMA,
     DIRECTION_JUDGE_JSON_SCHEMA,
     DIRECTION_PROPOSAL_JSON_SCHEMA,
+    PATTERN_CANDIDATE_PLAN_JSON_SCHEMA,
     build_direction_judge_prompt,
     build_direction_proposal_prompt,
     build_concept_role_prompt,
     build_composition_plan_prompt,
+    build_pattern_candidate_plan_prompt,
     build_stage_prompt,
 )
 from .base import (
@@ -59,7 +61,9 @@ from .base import (
     DirectionJudgeResult,
     DirectionProposalResult,
     EngineResult,
+    PatternCandidatePlanResult,
 )
+from ..patterns.atomic_models import PatternCandidatePlan
 
 
 def build_low_thinking_config(
@@ -567,6 +571,54 @@ class GeminiDirectEngine:
                 getattr(response, "request_id", None)
                 or getattr(response, "response_id", None)
             ),
+            diagnostic=_response_diagnostic(response, fallback_model=self.model),
+        )
+
+    async def plan_pattern_candidates(
+        self,
+        *,
+        request: BuilderRequest,
+        selected_direction: DirectionProposal,
+        selector_catalog: tuple[dict[str, Any], ...],
+        correction: str | None = None,
+    ) -> PatternCandidatePlanResult:
+        prompt = build_pattern_candidate_plan_prompt(
+            request=request,
+            selected_direction=selected_direction,
+            selector_catalog=selector_catalog,
+            correction=correction,
+        )
+        response = await self._generate_structured(
+            prompt=prompt,
+            schema=PATTERN_CANDIDATE_PLAN_JSON_SCHEMA,
+            temperature=0.2,
+            routing_deadline=self._new_routing_deadline(),
+            context=self._context(
+                operation="pattern_candidate_plan",
+                semantic_attempt=1,
+                candidate_id=selected_direction.proposal_id,
+                persona=selected_direction.role.value,
+            ),
+        )
+        try:
+            payload = _response_payload(response)
+            plan = PatternCandidatePlan.from_dict(payload)
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise BuilderEngineError(
+                "invalid_structured_output",
+                "РЎРµСЂРІРёСЃ РіРµРЅРµСЂР°С†РёРё РІРµСЂРЅСѓР» РЅРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ РїР»Р°РЅ РєР°РЅРґРёРґР°С‚РѕРІ",
+                diagnostic=f"{type(exc).__name__}: {exc}",
+                usage=_usage(response),
+            ) from exc
+        provider_request_id = (
+            getattr(response, "request_id", None)
+            or getattr(response, "response_id", None)
+        )
+        return PatternCandidatePlanResult(
+            plan=plan,
+            usage=_usage(response),
+            provider_request_id=provider_request_id,
+            provider_request_ids=(provider_request_id,) if provider_request_id else (),
             diagnostic=_response_diagnostic(response, fallback_model=self.model),
         )
 

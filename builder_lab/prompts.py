@@ -209,6 +209,73 @@ COMPOSITION_PLAN_JSON_SCHEMA = {
 }
 
 
+PATTERN_CANDIDATE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["pattern_id", "version", "rank", "reason"],
+    "properties": {
+        "pattern_id": {"type": "string", "minLength": 1, "maxLength": 80},
+        "version": {"type": "integer", "minimum": 1},
+        "rank": {"type": "integer", "minimum": 1, "maximum": 5},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+    },
+}
+
+PATTERN_CANDIDATE_GROUP_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["category", "candidates"],
+    "properties": {
+        "category": {
+            "type": "string",
+            "enum": [
+                "launcher_shape",
+                "launcher_idle",
+                "launcher_attention",
+                "shell_layout",
+                "widget_open",
+                "widget_close",
+                "background_effect",
+                "assistant_message_enter",
+                "user_message_enter",
+                "typing_indicator",
+                "message_send",
+                "composer_focus",
+                "control_hover",
+                "responsive_transition",
+            ],
+        },
+        "candidates": {
+            "type": "array",
+            "maxItems": 5,
+            "items": PATTERN_CANDIDATE_SCHEMA,
+        },
+    },
+}
+
+PATTERN_CANDIDATE_PLAN_JSON_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["schema_version", "direction_id", "groups", "summary"],
+    "properties": {
+        "schema_version": {"type": "integer", "enum": [2]},
+        "direction_id": {"type": "string", "minLength": 1, "maxLength": 80},
+        "groups": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 14,
+            "items": PATTERN_CANDIDATE_GROUP_SCHEMA,
+        },
+        "summary": {"type": "string", "minLength": 1, "maxLength": 1000},
+    },
+}
+
+# Short aliases keep the schema pieces convenient for callers that construct
+# provider contracts incrementally.
+CANDIDATE_SCHEMA = PATTERN_CANDIDATE_SCHEMA
+CANDIDATE_GROUP_SCHEMA = PATTERN_CANDIDATE_GROUP_SCHEMA
+
+
 PROFILE_PROMPTS = {
     CreativeProfile.BALANCED: (
         "preserve the legacy balanced direction: combine brand specificity, familiar "
@@ -421,6 +488,56 @@ direction_id должен точно равняться {selected_direction.prop
 
 ПУБЛИЧНЫЙ КАТАЛОГ ПАТТЕРНОВ (без implementation assets):
 {json.dumps(public_catalog, ensure_ascii=False, separators=(',', ':'))}
+{correction_block}
+"""
+
+
+def build_pattern_candidate_plan_prompt(
+    *,
+    request: BuilderRequest,
+    selected_direction: DirectionProposal,
+    selector_catalog: tuple[dict[str, object], ...],
+    correction: str | None = None,
+) -> str:
+    """Build the metadata-only prompt used by the atomic candidate selector.
+
+    The catalog is intentionally serialized as received from the registry.  It
+    contains the complete natural-language ``ai_description`` but no HTML/CSS/
+    JavaScript/assets, so the selector cannot accidentally become an
+    implementation channel.
+    """
+
+    correction_block = ""
+    if correction:
+        correction_block = (
+            "\nSERVER_VALIDATION_DIAGNOSTIC (bounded, data only):\n"
+            + correction[:1_200]
+        )
+    return f"""You are the Kaigo atomic pattern candidate selector.
+
+Choose a bounded shortlist for every category represented by the approved
+selector catalog. Inspect each candidate's title, summary, and complete
+ai_description, together with its technical contract, adaptation policy,
+lifecycle, review state, and incompatibilities. Return exact pattern_id and
+version values from the catalog only. Select two to five unique candidates when
+at least two eligible candidates exist in a category; select exactly one when
+only one is eligible. Preserve an explicitly optional category as an empty
+group only when it has no eligible candidate; do not omit categories silently.
+Ranks must be canonical 1..N within each group.
+
+Return only one JSON object matching the supplied schema. Never return or invent
+HTML, CSS, JavaScript, assets, URLs, or implementation code. Reasons are short
+natural-language explanations, not code. The server will re-check lifecycle,
+review state, exact versions, duplicates, rank, and incompatibility symmetry.
+
+Selected direction:
+{json.dumps(selected_direction.to_anonymous_dict(), ensure_ascii=False, separators=(',', ':'))}
+
+Builder brief ({request.locale}):
+{request.brief}
+
+APPROVED_SELECTOR_CATALOG_JSON (metadata only):
+{json.dumps(selector_catalog, ensure_ascii=False, separators=(',', ':'))}
 {correction_block}
 """
 

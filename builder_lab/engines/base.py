@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol
+from typing import TYPE_CHECKING, Any, Mapping, Protocol
 
 from ..models import (
     BuilderRequest,
@@ -16,6 +16,9 @@ from ..models import (
     WidgetArtifact,
 )
 from ..visual_models import VisualFinding
+
+if TYPE_CHECKING:
+    from ..patterns.atomic_models import PatternCandidatePlan
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,22 @@ class CompositionPlanResult:
     usage: TokenUsage = TokenUsage()
     provider_request_id: str | None = None
     diagnostic: str | None = None
+
+
+@dataclass(frozen=True)
+class PatternCandidatePlanResult:
+    plan: "PatternCandidatePlan"
+    usage: TokenUsage = TokenUsage()
+    provider_request_id: str | None = None
+    provider_request_ids: tuple[str, ...] = ()
+    diagnostic: str | None = None
+    used_fallback: bool = False
+
+    @property
+    def payload(self) -> Mapping[str, object]:
+        """Compatibility view matching the legacy composition result shape."""
+
+        return self.plan.to_dict()
 
 
 class BuilderEngineError(RuntimeError):
@@ -101,6 +120,15 @@ class DirectBuilderEngine(BuilderEngine, Protocol):
         public_catalog: tuple[dict[str, Any], ...],
         correction: str | None = None,
     ) -> CompositionPlanResult: ...
+
+    async def plan_pattern_candidates(
+        self,
+        *,
+        request: BuilderRequest,
+        selected_direction: DirectionProposal,
+        selector_catalog: tuple[dict[str, Any], ...],
+        correction: str | None = None,
+    ) -> PatternCandidatePlanResult: ...
 
     async def develop_concept_role(
         self,
