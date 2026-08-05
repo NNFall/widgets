@@ -1,0 +1,18 @@
+{
+  "schema_version": 3,
+  "pattern_id": "control-hover-technical",
+  "version": 1,
+  "category": "control_hover",
+  "status": "active",
+  "title": "Control Hover technical fixture",
+  "summary": "Neutral technical fixture for the control_hover contract.",
+  "ai_description": "A neutral technical reference for control_hover. It defines the expected runtime state and keeps the DOM contract small while leaving visual styling open for adaptation to the approved product direction. The fixture is safe for local previews and does not imply a final visual treatment.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "9542cb0725b581aa832bccf845fbe3136b1c0ea977e55adfc4d7413fe96e13fa",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved"
+  }
+}

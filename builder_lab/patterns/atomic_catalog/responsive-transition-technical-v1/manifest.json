@@ -1,0 +1,18 @@
+{
+  "schema_version": 3,
+  "pattern_id": "responsive-transition-technical",
+  "version": 1,
+  "category": "responsive_transition",
+  "status": "active",
+  "title": "Responsive Transition technical fixture",
+  "summary": "Neutral technical fixture for the responsive_transition contract.",
+  "ai_description": "A neutral technical reference for responsive_transition. It defines the expected runtime state and keeps the DOM contract small while leaving visual styling open for adaptation to the approved product direction. The fixture is safe for local previews and does not imply a final visual treatment.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "4fa29b29cc2fda3764e457623097735c0c7b5554f485b20b0ec7dec4805a86f7",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved"
+  }
+}

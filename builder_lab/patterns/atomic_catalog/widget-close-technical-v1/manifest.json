@@ -1,0 +1,18 @@
+{
+  "schema_version": 3,
+  "pattern_id": "widget-close-technical",
+  "version": 1,
+  "category": "widget_close",
+  "status": "active",
+  "title": "Widget Close technical fixture",
+  "summary": "Neutral technical fixture for the widget_close contract.",
+  "ai_description": "A neutral technical reference for widget_close. It defines the expected runtime state and keeps the DOM contract small while leaving visual styling open for adaptation to the approved product direction. The fixture is safe for local previews and does not imply a final visual treatment.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "3893b1335dac3f702d4c26a47b2ac59068d55e6400117d3b0f2145c95e70c46a",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved"
+  }
+}

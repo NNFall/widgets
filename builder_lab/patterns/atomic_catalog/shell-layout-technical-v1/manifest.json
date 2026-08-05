@@ -1,0 +1,18 @@
+{
+  "schema_version": 3,
+  "pattern_id": "shell-layout-technical",
+  "version": 1,
+  "category": "shell_layout",
+  "status": "active",
+  "title": "Shell Layout technical fixture",
+  "summary": "Neutral technical fixture for the shell_layout contract.",
+  "ai_description": "A neutral technical reference for shell_layout. It defines the expected runtime state and keeps the DOM contract small while leaving visual styling open for adaptation to the approved product direction. The fixture is safe for local previews and does not imply a final visual treatment.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "9ef71422d51f6fec1b32351c59dcaf67cf439a2d9d99fd40fcbb52f57b4f5254",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved"
+  }
+}

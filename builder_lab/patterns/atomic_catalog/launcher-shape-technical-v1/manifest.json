@@ -1,0 +1,18 @@
+{
+  "schema_version": 3,
+  "pattern_id": "launcher-shape-technical",
+  "version": 1,
+  "category": "launcher_shape",
+  "status": "active",
+  "title": "Launcher Shape technical fixture",
+  "summary": "Neutral technical fixture for the launcher_shape contract.",
+  "ai_description": "A neutral technical reference for launcher_shape. It defines the expected runtime state and keeps the DOM contract small while leaving visual styling open for adaptation to the approved product direction. The fixture is safe for local previews and does not imply a final visual treatment.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "e318ac2ffa0cde314be009a379cfdc016ccadc31f4a9ba18f456641be89f3520",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved"
+  }
+}

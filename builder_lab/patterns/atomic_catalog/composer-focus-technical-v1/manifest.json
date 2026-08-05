@@ -1,0 +1,18 @@
+{
+  "schema_version": 3,
+  "pattern_id": "composer-focus-technical",
+  "version": 1,
+  "category": "composer_focus",
+  "status": "active",
+  "title": "Composer Focus technical fixture",
+  "summary": "Neutral technical fixture for the composer_focus contract.",
+  "ai_description": "A neutral technical reference for composer_focus. It defines the expected runtime state and keeps the DOM contract small while leaving visual styling open for adaptation to the approved product direction. The fixture is safe for local previews and does not imply a final visual treatment.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "12541d9c2b10950fd58fc4a22c922497043b7a9025d7c1378d3f6a79f33a7bf3",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved"
+  }
+}

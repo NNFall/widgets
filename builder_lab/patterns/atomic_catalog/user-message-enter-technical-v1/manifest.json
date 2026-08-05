@@ -1,0 +1,18 @@
+{
+  "schema_version": 3,
+  "pattern_id": "user-message-enter-technical",
+  "version": 1,
+  "category": "user_message_enter",
+  "status": "active",
+  "title": "User Message Enter technical fixture",
+  "summary": "Neutral technical fixture for the user_message_enter contract.",
+  "ai_description": "A neutral technical reference for user_message_enter. It defines the expected runtime state and keeps the DOM contract small while leaving visual styling open for adaptation to the approved product direction. The fixture is safe for local previews and does not imply a final visual treatment.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "c8c24b8b971bac15a62ad20465921953f81a81451489f7dcb153efc8ba774a45",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved"
+  }
+}

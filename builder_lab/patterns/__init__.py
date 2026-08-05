@@ -1,5 +1,19 @@
 """Verified composition patterns used by the Kaigo builder."""
 
+from .atomic_models import (
+    AdaptationPolicy,
+    AtomicPatternCategory,
+    AtomicPatternDefinition,
+    AtomicPatternStatus,
+)
+from .atomic_registry import (
+    AtomicPatternRegistry,
+    AtomicPatternRegistryError,
+    compute_implementation_hash,
+    compute_implementation_sha256,
+    load_builtin_atomic_registry,
+)
+
 from .models import (
     CompositionPlan,
     CustomPatternEscape,
@@ -36,6 +50,12 @@ from .planner import (
 )
 
 __all__ = [
+    "AdaptationPolicy",
+    "AtomicPatternCategory",
+    "AtomicPatternDefinition",
+    "AtomicPatternRegistry",
+    "AtomicPatternRegistryError",
+    "AtomicPatternStatus",
     "CompositionPlan",
     "CompositionPlanningError",
     "CompiledPatternSource",
@@ -56,7 +76,10 @@ __all__ = [
     "PlannedComposition",
     "ResolvedComposition",
     "canonical_anatomy_fingerprint",
+    "compute_implementation_hash",
+    "compute_implementation_sha256",
     "compile_runtime_source",
+    "load_builtin_atomic_registry",
     "load_builtin_registry",
     "plan_composition",
     "resolve_composition",

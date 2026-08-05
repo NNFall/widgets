@@ -1,0 +1,18 @@
+{
+  "schema_version": 3,
+  "pattern_id": "background-effect-technical",
+  "version": 1,
+  "category": "background_effect",
+  "status": "active",
+  "title": "Background Effect technical fixture",
+  "summary": "Neutral technical fixture for the background_effect contract.",
+  "ai_description": "A neutral technical reference for background_effect. It defines the expected runtime state and keeps the DOM contract small while leaving visual styling open for adaptation to the approved product direction. The fixture is safe for local previews and does not imply a final visual treatment.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "1a27098f1c1418120670695ed5af4457a000d50f242eb91116a720f3e7eef083",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved"
+  }
+}
