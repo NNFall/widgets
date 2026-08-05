@@ -8,11 +8,13 @@ import {
   PaperPlaneTilt,
   Plus,
   StopCircle,
+  UserCircle,
 } from '@phosphor-icons/react';
 import { type FormEvent, type ReactNode, useCallback, useState } from 'react';
 
 import { KaigoLogo } from '../shared/KaigoLogo';
 import { ProjectVersionHistory } from './ProjectVersionHistory';
+import { StudioAccountPanel } from './StudioAccountPanel';
 import { StudioDrawer } from './StudioDrawer';
 import { StudioLibrary } from './StudioLibrary';
 import { StudioPreview } from './StudioPreview';
@@ -22,7 +24,7 @@ import { UpgradeGate } from './UpgradeGate';
 import type { PreviewViewport } from './types';
 import type { BuilderRunController } from './useBuilderRun';
 
-type WorkbenchDrawer = 'projects' | 'versions' | 'publication' | null;
+type WorkbenchDrawer = 'projects' | 'versions' | 'account' | 'publication' | null;
 type MobilePane = 'chat' | 'preview';
 
 type StudioProjectWorkbenchProps = {
@@ -133,6 +135,10 @@ export function StudioProjectWorkbench({
             {controller.versions.length > 0 && (
               <span className="studio-header__count">{controller.versions.length}</span>
             )}
+          </button>
+          <button type="button" onClick={() => setDrawer('account')} aria-label="Открыть тариф и лимиты">
+            <UserCircle aria-hidden size={19} />
+            <span className="studio-action-label">Аккаунт</span>
           </button>
           <button
             type="button"
@@ -286,16 +292,11 @@ export function StudioProjectWorkbench({
         </aside>
 
         <section className="studio-preview-pane" aria-label="Предпросмотр виджета">
-          <div className="studio-preview-pane__version" aria-label="Состояние выбранной версии">
-            <span>Версия <strong>{displayedVersionNumber ?? '—'}</strong></span>
-            <span data-quality={qualityStatus}>
-              <CheckCircle aria-hidden size={17} weight={isReadyQuality(qualityStatus) ? 'fill' : 'regular'} />
-              {qualityStatus === 'accepted' ? 'Готово' : qualityStatus === 'verified' ? 'Проверено' : 'В работе'}
-            </span>
-          </div>
           <StudioPreview
             runId={controller.previewRunId}
             revision={previewRevision}
+            versionNumber={displayedVersionNumber}
+            compactProjectHeader
             projectMode
             csrfToken={controller.csrfToken}
             artDirection={artifact?.art_direction ?? ''}
@@ -357,6 +358,15 @@ export function StudioProjectWorkbench({
             <p>Все последующие доработки будут сохраняться здесь автоматически.</p>
           </div>
         )}
+      </StudioDrawer>
+
+      <StudioDrawer
+        open={drawer === 'account'}
+        title="Тариф и лимиты"
+        description="Подписка, продление и доступный объём доработок."
+        onClose={closeDrawer}
+      >
+        <StudioAccountPanel onOpenPublication={() => setDrawer('publication')} />
       </StudioDrawer>
 
       <StudioDrawer

@@ -88,6 +88,11 @@ try {
   await desktop.getByTitle('Предпросмотр AI-сотрудника Kaigo').waitFor();
   await screenshot(desktop, 'studio-project-desktop.png');
 
+  await desktop.getByRole('button', { name: 'Открыть тариф и лимиты' }).click();
+  await desktop.getByRole('dialog', { name: 'Тариф и лимиты' }).waitFor();
+  await screenshot(desktop, 'studio-account-desktop.png');
+  await desktop.keyboard.press('Escape');
+
   await desktop.getByRole('button', { name: 'Открыть версии' }).click();
   await desktop.getByRole('dialog', { name: 'История версий' }).waitFor();
   await screenshot(desktop, 'studio-versions-desktop.png');

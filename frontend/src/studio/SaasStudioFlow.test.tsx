@@ -973,10 +973,22 @@ describe('durable SaaS Studio flow', () => {
 
     const workbench = await screen.findByRole('main', { name: 'Рабочая студия' });
     expect(within(workbench).getByRole('complementary', { name: 'Чат с Kaigo' })).toBeVisible();
-    expect(within(workbench).getByRole('region', { name: 'Предпросмотр виджета' })).toBeVisible();
+    const previewRegion = within(workbench).getByRole('region', { name: 'Предпросмотр виджета' });
+    expect(previewRegion).toBeVisible();
+    expect(within(previewRegion).getByRole('heading', { name: 'Предпросмотр' })).toBeVisible();
+    expect(within(previewRegion).getByText('Версия 1')).toBeVisible();
+    expect(within(previewRegion).getByText('Проверено')).toBeVisible();
+    expect(screen.queryByLabelText('Состояние выбранной версии')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Что изменить в виджете?')).toBeVisible();
     expect(screen.queryByRole('region', { name: 'История версий' })).not.toBeInTheDocument();
     expect(screen.queryByText('Подключите виджет к сайту')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Открыть тариф и лимиты' }));
+    const accountDialog = screen.getByRole('dialog', { name: 'Тариф и лимиты' });
+    expect(within(accountDialog).getByText('Бесплатный режим')).toBeVisible();
+    expect(within(accountDialog).getByText('Первая экспресс-версия — бесплатно')).toBeVisible();
+    expect(within(accountDialog).getByText('Для продолжения нужен тариф')).toBeVisible();
+    await user.keyboard('{Escape}');
 
     await user.click(screen.getByRole('button', { name: 'Открыть версии' }));
     const versionsDialog = screen.getByRole('dialog', { name: 'История версий' });
@@ -1382,11 +1394,19 @@ describe('durable SaaS Studio flow', () => {
 
     render(<StudioPage />);
 
+    await user.click(await screen.findByRole('button', { name: 'Открыть тариф и лимиты' }));
+    const accountDialog = screen.getByRole('dialog', { name: 'Тариф и лимиты' });
+    expect(within(accountDialog).getByText('Starter')).toBeVisible();
+    expect(within(accountDialog).getByText(/750\s000/)).toBeVisible();
+    expect(within(accountDialog).getByText('Автопродление включено')).toBeVisible();
+    await user.keyboard('{Escape}');
+
     await user.click(await screen.findByRole('button', { name: 'Открыть версии' }));
     await user.click(await screen.findByRole('button', { name: 'Просмотреть версию 1' }));
-    const selectedVersionSummary = screen.getByLabelText('Состояние выбранной версии');
-    expect(within(selectedVersionSummary).getByText('1')).toBeVisible();
-    expect(screen.getByText('Виджет готов к просмотру. Проверьте его на компьютере и телефоне.')).toBeVisible();
+    const selectedPreview = screen.getByRole('region', { name: 'Предпросмотр виджета' });
+    expect(within(selectedPreview).getByText('Версия 1')).toBeVisible();
+    expect(within(selectedPreview).getByText('Проверено')).toBeVisible();
+    expect(screen.queryByText('Виджет готов к просмотру. Проверьте его на компьютере и телефоне.')).not.toBeInTheDocument();
     expect(screen.queryByText('Точная историческая концепция')).not.toBeInTheDocument();
     expect(requests.some(({ url }) => url === '/api/artifacts/artifact-version-1')).toBe(true);
     await user.click(screen.getByRole('button', { name: 'Открыть публикацию' }));

@@ -1,4 +1,4 @@
-import { Desktop, DeviceMobile, Eye, Sparkle } from '@phosphor-icons/react';
+import { CheckCircle, Desktop, DeviceMobile, Eye, Sparkle } from '@phosphor-icons/react';
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 
 import {
@@ -26,6 +26,8 @@ interface StudioPreviewProps {
   viewport: PreviewViewport;
   onViewportChange: (viewport: PreviewViewport) => void;
   projectMode?: boolean;
+  compactProjectHeader?: boolean;
+  versionNumber?: number | null;
   csrfToken?: string | null;
 }
 
@@ -37,6 +39,8 @@ export function StudioPreview({
   viewport,
   onViewportChange,
   projectMode = false,
+  compactProjectHeader = false,
+  versionNumber = null,
   csrfToken = null,
 }: StudioPreviewProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -135,13 +139,28 @@ export function StudioPreview({
     : qualityStatus === 'pending'
       ? 'Kaigo собирает новую версию. Предпросмотр обновится автоматически.'
       : 'Этой версии нужна доработка перед публикацией.';
+  const compactQualityLabel = qualityStatus === 'accepted' || qualityStatus === 'verified'
+    ? 'Проверено'
+    : qualityStatus === 'pending'
+      ? 'Генерация'
+      : 'Нужна проверка';
+  const qualityReady = qualityStatus === 'accepted' || qualityStatus === 'verified';
 
   return (
     <section className="studio-preview" aria-labelledby="studio-preview-title">
-      <div className="studio-preview__head">
-        <div>
-          <p className="studio-kicker">Рабочее полотно</p>
+      <div className={`studio-preview__head${compactProjectHeader ? ' studio-preview__head--compact' : ''}`}>
+        <div className={compactProjectHeader ? 'studio-preview__title-row' : undefined}>
+          {!compactProjectHeader && <p className="studio-kicker">Рабочее полотно</p>}
           <h2 id="studio-preview-title">Предпросмотр</h2>
+          {compactProjectHeader && (
+            <>
+              <span className="studio-preview__version">Версия {versionNumber ?? '—'}</span>
+              <span className="studio-preview__quality" data-quality={qualityStatus} aria-live="polite">
+                <CheckCircle aria-hidden size={17} weight={qualityReady ? 'fill' : 'regular'} />
+                {compactQualityLabel}
+              </span>
+            </>
+          )}
         </div>
         <div className="studio-preview__switcher" aria-label="Размер предпросмотра">
           <button type="button" aria-pressed={viewport === 'desktop'} onClick={() => onViewportChange('desktop')}>
@@ -152,14 +171,16 @@ export function StudioPreview({
           </button>
         </div>
       </div>
-      <div className="studio-preview__meta" aria-live="polite">
-        <Sparkle aria-hidden size={20} weight="fill" />
-        <div>
-          <span>{projectMode ? 'Состояние виджета' : 'Визуальная концепция'}</span>
-          <p>{projectMode ? friendlyPreviewMessage : artDirection || 'Появится после первой собранной версии'}</p>
+      {!compactProjectHeader && (
+        <div className="studio-preview__meta" aria-live="polite">
+          <Sparkle aria-hidden size={20} weight="fill" />
+          <div>
+            <span>{projectMode ? 'Состояние виджета' : 'Визуальная концепция'}</span>
+            <p>{projectMode ? friendlyPreviewMessage : artDirection || 'Появится после первой собранной версии'}</p>
+          </div>
+          <strong data-quality={qualityStatus}>{qualityLabel}</strong>
         </div>
-        <strong data-quality={qualityStatus}>{qualityLabel}</strong>
-      </div>
+      )}
       <div className="studio-preview__canvas" data-viewport={viewport} data-testid="studio-preview-canvas">
         <div className="studio-preview__grid" aria-hidden />
         {previewUrl ? (

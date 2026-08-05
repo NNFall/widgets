@@ -70,7 +70,7 @@ describe('Studio accessibility contracts', () => {
 
   it('locks the project workbench to the viewport and scrolls only inside its panes', () => {
     expect(stylesSource).toMatch(/\.studio-app--workbench\s*\{[^}]*height:\s*100dvh[^}]*overflow:\s*hidden/s);
-    expect(stylesSource).toMatch(/\.studio-workbench\s*\{[^}]*grid-template-columns:\s*minmax\(360px,\s*420px\)\s+minmax\(0,\s*1fr\)/s);
+    expect(stylesSource).toMatch(/\.studio-workbench\s*\{[^}]*grid-template-columns:\s*minmax\(520px,\s*4fr\)\s+minmax\(520px,\s*5fr\)/s);
     expect(stylesSource).toMatch(/\.studio-conversation__feed\s*\{[^}]*overflow-y:\s*auto/s);
     expect(stylesSource).toMatch(/\.studio-preview-pane\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s);
     expect(stylesSource).toMatch(/min-height:\s*44px/);
@@ -82,5 +82,18 @@ describe('Studio accessibility contracts', () => {
     expect(mobileRules).toMatch(/\.studio-workbench__mobile-tabs\s*\{[^}]*display:\s*grid/s);
     expect(mobileRules).toMatch(/\.studio-workbench\[data-mobile-pane='chat'\][\s\S]*\.studio-preview-pane\s*\{[^}]*display:\s*none/s);
     expect(mobileRules).toMatch(/\.studio-workbench\[data-mobile-pane='preview'\][\s\S]*\.studio-conversation\s*\{[^}]*display:\s*none/s);
+  });
+
+  it('gives the conversation visual priority and keeps preview metadata on one line', () => {
+    expect(stylesSource).toMatch(/\.studio-message\s+p\s*\{[^}]*font-size:\s*14px/s);
+    expect(stylesSource).toMatch(/\.studio-conversation\s+\.studio-stages\s+li\s*\{[^}]*font-size:\s*13px/s);
+    expect(stylesSource).toMatch(/\.studio-conversation__composer\s+textarea\s*\{[^}]*font-size:\s*15px/s);
+    expect(stylesSource).toMatch(/\.studio-preview__head--compact\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto/s);
+    expect(stylesSource).toMatch(/\.studio-preview__title-row\s*\{[^}]*display:\s*flex[^}]*align-items:\s*center/s);
+  });
+
+  it('uses the Kaigo coral accent for the active conversation', () => {
+    expect(stylesSource).toMatch(/\.studio-conversation__avatar\s*\{[^}]*background:\s*var\(--coral\)/s);
+    expect(stylesSource).toMatch(/\.studio-conversation\s+\.studio-progress-card__bar\s+span\s*\{[^}]*background:\s*var\(--coral\)/s);
   });
 });

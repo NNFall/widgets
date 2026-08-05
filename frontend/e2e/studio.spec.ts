@@ -63,11 +63,22 @@ test('Studio creates an owned project and renders the refreshed SaaS run @deskto
   await technicalDetails.click();
   await expect(technicalDetails.getByText('Виджет прошёл визуальную проверку')).toBeVisible();
   await technicalDetails.click();
-  await expect(page.getByRole('complementary', { name: 'Чат с Kaigo' })).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Предпросмотр виджета' })).toBeVisible();
-  await expect(page.getByLabel('Состояние выбранной версии')).toContainText('Версия 2');
-  await expect(page.getByLabel('Состояние выбранной версии')).toContainText('Проверено');
+  const conversation = page.getByRole('complementary', { name: 'Чат с Kaigo' });
+  const previewRegion = page.getByRole('region', { name: 'Предпросмотр виджета' });
+  await expect(conversation).toBeVisible();
+  await expect(previewRegion).toBeVisible();
+  await expect(previewRegion).toContainText('Версия 2');
+  await expect(previewRegion).toContainText('Проверено');
   await expect(page.getByLabel('Что изменить в виджете?')).toBeVisible();
+
+  const [workbenchBox, conversationBox] = await Promise.all([
+    page.getByRole('main', { name: 'Рабочая студия' }).boundingBox(),
+    conversation.boundingBox(),
+  ]);
+  expect(workbenchBox).not.toBeNull();
+  expect(conversationBox).not.toBeNull();
+  if (!workbenchBox || !conversationBox) throw new Error('Studio workbench is not visible');
+  expect(conversationBox.width / workbenchBox.width).toBeGreaterThan(0.42);
 
   const frame = page.getByTitle('Предпросмотр AI-сотрудника Kaigo');
   await expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
@@ -100,7 +111,7 @@ test('Studio resumes the server-owned project with friendly status and preview a
     'Уверенный консультант, который говорит простым языком.',
   )).toBeVisible();
   await expect(page.getByText('example.com').first()).toBeVisible();
-  await expect(page.getByLabel('Состояние выбранной версии')).toContainText('Версия 2');
+  await expect(page.getByRole('region', { name: 'Предпросмотр виджета' })).toContainText('Версия 2');
   await expect(page.getByText('12 345', { exact: true })).not.toBeVisible();
   await expect(page.getByText('24,8 с', { exact: true })).not.toBeVisible();
   await expect(page.getByTitle('Предпросмотр AI-сотрудника Kaigo')).toHaveAttribute(
@@ -115,7 +126,7 @@ test('Studio resumes the server-owned project with friendly status and preview a
   await page.reload();
   await expect(page.locator('details.studio-conversation__context')).not.toHaveAttribute('open');
   await expect(page.getByTitle('Предпросмотр AI-сотрудника Kaigo')).toBeVisible();
-  await expect(page.getByLabel('Состояние выбранной версии')).toContainText('Версия 2');
+  await expect(page.getByRole('region', { name: 'Предпросмотр виджета' })).toContainText('Версия 2');
   await expect.poll(() => builderApi.requests.filter(({ method, pathname }) =>
     method === 'GET' && pathname === `/api/projects/${builderApi.projectId}`,
   ).length).toBeGreaterThan(projectReadsBeforeReload);
@@ -156,6 +167,14 @@ test('active subscription publishes the current verified artifact with a stable 
   builderApi.seedRun('run-publish');
   builderApi.activateSubscription();
   await page.goto(`/studio?project=${builderApi.projectId}`);
+
+  await page.getByRole('button', { name: 'Открыть тариф и лимиты' }).click();
+  const accountDrawer = page.getByRole('dialog', { name: 'Тариф и лимиты' });
+  await expect(accountDrawer.getByText('Starter')).toBeVisible();
+  await expect(accountDrawer.getByText(/750\s000/)).toBeVisible();
+  await expect(accountDrawer.getByText('Автопродление включено')).toBeVisible();
+  expect(await accountDrawer.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+  await accountDrawer.getByRole('button', { name: 'Закрыть панель' }).click();
 
   await page.getByRole('button', { name: 'Открыть публикацию' }).click();
   await expect(page.getByRole('heading', { name: 'Всё готово к публикации' })).toBeVisible();
@@ -213,7 +232,7 @@ test('Studio mobile restores a SaaS project, switches preview and has no overflo
   await expect(page.getByRole('button', { name: 'На телефоне' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('studio-preview-canvas')).toHaveAttribute('data-viewport', 'mobile');
   await expect(page.getByTitle('Предпросмотр AI-сотрудника Kaigo')).toHaveAttribute('sandbox', 'allow-scripts');
-  await expect(page.getByLabel('Состояние выбранной версии')).toContainText('Версия 2');
+  await expect(page.getByRole('region', { name: 'Предпросмотр виджета' })).toContainText('Версия 2');
   await expectNoHorizontalOverflow(page);
 
   const viewportLock = await page.locator('.studio-app--workbench').evaluate((shell) => {
@@ -232,6 +251,12 @@ test('Studio mobile restores a SaaS project, switches preview and has no overflo
   await expect(page.getByRole('dialog', { name: 'История версий' })).toBeVisible();
   await page.getByRole('button', { name: 'Закрыть панель' }).click();
   await expect(page.getByRole('dialog', { name: 'История версий' })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Открыть тариф и лимиты' }).click();
+  const accountDrawer = page.getByRole('dialog', { name: 'Тариф и лимиты' });
+  await expect(accountDrawer.getByText('Бесплатный режим')).toBeVisible();
+  await expect(accountDrawer.getByText('Для продолжения нужен тариф')).toBeVisible();
+  await accountDrawer.getByRole('button', { name: 'Закрыть панель' }).click();
 
   await expect(page).toHaveScreenshot('studio-mobile.png', {
     animations: 'disabled',
@@ -288,6 +313,8 @@ test('Studio SaaS project has no serious or critical accessibility violations @a
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto(`/studio?project=${builderApi.projectId}`);
   await expect(page.getByTitle('Предпросмотр AI-сотрудника Kaigo')).toBeVisible();
+  await page.getByRole('button', { name: 'Открыть тариф и лимиты' }).click();
+  await expect(page.getByRole('dialog', { name: 'Тариф и лимиты' })).toBeVisible();
 
   const results = await new AxeBuilder({ page })
     .withTags(['wcag2a', 'wcag2aa'])
