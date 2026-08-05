@@ -8,6 +8,7 @@ before the resulting plan can be handed to a generation stage.
 from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Mapping, Sequence
+from itertools import combinations
 from typing import Any
 
 from ..engines.base import PatternCandidatePlanResult
@@ -29,6 +30,8 @@ class PatternCandidateValidationError(ValueError):
 
 
 _MAX_CORRECTION_DIAGNOSTIC = 1_200
+_MAX_FALLBACK_SEARCH_NODES = 4_096
+_MAX_FALLBACK_COMBINATIONS_PER_CATEGORY = 4_096
 
 
 def _bounded_diagnostic(value: object) -> str:
@@ -315,6 +318,107 @@ def validate_pattern_candidate_plan(
     return parsed
 
 
+def _definitions_are_compatible(
+    candidates: Sequence[AtomicPatternDefinition],
+) -> bool:
+    """Return whether a set of definitions has no declared incompatibility."""
+
+    for index, definition in enumerate(candidates):
+        for other in candidates[index + 1 :]:
+            if (
+                other.pattern_id in definition.incompatible_with
+                or definition.pattern_id in other.incompatible_with
+            ):
+                return False
+    return True
+
+
+def _fallback_options(
+    entries: Sequence[AtomicPatternDefinition],
+) -> tuple[tuple[AtomicPatternDefinition, ...], ...]:
+    """Enumerate stable, bounded compatible subsets for one category.
+
+    A category with at least two eligible entries may submit any two through
+    five candidates.  The server fallback prefers the largest shortlist and
+    then the lexicographically earliest exact versions.  Limiting combination
+    inspection keeps a pathological catalog from turning fallback into an
+    unbounded search.
+    """
+
+    if not entries:
+        return ((),)
+    if len(entries) == 1:
+        return ((entries[0],),)
+
+    ordered = tuple(
+        sorted(entries, key=lambda item: (item.pattern_id, item.version))
+    )
+    minimum = 2
+    maximum = min(5, len(ordered))
+    options: list[tuple[AtomicPatternDefinition, ...]] = []
+    inspected = 0
+    for size in range(maximum, minimum - 1, -1):
+        for indexes in combinations(range(len(ordered)), size):
+            inspected += 1
+            if inspected > _MAX_FALLBACK_COMBINATIONS_PER_CATEGORY:
+                return tuple(options)
+            candidate_set = tuple(ordered[index] for index in indexes)
+            if _definitions_are_compatible(candidate_set):
+                options.append(candidate_set)
+    return tuple(options)
+
+
+def _solve_fallback_assignment(
+    grouped: Mapping[
+        AtomicPatternCategory,
+        Sequence[AtomicPatternDefinition],
+    ],
+) -> dict[AtomicPatternCategory, tuple[AtomicPatternDefinition, ...]] | None:
+    """Find a deterministic compatible assignment across all categories.
+
+    Greedily filling one category can consume the only compatible candidates
+    for a later required category.  This bounded depth-first search keeps the
+    stable sorted preference while backtracking across category boundaries.
+    """
+
+    categories = tuple(sorted(grouped, key=lambda value: value.value))
+    options = {
+        category: _fallback_options(grouped[category])
+        for category in categories
+    }
+    if any(not options[category] for category in categories):
+        return None
+
+    nodes = 0
+    assignment: dict[AtomicPatternCategory, tuple[AtomicPatternDefinition, ...]] = {}
+
+    def search(
+        index: int,
+        selected: tuple[AtomicPatternDefinition, ...],
+    ) -> dict[AtomicPatternCategory, tuple[AtomicPatternDefinition, ...]] | None:
+        nonlocal nodes
+        if nodes >= _MAX_FALLBACK_SEARCH_NODES:
+            return None
+        if index == len(categories):
+            return dict(assignment)
+
+        category = categories[index]
+        for candidate_set in options[category]:
+            nodes += 1
+            if nodes > _MAX_FALLBACK_SEARCH_NODES:
+                return None
+            if not _definitions_are_compatible(selected + candidate_set):
+                continue
+            assignment[category] = candidate_set
+            result = search(index + 1, selected + candidate_set)
+            if result is not None:
+                return result
+            assignment.pop(category, None)
+        return None
+
+    return search(0, ())
+
+
 def _fallback_plan(
     *,
     direction_id: str,
@@ -331,29 +435,26 @@ def _fallback_plan(
         selector_catalog=selector_catalog,
         effective_approved=effective_approved,
     )
-    grouped: dict[AtomicPatternCategory, list[Mapping[str, Any]]] = {}
+    grouped: dict[AtomicPatternCategory, list[AtomicPatternDefinition]] = {}
     for item in eligible:
         category = AtomicPatternCategory(item["category"])
-        grouped.setdefault(category, []).append(item)
+        grouped.setdefault(category, []).append(
+            registry.resolve(str(item["pattern_id"]), int(item["version"]))
+        )
     for category in optional:
         grouped.setdefault(category, [])
 
-    selected: list[AtomicPatternDefinition] = []
+    assignment = _solve_fallback_assignment(grouped)
+    if assignment is None:
+        raise PatternCandidateValidationError(
+            "deterministic fallback could not satisfy candidate compatibility constraints"
+        )
+
     groups: list[PatternCandidateGroup] = []
     for category in sorted(grouped, key=lambda value: value.value):
-        entries = sorted(
-            grouped[category],
-            key=lambda item: (str(item["category"]), str(item["pattern_id"]), int(item["version"])),
-        )
+        entries = assignment[category]
         chosen: list[PatternCandidate] = []
-        for item in entries:
-            definition = registry.resolve(str(item["pattern_id"]), int(item["version"]))
-            if any(
-                definition.pattern_id in other.incompatible_with
-                or other.pattern_id in definition.incompatible_with
-                for other in selected
-            ):
-                continue
+        for definition in entries:
             chosen.append(
                 PatternCandidate(
                     pattern_id=definition.pattern_id,
@@ -362,9 +463,6 @@ def _fallback_plan(
                     reason="Deterministic server fallback ordered by category and exact version.",
                 )
             )
-            selected.append(definition)
-            if len(chosen) == 5:
-                break
         groups.append(
             PatternCandidateGroup(
                 category=category,

@@ -444,6 +444,64 @@ async def test_fallback_is_sorted_compatible_and_server_validated() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fallback_backtracks_earlier_category_to_preserve_later_required_group() -> None:
+    original = approved_registry()
+    open_definition = original.resolve("widget-open-technical", 1)
+    close_definition = original.resolve("widget-close-technical", 1)
+    retained = tuple(
+        item
+        for item in original.definitions
+        if item.pattern_id not in {open_definition.pattern_id, close_definition.pattern_id}
+    )
+    close_one = replace(
+        close_definition,
+        pattern_id="widget-close-001",
+        incompatible_with=("widget-open-001", "widget-open-002"),
+    )
+    close_two = replace(close_definition, pattern_id="widget-close-002", incompatible_with=())
+    close_three = replace(close_definition, pattern_id="widget-close-003", incompatible_with=())
+    open_one = replace(
+        open_definition,
+        pattern_id="widget-open-001",
+        incompatible_with=("widget-close-001",),
+    )
+    open_two = replace(
+        open_definition,
+        pattern_id="widget-open-002",
+        incompatible_with=("widget-close-001",),
+    )
+    registry = AtomicPatternRegistry(
+        retained + (close_one, close_two, close_three, open_one, open_two)
+    )
+
+    result = await plan_pattern_candidates(
+        FakeSelectorEngine([
+            plan_for(candidate(AtomicPatternCategory.WIDGET_OPEN)),
+            plan_for(candidate(AtomicPatternCategory.WIDGET_OPEN)),
+        ]),
+        request=builder_request(),
+        selected_direction=direction(),
+        registry=registry,
+    )
+
+    assert result.used_fallback is True
+    validate_pattern_candidate_plan(
+        result.plan,
+        registry=registry,
+        selector_catalog=registry.selector_catalog(),
+    )
+    groups = {group.category: group for group in result.plan.groups}
+    assert [item.pattern_id for item in groups[AtomicPatternCategory.WIDGET_CLOSE].candidates] == [
+        "widget-close-002",
+        "widget-close-003",
+    ]
+    assert [item.pattern_id for item in groups[AtomicPatternCategory.WIDGET_OPEN].candidates] == [
+        "widget-open-001",
+        "widget-open-002",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_effective_approved_catalog_is_filtered_before_selector_call() -> None:
     registry = approved_registry()
     filtered_key = ("widget-open-technical", 1)
