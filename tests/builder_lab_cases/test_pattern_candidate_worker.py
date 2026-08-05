@@ -436,20 +436,30 @@ async def test_finalize_persists_exact_stage_exposures_and_safe_usage_claim(tmp_
             )
             database.add(attempt)
             await database.flush()
-            model_call = ModelCall(
-                run_id=run.id,
-                stage_attempt_id=attempt.id,
-                operation="foundation",
-                provider="gemini",
-                model="test-model",
-                role="foundation",
-                mode="direct",
-                prompt_version="test-v1",
-                request_id="foundation-call",
-                status="completed",
-                provider_dispatched=True,
-            )
-            database.add(model_call)
+            calls_by_operation = {}
+            for operation in (
+                "artifact_generation",
+                "validation_repair",
+                "visual_repair",
+                "visual_critic",
+                "visual_judge",
+                "repair_verification",
+            ):
+                call = ModelCall(
+                    run_id=run.id,
+                    stage_attempt_id=attempt.id,
+                    operation=operation,
+                    provider="gemini",
+                    model="test-model",
+                    role=operation,
+                    mode="direct",
+                    prompt_version="test-v1",
+                    request_id=f"{operation}-call",
+                    status="completed",
+                    provider_dispatched=True,
+                )
+                database.add(call)
+                calls_by_operation[operation] = call
             await database.flush()
             await PatternCandidateRepository(database).create_plan(
                 run_id=run.id,
@@ -467,7 +477,7 @@ async def test_finalize_persists_exact_stage_exposures_and_safe_usage_claim(tmp_
                 "pattern_id": first_group.candidates[0].pattern_id,
                 "version": first_group.candidates[0].version,
                 "usage_mode": "primary",
-                "request_id": "foundation-call",
+                "request_id": "artifact_generation-call",
             }
 
         queue = PostgresWorkerQueue(
@@ -487,6 +497,40 @@ async def test_finalize_persists_exact_stage_exposures_and_safe_usage_claim(tmp_
                 attempt_id=attempt_id,
             )
 
+            critic_only_attempt = GenerationStageAttempt(
+                run_id=run_id,
+                stage="identity",
+                ordinal=2,
+                status="running",
+                started_at=now,
+            )
+            database.add(critic_only_attempt)
+            await database.flush()
+            for operation in ("visual_critic", "visual_judge", "repair_verification"):
+                database.add(
+                    ModelCall(
+                        run_id=run_id,
+                        stage_attempt_id=critic_only_attempt.id,
+                        operation=operation,
+                        provider="gemini",
+                        model="test-model",
+                        role=operation,
+                        mode="direct",
+                        prompt_version="test-v1",
+                        request_id=f"identity-{operation}-call",
+                        status="completed",
+                        provider_dispatched=True,
+                    )
+                )
+            await database.flush()
+            await queue._persist_pattern_stage_provenance(
+                database,
+                run_id=run_id,
+                stage="identity",
+                result=StageResult(public_message="Critic-only replay"),
+                attempt_id=critic_only_attempt.id,
+            )
+
         async with factory() as database:
             exposures = (
                 await database.execute(
@@ -499,10 +543,34 @@ async def test_finalize_persists_exact_stage_exposures_and_safe_usage_claim(tmp_
             claims = (
                 await database.execute(select(PatternStageUsageClaim))
             ).scalars().all()
-        assert len(exposures) == 3
-        assert {row.model_call_id for row in exposures} == {model_call.id}
+            critic_only_exposures = (
+                await database.execute(
+                    select(PatternStageExposure).where(
+                        PatternStageExposure.run_id == run_id,
+                        PatternStageExposure.stage == "identity",
+                    )
+                )
+            ).scalars().all()
+        pack_operations = {
+            "artifact_generation",
+            "validation_repair",
+            "visual_repair",
+        }
+        non_pack_operations = {
+            "visual_critic",
+            "visual_judge",
+            "repair_verification",
+        }
+        assert len(exposures) == 9
+        assert {row.model_call_id for row in exposures} == {
+            calls_by_operation[operation].id for operation in pack_operations
+        }
+        assert not {
+            calls_by_operation[operation].id for operation in non_pack_operations
+        } & {row.model_call_id for row in exposures}
         assert len(claims) == 1
         assert claims[0].usage_mode == "primary"
-        assert claims[0].model_call_id == model_call.id
+        assert claims[0].model_call_id == calls_by_operation["artifact_generation"].id
+        assert critic_only_exposures == []
     finally:
         await engine.dispose()

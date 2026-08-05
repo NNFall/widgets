@@ -95,6 +95,9 @@ MAX_STAGE_RESULT_BYTES = 1_048_576
 MAX_STAGE_CONTEXT_BYTES = 131_072
 MAX_STAGE_OUTPUT_REFS = 32
 MAX_STAGE_EVENTS = 64
+PATTERN_PACK_MODEL_CALL_OPERATIONS = frozenset(
+    {"artifact_generation", "validation_repair", "visual_repair"}
+)
 ALLOWED_STAGE_RESULT_EVENTS = frozenset(
     {"reference.completed", "repair.completed"}
 )
@@ -2768,7 +2771,7 @@ class PostgresWorkerQueue:
         ]
         if not exposed_items:
             return
-        model_calls = (
+        all_model_calls = (
             (
                 await database.execute(
                     select(ModelCall)
@@ -2782,6 +2785,17 @@ class PostgresWorkerQueue:
             if attempt_id is not None
             else []
         )
+        model_calls = [
+            call
+            for call in all_model_calls
+            if call.operation in PATTERN_PACK_MODEL_CALL_OPERATIONS
+        ]
+        # A visual critic/judge/verifier can share the stage attempt but never
+        # receives the candidate pack.  Do not fabricate nullable exposures
+        # for such an attempt; nullable provenance is reserved for a truly
+        # call-less generator attempt.
+        if not model_calls and all_model_calls:
+            return
         exposure_by_key_call: dict[tuple[tuple[str, int], UUID | None], Any] = {}
         for item in exposed_items:
             calls = model_calls or [None]
