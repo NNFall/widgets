@@ -104,6 +104,24 @@ async def test_pattern_lab_list_loads_review_states_with_one_bounded_query(
     tmp_path, monkeypatch
 ):
     client, factory, engine = await _client(tmp_path, monkeypatch, email="operator@example.com")
+    await client.get("/admin/pattern-lab")
+    async with factory() as database:
+        rows = (await database.scalars(select(WidgetPatternVersion))).all()
+        assert rows
+        now = datetime.now(timezone.utc)
+        database.add_all(
+            [
+                PatternReview(
+                    pattern_version_id=rows[0].id,
+                    reviewer_email=f"reviewer-{index}@example.com",
+                    status="approved" if index == 120 else "rejected",
+                    comment=f"review {index}",
+                    created_at=now + timedelta(seconds=index),
+                )
+                for index in range(121)
+            ]
+        )
+        await database.commit()
     review_selects: list[str] = []
 
     def _track_review_select(_connection, _cursor, statement, _parameters, _context, _executemany):
@@ -116,6 +134,7 @@ async def test_pattern_lab_list_loads_review_states_with_one_bounded_query(
         response = await client.get("/admin/pattern-lab")
         assert response.status == 200
         assert len(review_selects) == 1
+        assert "row_number" in review_selects[0].lower()
     finally:
         event.remove(engine.sync_engine, "before_cursor_execute", _track_review_select)
         await client.close()

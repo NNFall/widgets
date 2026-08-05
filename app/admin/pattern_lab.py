@@ -15,7 +15,7 @@ from typing import Any
 
 from aiohttp import web
 from aiohttp_session import get_session
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.admin.auth import require_admin_session
 from app.admin.layout import render_layout
@@ -146,23 +146,33 @@ async def _rows(request: web.Request) -> list[tuple[WidgetPatternVersion, str]]:
         records = list((await database.scalars(statement)).all())
         latest_reviews: dict[object, str] = {}
         if records:
-            review_rows = list(
-                (
-                    await database.scalars(
-                        select(PatternReview)
-                        .where(
-                            PatternReview.pattern_version_id.in_(
-                                [row.id for row in records]
-                            )
-                        )
-                        .order_by(
-                            PatternReview.pattern_version_id,
+            review_ranked = (
+                select(
+                    PatternReview.pattern_version_id,
+                    PatternReview.status,
+                    func.row_number()
+                    .over(
+                        partition_by=PatternReview.pattern_version_id,
+                        order_by=(
                             PatternReview.created_at.desc(),
                             PatternReview.id.desc(),
-                        )
+                        ),
                     )
-                ).all()
+                    .label("review_rank"),
+                )
+                .where(
+                    PatternReview.pattern_version_id.in_([row.id for row in records])
+                )
+                .subquery()
             )
+            review_rows = (
+                await database.execute(
+                    select(
+                        review_ranked.c.pattern_version_id,
+                        review_ranked.c.status,
+                    ).where(review_ranked.c.review_rank == 1)
+                )
+            ).all()
             for review_row in review_rows:
                 latest_reviews.setdefault(
                     review_row.pattern_version_id, review_row.status
