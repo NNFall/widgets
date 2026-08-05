@@ -259,6 +259,8 @@ class BuilderOrchestrator:
         pattern_candidate_pack: Any | None = None,
     ) -> EngineResult:
         """Execute one requested generation stage without advancing a run."""
+        if pattern_candidate_pack is not None and pattern_candidate_pack.stage != stage:
+            raise ValueError("pattern candidate pack stage does not match requested stage")
         if request.engine is EngineName.DIRECT:
             return await cast(DirectBuilderEngine, engine).generate(
                 request=request,

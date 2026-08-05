@@ -21,8 +21,11 @@ from builder_lab.patterns.atomic_registry import (
     load_builtin_atomic_registry,
 )
 from builder_lab.patterns.candidate_resolver import (
+    MAX_STAGE_PATTERN_PACK_BYTES,
     STAGE_PATTERN_CATEGORIES,
     PatternCandidateResolutionError,
+    PatternVersionRef,
+    ResolvedPatternCandidatePack,
     resolve_pattern_candidate_pack,
 )
 from builder_lab.prompts import build_stage_prompt
@@ -370,3 +373,124 @@ async def test_gemini_direct_forwards_stage_pack_to_stage_prompt() -> None:
 
     assert result.artifact.stage is Stage.FOUNDATION
     assert build_prompt.call_args.kwargs["pattern_candidate_pack"] is pack
+
+
+def test_stage_prompt_rejects_a_pack_for_a_different_stage() -> None:
+    registry = load_builtin_atomic_registry()
+    pack = resolve_pattern_candidate_pack(
+        _plan(AtomicPatternCategory.WIDGET_OPEN),
+        Stage.MOTION_POLISH,
+        registry,
+    )
+    request = BuilderRequest(engine=EngineName.DIRECT, brief="A compact widget.")
+
+    with pytest.raises(ValueError, match="stage"):
+        build_stage_prompt(
+            request=request,
+            stage=Stage.FOUNDATION,
+            revision=1,
+            previous_artifact=None,
+            pattern_candidate_pack=pack,
+        )
+
+
+@pytest.mark.asyncio
+async def test_gemini_direct_rejects_a_pack_for_a_different_stage() -> None:
+    registry = load_builtin_atomic_registry()
+    pack = resolve_pattern_candidate_pack(
+        _plan(AtomicPatternCategory.WIDGET_OPEN),
+        Stage.MOTION_POLISH,
+        registry,
+    )
+    engine = GeminiDirectEngine(
+        model_router=SimpleNamespace(),
+        routing_role="widget_generator",
+    )
+
+    with pytest.raises(ValueError, match="stage"):
+        await engine.generate(
+            request=BuilderRequest(engine=EngineName.DIRECT, brief="A compact widget."),
+            stage=Stage.FOUNDATION,
+            revision=1,
+            pattern_candidate_pack=pack,
+        )
+
+
+def test_public_pack_constructor_rejects_forged_prompt_and_unmapped_or_oversized_refs() -> None:
+    registry = load_builtin_atomic_registry()
+    resolved = resolve_pattern_candidate_pack(
+        _plan(AtomicPatternCategory.WIDGET_OPEN),
+        Stage.MOTION_POLISH,
+        registry,
+    )
+    with pytest.raises(ValueError, match="prompt"):
+        ResolvedPatternCandidatePack(
+            stage=resolved.stage,
+            exposed_versions=resolved.exposed_versions,
+            prompt_text="forged prompt",
+        )
+
+    unrelated = registry.resolve("launcher-shape-technical", 1)
+    unrelated_ref = PatternVersionRef.from_definition(
+        unrelated,
+        _candidate(AtomicPatternCategory.LAUNCHER_SHAPE),
+    )
+    with pytest.raises(ValueError, match="category"):
+        ResolvedPatternCandidatePack(
+            stage=Stage.MOTION_POLISH,
+            exposed_versions=(unrelated_ref,),
+            prompt_text="",
+        )
+
+    oversized_ref = PatternVersionRef(
+        category=AtomicPatternCategory.WIDGET_OPEN,
+        pattern_id="widget-open-technical",
+        version=1,
+        title="Open",
+        summary="Open",
+        ai_description=(
+            "A safe opening motion reference with bounded technical behavior and "
+            "clear adaptation guidance for the generator."
+        ),
+        technical_contract="Preserve runtime ownership.",
+        implementation_sha256="0" * 64,
+        html="я" * (MAX_STAGE_PATTERN_PACK_BYTES // 2),
+        css="",
+        javascript="",
+    )
+    with pytest.raises(ValueError, match="byte"):
+        ResolvedPatternCandidatePack(
+            stage=Stage.MOTION_POLISH,
+            exposed_versions=(oversized_ref,),
+            prompt_text="",
+        )
+
+
+def test_effective_approval_mapping_objects_fail_closed() -> None:
+    registry = load_builtin_atomic_registry()
+    key = ("widget-open-technical", 1)
+    with pytest.raises(PatternCandidateResolutionError, match="approved"):
+        resolve_pattern_candidate_pack(
+            _plan(AtomicPatternCategory.WIDGET_OPEN),
+            Stage.MOTION_POLISH,
+            registry,
+            effective_approved={key: {"status": "approved"}},
+        )
+
+
+def test_pattern_version_ref_freezes_nested_provenance() -> None:
+    provenance = {
+        "origin": "test",
+        "review_state": "approved",
+        "nested": {"marker": "before"},
+    }
+    ref = PatternVersionRef(
+        category=AtomicPatternCategory.WIDGET_OPEN,
+        pattern_id="widget-open-technical",
+        version=1,
+        provenance=provenance,
+    )
+    provenance["nested"]["marker"] = "after"
+    assert ref.provenance["nested"]["marker"] == "before"
+    with pytest.raises(TypeError):
+        ref.provenance["nested"]["marker"] = "blocked"

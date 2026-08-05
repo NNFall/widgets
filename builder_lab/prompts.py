@@ -605,6 +605,8 @@ def build_stage_prompt(
 ) -> str:
     if composition is not None and pattern_candidate_pack is not None:
         raise ValueError("legacy composition and candidate pack are mutually exclusive")
+    if pattern_candidate_pack is not None and pattern_candidate_pack.stage != stage:
+        raise ValueError("pattern candidate pack stage does not match requested stage")
     previous = (
         json.dumps(previous_artifact.to_dict(), ensure_ascii=False, separators=(",", ":"))
         if previous_artifact

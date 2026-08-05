@@ -193,7 +193,7 @@ class BuilderOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             engine=EngineName.DIRECT,
             brief="Execute foundation with exact pattern references",
         )
-        pack = object()
+        pack = type("Pack", (), {"stage": Stage.FOUNDATION})()
 
         await orchestrator.execute_stage(
             request=request,
@@ -205,6 +205,27 @@ class BuilderOrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
         generation_calls = [call for call in engine.calls if "stage" in call]
         self.assertIs(generation_calls[0]["pattern_candidate_pack"], pack)
+
+    async def test_execute_stage_rejects_pattern_pack_for_a_different_stage(self):
+        engine = ScriptedEngine()
+        orchestrator = BuilderOrchestrator(
+            store=self.store,
+            engine_factories={EngineName.DIRECT: lambda: engine},
+        )
+        request = BuilderRequest(
+            engine=EngineName.DIRECT,
+            brief="Reject a mismatched stage pack",
+        )
+        pack = type("Pack", (), {"stage": Stage.MOTION_POLISH})()
+
+        with self.assertRaisesRegex(ValueError, "stage"):
+            await orchestrator.execute_stage(
+                request=request,
+                engine=engine,
+                stage=Stage.FOUNDATION,
+                revision=1,
+                pattern_candidate_pack=pack,
+            )
 
     async def test_direct_run_commits_each_real_stage_in_order(self):
         engine = ScriptedEngine()

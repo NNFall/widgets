@@ -605,6 +605,18 @@ async def test_effective_approved_catalog_is_filtered_before_selector_call() -> 
     assert sent_ids == {filtered_key}
 
 
+def test_effective_approved_mapping_object_fails_closed() -> None:
+    registry = approved_registry()
+    key = ("widget-open-technical", 1)
+    with pytest.raises(PatternCandidateValidationError, match="effectively approved"):
+        validate_pattern_candidate_plan(
+            plan_for(candidate(AtomicPatternCategory.WIDGET_OPEN)),
+            registry=registry,
+            selector_catalog=catalog(registry),
+            effective_approved={key: {"status": "approved"}},
+        )
+
+
 class RaisingSelectorEngine:
     def __init__(self):
         self.calls = 0

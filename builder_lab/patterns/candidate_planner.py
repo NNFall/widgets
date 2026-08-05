@@ -21,6 +21,7 @@ from .atomic_models import (
     PatternCandidate,
     PatternCandidateGroup,
     PatternCandidatePlan,
+    normalize_effective_approved,
 )
 from .atomic_registry import AtomicPatternRegistry, AtomicPatternRegistryError
 
@@ -71,15 +72,7 @@ def _normalise_effective_approved(
     | Collection[tuple[str, int]]
     | None,
 ) -> frozenset[tuple[str, int]] | None:
-    if effective_approved is None:
-        return None
-    if isinstance(effective_approved, Mapping):
-        return frozenset(
-            key
-            for key, state in effective_approved.items()
-            if state is True or state == "approved"
-        )
-    return frozenset(effective_approved)
+    return normalize_effective_approved(effective_approved)
 
 
 def _catalog_metadata(

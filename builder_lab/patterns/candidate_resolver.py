@@ -25,6 +25,7 @@ from .atomic_models import (
     PatternCandidateVersionRef,
     PatternVersionRef,
     ExactPatternVersionRef,
+    normalize_effective_approved,
 )
 from .atomic_registry import AtomicPatternRegistry, AtomicPatternRegistryError
 
@@ -89,8 +90,29 @@ class ResolvedPatternCandidatePack:
         exposed = tuple(self.exposed_versions)
         if any(not isinstance(item, PatternVersionRef) for item in exposed):
             raise ValueError("exposed_versions contains an invalid value")
+        allowed_categories = set(STAGE_PATTERN_CATEGORIES[stage])
+        seen_exact: set[tuple[str, int]] = set()
+        for item in exposed:
+            if item.category not in allowed_categories:
+                raise ValueError("exposed_versions contains an unmapped category")
+            exact = (item.pattern_id, item.version)
+            if exact in seen_exact:
+                raise ValueError("exposed_versions contains duplicate exact versions")
+            seen_exact.add(exact)
+            if not item.ai_description or not item.technical_contract:
+                raise ValueError("exposed_versions contains incomplete metadata")
+            if not item.implementation_sha256:
+                raise ValueError("exposed_versions contains an incomplete hash")
         if not isinstance(self.prompt_text, str) or "\x00" in self.prompt_text:
             raise ValueError("prompt_text is invalid")
+        canonical_prompt = _prompt_for(stage, exposed)
+        canonical_bytes = len(canonical_prompt.encode("utf-8"))
+        if canonical_bytes > MAX_STAGE_PATTERN_PACK_BYTES:
+            raise ValueError(
+                "prompt_text exceeds the default UTF-8 byte budget"
+            )
+        if self.prompt_text != canonical_prompt:
+            raise ValueError("prompt_text does not match exposed exact versions")
         object.__setattr__(self, "exposed_versions", exposed)
 
     @property
@@ -114,26 +136,10 @@ def _effective_approved(
     approved: Mapping[tuple[str, int], object] | Collection[tuple[str, int]] | None,
 ) -> bool:
     key = (definition.pattern_id, definition.version)
-    if approved is None:
+    approved_versions = normalize_effective_approved(approved)
+    if approved_versions is None:
         return definition.provenance.get("review_state") == "approved"
-    try:
-        if key not in approved:
-            return False
-        if isinstance(approved, Mapping):
-            value = approved[key]
-            if isinstance(value, bool):
-                return value
-            if isinstance(value, str):
-                return value == "approved"
-            if hasattr(value, "review_state"):
-                return getattr(value, "review_state") == "approved"
-            if hasattr(value, "status"):
-                status = getattr(value, "status")
-                return getattr(status, "value", status) == "approved"
-            return bool(value)
-    except (KeyError, TypeError):
-        return False
-    return True
+    return key in approved_versions
 
 
 def _resolve_definition(

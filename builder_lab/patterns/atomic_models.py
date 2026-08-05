@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from math import log2
 from types import MappingProxyType
-from typing import Mapping, TypeAlias
+from typing import Collection, Mapping, TypeAlias
 
 
 JSONScalar: TypeAlias = str | int | float | bool | None
@@ -21,6 +21,43 @@ JSONValue: TypeAlias = JSONScalar | tuple["JSONValue", ...] | Mapping[str, "JSON
 SerializedJSONValue: TypeAlias = (
     JSONScalar | list["SerializedJSONValue"] | dict[str, "SerializedJSONValue"]
 )
+
+
+def normalize_effective_approved(
+    effective_approved: Mapping[tuple[str, int], object]
+    | Collection[tuple[str, int]]
+    | None,
+) -> frozenset[tuple[str, int]] | None:
+    """Normalize persistence review overrides using a strict allowlist.
+
+    The only approved representations are an exact-version collection or a
+    mapping whose value is the literal ``True`` or ``"approved"``.  Unknown
+    values and malformed keys are intentionally treated as non-approved so an
+    untrusted object cannot become truthy approval by accident.
+    """
+
+    if effective_approved is None:
+        return None
+    if isinstance(effective_approved, Mapping):
+        entries = effective_approved.items()
+    else:
+        try:
+            entries = ((key, True) for key in effective_approved)
+        except TypeError:
+            return frozenset()
+    result: set[tuple[str, int]] = set()
+    for key, state in entries:
+        if (
+            not isinstance(key, tuple)
+            or len(key) != 2
+            or not isinstance(key[0], str)
+            or isinstance(key[1], bool)
+            or not isinstance(key[1], int)
+        ):
+            continue
+        if state is True or (isinstance(state, str) and state == "approved"):
+            result.add((key[0], key[1]))
+    return frozenset(result)
 
 _IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -601,7 +638,10 @@ class PatternVersionRef:
                 raise ValueError(f"{name} is invalid")
         if not isinstance(self.provenance, Mapping):
             raise ValueError("provenance is invalid")
-        object.__setattr__(self, "provenance", MappingProxyType(dict(self.provenance)))
+        frozen_provenance = _freeze_json(self.provenance)
+        if not isinstance(frozen_provenance, Mapping):
+            raise ValueError("provenance is invalid")
+        object.__setattr__(self, "provenance", frozen_provenance)
 
     @classmethod
     def from_definition(
@@ -686,5 +726,6 @@ __all__ = [
     "PatternCandidateVersionRef",
     "PatternVersionRef",
     "ExactPatternVersionRef",
+    "normalize_effective_approved",
     "SerializedJSONValue",
 ]
