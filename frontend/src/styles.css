@@ -5273,6 +5273,19 @@ a {
   border-radius: 16px;
 }
 
+.studio-drawer .studio-upgrade,
+.studio-drawer .studio-upgrade > div,
+.studio-drawer .studio-upgrade__publication,
+.studio-drawer .studio-upgrade__developer,
+.studio-drawer .studio-upgrade__developer > div {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.studio-drawer .studio-upgrade__developer code {
+  max-width: 100%;
+}
+
 .studio-drawer .studio-upgrade > svg {
   display: none;
 }
@@ -5281,6 +5294,18 @@ a {
 .studio-drawer .studio-upgrade > .studio-upgrade__actions {
   grid-column: 1;
   justify-self: stretch;
+}
+
+.studio-drawer .studio-upgrade__actions {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.studio-drawer .studio-upgrade__actions button {
+  width: 100%;
+  min-width: 0;
+  white-space: normal;
 }
 
 @keyframes studio-drawer-backdrop {

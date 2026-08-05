@@ -88,16 +88,22 @@ try {
   await desktop.getByTitle('Предпросмотр AI-сотрудника Kaigo').waitFor();
   await screenshot(desktop, 'studio-project-desktop.png');
 
+  await desktop.getByRole('button', { name: 'Открыть версии' }).click();
+  await desktop.getByRole('dialog', { name: 'История версий' }).waitFor();
+  await screenshot(desktop, 'studio-versions-desktop.png');
+  await desktop.keyboard.press('Escape');
+
   const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   await mobile.goto(`${baseUrl}/studio?project=${projectId}`);
-  await mobile.getByTitle('Предпросмотр AI-сотрудника Kaigo').waitFor();
+  await mobile.getByRole('heading', { name: 'Чат с Kaigo' }).waitFor();
   await screenshot(mobile, 'studio-project-mobile-top.png', false);
+  await mobile.getByRole('button', { name: 'Предпросмотр', exact: true }).click();
+  await mobile.getByTitle('Предпросмотр AI-сотрудника Kaigo').waitFor();
   await mobile.getByRole('button', { name: 'На телефоне' }).click();
-  const expand = mobile.getByRole('button', { name: 'Показать полностью' });
-  if (await expand.isVisible()) await expand.click();
   await screenshot(mobile, 'studio-project-mobile.png');
 
   await desktop.goto(`${baseUrl}/studio?project=${projectId}`);
+  await desktop.getByRole('button', { name: 'Открыть публикацию' }).click();
   await desktop.getByRole('heading', { name: 'Всё готово к публикации' }).waitFor();
   await desktop.getByLabel('На каких сайтах разрешить виджет').fill('https://atelier.example.com');
   await desktop.getByRole('button', { name: 'Опубликовать виджет' }).click();

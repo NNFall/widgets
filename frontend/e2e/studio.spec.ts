@@ -171,6 +171,11 @@ test('active subscription publishes the current verified artifact with a stable 
   await expect(embedSnippet).not.toBeVisible();
   await page.getByText('Код для разработчика').click();
   await expect(embedSnippet).toBeVisible();
+  const publicationDrawer = page.getByRole('dialog', { name: 'Публикация виджета' });
+  const drawerOverflow = await publicationDrawer.evaluate((element) =>
+    element.scrollWidth - element.clientWidth,
+  );
+  expect(drawerOverflow).toBeLessThanOrEqual(1);
   const request = builderApi.requests.find(({ method, pathname }) =>
     method === 'POST' && pathname === `/api/projects/${builderApi.projectId}/publish`,
   );
