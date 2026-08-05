@@ -522,9 +522,9 @@ export function UpgradeGate({
             </p>
             {typeof subscription?.generation_tokens_remaining === 'number' && (
               <p className="studio-upgrade__renewal-status">
-                Доступный объём доработок: {new Intl.NumberFormat('ru-RU').format(
-                  Math.max(0, subscription.generation_tokens_remaining),
-                )} токенов
+                {subscription.generation_tokens_remaining > 0
+                  ? 'Доработки доступны в рамках тарифа.'
+                  : 'Лимит доработок на тарифе исчерпан.'}
               </p>
             )}
             <label htmlFor="studio-publication-domains">На каких сайтах разрешить виджет</label>

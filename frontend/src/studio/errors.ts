@@ -5,7 +5,7 @@ export const STUDIO_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   provider_unavailable: 'Сервис генерации сейчас недоступен. Запуск можно повторить позже.',
   model_unavailable: 'Выбранная модель сейчас недоступна.',
   quota_exceeded: 'Лимит сервиса генерации временно исчерпан. Попробуйте позже.',
-  generation_credits_unavailable: 'На тарифе недостаточно токенов для новой доработки.',
+  generation_credits_unavailable: 'Лимит доработок на тарифе исчерпан.',
   route_exhausted: 'Ни один доступный сервис генерации не смог завершить запрос. Попробуйте позже.',
   generation_timeout: 'Генерация заняла слишком много времени и была остановлена.',
   invalid_artifact: 'Полученную версию не удалось безопасно открыть.',

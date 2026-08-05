@@ -30,6 +30,8 @@ function projectDate(value: string) {
     day: 'numeric',
     month: 'long',
     year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
   }).format(date);
 }
 
@@ -41,7 +43,10 @@ export function StudioLibrary({ onOpenProject, onCreateProject }: StudioLibraryP
     const abort = new AbortController();
     setState({ kind: 'loading' });
     void getProjects(abort.signal)
-      .then(({ projects }) => setState({ kind: 'ready', projects }))
+      .then(({ projects }) => {
+        if (!Array.isArray(projects)) throw new Error('invalid_projects_response');
+        setState({ kind: 'ready', projects });
+      })
       .catch(() => {
         if (!abort.signal.aborted) setState({ kind: 'error' });
       });
@@ -97,6 +102,9 @@ export function StudioLibrary({ onOpenProject, onCreateProject }: StudioLibraryP
                 <span aria-hidden><GlobeSimple size={18} /></span>
                 <div>
                   <h2>{projectDomain(project.source_url)}</h2>
+                  {project.brief?.trim() && (
+                    <p className="studio-library__brief">{project.brief.trim()}</p>
+                  )}
                   <time dateTime={project.updated_at}>{projectDate(project.updated_at)}</time>
                 </div>
               </div>

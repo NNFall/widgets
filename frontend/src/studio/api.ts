@@ -140,8 +140,8 @@ async function saasRequestJson<T>(path: string, init: RequestInit = {}): Promise
   return payload;
 }
 
-export function getAuthSession() {
-  return saasRequestJson<AuthSessionSnapshot>('/api/auth/session');
+export function getAuthSession(signal?: AbortSignal) {
+  return saasRequestJson<AuthSessionSnapshot>('/api/auth/session', { signal });
 }
 
 export function createBillingCheckout(
@@ -209,8 +209,8 @@ export function disableBillingAutoRenew(
   );
 }
 
-export function getProject(projectId: string) {
-  return saasRequestJson<SaasProject>(`/api/projects/${encodeURIComponent(projectId)}`);
+export function getProject(projectId: string, signal?: AbortSignal) {
+  return saasRequestJson<SaasProject>(`/api/projects/${encodeURIComponent(projectId)}`, { signal });
 }
 
 export function getProjects(signal?: AbortSignal) {

@@ -415,7 +415,7 @@ Run: `.\frontend\node_modules\.bin\vitest.cmd run --root frontend src/studio/Pro
 
 Expected: legacy Builder and SaaS project flows pass with friendly default copy.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add frontend/src/studio/StudioPage.tsx frontend/src/studio/StudioPage.test.tsx frontend/src/studio/ProjectVersionHistory.tsx frontend/src/studio/ProjectVersionHistory.test.tsx frontend/src/studio/StudioPreview.tsx
@@ -485,15 +485,15 @@ git commit -m "feat: clarify studio publication and responsive layout"
 - Create: `docs/release-evidence/2026-08-05-friendly-studio/README.md`
 - Create: `docs/release-evidence/2026-08-05-friendly-studio/*.png`
 
-- [ ] **Step 1: Align the stale landing meta test**
+- [x] **Step 1: Align the stale landing meta test**
 
 Set `EXACT_DESCRIPTION` to the approved `frontend/index.html` description mentioning the free first version and the usual 10 to 20 minute range. Do not change the approved landing solely for the stale assertion.
 
-- [ ] **Step 2: Update focused e2e journeys**
+- [x] **Step 2: Update focused e2e journeys**
 
 Assert project library, friendly progress, Russian viewport labels, refinement/version placement, collapsed developer disclosure, reload/resume, cancel/retry, billing/publication, no document overflow, serious/critical axe checks, and no infinite reduced-motion animation.
 
-- [ ] **Step 3: Run all automated verification sequentially**
+- [x] **Step 3: Run all automated verification sequentially**
 
 ```bash
 npm --prefix frontend test
@@ -505,15 +505,19 @@ npm --prefix frontend run test:e2e
 
 Expected: all commands exit 0. Inspect expected, actual, and diff before updating any approved visual snapshot.
 
-- [ ] **Step 4: Verify in the in-app Codex browser**
+- [x] **Step 4: Verify in the in-app Codex browser**
 
 Run local frontend and inspect 1536 by 960, 1440 by 900, 390 by 844, and reduced motion. Verify library, running progress fixture, completed result, desktop/mobile preview, widget open/close, refinement, version expansion, and developer disclosure. Use production only for read-only comparison.
 
-- [ ] **Step 5: Capture release evidence**
+Completed with combined coverage: the in-app browser inspected 1536 by 960, 390 by 844, and reduced motion; the sequential e2e run covered 1536 by 830, 1920 by 1080, running/cancel/retry, mobile preview, publication, and reduced motion. The exact 1440 by 900 viewport was not repeated after the final browser cleanup because adjacent desktop breakpoints and the 1480 px shell boundary were already covered.
+
+The independent review delta was then verified with terminal Playwright: project navigation clears the previous run and invalidates stale mutations, visible SSE activity uses the safe presentation mapping, reduced motion removes Motion springs, the 390 px document follows the specified content order, and library rows include the saved brief plus local date and time. The refreshed mobile snapshot was inspected before approval.
+
+- [x] **Step 5: Capture release evidence**
 
 Store representative local screenshots and a README under `docs/release-evidence/2026-08-05-friendly-studio/`. Record commit, verification commands, viewport results, known external limitations, and that no live paid or generation side effect was triggered.
 
-- [ ] **Step 6: Run repository checks**
+- [x] **Step 6: Run repository checks**
 
 ```bash
 git diff --check
@@ -522,13 +526,13 @@ git status --short
 
 Expected: no whitespace errors and only planned frontend, plan/spec, and release-evidence changes.
 
-- [ ] **Step 7: Commit verification evidence**
+- [x] **Step 7: Commit verification evidence**
 
 ```bash
 git add frontend/e2e/landing.spec.ts frontend/e2e/visual.spec.ts docs/release-evidence/2026-08-05-friendly-studio
 git commit -m "test: verify friendly studio journey"
 ```
 
-- [ ] **Step 8: Prepare handoff without deployment**
+- [x] **Step 8: Prepare handoff without deployment**
 
 Report the final local commit SHA, tests, screenshots, and backend contract assumptions. Do not push, pull production, restart services, change nginx, run migrations, or deploy. Wait for explicit push instruction before `git push -u origin codex/product-ui`.

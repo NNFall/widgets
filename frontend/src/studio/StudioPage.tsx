@@ -11,7 +11,7 @@ import {
   PaperPlaneTilt,
   StopCircle,
 } from '@phosphor-icons/react';
-import { motion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { KaigoLogo } from '../shared/KaigoLogo';
@@ -125,6 +125,7 @@ function ErrorNotice({
 }
 
 export function StudioPage() {
+  const reducedMotion = Boolean(useReducedMotion());
   const [projectId, setProjectId] = useState(queryProjectId);
   const legacyBuilder = (window.location.pathname.replace(/\/+$/, '') || '/') === '/builder';
   const controller = useBuilderRun(projectId, legacyBuilder);
@@ -137,7 +138,7 @@ export function StudioPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [projectPending, setProjectPending] = useState(false);
   const hydratedRun = useRef<string | null>(null);
-  const previewAnchorRef = useRef<HTMLElement>(null);
+  const previewAnchorRef = useRef<HTMLDivElement>(null);
   const newWidgetIntentRef = useRef(false);
   const artifact = controller.selectedArtifact;
   const activeVersionId = controller.activeVersionId ?? controller.project?.active_version_id ?? null;
@@ -195,10 +196,10 @@ export function StudioPage() {
     if (projectId || !newWidgetIntentRef.current) return;
     newWidgetIntentRef.current = false;
     document.getElementById('studio-new-widget')?.scrollIntoView({
-      behavior: 'smooth',
+      behavior: reducedMotion ? 'auto' : 'smooth',
       block: 'start',
     });
-  }, [projectId]);
+  }, [projectId, reducedMotion]);
 
   const formattedSession = useMemo(() => {
     if (!controller.runId) return 'Новая сессия';
@@ -271,7 +272,10 @@ export function StudioPage() {
   };
 
   const scrollToPreview = () => {
-    previewAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    previewAnchorRef.current?.scrollIntoView({
+      behavior: reducedMotion ? 'auto' : 'smooth',
+      block: 'start',
+    });
   };
 
   const openProject = (nextProjectId: string) => {
@@ -281,7 +285,7 @@ export function StudioPage() {
 
   const scrollToNewProject = () => {
     document.getElementById('studio-new-widget')?.scrollIntoView({
-      behavior: 'smooth',
+      behavior: reducedMotion ? 'auto' : 'smooth',
       block: 'start',
     });
   };
@@ -391,7 +395,7 @@ export function StudioPage() {
             aria-label={freeResultReady ? 'Перейти к публикации' : 'Публикация станет доступна после проверенного результата'}
             style={freeResultReady ? { color: 'var(--ink)' } : undefined}
             onClick={() => document.getElementById('studio-publication')?.scrollIntoView({
-              behavior: 'smooth',
+              behavior: reducedMotion ? 'auto' : 'smooth',
               block: 'center',
             })}
           >
@@ -406,7 +410,7 @@ export function StudioPage() {
           className="studio-rail"
           initial={false}
           animate={{ opacity: 1, x: 0 }}
-          transition={{ type: 'spring', stiffness: 105, damping: 22 }}
+          transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 105, damping: 22 }}
         >
           <a className="studio-back" href="/">
             <ArrowLeft aria-hidden size={17} /> На главную
@@ -549,43 +553,45 @@ export function StudioPage() {
 
         <motion.section
           className="studio-workspace"
-          ref={previewAnchorRef}
+          aria-label="Предпросмотр, доработка и публикация"
           initial={false}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ type: 'spring', stiffness: 95, damping: 22, delay: 0.08 }}
+          transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 95, damping: 22, delay: 0.08 }}
         >
-          {controller.projectMode ? (
-            <div className="studio-workspace__summary" aria-label="Состояние выбранной версии">
-              <div>
-                <span>Версия</span>
-                <strong>{displayedVersionNumber ?? '—'}</strong>
+          <div className="studio-preview-region" ref={previewAnchorRef}>
+            {controller.projectMode ? (
+              <div className="studio-workspace__summary" aria-label="Состояние выбранной версии">
+                <div>
+                  <span>Версия</span>
+                  <strong>{displayedVersionNumber ?? '—'}</strong>
+                </div>
+                <div className="studio-workspace__quality">
+                  <CheckCircle aria-hidden size={19} weight={readyQuality(artifact?.quality_status ?? controller.snapshot?.quality_status) ? 'fill' : 'regular'} />
+                  <span>{(artifact?.quality_status ?? controller.snapshot?.quality_status) === 'accepted' ? 'Готово к работе' : (artifact?.quality_status ?? controller.snapshot?.quality_status) === 'verified' ? 'Проверено' : 'Черновик'}</span>
+                </div>
               </div>
-              <div className="studio-workspace__quality">
-                <CheckCircle aria-hidden size={19} weight={readyQuality(artifact?.quality_status ?? controller.snapshot?.quality_status) ? 'fill' : 'regular'} />
-                <span>{(artifact?.quality_status ?? controller.snapshot?.quality_status) === 'accepted' ? 'Готово к работе' : (artifact?.quality_status ?? controller.snapshot?.quality_status) === 'verified' ? 'Проверено' : 'Черновик'}</span>
+            ) : (
+              <div className="studio-workspace__metrics" aria-label="Метрики запуска">
+                <div><span>Ревизия</span><strong>{previewRevision ?? '—'}</strong></div>
+                <div><span>Токены</span><strong>{controller.snapshot ? numberFormatter.format(controller.snapshot.usage.total_tokens) : '—'}</strong></div>
+                <div><span>Время</span><strong>{controller.snapshot ? `${decimalFormatter.format(controller.snapshot.elapsed_seconds)} с` : '—'}</strong></div>
+                <div className="studio-workspace__quality">
+                  <CheckCircle aria-hidden size={19} weight={readyQuality(artifact?.quality_status ?? controller.snapshot?.quality_status) ? 'fill' : 'regular'} />
+                  <span>{(artifact?.quality_status ?? controller.snapshot?.quality_status) === 'accepted' ? 'Готово' : (artifact?.quality_status ?? controller.snapshot?.quality_status) === 'verified' ? 'Проверено' : 'Черновик'}</span>
+                </div>
               </div>
-            </div>
-          ) : (
-            <div className="studio-workspace__metrics" aria-label="Метрики запуска">
-              <div><span>Ревизия</span><strong>{previewRevision ?? '—'}</strong></div>
-              <div><span>Токены</span><strong>{controller.snapshot ? numberFormatter.format(controller.snapshot.usage.total_tokens) : '—'}</strong></div>
-              <div><span>Время</span><strong>{controller.snapshot ? `${decimalFormatter.format(controller.snapshot.elapsed_seconds)} с` : '—'}</strong></div>
-              <div className="studio-workspace__quality">
-                <CheckCircle aria-hidden size={19} weight={readyQuality(artifact?.quality_status ?? controller.snapshot?.quality_status) ? 'fill' : 'regular'} />
-                <span>{(artifact?.quality_status ?? controller.snapshot?.quality_status) === 'accepted' ? 'Готово' : (artifact?.quality_status ?? controller.snapshot?.quality_status) === 'verified' ? 'Проверено' : 'Черновик'}</span>
-              </div>
-            </div>
-          )}
-          <StudioPreview
-            runId={previewRunId}
-            revision={previewRevision}
-            projectMode={controller.projectMode}
-            csrfToken={controller.csrfToken}
-            artDirection={artifact?.art_direction ?? ''}
-            qualityStatus={artifact?.quality_status ?? controller.snapshot?.quality_status ?? 'pending'}
-            viewport={viewport}
-            onViewportChange={setViewport}
-          />
+            )}
+            <StudioPreview
+              runId={previewRunId}
+              revision={previewRevision}
+              projectMode={controller.projectMode}
+              csrfToken={controller.csrfToken}
+              artDirection={artifact?.art_direction ?? ''}
+              qualityStatus={artifact?.quality_status ?? controller.snapshot?.quality_status ?? 'pending'}
+              viewport={viewport}
+              onViewportChange={setViewport}
+            />
+          </div>
           {controller.projectMode && (
             <section className="studio-workspace__editing" aria-labelledby="studio-editing-title">
               <header>
@@ -642,16 +648,18 @@ export function StudioPage() {
             && freeResultReady
             && (controller.versionsAvailable ? Boolean(selectedVersion) : Boolean(artifact?.id))
             && (
-            <UpgradeGate
-              csrfToken={controller.csrfToken}
-              projectId={projectId}
-              versionsEnabled={controller.versionsAvailable}
-              projectVersionId={selectedVersion?.id}
-              projectVersionOrdinal={selectedVersion?.ordinal}
-              projectVersions={controller.versions}
-              artifactId={artifact?.id}
-              revision={artifact?.revision}
-            />
+            <div className="studio-publication-region">
+              <UpgradeGate
+                csrfToken={controller.csrfToken}
+                projectId={projectId}
+                versionsEnabled={controller.versionsAvailable}
+                projectVersionId={selectedVersion?.id}
+                projectVersionOrdinal={selectedVersion?.ordinal}
+                projectVersions={controller.versions}
+                artifactId={artifact?.id}
+                revision={artifact?.revision}
+              />
+            </div>
           )}
           <div className="studio-workspace__footer">
             {controller.projectMode ? <CheckCircle aria-hidden size={18} /> : <Code aria-hidden size={18} />}

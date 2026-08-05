@@ -4,6 +4,8 @@ const PROJECT_ID = '5d34bcab-cfd3-4ca2-8398-eb59f34aab92';
 const CSRF_TOKEN = 'playwright-csrf';
 const NOW = '2026-07-27T12:00:00.000Z';
 const FINISHED = '2026-07-27T12:00:24.800Z';
+const ACTIVE_VERSION_ID = 'version-playwright-2';
+const LONG_CHANGE_REQUEST = 'Сделай приветствие короче, добавь больше воздуха и сохрани спокойный тон бренда. '.repeat(4).trim();
 
 type RunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -41,6 +43,7 @@ interface FakeProject {
   brief: string | null;
   status: string;
   active_revision: number | null;
+  active_version_id: string | null;
   active_run: FakeRun | null;
   created_at: string;
   updated_at: string;
@@ -106,6 +109,15 @@ function preview(): FakePreview {
     layout_contract: { width: 'compact', placement: 'bottom-right' },
     quality_status: 'verified',
     source: 'accepted_artifact',
+  };
+}
+
+function artifactFor(id: string, revision: number): FakePreview {
+  return {
+    ...preview(),
+    id,
+    revision,
+    art_direction: `Проверенная концепция ${revision}`,
   };
 }
 
@@ -199,9 +211,47 @@ function createProject(activeRun: FakeRun | null = null): FakeProject {
     brief: 'Уверенный консультант, который говорит простым языком.',
     status: activeRun?.status ?? 'draft',
     active_revision: activeRun?.preview?.revision ?? null,
+    active_version_id: activeRun?.status === 'completed' ? ACTIVE_VERSION_ID : null,
     active_run: activeRun,
     created_at: NOW,
     updated_at: FINISHED,
+  };
+}
+
+function versionsFor(activeRun: FakeRun | null) {
+  if (activeRun?.status !== 'completed') {
+    return { active_version_id: null, versions: [] };
+  }
+  return {
+    active_version_id: ACTIVE_VERSION_ID,
+    versions: [
+      {
+        id: ACTIVE_VERSION_ID,
+        project_id: PROJECT_ID,
+        ordinal: 2,
+        kind: 'refinement',
+        change_request: LONG_CHANGE_REQUEST,
+        parent_version_id: 'version-playwright-1',
+        run_id: activeRun.id,
+        artifact_id: 'artifact-playwright-4',
+        artifact_revision: 4,
+        refinable: true,
+        created_at: FINISHED,
+      },
+      {
+        id: 'version-playwright-1',
+        project_id: PROJECT_ID,
+        ordinal: 1,
+        kind: 'initial',
+        change_request: null,
+        parent_version_id: null,
+        run_id: activeRun.id,
+        artifact_id: 'artifact-playwright-3',
+        artifact_revision: 3,
+        refinable: true,
+        created_at: NOW,
+      },
+    ],
   };
 }
 
@@ -297,6 +347,10 @@ const test = base.extend<{ builderApi: FakeBuilderApi }>({
         await route.fulfill({ status: 201, json: project });
         return;
       }
+      if (url.pathname === '/api/projects' && method === 'GET') {
+        await route.fulfill({ status: 200, json: { projects: [project] } });
+        return;
+      }
 
       const projectMatch = url.pathname.match(/^\/api\/projects\/([^/]+)$/);
       if (projectMatch && method === 'GET') {
@@ -311,6 +365,20 @@ const test = base.extend<{ builderApi: FakeBuilderApi }>({
           brief: input?.brief ?? project.brief,
         };
         await route.fulfill({ status: 200, json: project });
+        return;
+      }
+
+      const versionsMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/versions$/);
+      if (versionsMatch && method === 'GET') {
+        await route.fulfill({ status: 200, json: versionsFor(project.active_run) });
+        return;
+      }
+
+      const artifactMatch = url.pathname.match(/^\/api\/artifacts\/([^/]+)$/);
+      if (artifactMatch && method === 'GET') {
+        const artifactId = decodeURIComponent(artifactMatch[1]);
+        const revision = artifactId.endsWith('-3') ? 3 : 4;
+        await route.fulfill({ status: 200, json: artifactFor(artifactId, revision) });
         return;
       }
 
@@ -361,6 +429,7 @@ const test = base.extend<{ builderApi: FakeBuilderApi }>({
         publicationRevision += 1;
         const input = body as {
           artifact_id?: string;
+          project_version_id?: string;
           revision?: number;
           allowed_domains?: string[];
         } | null;
@@ -368,6 +437,7 @@ const test = base.extend<{ builderApi: FakeBuilderApi }>({
           publication_id: 'publication-playwright',
           release_id: `release-playwright-${publicationRevision}`,
           artifact_id: input?.artifact_id ?? 'artifact-playwright-4',
+          project_version_id: input?.project_version_id ?? null,
           stable_key: 'stable-playwright-widget',
           revision: input?.revision ?? 4,
           allowed_domains: input?.allowed_domains ?? ['https://example.com'],
@@ -378,6 +448,7 @@ const test = base.extend<{ builderApi: FakeBuilderApi }>({
         const release = {
           release_id: published.release_id,
           artifact_id: published.artifact_id,
+          project_version_id: published.project_version_id,
           previous_release_id: null,
           revision: published.revision,
           checksum: published.checksum,
@@ -417,6 +488,7 @@ const test = base.extend<{ builderApi: FakeBuilderApi }>({
             publication_id: 'publication-playwright',
             release_id: (body as { target_release_id?: string } | null)?.target_release_id,
             artifact_id: 'artifact-playwright-4',
+            project_version_id: ACTIVE_VERSION_ID,
             stable_key: 'stable-playwright-widget',
             revision: 4,
             allowed_domains: ['https://example.com'],
@@ -477,6 +549,9 @@ const test = base.extend<{ builderApi: FakeBuilderApi }>({
                   status: 'active',
                   current_period_start: NOW,
                   current_period_end: '2026-08-27T12:00:00.000Z',
+                  auto_renew: true,
+                  next_renewal_at: '2026-08-27T12:00:00.000Z',
+                  generation_tokens_remaining: 750_000,
                 }
               : null,
           },

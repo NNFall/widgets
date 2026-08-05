@@ -5,9 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './App';
 
 beforeEach(() => {
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
-    new Response(JSON.stringify({ enabled: false, authenticated: false })),
-  ));
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input) === '/api/projects') {
+      return new Response(JSON.stringify({ projects: [] }));
+    }
+    return new Response(JSON.stringify({ enabled: false, authenticated: false }));
+  }));
 });
 
 afterEach(() => {
@@ -189,7 +192,8 @@ describe('App', () => {
 
     render(<App />);
 
-    expect(await screen.findByRole('heading', { name: 'Новый проект в Kaigo Studio' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Мои виджеты' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Создайте новый виджет' })).toBeInTheDocument();
     expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(0);
   });
 

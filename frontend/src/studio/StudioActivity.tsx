@@ -2,7 +2,7 @@ import { useReducedMotion } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
 
 import { safeActivityForEvent, STUDIO_STAGES } from './studioPresentation';
-import type { BuilderEvent, BuilderStage } from './types';
+import type { BuilderEvent, BuilderRunStatus, BuilderStage } from './types';
 
 const MIN_VISIBLE_MS = 2_000;
 
@@ -11,6 +11,7 @@ type StudioActivityProps = {
   events: BuilderEvent[];
   stage?: BuilderStage | null;
   fallback: string;
+  status?: BuilderRunStatus | null;
 };
 
 type ActivityItem = {
@@ -18,7 +19,16 @@ type ActivityItem = {
   text: string;
 };
 
-function activityItem(events: BuilderEvent[], stage: BuilderStage | null | undefined, fallback: string): ActivityItem {
+function activityItem(
+  events: BuilderEvent[],
+  stage: BuilderStage | null | undefined,
+  fallback: string,
+  status: BuilderRunStatus | null | undefined,
+): ActivityItem {
+  if (status === 'failed' || status === 'cancelled') {
+    return { key: `terminal-${status}-${fallback}`, text: fallback };
+  }
+
   const latest = events.at(-1);
   if (latest) {
     return {
@@ -32,9 +42,9 @@ function activityItem(events: BuilderEvent[], stage: BuilderStage | null | undef
   return { key: `fallback-${stage ?? 'idle'}-${text}`, text };
 }
 
-export function StudioActivity({ running, events, stage, fallback }: StudioActivityProps) {
+export function StudioActivity({ running, events, stage, fallback, status }: StudioActivityProps) {
   const reducedMotion = Boolean(useReducedMotion());
-  const candidate = activityItem(events, stage, fallback);
+  const candidate = activityItem(events, stage, fallback, status);
   const [visible, setVisible] = useState<ActivityItem>(candidate);
   const visibleAtRef = useRef(Date.now());
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);

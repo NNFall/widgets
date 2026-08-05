@@ -7,6 +7,7 @@ import type { SaasProject, SaasRunSnapshot } from './types';
 import { adaptSaasRunSnapshot, isSaasRunRegression } from './useBuilderRun';
 
 const PROJECT_ID = '5d34bcab-cfd3-4ca2-8398-eb59f34aab92';
+const SECOND_PROJECT_ID = '840ba06f-5bf8-4fd7-af64-d93d0b8a5e11';
 const RUN_ID = 'a7c3081e-936c-41fc-85c0-e3484484c726';
 
 function jsonResponse(body: unknown, status = 200) {
@@ -236,6 +237,45 @@ describe('durable SaaS Studio flow', () => {
     window.history.pushState({}, '', '/studio');
     act(() => window.dispatchEvent(new PopStateEvent('popstate')));
     expect(await screen.findByRole('heading', { name: 'Мои виджеты' })).toBeVisible();
+  });
+
+  it('clears the previous run before hydrating a different project', async () => {
+    const running = run({ status: 'running', state: 'running', progress: 38 });
+    const secondProject = {
+      ...project(),
+      id: SECOND_PROJECT_ID,
+      source_url: 'https://second.example.org',
+      brief: 'Консультант второго проекта',
+    };
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requests.push(url);
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(running));
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(running);
+      if (url === `/api/runs/${RUN_ID}/events`) return emptyEventStream();
+      if (url === `/api/projects/${PROJECT_ID}/versions`) {
+        return jsonResponse({ active_version_id: null, versions: [] });
+      }
+      if (url === `/api/projects/${SECOND_PROJECT_ID}`) return jsonResponse(secondProject);
+      if (url === `/api/projects/${SECOND_PROJECT_ID}/versions`) {
+        return jsonResponse({ active_version_id: null, versions: [] });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+
+    render(<StudioPage />);
+    expect(await screen.findByRole('button', { name: 'Отменить генерацию' })).toBeEnabled();
+
+    window.history.pushState({}, '', `/studio?project=${SECOND_PROJECT_ID}`);
+    act(() => window.dispatchEvent(new PopStateEvent('popstate')));
+
+    expect(await screen.findByRole('heading', { name: 'Создайте первый AI-виджет' })).toBeVisible();
+    await waitFor(() => expect(screen.getByLabelText('Ссылка на сайт')).toHaveValue('https://second.example.org'));
+    expect(screen.queryByRole('button', { name: 'Отменить генерацию' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Создаём ваш виджет')).not.toBeInTheDocument();
+    expect(requests).not.toContain(`/api/runs/${RUN_ID}/cancel`);
   });
 
   it('restores an authenticated queued run from the project API after reload', async () => {
@@ -562,10 +602,44 @@ describe('durable SaaS Studio flow', () => {
 
     render(<StudioPage />);
 
-    expect(await screen.findByText('Собираем основу будущего виджета')).toBeInTheDocument();
+    expect((await screen.findAllByText('Собираем основу будущего виджета')).length).toBeGreaterThan(0);
     expect(screen.queryByText('Дубликат')).not.toBeInTheDocument();
     expect(screen.queryByText('Старое событие')).not.toBeInTheDocument();
     expect(document.querySelectorAll('.studio-technical__body li')).toHaveLength(2);
+  });
+
+  it('keeps raw SSE diagnostics out of the visible Studio header', async () => {
+    const running = run({ status: 'running', state: 'running', latest_sequence: 0 });
+    const rawMessage = 'Gemini bytes=991; C:\\secret\\trace.log';
+    const incoming = {
+      sequence: 1,
+      type: 'provider.telemetry',
+      message: rawMessage,
+      payload: { status: 'running', stage: 'foundation' },
+      created_at: '2026-07-28T10:00:01Z',
+    };
+    let runReads = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(running));
+      if (url === `/api/projects/${PROJECT_ID}/versions`) {
+        return jsonResponse({ active_version_id: null, versions: [] });
+      }
+      if (url === `/api/runs/${RUN_ID}`) {
+        runReads += 1;
+        if (runReads === 1) return jsonResponse(running);
+        return new Promise<Response>(() => undefined);
+      }
+      if (url === `/api/runs/${RUN_ID}/events`) return eventStream(incoming);
+      throw new Error(`unexpected request: ${url}`);
+    }));
+
+    render(<StudioPage />);
+
+    const headerStatus = document.querySelector('.studio-header__session strong');
+    await waitFor(() => expect(headerStatus).toHaveTextContent('Собираем основу будущего виджета'));
+    expect(screen.queryByText(rawMessage)).not.toBeInTheDocument();
   });
 
   it.each([

@@ -11,13 +11,19 @@ function response(body: unknown, status = 200) {
   });
 }
 
-function project(id: string, status: string, sourceUrl: string, updatedAt = '2026-08-05T10:15:00Z') {
+function project(
+  id: string,
+  status: string,
+  sourceUrl: string,
+  updatedAt = '2026-08-05T10:15:00Z',
+  brief: string | null = null,
+) {
   return {
     id,
     tenant_id: 2,
     owner_user_id: 4,
     source_url: sourceUrl,
-    brief: null,
+    brief,
     status,
     active_revision: status === 'completed' ? 3 : null,
     active_version_id: null,
@@ -37,7 +43,13 @@ describe('StudioLibrary', () => {
   it('shows owner projects with safe Russian states, domain and local date', async () => {
     const payload = {
       projects: [
-        project('project-ready', 'completed', 'https://atelier.ru/catalog'),
+        project(
+          'project-ready',
+          'completed',
+          'https://atelier.ru/catalog',
+          '2026-08-05T10:15:00Z',
+          'Помогает подобрать услугу и записаться на консультацию.',
+        ),
         project('project-running', 'running', 'https://shop.example.com/'),
         project('project-unknown', 'internal_pending', 'not a url'),
       ],
@@ -56,10 +68,13 @@ describe('StudioLibrary', () => {
     expect(screen.getByText('Создаётся сейчас')).toBeInTheDocument();
     expect(screen.getByText('Состояние уточняется')).toBeInTheDocument();
     expect(screen.queryByText('internal_pending')).not.toBeInTheDocument();
+    expect(screen.getByText('Помогает подобрать услугу и записаться на консультацию.')).toBeInTheDocument();
     expect(screen.getAllByText(new Intl.DateTimeFormat('ru-RU', {
       day: 'numeric',
       month: 'long',
       year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
     }).format(new Date('2026-08-05T10:15:00Z')))).toHaveLength(3);
 
     await user.click(screen.getAllByRole('button', { name: 'Открыть' })[1]);
@@ -94,5 +109,14 @@ describe('StudioLibrary', () => {
 
     await screen.findByRole('button', { name: 'Создать первый виджет' });
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
+
+  it('shows a recoverable error when the projects response is malformed', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({ enabled: false })));
+
+    render(<StudioLibrary onOpenProject={vi.fn()} onCreateProject={vi.fn()} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Не удалось загрузить ваши виджеты');
+    expect(screen.queryByText('Здесь появятся ваши виджеты')).not.toBeInTheDocument();
   });
 });

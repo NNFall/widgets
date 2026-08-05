@@ -102,7 +102,13 @@ export function runStatusPresentation(status: BuilderRunStatus | null) {
       detail: 'Можно оставить страницу открытой или вернуться позже.',
     };
   }
-  if (status === 'queued' || status === 'created') {
+  if (status === 'created') {
+    return {
+      title: 'Можно начинать',
+      detail: 'Запустите создание, когда будете готовы.',
+    };
+  }
+  if (status === 'queued') {
     return {
       title: 'Готовим запуск',
       detail: 'Kaigo начнёт работу автоматически.',

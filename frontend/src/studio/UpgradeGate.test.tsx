@@ -231,7 +231,8 @@ describe('UpgradeGate', () => {
     });
     expect(api.getBillingSubscription).toHaveBeenCalledTimes(2);
     expect(screen.getByText(/всё готово к публикации/i)).toBeVisible();
-    expect(screen.getByText(/Доступный объём доработок: 750[\s ]000 токенов/)).toBeVisible();
+    expect(screen.getByText('Доработки доступны в рамках тарифа.')).toBeVisible();
+    expect(screen.queryByText(/750[\s ]000|токен/i)).not.toBeInTheDocument();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);

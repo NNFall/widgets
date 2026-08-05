@@ -41,7 +41,7 @@ export function StudioProgress({
   const progressValue = Math.max(0, Math.min(100, Math.round(progress)));
   const currentIndex = STUDIO_STAGES.findIndex(({ id }) => id === currentStage);
   const completedIndex = STUDIO_STAGES.findIndex(({ id }) => id === lastCompletedStage);
-  const running = status === 'created' || status === 'queued' || status === 'running';
+  const running = status === 'queued' || status === 'running';
   const displayedCurrentIndex = currentIndex >= 0
     ? currentIndex
     : running
@@ -93,12 +93,15 @@ export function StudioProgress({
           Этап {displayedCurrentIndex + 1} из {STUDIO_STAGES.length}
         </p>
       )}
-      <StudioActivity
-        running={running}
-        events={events}
-        stage={currentStage}
-        fallback={activityFallback}
-      />
+      {running && (
+        <StudioActivity
+          running
+          events={events}
+          stage={currentStage}
+          fallback={activityFallback}
+          status={status}
+        />
+      )}
     </section>
   );
 }

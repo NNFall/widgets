@@ -2,6 +2,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import stylesSource from '../styles.css?raw';
+import studioPageSource from './StudioPage.tsx?raw';
 import { StudioProgress } from './StudioProgress';
 import { StudioTimeline } from './StudioTimeline';
 import type { BuilderEvent } from './types';
@@ -60,9 +61,11 @@ describe('Studio accessibility contracts', () => {
     expect(stylesSource).toMatch(/\.studio-technical\s+summary\s*\{[^}]*min-height:\s*44px/s);
   });
 
-  it('removes activity animation when reduced motion is requested', () => {
+  it('removes CSS and Motion spring movement when reduced motion is requested', () => {
     const reducedMotionRules = stylesSource.slice(stylesSource.lastIndexOf('@media (prefers-reduced-motion: reduce)'));
     expect(reducedMotionRules).toMatch(/\.studio-activity__message[\s\S]*animation:\s*none !important/);
+    expect(studioPageSource).toMatch(/useReducedMotion\(\)/);
+    expect(studioPageSource).toMatch(/reducedMotion\s*\?\s*\{\s*duration:\s*0\s*\}/);
   });
 
   it('uses page scrolling, readable controls, and a compact responsive shell', () => {
@@ -71,5 +74,17 @@ describe('Studio accessibility contracts', () => {
     expect(stylesSource).not.toMatch(/\.studio-timeline__list\s*\{[^}]*max-height:\s*330px/s);
     expect(stylesSource).toMatch(/min-height:\s*44px/);
     expect(stylesSource).toMatch(/@media \(max-width:\s*390px\)/);
+  });
+
+  it('defines the friendly mobile flow as status, preview, action, editing, publication and details', () => {
+    const mobileRules = stylesSource.slice(stylesSource.indexOf('@media (max-width: 860px)'));
+    expect(mobileRules).toMatch(/\.studio-shell--friendly\s*>\s*\.studio-rail[\s\S]*display:\s*contents/);
+    expect(mobileRules).toMatch(/\.studio-intro[\s\S]*order:\s*1/);
+    expect(mobileRules).toMatch(/\.studio-progress-card[\s\S]*order:\s*2/);
+    expect(mobileRules).toMatch(/\.studio-preview-region[\s\S]*order:\s*3/);
+    expect(mobileRules).toMatch(/\.studio-run-actions[\s\S]*order:\s*4/);
+    expect(mobileRules).toMatch(/\.studio-workspace__editing[\s\S]*order:\s*5/);
+    expect(mobileRules).toMatch(/\.studio-publication-region[\s\S]*order:\s*6/);
+    expect(mobileRules).toMatch(/\.studio-technical[\s\S]*order:\s*7/);
   });
 });

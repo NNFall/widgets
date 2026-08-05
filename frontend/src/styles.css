@@ -2566,7 +2566,7 @@ a {
 
 .studio-kicker {
   margin: 0 0 7px;
-  color: var(--sage);
+  color: #397664;
   font-size: 10px;
   font-weight: 800;
   letter-spacing: .13em;
@@ -2665,7 +2665,7 @@ a {
 .studio-helper,
 .studio-refine > p {
   margin: -2px 0 7px;
-  color: #87939c;
+  color: #5f6f79;
   font-size: 10px;
   line-height: 1.45;
 }
@@ -3326,7 +3326,7 @@ a {
 .studio-versions article span,
 .studio-versions article p,
 .studio-versions article time {
-  color: #71808a;
+  color: #5f6f79;
   font-size: 10px;
   line-height: 1.4;
 }
@@ -3627,6 +3627,12 @@ a {
   overflow: visible;
 }
 
+.studio-preview-region {
+  min-width: 0;
+  display: grid;
+  gap: 24px;
+}
+
 .studio-workspace__summary {
   min-height: 58px;
   padding-bottom: 18px;
@@ -3885,6 +3891,69 @@ a {
     position: static;
   }
 
+  .studio-shell--friendly > .studio-rail,
+  .studio-shell--friendly > .studio-workspace {
+    display: contents;
+  }
+
+  .studio-shell--friendly .studio-back {
+    order: 0;
+  }
+
+  .studio-shell--friendly .studio-intro {
+    order: 1;
+    padding: 20px;
+    border: 1px solid rgba(7, 27, 47, .11);
+    border-radius: 18px;
+    background: rgba(255, 253, 250, .94);
+    box-shadow: 0 18px 48px rgba(79, 50, 37, .065);
+  }
+
+  .studio-shell--friendly .studio-form {
+    display: none;
+  }
+
+  .studio-shell--friendly .studio-progress-card {
+    order: 2;
+    margin-top: 0;
+    background: rgba(255, 253, 250, .96);
+    box-shadow: 0 18px 48px rgba(79, 50, 37, .065);
+  }
+
+  .studio-shell--friendly .studio-preview-region {
+    order: 3;
+    padding: 20px;
+    overflow: hidden;
+    border: 1px solid rgba(7, 27, 47, .11);
+    border-radius: 18px;
+    background: rgba(255, 252, 249, .86);
+    box-shadow: 0 18px 48px rgba(79, 50, 37, .065);
+  }
+
+  .studio-shell--friendly .studio-run-actions,
+  .studio-shell--friendly .studio-error {
+    order: 4;
+    margin-top: 0;
+  }
+
+  .studio-shell--friendly .studio-workspace__editing {
+    order: 5;
+  }
+
+  .studio-shell--friendly .studio-publication-region,
+  .studio-shell--friendly .studio-workspace__footer {
+    order: 6;
+  }
+
+  .studio-shell--friendly .studio-technical {
+    order: 7;
+    margin-top: 0;
+    padding: 0 16px;
+    border: 1px solid rgba(7, 27, 47, .1);
+    border-radius: 14px;
+    background: rgba(255, 253, 250, .9);
+  }
+
   .studio-workspace {
     min-height: 780px;
     grid-template-rows: auto minmax(650px, 1fr) auto;
@@ -4085,6 +4154,12 @@ a {
     padding: 16px;
   }
 
+  .studio-shell--friendly .studio-intro,
+  .studio-shell--friendly .studio-progress-card,
+  .studio-shell--friendly .studio-preview-region {
+    padding: 16px;
+  }
+
   .studio-workspace__editing .studio-versions article {
     grid-template-columns: 1fr;
   }
@@ -4271,6 +4346,10 @@ a {
   background: rgba(105, 166, 142, .08);
 }
 
+.studio-library__identity > div {
+  min-width: 0;
+}
+
 .studio-library__identity h2 {
   margin: 0 0 5px;
   overflow: hidden;
@@ -4281,7 +4360,19 @@ a {
   white-space: nowrap;
 }
 
+.studio-library__brief {
+  margin: 0 0 5px;
+  display: -webkit-box;
+  overflow: hidden;
+  color: #536570;
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .studio-library__identity time {
+  display: block;
   color: #7a878f;
   font-size: 13px;
 }

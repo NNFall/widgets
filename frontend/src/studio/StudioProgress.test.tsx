@@ -61,4 +61,67 @@ describe('StudioProgress', () => {
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
     expect(screen.getByText('100%')).toBeInTheDocument();
   });
+
+  it('keeps the live activity region hidden after terminal cancellation', () => {
+    render(
+      <StudioProgress
+        status="cancelled"
+        progress={34}
+        currentStage="motion_polish"
+        lastCompletedStage="conversation"
+        events={[{
+          run_id: 'run-cancelled',
+          sequence: 1,
+          timestamp: '2026-08-05T10:15:00Z',
+          type: 'run.created',
+          stage: null,
+          status: 'queued',
+          message: 'raw queued status',
+          revision: null,
+          usage: { prompt_tokens: 0, output_tokens: 0, thinking_tokens: 0, total_tokens: 0 },
+          issues: [],
+          changes: [],
+          error_code: null,
+        }]}
+        activityFallback="Создание остановлено по вашему запросу"
+      />,
+    );
+
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByText('Работу можно запустить снова.')).toBeInTheDocument();
+    expect(screen.queryByText('Готовим проект к запуску')).not.toBeInTheDocument();
+  });
+
+  it('shows live activity only while a run is queued or running', () => {
+    const { rerender } = render(
+      <StudioProgress
+        status="created"
+        progress={0}
+        events={[]}
+        activityFallback="Запуск создан"
+      />,
+    );
+
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+
+    rerender(
+      <StudioProgress
+        status="queued"
+        progress={0}
+        events={[]}
+        activityFallback="Готовим запуск"
+      />,
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('Готовим запуск');
+
+    rerender(
+      <StudioProgress
+        status="completed"
+        progress={100}
+        events={[]}
+        activityFallback="Виджет готов"
+      />,
+    );
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
 });

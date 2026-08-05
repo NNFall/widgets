@@ -2,7 +2,7 @@ import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 
 const EXACT_HERO = 'Через 10 минут вы сможете сказать: наш бизнес использует AI';
-const EXACT_DESCRIPTION = 'Добавьте ссылку на сайт и бесплатно получите первую версию персонального AI-виджета для вашего бизнеса. Kaigo изучит страницы, услуги, стиль и вопросы клиентов.';
+const EXACT_DESCRIPTION = 'Добавьте ссылку на сайт и бесплатно получите первую версию персонального AI-виджета для вашего бизнеса. Обычно первая версия готова за 10–20 минут; сложные сайты могут потребовать больше времени.';
 
 async function expectNoHorizontalOverflow(page: Page) {
   const overflow = await page.evaluate(() =>
