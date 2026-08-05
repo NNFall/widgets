@@ -38,17 +38,21 @@ def test_pattern_candidate_migration_identity_and_named_contracts() -> None:
     for constraint in (
         "uq_pattern_candidate_plan_run",
         "uq_pattern_candidate_group_plan_category",
+        "uq_pattern_candidate_group_plan_ordinal",
         "uq_pattern_candidate_item_group_rank",
         "uq_pattern_candidate_item_group_pattern_version",
         "uq_pattern_stage_exposure_idempotency",
         "uq_pattern_stage_usage_claim_exposure",
         "ck_pattern_candidate_plan_schema_version",
+        "ck_pattern_candidate_group_ordinal",
         "ck_pattern_candidate_item_rank",
         "ck_pattern_stage_exposure_stage",
         "ck_pattern_stage_usage_mode",
         "ck_pattern_review_status",
     ):
         assert constraint in source
+    assert "uq_pattern_stage_exposure_null_model_call" not in source
+    assert "idempotency_model_call_id" in source
 
 
 def test_pattern_candidate_migration_fake_op_order_and_downgrade(monkeypatch) -> None:
@@ -175,14 +179,10 @@ def test_pattern_candidate_migration_has_named_fk_ondelete_and_indexes(monkeypat
         "pattern_stage_exposures",
         ("model_call_id",),
     )
-    partial = next(
-        call for call in calls if call[0] == "create_index" and call[1] == "uq_pattern_stage_exposure_null_model_call"
+    assert not any(
+        call[0] == "create_index" and call[1] == "uq_pattern_stage_exposure_null_model_call"
+        for call in calls
     )
-    assert partial[2] == "pattern_stage_exposures"
-    assert partial[3] == ("run_id", "stage", "candidate_item_id")
-    assert partial[4]["unique"] is True
-    assert str(partial[4]["postgresql_where"]) == "model_call_id IS NULL"
-    assert str(partial[4]["sqlite_where"]) == "model_call_id IS NULL"
     assert indexes["ix_pattern_stage_usage_claims_model_call_id"] == (
         "pattern_stage_usage_claims",
         ("model_call_id",),
@@ -191,6 +191,49 @@ def test_pattern_candidate_migration_has_named_fk_ondelete_and_indexes(monkeypat
     assert indexes["ix_pattern_reviews_pattern_version_created_at"] == (
         "pattern_reviews",
         ("pattern_version_id", "created_at"),
+    )
+
+    group_items = tables["pattern_candidate_groups"]
+    group_columns = {
+        item.name: item
+        for item in group_items
+        if isinstance(item, sa.Column)
+    }
+    assert group_columns["ordinal"].nullable is False
+    group_constraints = {
+        item.name: tuple(item._pending_colargs)
+        for item in group_items
+        if isinstance(item, sa.UniqueConstraint) and item.name
+    }
+    assert group_constraints["uq_pattern_candidate_group_plan_ordinal"] == (
+        "plan_id",
+        "ordinal",
+    )
+    ordinal_check = next(
+        item
+        for item in group_items
+        if isinstance(item, sa.CheckConstraint)
+        and item.name == "ck_pattern_candidate_group_ordinal"
+    )
+    assert str(ordinal_check.sqltext) == "ordinal BETWEEN 1 AND 14"
+
+    exposure_items = tables["pattern_stage_exposures"]
+    exposure_columns = {
+        item.name: item
+        for item in exposure_items
+        if isinstance(item, sa.Column)
+    }
+    assert exposure_columns["idempotency_model_call_id"].nullable is False
+    exposure_constraints = {
+        item.name: tuple(item._pending_colargs)
+        for item in exposure_items
+        if isinstance(item, sa.UniqueConstraint) and item.name
+    }
+    assert exposure_constraints["uq_pattern_stage_exposure_idempotency"] == (
+        "run_id",
+        "stage",
+        "candidate_item_id",
+        "idempotency_model_call_id",
     )
 
 

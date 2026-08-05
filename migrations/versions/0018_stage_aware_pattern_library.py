@@ -5,8 +5,9 @@ Revises: 0017_funnel_journeys
 
 The six tables in this migration are additive. Legacy composition plans keep
 their schema unchanged. Exposure idempotency is the tuple
-``(run_id, stage, candidate_item_id, model_call_id)``; the repository performs
-an explicit NULL-aware lookup so a no-model-call exposure is replay-safe too.
+``(run_id, stage, candidate_item_id, idempotency_model_call_id)``. The nullable
+``model_call_id`` foreign key is retained for provenance and can be set NULL
+on deletion without changing the stable idempotency identity.
 """
 
 from alembic import op
@@ -69,6 +70,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("plan_id", sa.Uuid(), nullable=False),
         sa.Column("category", sa.String(length=32), nullable=False),
+        sa.Column("ordinal", sa.Integer(), nullable=False),
         sa.Column("stage_mapping", postgresql.JSONB(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.ForeignKeyConstraint(
@@ -77,6 +79,8 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("plan_id", "category", name="uq_pattern_candidate_group_plan_category"),
+        sa.UniqueConstraint("plan_id", "ordinal", name="uq_pattern_candidate_group_plan_ordinal"),
+        sa.CheckConstraint("ordinal BETWEEN 1 AND 14", name="ck_pattern_candidate_group_ordinal"),
     )
     op.create_index("ix_pattern_candidate_groups_plan_id", "pattern_candidate_groups", ["plan_id"])
     op.create_index("ix_pattern_candidate_groups_category", "pattern_candidate_groups", ["category"])
@@ -112,6 +116,7 @@ def upgrade() -> None:
         sa.Column("stage", sa.String(length=64), nullable=False),
         sa.Column("candidate_item_id", sa.Uuid(), nullable=False),
         sa.Column("model_call_id", sa.Uuid(), nullable=True),
+        sa.Column("idempotency_model_call_id", sa.Uuid(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.CheckConstraint(
             "stage IN ('foundation', 'identity', 'conversation', 'motion_polish')",
@@ -131,21 +136,13 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
-            "run_id", "stage", "candidate_item_id", "model_call_id",
+            "run_id", "stage", "candidate_item_id", "idempotency_model_call_id",
             name="uq_pattern_stage_exposure_idempotency",
         ),
     )
     op.create_index("ix_pattern_stage_exposures_run_id", "pattern_stage_exposures", ["run_id"])
     op.create_index("ix_pattern_stage_exposures_candidate_item_id", "pattern_stage_exposures", ["candidate_item_id"])
     op.create_index("ix_pattern_stage_exposures_model_call_id", "pattern_stage_exposures", ["model_call_id"])
-    op.create_index(
-        "uq_pattern_stage_exposure_null_model_call",
-        "pattern_stage_exposures",
-        ["run_id", "stage", "candidate_item_id"],
-        unique=True,
-        postgresql_where=sa.text("model_call_id IS NULL"),
-        sqlite_where=sa.text("model_call_id IS NULL"),
-    )
 
     op.create_table(
         "pattern_stage_usage_claims",
@@ -201,7 +198,6 @@ def downgrade() -> None:
     op.drop_index("ix_pattern_stage_usage_claims_exposure_id", table_name="pattern_stage_usage_claims")
     op.drop_table("pattern_stage_usage_claims")
     op.drop_index("ix_pattern_stage_exposures_model_call_id", table_name="pattern_stage_exposures")
-    op.drop_index("uq_pattern_stage_exposure_null_model_call", table_name="pattern_stage_exposures")
     op.drop_index("ix_pattern_stage_exposures_candidate_item_id", table_name="pattern_stage_exposures")
     op.drop_index("ix_pattern_stage_exposures_run_id", table_name="pattern_stage_exposures")
     op.drop_table("pattern_stage_exposures")

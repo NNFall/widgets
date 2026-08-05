@@ -46,6 +46,7 @@ from builder_lab.patterns.candidate_resolver import STAGE_PATTERN_CATEGORIES
 _EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+$")
 _REVIEW_COMMENT_MAX = 4_000
 _STAGES = frozenset(stage.value for stage in STAGE_PATTERN_CATEGORIES)
+_NULL_MODEL_CALL_ID = UUID(int=0)
 
 
 def _json_clone(value: Any) -> Any:
@@ -146,6 +147,58 @@ class PatternCandidateRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    @staticmethod
+    def _registry_snapshot(definition: Any) -> dict[str, Any]:
+        snapshot = _json_clone(definition.selector_dict())
+        if any(name in snapshot for name in ("html", "css", "javascript")):
+            raise ValueError("manifest snapshot must not contain implementation assets")
+        return snapshot
+
+    @staticmethod
+    def _assert_registry_definition(
+        existing: WidgetPatternVersion,
+        definition: Any,
+        snapshot: Mapping[str, Any],
+    ) -> None:
+        immutable = (
+            existing.category,
+            existing.description,
+            _json_clone(existing.manifest_snapshot),
+            existing.implementation_sha256,
+        )
+        expected = (
+            definition.category.value,
+            definition.summary,
+            _json_clone(snapshot),
+            definition.implementation_sha256,
+        )
+        # Manifest lifecycle is represented both in the selector snapshot and
+        # in the indexed status column.  It is the sole mutable field; all
+        # other canonical metadata remains drift-protected.
+        persisted_snapshot = dict(immutable[2])
+        expected_snapshot = dict(expected[2])
+        persisted_snapshot.pop("status", None)
+        expected_snapshot.pop("status", None)
+        if (immutable[0], immutable[1], persisted_snapshot, immutable[3]) != (
+            expected[0], expected[1], expected_snapshot, expected[3]
+        ):
+            raise ValueError(
+                f"persisted pattern version drift: {definition.pattern_id}@{definition.version}"
+            )
+
+    @staticmethod
+    def _sync_registry_lifecycle(
+        existing: WidgetPatternVersion,
+        definition: Any,
+        snapshot: Mapping[str, Any],
+    ) -> None:
+        if (
+            existing.status != definition.status.value
+            or _json_clone(existing.manifest_snapshot).get("status") != snapshot.get("status")
+        ):
+            existing.status = definition.status.value
+            existing.manifest_snapshot = _json_clone(snapshot)
+
     async def sync_registry(self, registry: AtomicPatternRegistry) -> None:
         for definition in registry.definitions:
             existing = await self._session.scalar(
@@ -154,50 +207,39 @@ class PatternCandidateRepository:
                     WidgetPatternVersion.version == definition.version,
                 )
             )
-            snapshot = _json_clone(definition.selector_dict())
-            if any(name in snapshot for name in ("html", "css", "javascript")):
-                raise ValueError("manifest snapshot must not contain implementation assets")
-            expected = (
-                definition.category.value,
-                definition.summary,
-                snapshot,
-                definition.implementation_sha256,
-            )
+            snapshot = self._registry_snapshot(definition)
             if existing is None:
-                self._session.add(
-                    WidgetPatternVersion(
-                        id=uuid4(),
-                        pattern_id=definition.pattern_id,
-                        version=definition.version,
-                        category=definition.category.value,
-                        status=definition.status.value,
-                        description=definition.summary,
-                        manifest_snapshot=snapshot,
-                        implementation_sha256=definition.implementation_sha256,
-                    )
+                candidate = WidgetPatternVersion(
+                    id=uuid4(),
+                    pattern_id=definition.pattern_id,
+                    version=definition.version,
+                    category=definition.category.value,
+                    status=definition.status.value,
+                    description=definition.summary,
+                    manifest_snapshot=snapshot,
+                    implementation_sha256=definition.implementation_sha256,
                 )
+                try:
+                    async with self._session.begin_nested():
+                        self._session.add(candidate)
+                        await self._session.flush()
+                except IntegrityError:
+                    # A concurrent worker may have inserted the same immutable
+                    # version.  Reload the winner after the savepoint rollback
+                    # and compare it before applying any lifecycle update.
+                    existing = await self._session.scalar(
+                        select(WidgetPatternVersion).where(
+                            WidgetPatternVersion.pattern_id == definition.pattern_id,
+                            WidgetPatternVersion.version == definition.version,
+                        )
+                    )
+                    if existing is None:
+                        raise
+                    self._assert_registry_definition(existing, definition, snapshot)
+                    self._sync_registry_lifecycle(existing, definition, snapshot)
                 continue
-            immutable = (
-                existing.category,
-                existing.description,
-                _json_clone(existing.manifest_snapshot),
-                existing.implementation_sha256,
-            )
-            persisted_snapshot = dict(immutable[2])
-            expected_snapshot = dict(expected[2])
-            # Manifest lifecycle is represented both in the selector snapshot
-            # and in the indexed status column.  It is the sole mutable field;
-            # all other canonical metadata remains drift-protected.
-            persisted_snapshot.pop("status", None)
-            expected_snapshot.pop("status", None)
-            if immutable[:2] + (persisted_snapshot, immutable[3]) != (
-                expected[0],
-                expected[1],
-                expected_snapshot,
-                expected[3],
-            ):
-                raise ValueError(f"persisted pattern version drift: {definition.pattern_id}@{definition.version}")
-            existing.status = definition.status.value
+            self._assert_registry_definition(existing, definition, snapshot)
+            self._sync_registry_lifecycle(existing, definition, snapshot)
         await self._session.flush()
 
     @staticmethod
@@ -244,7 +286,13 @@ class PatternCandidateRepository:
         existing = await self._session.scalar(select(PatternCandidatePlanRecord).where(PatternCandidatePlanRecord.run_id == run_id))
         if existing is not None:
             loaded = await self.load_plan(run_id)
-            if loaded is None or loaded.plan != plan or loaded.direction_artifact_id != direction_artifact_id or loaded.selector_model_call_id != selector_model_call_id:
+            if (
+                loaded is None
+                or loaded.plan != plan
+                or loaded.registry_digest != digest
+                or loaded.direction_artifact_id != direction_artifact_id
+                or loaded.selector_model_call_id != selector_model_call_id
+            ):
                 raise ValueError("conflicting candidate plan replay")
             return existing
         await self._validate_run_lineage(run_id=run_id, direction_artifact_id=direction_artifact_id, selector_model_call_id=selector_model_call_id)
@@ -277,13 +325,13 @@ class PatternCandidateRepository:
             selector_model_call_id=selector_model_call_id, schema_version=2,
             direction_id=plan.direction_id, summary=plan.summary, registry_digest=digest,
         )
-        self._session.add(record)
         group_records: list[PatternCandidateGroupRecord] = []
         item_records: list[PatternCandidateItemRecord] = []
-        for group in plan.groups:
+        for ordinal, group in enumerate(plan.groups, start=1):
             stage_mapping = [stage.value for stage, categories in STAGE_PATTERN_CATEGORIES.items() if group.category in categories]
             group_record = PatternCandidateGroupRecord(
-                id=uuid4(), plan_id=record.id, category=group.category.value, stage_mapping=stage_mapping,
+                id=uuid4(), plan_id=record.id, category=group.category.value,
+                ordinal=ordinal, stage_mapping=stage_mapping,
             )
             group_records.append(group_record)
             for candidate in group.candidates:
@@ -294,8 +342,39 @@ class PatternCandidateRepository:
                         rank=candidate.rank, reason=candidate.reason,
                     )
                 )
-        self._session.add_all([*group_records, *item_records])
-        await self._session.flush()
+        try:
+            async with self._session.begin_nested():
+                self._session.add(record)
+                # Flush the parent first.  The repository intentionally does
+                # not define ORM relationships for these immutable records;
+                # an explicit parent flush keeps FK enforcement deterministic
+                # on SQLite as well as PostgreSQL.
+                await self._session.flush()
+                self._session.add_all([*group_records, *item_records])
+                await self._session.flush()
+        except IntegrityError:
+            # Another worker may have won the unique run-id key while both
+            # transactions were building their plans.  The savepoint rollback
+            # leaves the caller's outer transaction usable; compare the
+            # committed winner before returning it.
+            winner = await self.load_plan(run_id)
+            if winner is None:
+                raise
+            if (
+                winner.plan != plan
+                or winner.registry_digest != digest
+                or winner.direction_artifact_id != direction_artifact_id
+                or winner.selector_model_call_id != selector_model_call_id
+            ):
+                raise ValueError("conflicting candidate plan replay")
+            winner_record = await self._session.scalar(
+                select(PatternCandidatePlanRecord).where(
+                    PatternCandidatePlanRecord.run_id == run_id
+                )
+            )
+            if winner_record is None:
+                raise
+            return winner_record
         return record
 
     async def load_plan(self, run_id: UUID) -> PersistedPatternCandidatePlan | None:
@@ -303,7 +382,9 @@ class PatternCandidateRepository:
         if record is None:
             return None
         group_rows = (await self._session.execute(
-            select(PatternCandidateGroupRecord).where(PatternCandidateGroupRecord.plan_id == record.id).order_by(PatternCandidateGroupRecord.category)
+            select(PatternCandidateGroupRecord)
+            .where(PatternCandidateGroupRecord.plan_id == record.id)
+            .order_by(PatternCandidateGroupRecord.ordinal)
         )).scalars().all()
         plan_groups: list[PatternCandidateGroup] = []
         persisted_groups: list[PersistedPatternCandidateGroup] = []
@@ -367,6 +448,8 @@ class PatternCandidateRepository:
         if review is not None:
             return review.status
         snapshot = await self._session.scalar(select(WidgetPatternVersion.manifest_snapshot).where(WidgetPatternVersion.id == pattern_version_id))
+        if snapshot is None:
+            raise ValueError("unknown persisted pattern version")
         if isinstance(snapshot, Mapping):
             provenance = snapshot.get("provenance")
             if isinstance(provenance, Mapping) and provenance.get("review_state") in {"ready_for_review", "approved", "rejected"}:
@@ -457,12 +540,22 @@ class PatternCandidateRepository:
         if stage_value not in tuple(group.stage_mapping or ()):
             raise ValueError("candidate category is not permitted for stage")
         await self._validate_model_call(model_call_id, run_id, stage_value)
+        idempotency_model_call_id = model_call_id or _NULL_MODEL_CALL_ID
         filters = [PatternStageExposure.run_id == run_id, PatternStageExposure.stage == stage_value, PatternStageExposure.candidate_item_id == candidate_item_id]
-        filters.append(PatternStageExposure.model_call_id.is_(None) if model_call_id is None else PatternStageExposure.model_call_id == model_call_id)
+        filters.append(
+            PatternStageExposure.idempotency_model_call_id == idempotency_model_call_id
+        )
         existing = await self._session.scalar(select(PatternStageExposure).where(and_(*filters)))
         if existing is not None:
             return existing
-        exposure = PatternStageExposure(id=uuid4(), run_id=run_id, stage=stage_value, candidate_item_id=candidate_item_id, model_call_id=model_call_id)
+        exposure = PatternStageExposure(
+            id=uuid4(),
+            run_id=run_id,
+            stage=stage_value,
+            candidate_item_id=candidate_item_id,
+            model_call_id=model_call_id,
+            idempotency_model_call_id=idempotency_model_call_id,
+        )
         try:
             async with self._session.begin_nested():
                 self._session.add(exposure)

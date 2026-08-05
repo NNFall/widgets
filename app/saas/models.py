@@ -894,6 +894,15 @@ class PatternCandidateGroupRecord(Base):
             "category",
             name="uq_pattern_candidate_group_plan_category",
         ),
+        UniqueConstraint(
+            "plan_id",
+            "ordinal",
+            name="uq_pattern_candidate_group_plan_ordinal",
+        ),
+        CheckConstraint(
+            "ordinal BETWEEN 1 AND 14",
+            name="ck_pattern_candidate_group_ordinal",
+        ),
         Index("ix_pattern_candidate_groups_category", "category"),
     )
 
@@ -908,6 +917,7 @@ class PatternCandidateGroupRecord(Base):
         index=True,
     )
     category: Mapped[str] = mapped_column(String(32), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     stage_mapping: Mapped[list[str]] = mapped_column(
         "stage_mapping",
         _json_document(),
@@ -970,9 +980,9 @@ class PatternStageExposure(Base):
     """A shortlist item exposed to one generation stage/model invocation.
 
     The idempotency key is the tuple ``(run_id, stage, candidate_item_id,
-    model_call_id)``.  A nullable model call is compared explicitly by the
-    repository because SQL NULLs are distinct under PostgreSQL unique indexes;
-    different repair/model calls intentionally produce separate exposures.
+    idempotency_model_call_id)``.  ``model_call_id`` remains nullable so a
+    deleted model call is represented accurately; the stable identity column
+    keeps idempotency deterministic even after that foreign key is set NULL.
     """
 
     __tablename__ = "pattern_stage_exposures"
@@ -981,21 +991,12 @@ class PatternStageExposure(Base):
             "run_id",
             "stage",
             "candidate_item_id",
-            "model_call_id",
+            "idempotency_model_call_id",
             name="uq_pattern_stage_exposure_idempotency",
         ),
         CheckConstraint(
             "stage IN ('foundation', 'identity', 'conversation', 'motion_polish')",
             name="ck_pattern_stage_exposure_stage",
-        ),
-        Index(
-            "uq_pattern_stage_exposure_null_model_call",
-            "run_id",
-            "stage",
-            "candidate_item_id",
-            unique=True,
-            postgresql_where=text("model_call_id IS NULL"),
-            sqlite_where=text("model_call_id IS NULL"),
         ),
     )
 
@@ -1027,6 +1028,9 @@ class PatternStageExposure(Base):
         ),
         nullable=True,
         index=True,
+    )
+    idempotency_model_call_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
