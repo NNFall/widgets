@@ -256,6 +256,7 @@ class BuilderOrchestrator:
         selected_direction: DirectionProposal | None = None,
         repair_issues: tuple[ValidationIssue, ...] = (),
         composition: Any | None = None,
+        pattern_candidate_pack: Any | None = None,
     ) -> EngineResult:
         """Execute one requested generation stage without advancing a run."""
         if request.engine is EngineName.DIRECT:
@@ -267,15 +268,19 @@ class BuilderOrchestrator:
                 selected_direction=selected_direction,
                 repair_issues=repair_issues,
                 composition=composition,
+                pattern_candidate_pack=pattern_candidate_pack,
             )
-        return await engine.generate(
-            request=request,
-            stage=stage,
-            revision=revision,
-            previous_artifact=previous_artifact,
-            repair_issues=repair_issues,
-            composition=composition,
-        )
+        kwargs: dict[str, Any] = {
+            "request": request,
+            "stage": stage,
+            "revision": revision,
+            "previous_artifact": previous_artifact,
+            "repair_issues": repair_issues,
+            "composition": composition,
+        }
+        if pattern_candidate_pack is not None:
+            kwargs["pattern_candidate_pack"] = pattern_candidate_pack
+        return await engine.generate(**kwargs)
 
     async def _run(
         self,
@@ -726,6 +731,7 @@ class BuilderOrchestrator:
         previous: WidgetArtifact | None,
         selected_direction: DirectionProposal,
         composition: Any | None = None,
+        pattern_candidate_pack: Any | None = None,
     ) -> WidgetArtifact:
         previous_revision = previous.revision if previous else 0
         candidate = strip_reserved_runtime_attributes(candidate)
@@ -754,6 +760,7 @@ class BuilderOrchestrator:
                 repair_issues=issues,
                 selected_direction=selected_direction,
                 composition=composition,
+                pattern_candidate_pack=pattern_candidate_pack,
             )
             candidate = strip_reserved_runtime_attributes(result.artifact)
             await self.store.append_event(

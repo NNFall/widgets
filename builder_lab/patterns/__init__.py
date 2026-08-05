@@ -5,9 +5,14 @@ from .atomic_models import (
     AtomicPatternCategory,
     AtomicPatternDefinition,
     AtomicPatternStatus,
+    ExactPatternVersionRef,
+    PatternAssetBundle,
     PatternCandidate,
+    PatternCandidateAssets,
     PatternCandidateGroup,
     PatternCandidatePlan,
+    PatternCandidateVersionRef,
+    PatternVersionRef,
 )
 from .atomic_registry import (
     AtomicPatternRegistry,
@@ -57,6 +62,15 @@ from .candidate_planner import (
     plan_pattern_candidates,
     validate_pattern_candidate_plan,
 )
+from .candidate_resolver import (
+    DEFAULT_STAGE_PATTERN_PACK_BYTES,
+    MAX_STAGE_PATTERN_PACK_BYTES,
+    PatternCandidateResolutionError,
+    ResolvedPatternCandidatePack,
+    STAGE_PATTERN_CATEGORIES,
+    STAGE_TO_PATTERN_CATEGORIES,
+    resolve_pattern_candidate_pack,
+)
 
 __all__ = [
     "AdaptationPolicy",
@@ -65,6 +79,7 @@ __all__ = [
     "AtomicPatternRegistry",
     "AtomicPatternRegistryError",
     "AtomicPatternStatus",
+    "ExactPatternVersionRef",
     "CompositionPlan",
     "CompositionPlanningError",
     "CompiledPatternSource",
@@ -72,10 +87,14 @@ __all__ = [
     "CssParameterBinding",
     "PatternCategory",
     "PatternCandidate",
+    "PatternCandidateAssets",
     "PatternCandidateGroup",
     "PatternCandidatePlan",
+    "PatternCandidateResolutionError",
     "PatternCandidatePlanResult",
     "PatternCandidateValidationError",
+    "PatternCandidateVersionRef",
+    "PatternAssetBundle",
     "PatternBrowserAuditContract",
     "PatternCompilationError",
     "PatternDefinition",
@@ -89,6 +108,12 @@ __all__ = [
     "PatternStatus",
     "PlannedComposition",
     "ResolvedComposition",
+    "ResolvedPatternCandidatePack",
+    "PatternVersionRef",
+    "DEFAULT_STAGE_PATTERN_PACK_BYTES",
+    "MAX_STAGE_PATTERN_PACK_BYTES",
+    "STAGE_PATTERN_CATEGORIES",
+    "STAGE_TO_PATTERN_CATEGORIES",
     "canonical_anatomy_fingerprint",
     "compute_implementation_hash",
     "compute_implementation_sha256",
@@ -98,5 +123,6 @@ __all__ = [
     "plan_composition",
     "plan_pattern_candidates",
     "resolve_composition",
+    "resolve_pattern_candidate_pack",
     "validate_pattern_candidate_plan",
 ]

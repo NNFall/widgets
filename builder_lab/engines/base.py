@@ -19,6 +19,7 @@ from ..visual_models import VisualFinding
 
 if TYPE_CHECKING:
     from ..patterns.atomic_models import PatternCandidatePlan
+    from ..patterns.candidate_resolver import ResolvedPatternCandidatePack
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,7 @@ class BuilderEngine(Protocol):
         repair_issues: tuple[ValidationIssue, ...] = (),
         visual_findings: tuple[VisualFinding, ...] = (),
         composition: Any | None = None,
+        pattern_candidate_pack: "ResolvedPatternCandidatePack | None" = None,
     ) -> EngineResult: ...
 
     async def cancel(self) -> None: ...
@@ -167,4 +169,5 @@ class DirectBuilderEngine(BuilderEngine, Protocol):
         visual_findings: tuple[VisualFinding, ...] = (),
         selected_direction: DirectionProposal | None = None,
         composition: Any | None = None,
+        pattern_candidate_pack: "ResolvedPatternCandidatePack | None" = None,
     ) -> EngineResult: ...

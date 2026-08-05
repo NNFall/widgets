@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from math import log2
 from types import MappingProxyType
@@ -526,14 +526,165 @@ class PatternCandidatePlan:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class PatternAssetBundle:
+    """Immutable exact implementation assets for one registry version."""
+
+    html: str
+    css: str
+    javascript: str = ""
+
+    def __post_init__(self) -> None:
+        for name in ("html", "css", "javascript"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or "\x00" in value:
+                raise ValueError(f"{name} asset is invalid")
+
+    def as_dict(self) -> dict[str, str]:
+        return {"html": self.html, "css": self.css, "javascript": self.javascript}
+
+    def __getitem__(self, name: str) -> str:
+        if name not in {"html", "css", "javascript"}:
+            raise KeyError(name)
+        return getattr(self, name)
+
+    @property
+    def implementation_dict(self) -> dict[str, str]:
+        return self.as_dict()
+
+
+@dataclass(frozen=True, slots=True)
+class PatternVersionRef:
+    """Immutable exact ``pattern_id@version`` reference with its assets."""
+
+    category: AtomicPatternCategory
+    pattern_id: str
+    version: int
+    title: str = ""
+    summary: str = ""
+    ai_description: str = ""
+    technical_contract: str = ""
+    adaptation_policy: AdaptationPolicy = AdaptationPolicy.ADAPTIVE
+    implementation_sha256: str = ""
+    html: str = ""
+    css: str = ""
+    javascript: str = ""
+    rank: int = 1
+    reason: str = ""
+    provenance: Mapping[str, JSONValue] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.category, AtomicPatternCategory):
+            raise ValueError("category is invalid")
+        if not isinstance(self.pattern_id, str) or not self.pattern_id:
+            raise ValueError("pattern_id is invalid")
+        if isinstance(self.version, bool) or not isinstance(self.version, int) or self.version < 1:
+            raise ValueError("version is invalid")
+        if isinstance(self.rank, bool) or not isinstance(self.rank, int) or self.rank < 1:
+            raise ValueError("rank is invalid")
+        if not isinstance(self.adaptation_policy, AdaptationPolicy):
+            raise ValueError("adaptation_policy is invalid")
+        if self.implementation_sha256 and not _SHA256_RE.fullmatch(self.implementation_sha256):
+            raise ValueError("implementation_sha256 is invalid")
+        for name in (
+            "title",
+            "summary",
+            "ai_description",
+            "technical_contract",
+            "reason",
+            "html",
+            "css",
+            "javascript",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, str) or "\x00" in value:
+                raise ValueError(f"{name} is invalid")
+        if not isinstance(self.provenance, Mapping):
+            raise ValueError("provenance is invalid")
+        object.__setattr__(self, "provenance", MappingProxyType(dict(self.provenance)))
+
+    @classmethod
+    def from_definition(
+        cls,
+        definition: AtomicPatternDefinition,
+        candidate: PatternCandidate,
+    ) -> "PatternVersionRef":
+        return cls(
+            category=definition.category,
+            pattern_id=definition.pattern_id,
+            version=definition.version,
+            title=definition.title,
+            summary=definition.summary,
+            ai_description=definition.ai_description,
+            technical_contract=definition.technical_contract,
+            adaptation_policy=definition.adaptation_policy,
+            implementation_sha256=definition.implementation_sha256,
+            html=definition.html,
+            css=definition.css,
+            javascript=definition.javascript,
+            rank=candidate.rank,
+            reason=candidate.reason,
+            provenance=definition.provenance,
+        )
+
+    @property
+    def assets(self) -> PatternAssetBundle:
+        return PatternAssetBundle(self.html, self.css, self.javascript)
+
+    @property
+    def asset_bundle(self) -> PatternAssetBundle:
+        return self.assets
+
+    @property
+    def implementation(self) -> PatternAssetBundle:
+        return self.assets
+
+    @property
+    def implementation_assets(self) -> PatternAssetBundle:
+        return self.assets
+
+    def implementation_dict(self) -> dict[str, str]:
+        return self.assets.as_dict()
+
+    @property
+    def exact_version(self) -> tuple[str, int]:
+        return self.pattern_id, self.version
+
+    def manifest_metadata(self) -> dict[str, SerializedJSONValue]:
+        return {
+            "pattern_id": self.pattern_id,
+            "version": self.version,
+            "category": self.category.value,
+            "title": self.title,
+            "summary": self.summary,
+            "ai_description": self.ai_description,
+            "technical_contract": self.technical_contract,
+            "adaptation_policy": self.adaptation_policy.value,
+            "implementation_sha256": self.implementation_sha256,
+            "provenance": _thaw_json(self.provenance),
+            "rank": self.rank,
+            "reason": self.reason,
+        }
+
+
+PatternCandidateVersionRef = PatternVersionRef
+ExactPatternVersionRef = PatternVersionRef
+PatternCandidateAssets = PatternAssetBundle
+
+
 __all__ = [
     "AdaptationPolicy",
     "AtomicPatternCategory",
     "AtomicPatternDefinition",
     "AtomicPatternStatus",
     "JSONValue",
+    "PatternAssetBundle",
     "PatternCandidate",
+    "PatternCandidateAssets",
     "PatternCandidateGroup",
     "PatternCandidatePlan",
+    "PatternCandidateVersionRef",
+    "PatternVersionRef",
+    "ExactPatternVersionRef",
     "SerializedJSONValue",
 ]

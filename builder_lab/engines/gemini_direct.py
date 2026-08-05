@@ -640,6 +640,7 @@ class GeminiDirectEngine:
         visual_findings: tuple[VisualFinding, ...] = (),
         selected_direction: DirectionProposal | None = None,
         composition: Any | None = None,
+        pattern_candidate_pack: Any | None = None,
     ) -> EngineResult:
         prompt = build_stage_prompt(
             request=request,
@@ -650,6 +651,7 @@ class GeminiDirectEngine:
             visual_findings=visual_findings,
             selected_direction=selected_direction,
             composition=composition,
+            pattern_candidate_pack=pattern_candidate_pack,
         )
         temperature = (
             min(request.creativity, 0.35)

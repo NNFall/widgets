@@ -183,6 +183,29 @@ class BuilderOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(generation_calls[0]["selected_direction"], direction)
         self.assertEqual(result.artifact.stage, Stage.FOUNDATION)
 
+    async def test_execute_stage_forwards_optional_pattern_candidate_pack(self):
+        engine = ScriptedEngine()
+        orchestrator = BuilderOrchestrator(
+            store=self.store,
+            engine_factories={EngineName.DIRECT: lambda: engine},
+        )
+        request = BuilderRequest(
+            engine=EngineName.DIRECT,
+            brief="Execute foundation with exact pattern references",
+        )
+        pack = object()
+
+        await orchestrator.execute_stage(
+            request=request,
+            engine=engine,
+            stage=Stage.FOUNDATION,
+            revision=1,
+            pattern_candidate_pack=pack,
+        )
+
+        generation_calls = [call for call in engine.calls if "stage" in call]
+        self.assertIs(generation_calls[0]["pattern_candidate_pack"], pack)
+
     async def test_direct_run_commits_each_real_stage_in_order(self):
         engine = ScriptedEngine()
         _, snapshot = await self.run_direct(engine)

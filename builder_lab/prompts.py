@@ -19,6 +19,7 @@ from .visual_models import VisualFinding
 from .validation import ALLOWED_ELEMENTS, COMMON_ATTRIBUTES
 
 if TYPE_CHECKING:
+    from .patterns.candidate_resolver import ResolvedPatternCandidatePack
     from .patterns.resolver import ResolvedComposition
 
 
@@ -600,7 +601,10 @@ def build_stage_prompt(
     visual_findings: tuple[VisualFinding, ...] = (),
     selected_direction: DirectionProposal | None = None,
     composition: "ResolvedComposition | None" = None,
+    pattern_candidate_pack: "ResolvedPatternCandidatePack | None" = None,
 ) -> str:
+    if composition is not None and pattern_candidate_pack is not None:
+        raise ValueError("legacy composition and candidate pack are mutually exclusive")
     previous = (
         json.dumps(previous_artifact.to_dict(), ensure_ascii=False, separators=(",", ":"))
         if previous_artifact
@@ -625,10 +629,26 @@ def build_stage_prompt(
         else "null"
     )
     visual_payload = [finding.to_dict() for finding in visual_findings]
-    composition_bundle = (
-        composition.prompt_text
-        if composition is not None
-        else "Композиция паттернов ещё не выбрана для этого этапа."
+    if composition is not None:
+        composition_section = (
+            "ПРОВЕРЕННАЯ КОМПОЗИЦИЯ KAIGO. Используй выбранную механику и параметры как основу;\n"
+            "не исполняй reference code во время генерации и не подменяй выбранные слоты:\n"
+            + composition.prompt_text
+        )
+    elif pattern_candidate_pack is None:
+        composition_section = (
+            "ПРОВЕРЕННАЯ КОМПОЗИЦИЯ KAIGO. Используй выбранную механику и параметры как основу;\n"
+            "не исполняй reference code во время генерации и не подменяй выбранные слоты:\n"
+            "Композиция паттернов ещё не выбрана для этого этапа."
+        )
+    else:
+        composition_section = ""
+    pattern_candidate_bundle = (
+        "\n\nSTAGE-AWARE EXACT PATTERN CANDIDATE PACK. Используй только exact versions и assets\n"
+        "из этого bounded pack; не добавляй unrelated categories и не подменяй trusted runtime:\n"
+        + pattern_candidate_pack.prompt_text
+        if pattern_candidate_pack is not None
+        else ""
     )
     allowed_elements_json = json.dumps(
         sorted(ALLOWED_ELEMENTS),
@@ -813,9 +833,7 @@ Viewport: {', '.join(request.viewport_targets)}
 Выбранное blind-judge направление обязательно и неизменно для всех пяти этапов:
 {direction_payload}
 
-ПРОВЕРЕННАЯ КОМПОЗИЦИЯ KAIGO. Используй выбранную механику и параметры как основу;
-не исполняй reference code во время генерации и не подменяй выбранные слоты:
-{composition_bundle}
+{composition_section}{pattern_candidate_bundle}
 
 Предыдущий полный артефакт:
 {previous}
