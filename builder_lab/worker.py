@@ -684,6 +684,7 @@ class OrchestratorStageHandler:
                             usage=getattr(exc, "usage", TokenUsage()),
                         ) from exc
                     next_context["pattern_candidate_plan"] = planned.plan.to_dict()
+                    next_context.pop("composition_plan", None)
                     next_context["pattern_candidate_selector_request_ids"] = list(
                         planned.provider_request_ids
                     )
