@@ -8,7 +8,6 @@ import pytest
 
 from builder_lab.patterns.atomic_models import (
     AdaptationPolicy,
-    AtomicPatternCategory,
     AtomicPatternStatus,
 )
 from builder_lab.patterns.atomic_registry import (
@@ -36,10 +35,33 @@ ATOMIC_FIELDS = {
     "provenance",
 }
 
+EXPECTED_ATOMIC_CATEGORIES = {
+    "launcher_shape",
+    "launcher_idle",
+    "launcher_attention",
+    "shell_layout",
+    "widget_open",
+    "widget_close",
+    "background_effect",
+    "assistant_message_enter",
+    "user_message_enter",
+    "typing_indicator",
+    "message_send",
+    "composer_focus",
+    "control_hover",
+    "responsive_transition",
+}
+
 
 def implementation_hash(*assets: bytes) -> str:
     digest = hashlib.sha256()
-    for asset in assets:
+    for name, asset in zip(
+        ("fragment.html", "styles.css", "behavior.js"), assets, strict=True
+    ):
+        encoded_name = name.encode("utf-8")
+        digest.update(len(encoded_name).to_bytes(2, "big"))
+        digest.update(encoded_name)
+        digest.update(len(asset).to_bytes(8, "big"))
         digest.update(asset)
     return digest.hexdigest()
 
@@ -101,6 +123,19 @@ def valid_atomic_catalog(tmp_path: Path) -> Path:
     return root
 
 
+def rewrite_raw_asset_hash(directory: Path) -> None:
+    manifest_path = directory / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assets = tuple(
+        (directory / name).read_bytes() if (directory / name).exists() else b""
+        for name in ("fragment.html", "styles.css", "behavior.js")
+    )
+    manifest["implementation_sha256"] = implementation_hash(*assets)
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+
 def test_v3_registry_exposes_full_ai_description_without_assets() -> None:
     registry = load_builtin_atomic_registry()
     definition = registry.resolve("widget-open-technical", 1)
@@ -129,8 +164,8 @@ def test_v3_implementation_dict_returns_exact_assets() -> None:
 def test_builtin_registry_contains_one_active_approved_fixture_per_category() -> None:
     registry = load_builtin_atomic_registry()
 
-    assert {item.category for item in registry.definitions} == set(AtomicPatternCategory)
-    assert len(registry.definitions) == len(AtomicPatternCategory)
+    assert {item.category.value for item in registry.definitions} == EXPECTED_ATOMIC_CATEGORIES
+    assert len(registry.definitions) == len(EXPECTED_ATOMIC_CATEGORIES)
     assert all(item.status is AtomicPatternStatus.ACTIVE for item in registry.definitions)
     assert all(item.provenance["review_state"] == "approved" for item in registry.definitions)
     assert all(item.adaptation_policy in set(AdaptationPolicy) for item in registry.definitions)
@@ -196,6 +231,166 @@ def test_v3_registry_rejects_forbidden_markers(tmp_path: Path) -> None:
     )
 
     with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
+def test_v3_registry_rejects_network_beacon_capability(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "behavior.js").write_text(
+        "navigator.sendBeacon('/telemetry')", encoding="utf-8"
+    )
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
+def test_v3_registry_rejects_document_cookie_storage(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "behavior.js").write_text("document.cookie", encoding="utf-8")
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
+def test_v3_registry_rejects_function_constructor_eval_capability(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "behavior.js").write_text("Function('return 1')", encoding="utf-8")
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
+def test_v3_registry_rejects_static_import_without_spacing(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "behavior.js").write_text(
+        'import{load}from"module"', encoding="utf-8"
+    )
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
+def test_v3_registry_rejects_protocol_relative_url(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "styles.css").write_text(
+        ".fixture { background-image: url(//cdn.invalid/pixel); }",
+        encoding="utf-8",
+    )
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
+def test_v3_hash_uses_unambiguous_asset_framing(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    for directory in (first, second):
+        directory.mkdir()
+    (first / "fragment.html").write_bytes(b"a")
+    (first / "styles.css").write_bytes(b"bc")
+    (first / "behavior.js").write_bytes(b"")
+    (second / "fragment.html").write_bytes(b"ab")
+    (second / "styles.css").write_bytes(b"c")
+    (second / "behavior.js").write_bytes(b"")
+
+    from builder_lab.patterns.atomic_registry import compute_implementation_hash
+
+    assert compute_implementation_hash(first) != compute_implementation_hash(second)
+
+
+def test_selector_catalog_requires_active_approved_definition(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    write_atomic_pattern(
+        root / "approved", pattern_id="approved", status="active"
+    )
+    write_atomic_pattern(
+        root / "ready", pattern_id="ready", status="active"
+    )
+    write_atomic_pattern(
+        root / "rejected", pattern_id="rejected", status="active"
+    )
+    write_atomic_pattern(
+        root / "deprecated", pattern_id="deprecated", status="deprecated"
+    )
+    write_atomic_pattern(root / "draft", pattern_id="draft", status="draft")
+    for name, state in (("ready", "ready_for_review"), ("rejected", "rejected")):
+        manifest_path = root / name / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["provenance"]["review_state"] = state
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+
+    catalog = AtomicPatternRegistry.load(root).selector_catalog()
+
+    assert [item["pattern_id"] for item in catalog] == ["approved"]
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "function render() { return '<div>' + value + '</div>'; } " * 3,
+        "technical " * 60,
+        '{"state": true, "items": [1, 2, 3], "nested": {"ok": false}} ' * 5,
+    ],
+)
+def test_v3_registry_rejects_code_or_blob_shaped_ai_description(
+    tmp_path: Path,
+    description: str,
+) -> None:
+    root = tmp_path / "catalog"
+    write_atomic_pattern(root / "widget-open-technical-v1", ai_description=description)
+
+    with pytest.raises(AtomicPatternRegistryError, match="ai_description"):
+        AtomicPatternRegistry.load(root)
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "This neutral technical description explains the runtime state, stable DOM contract, and safe visual adaptation boundaries for the pattern.",
+        "Это нейтральное техническое описание объясняет состояние runtime, контракт DOM и безопасные границы адаптации визуального эффекта паттерна.",
+    ],
+)
+def test_v3_registry_accepts_english_and_russian_prose(
+    tmp_path: Path,
+    description: str,
+) -> None:
+    root = tmp_path / "catalog"
+    write_atomic_pattern(root / "widget-open-technical-v1", ai_description=description)
+
+    definition = AtomicPatternRegistry.load(root).resolve("widget-open-technical", 1)
+
+    assert definition.ai_description == description
+
+
+@pytest.mark.parametrize("mutation", ["remove", "extra"])
+def test_v3_registry_rejects_real_manifest_field_mutations(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    manifest_path = root / "widget-open-technical-v1" / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if mutation == "remove":
+        del manifest["summary"]
+    else:
+        manifest["unexpected"] = "not part of schema v3"
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+    with pytest.raises(AtomicPatternRegistryError, match="manifest fields"):
         AtomicPatternRegistry.load(root)
 
 

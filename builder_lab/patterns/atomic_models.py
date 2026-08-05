@@ -8,6 +8,8 @@ separate module so a v3 atomic catalog can evolve without changing that API.
 from __future__ import annotations
 
 import re
+import string
+from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
@@ -19,6 +21,11 @@ JSONValue: TypeAlias = JSONScalar | tuple["JSONValue", ...] | Mapping[str, "JSON
 
 _IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_WORD_RE = re.compile(r"[^\W\d_]+(?:['’\-][^\W\d_]+)*", re.UNICODE)
+_CODE_MARKER_RE = re.compile(
+    r"(?:=>|</?\w[^>]*>|[{}\[\];]|\b(?:const|def|eval|export|function|import|let|var)\b)",
+    re.IGNORECASE,
+)
 
 
 class AtomicPatternCategory(str, Enum):
@@ -108,6 +115,28 @@ def _identifier(value: object, *, name: str) -> str:
     return normalized
 
 
+def _validate_natural_language(value: str) -> None:
+    """Apply a bounded deterministic prose heuristic to selector descriptions."""
+
+    if _CODE_MARKER_RE.search(value):
+        raise ValueError("ai_description must be natural-language text")
+    punctuation = sum(char in string.punctuation for char in value)
+    if punctuation / max(1, len(value)) > 0.28:
+        raise ValueError("ai_description must be natural-language text")
+
+    words = _WORD_RE.findall(value)
+    if len(words) < 8:
+        raise ValueError("ai_description must contain at least eight words")
+    normalized_words = [word.casefold() for word in words]
+    unique_words = set(normalized_words)
+    minimum_unique = max(4, (len(normalized_words) + 2) // 3)
+    if len(unique_words) < minimum_unique:
+        raise ValueError("ai_description contains too little lexical variety")
+    dominant_count = max(Counter(normalized_words).values())
+    if dominant_count > max(4, (len(normalized_words) + 1) // 2):
+        raise ValueError("ai_description contains a repeated-token blob")
+
+
 @dataclass(frozen=True, slots=True)
 class AtomicPatternDefinition:
     """A validated immutable schema v3 pattern and its exact implementation."""
@@ -158,6 +187,7 @@ class AtomicPatternDefinition:
             char.isspace() for char in ai_description
         ):
             raise ValueError("ai_description must be natural-language text")
+        _validate_natural_language(ai_description)
         technical_contract = _text(
             self.technical_contract,
             name="technical_contract",

@@ -39,6 +39,7 @@ _EXPECTED_MANIFEST_FIELDS = frozenset(
 _EXPECTED_ASSETS = frozenset({"manifest.json", "fragment.html", "styles.css", "behavior.js"})
 _REQUIRED_ASSETS = frozenset({"manifest.json", "fragment.html", "styles.css"})
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_IMPLEMENTATION_ASSETS = ("fragment.html", "styles.css", "behavior.js")
 _MAX_ASSET_BYTES = 64 * 1024
 _MAX_CATALOG_BYTES = 512 * 1024
 
@@ -55,13 +56,33 @@ _FORBIDDEN_MARKERS = (
     "localstorage",
     "sessionstorage",
     "indexeddb",
-    "import(",
-    "import ",
-    "eval(",
-    "new function",
+    "document.cookie",
+    "navigator.sendbeacon",
+    "sendbeacon",
+    "cookiestore",
+    "navigator.storage",
+    "caches.",
     "javascript:",
+    "require(",
 )
-_FORBIDDEN_CALL_RE = re.compile(r"\b(?:fetch|eval|import)\s*\(")
+_FORBIDDEN_CALL_RE = re.compile(
+    r"\b(?:eval|fetch|function|import|require)\s*\(|\bnew\s+function\b",
+    re.IGNORECASE,
+)
+_FORBIDDEN_IMPORT_RE = re.compile(
+    r"\b(?:import|export)\s*(?:\{|\*|[\"']|[A-Za-z_$][\w$]*\s+from\b)",
+    re.IGNORECASE,
+)
+_FORBIDDEN_URL_RE = re.compile(
+    r"(?:https?|ftp|wss?|data|blob):\s*(?://|[^\s\"'`)>]+)|//[^\s\"'`)>]+",
+    re.IGNORECASE,
+)
+_FORBIDDEN_STORAGE_RE = re.compile(
+    r"\bdocument\s*(?:\.\s*cookie|\[\s*['\"]cookie['\"]\s*\])"
+    r"|\b(?:localstorage|sessionstorage|indexeddb|cookiestore)\b"
+    r"|\bnavigator\s*(?:\.\s*storage|\[\s*['\"]storage['\"]\s*\])",
+    re.IGNORECASE,
+)
 
 
 class AtomicPatternRegistryError(ValueError):
@@ -212,12 +233,13 @@ class AtomicPatternRegistry:
         )
 
     def selector_catalog(self) -> tuple[dict[str, JSONValue], ...]:
-        """Return deterministic metadata for active v3 patterns only."""
+        """Return deterministic metadata for active and approved v3 patterns."""
 
         return tuple(
             definition.selector_dict()
             for definition in self.definitions
             if definition.status is AtomicPatternStatus.ACTIVE
+            and definition.provenance.get("review_state") == "approved"
         )
 
 
@@ -236,14 +258,14 @@ def compute_implementation_hash(directory: Path) -> str:
     """
 
     path = Path(directory)
-    assets: list[bytes] = []
-    for name in ("fragment.html", "styles.css", "behavior.js"):
+    assets: list[tuple[str, bytes]] = []
+    for name in _IMPLEMENTATION_ASSETS:
         asset_path = path / name
         if name == "behavior.js" and not asset_path.exists():
-            assets.append(b"")
+            assets.append((name, b""))
             continue
         raw = _read_asset_bytes(asset_path, name)
-        assets.append(raw)
+        assets.append((name, raw))
     return _implementation_hash_bytes(tuple(assets))
 
 
@@ -286,7 +308,13 @@ def _load_atomic_definition(
     css = _decode_asset(css_bytes, "styles.css")
     javascript = _decode_asset(js_bytes, "behavior.js")
     _validate_implementation((html, css, javascript))
-    actual_hash = _implementation_hash_bytes((html_bytes, css_bytes, js_bytes))
+    actual_hash = _implementation_hash_bytes(
+        (
+            ("fragment.html", html_bytes),
+            ("styles.css", css_bytes),
+            ("behavior.js", js_bytes),
+        )
+    )
     if actual_hash != expected_hash:
         pattern_id = manifest.get("pattern_id", "<unknown>")
         version = manifest.get("version", "<unknown>")
@@ -348,6 +376,12 @@ def _validate_implementation(assets: tuple[str, str, str]) -> None:
     marker = next((item for item in _FORBIDDEN_MARKERS if item in combined), None)
     if marker is None and _FORBIDDEN_CALL_RE.search(combined):
         marker = "forbidden call"
+    if marker is None and _FORBIDDEN_IMPORT_RE.search(combined):
+        marker = "module import"
+    if marker is None and _FORBIDDEN_URL_RE.search(combined):
+        marker = "external URL"
+    if marker is None and _FORBIDDEN_STORAGE_RE.search(combined):
+        marker = "storage capability"
     if marker is not None:
         raise AtomicPatternRegistryError(
             f"forbidden implementation capability: {marker}"
@@ -357,9 +391,13 @@ def _validate_implementation(assets: tuple[str, str, str]) -> None:
         raise AtomicPatternRegistryError("fragment HTML must not contain inline code")
 
 
-def _implementation_hash_bytes(assets: tuple[bytes, bytes, bytes]) -> str:
+def _implementation_hash_bytes(assets: tuple[tuple[str, bytes], ...]) -> str:
     digest = hashlib.sha256()
-    for asset in assets:
+    for name, asset in assets:
+        encoded_name = name.encode("utf-8")
+        digest.update(len(encoded_name).to_bytes(2, "big"))
+        digest.update(encoded_name)
+        digest.update(len(asset).to_bytes(8, "big"))
         digest.update(asset)
     return digest.hexdigest()
 

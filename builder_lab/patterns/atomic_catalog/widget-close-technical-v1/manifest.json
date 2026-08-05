@@ -10,7 +10,7 @@
   "technical_contract": "chat-runtime-atomic-v1",
   "adaptation_policy": "adaptive",
   "incompatible_with": [],
-  "implementation_sha256": "3893b1335dac3f702d4c26a47b2ac59068d55e6400117d3b0f2145c95e70c46a",
+  "implementation_sha256": "d45455cd63d16f882f32479b24f52b1a54372894d27fedead82674f9258d64d2",
   "provenance": {
     "origin": "kaigo-owned",
     "review_state": "approved"
