@@ -171,7 +171,9 @@ describe('StudioPage', () => {
       }));
     });
     expect((await screen.findAllByText('Изучаем структуру и визуальный язык сайта')).length).toBeGreaterThan(0);
-    expect(screen.getByText('Анализ сайта начат')).toBeVisible();
+    const technicalDetails = screen.getByText('Технические детали').closest('details');
+    expect(technicalDetails).not.toBeNull();
+    expect(within(technicalDetails!).getByText('Изучаем структуру и содержание сайта')).toBeInTheDocument();
     await waitFor(() => expect(document.querySelector('.studio-header__session strong')).toHaveTextContent('Изучаем структуру и визуальный язык сайта'));
   });
 
@@ -361,9 +363,10 @@ describe('StudioPage', () => {
     expect(alert).toHaveTextContent('Финальная визуальная проверка не пройдена');
     expect(alert).toHaveTextContent('История запуска сохранена, но версия виджета не была создана.');
     expect(alert).not.toHaveTextContent('Последняя доступная версия и история запуска сохранены.');
-    const timeline = screen.getByRole('region', { name: 'Диалог с генератором' });
-    expect(within(timeline).getByText('Финальная визуальная проверка не пройдена.')).toBeVisible();
-    expect(within(timeline).queryByText('Gemini returned an invalid grounded reference')).not.toBeInTheDocument();
+    const timeline = screen.getByText('Технические детали').closest('details');
+    expect(timeline).not.toBeNull();
+    expect(within(timeline!).getByText('Дорабатываем движения и детали')).toBeInTheDocument();
+    expect(within(timeline!).queryByText('Gemini returned an invalid grounded reference')).not.toBeInTheDocument();
     const details = within(alert).getByText('Детали');
     expect(details.closest('details')).not.toHaveAttribute('open');
     expect(within(alert).getByText('Gemini returned an invalid grounded reference')).toBeInTheDocument();

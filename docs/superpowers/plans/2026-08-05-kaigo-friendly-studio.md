@@ -205,21 +205,21 @@ git commit -m "feat: add truthful studio activity updates"
 - Modify: `frontend/src/studio/StudioTimeline.tsx`
 - Modify: `frontend/src/studio/StudioAccessibilityContracts.test.tsx`
 
-- [ ] **Step 1: Write failing progress semantics tests**
+- [x] **Step 1: Write failing progress semantics tests**
 
 Render current stage `conversation`, last completed `identity`, and progress `52`. Assert `Диалог` has `aria-current="step"`, `Стиль и бренд` has `data-state="completed"`, `Проверка качества` has `data-state="upcoming"`, and the progressbar has `aria-valuenow="52"`.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `.\frontend\node_modules\.bin\vitest.cmd run --root frontend src/studio/StudioProgress.test.tsx --maxWorkers=1`
 
 Expected: FAIL because `StudioProgress` does not exist.
 
-- [ ] **Step 3: Implement `StudioProgress`**
+- [x] **Step 3: Implement `StudioProgress`**
 
 Compose `runStatusPresentation`, `STUDIO_STAGES`, and `StudioActivity`. Use an ordered list, a semantic progressbar, and only completed/current/upcoming states. Use backend progress directly; do not derive it from event count.
 
-- [ ] **Step 4: Convert `StudioTimeline` into a secondary disclosure**
+- [x] **Step 4: Convert `StudioTimeline` into a secondary disclosure**
 
 ```tsx
 <details className="studio-technical">
@@ -234,17 +234,17 @@ Compose `runStatusPresentation`, `STUDIO_STAGES`, and `StudioActivity`. Use an o
 
 Render safe type/stage labels, sequence, and timestamp only. Do not render arbitrary messages, model names, byte counts, file paths, raw issues, or raw changes.
 
-- [ ] **Step 5: Update accessibility contracts**
+- [x] **Step 5: Update accessibility contracts**
 
 Assert an ordered stage list, polite live region, minimum 44 px controls, and removal of `.studio-activity__message` animation under reduced motion.
 
-- [ ] **Step 6: Run and verify GREEN**
+- [x] **Step 6: Run and verify GREEN**
 
 Run: `.\frontend\node_modules\.bin\vitest.cmd run --root frontend src/studio/StudioProgress.test.tsx src/studio/StudioAccessibilityContracts.test.tsx --maxWorkers=1`
 
 Expected: progress and accessibility tests pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add frontend/src/studio/StudioProgress.tsx frontend/src/studio/StudioProgress.test.tsx frontend/src/studio/StudioTimeline.tsx frontend/src/studio/StudioAccessibilityContracts.test.tsx
