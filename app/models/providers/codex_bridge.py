@@ -132,6 +132,7 @@ class CodexBridgeProvider:
 def conversation_key_for_request(metadata: Mapping[str, Any]) -> str:
     role = metadata.get("_kaigo_role")
     role = role if isinstance(role, str) else ""
+    stage = _safe_segment(metadata.get("_kaigo_stage") or "unknown")
     if role == "direction_candidate":
         return "direction:" + _safe_segment(metadata.get("_kaigo_candidate_id"))
     if role == "direction_judge":
@@ -142,12 +143,12 @@ def conversation_key_for_request(metadata: Mapping[str, Any]) -> str:
     if role == "visual_judge":
         return "visual:judge"
     if role == "repair":
-        return "repair"
+        return "repair:" + stage
     if role == "code_review":
-        return "repair:verify"
+        return "repair:verify:" + stage
     if role == "reference_analyst":
         return "reference"
-    return "build"
+    return "build:" + stage
 
 
 def _run_id(metadata: Mapping[str, Any]) -> str:

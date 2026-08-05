@@ -40,7 +40,7 @@ def test_systemd_unit_runs_host_bridge_with_bounded_state_paths() -> None:
 
     assert "scripts/run_codex_bridge.py" in unit
     assert "KAIGO_CODEX_BRIDGE_MAX_CONCURRENCY=3" in unit
-    assert "KAIGO_CODEX_BRIDGE_REASONING_EFFORT=max" in unit
+    assert "KAIGO_CODEX_BRIDGE_REASONING_EFFORT=medium" in unit
     assert "NoNewPrivileges=true" in unit
     assert "ProtectSystem=strict" in unit
     assert "RuntimeDirectory=kaigo-codex" in unit

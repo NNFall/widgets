@@ -60,6 +60,20 @@ def _config(tmp_path) -> CodexBridgeConfig:
     )
 
 
+def test_config_defaults_to_balanced_reasoning(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("KAIGO_CODEX_BRIDGE_REASONING_EFFORT", raising=False)
+    monkeypatch.setenv("KAIGO_CODEX_BRIDGE_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("KAIGO_CODEX_BRIDGE_WORK_ROOT", str(tmp_path / "work"))
+    monkeypatch.setenv(
+        "KAIGO_CODEX_BRIDGE_SOCKET_PATH",
+        str(tmp_path / "bridge.sock"),
+    )
+
+    config = CodexBridgeConfig.from_env()
+
+    assert config.reasoning_effort == "medium"
+
+
 async def _client(tmp_path, runner: FakeRunner) -> TestClient:
     app = create_app(config=_config(tmp_path), runner=runner)
     client = TestClient(TestServer(app))

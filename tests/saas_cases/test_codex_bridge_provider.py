@@ -88,7 +88,7 @@ async def test_provider_serializes_schema_images_and_safe_lineage() -> None:
     assert requests[0].url.path == "/v1/turn"
     assert payload == {
         "run_id": response.raw["run_id"],
-        "conversation_key": "build",
+        "conversation_key": "build:foundation",
         "prompt": "Generate",
         "response_schema": schema,
         "images": [
@@ -128,10 +128,38 @@ async def test_provider_serializes_schema_images_and_safe_lineage() -> None:
             "critic:customer",
         ),
         (_metadata(_kaigo_role="visual_judge"), "visual:judge"),
-        (_metadata(_kaigo_role="repair"), "repair"),
-        (_metadata(_kaigo_role="code_review"), "repair:verify"),
+        (
+            _metadata(_kaigo_role="repair", _kaigo_stage="foundation"),
+            "repair:foundation",
+        ),
+        (
+            _metadata(_kaigo_role="repair", _kaigo_stage="motion_polish"),
+            "repair:motion_polish",
+        ),
+        (
+            _metadata(_kaigo_role="code_review", _kaigo_stage="identity"),
+            "repair:verify:identity",
+        ),
         (_metadata(_kaigo_role="reference_analyst"), "reference"),
-        (_metadata(_kaigo_role="motion_designer"), "build"),
+        (
+            _metadata(_kaigo_role="widget_generator", _kaigo_stage="foundation"),
+            "build:foundation",
+        ),
+        (
+            _metadata(_kaigo_role="brand_designer", _kaigo_stage="identity"),
+            "build:identity",
+        ),
+        (
+            _metadata(
+                _kaigo_role="conversation_designer",
+                _kaigo_stage="conversation",
+            ),
+            "build:conversation",
+        ),
+        (
+            _metadata(_kaigo_role="motion_designer", _kaigo_stage="motion_polish"),
+            "build:motion_polish",
+        ),
     ],
 )
 def test_conversation_key_matches_builder_role(metadata, expected) -> None:
@@ -239,4 +267,3 @@ async def test_provider_finalizes_run_through_bridge() -> None:
     assert requests[0].method == "POST"
     assert requests[0].url.path == f"/v1/runs/{run_id}/complete"
     await client.aclose()
-

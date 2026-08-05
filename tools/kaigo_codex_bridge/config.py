@@ -60,7 +60,7 @@ class CodexBridgeConfig:
             executable=os.getenv("KAIGO_CODEX_EXECUTABLE", "codex").strip(),
             model=os.getenv("KAIGO_CODEX_BRIDGE_MODEL", "gpt-5.6-luna").strip(),
             reasoning_effort=os.getenv(
-                "KAIGO_CODEX_BRIDGE_REASONING_EFFORT", "max"
+                "KAIGO_CODEX_BRIDGE_REASONING_EFFORT", "medium"
             ).strip(),
             max_concurrency=_env_int(
                 "KAIGO_CODEX_BRIDGE_MAX_CONCURRENCY", 3
