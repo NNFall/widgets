@@ -50,6 +50,7 @@ from builder_lab.patterns.atomic_registry import load_builtin_atomic_registry
 from builder_lab.patterns.candidate_planner import plan_pattern_candidates
 from builder_lab.patterns.candidate_resolver import (
     ResolvedPatternCandidatePack,
+    STAGE_PATTERN_CATEGORIES,
     resolve_pattern_candidate_pack,
 )
 from builder_lab.patterns.planner import CompositionPlanningError, plan_composition
@@ -136,6 +137,95 @@ _VALIDATION_FAILURE_CODES = frozenset({
     "reference_url_unsafe",
     "snapshot_rejected",
 })
+
+
+def _plain_json(value: Any) -> Any:
+    """Normalize frozen JSON containers before comparing persisted metadata."""
+
+    if isinstance(value, Mapping):
+        return {str(key): _plain_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain_json(item) for item in value]
+    return value
+
+
+def _candidate_plan_replay_conflicts(
+    existing: Any,
+    *,
+    plan: PatternCandidatePlan,
+    direction_artifact_id: UUID | None,
+    selector_model_call_id: UUID | None,
+) -> bool:
+    """Compare staged composition with durable lineage when evidence exists.
+
+    A replay may carry no selector output references at all.  In that case
+    ``selector_model_call_id`` is intentionally unknown and the persisted
+    selector lineage remains authoritative instead of being compared to
+    ``None``.
+    """
+
+    return (
+        existing.plan != plan
+        or existing.direction_artifact_id != direction_artifact_id
+        or (
+            selector_model_call_id is not None
+            and existing.selector_model_call_id != selector_model_call_id
+        )
+    )
+
+
+def _validate_persisted_candidate_lineage(persisted, registry) -> None:
+    """Reject exact-version drift before exposing implementation assets.
+
+    The registry digest is intentionally not compared wholesale: adding an
+    unrelated pattern version must not invalidate an existing run.  Every
+    persisted candidate item is instead checked against its exact live
+    implementation hash, selector manifest and stage mapping.
+    """
+
+    for group in persisted.groups:
+        expected_mapping = tuple(
+            stage.value
+            for stage, categories in STAGE_PATTERN_CATEGORIES.items()
+            if group.category in categories
+        )
+        if tuple(group.stage_mapping) != expected_mapping:
+            raise ValueError(
+                f"persisted stage mapping drift for {group.category.value}"
+            )
+        if len(group.items) != len(group.candidates):
+            raise ValueError(
+                f"persisted candidate item count drift for {group.category.value}"
+            )
+        for candidate, item in zip(group.candidates, group.items, strict=True):
+            if (
+                candidate.pattern_id != item.pattern_id
+                or candidate.version != item.version
+                or candidate.rank != item.rank
+            ):
+                raise ValueError("persisted candidate item identity drift")
+            try:
+                definition = registry.resolve(item.pattern_id, item.version)
+            except Exception as exc:
+                raise ValueError(
+                    f"persisted candidate version is unavailable: {item.pattern_id}@{item.version}"
+                ) from exc
+            if definition.category is not group.category:
+                raise ValueError("persisted candidate category drift")
+            if definition.implementation_sha256 != item.implementation_sha256:
+                raise ValueError(
+                    f"persisted implementation hash drift: {item.pattern_id}@{item.version}"
+                )
+            persisted_manifest = _plain_json(item.manifest_snapshot)
+            live_manifest = _plain_json(definition.selector_dict())
+            # Lifecycle status is mutable; all other selector metadata is
+            # immutable provenance and must match byte-for-byte as JSON.
+            persisted_manifest.pop("status", None)
+            live_manifest.pop("status", None)
+            if persisted_manifest != live_manifest:
+                raise ValueError(
+                    f"persisted selector manifest drift: {item.pattern_id}@{item.version}"
+                )
 
 
 def failure_category_for_error(error: BuilderEngineError) -> TrialFailureKind:
@@ -428,8 +518,6 @@ class OrchestratorStageHandler:
     async def _candidate_plan(self, run_id: UUID):
         """Load a durable candidate plan without consulting the selector."""
 
-        if not self._pattern_candidate_plan_v2_enabled:
-            return None
         loader = getattr(self._queue, "load_pattern_candidate_plan", None)
         if not callable(loader):
             raise BuilderEngineError(
@@ -460,6 +548,14 @@ class OrchestratorStageHandler:
                 "Хранилище плана кандидатов не настроено",
             )
         registry = load_builtin_atomic_registry()
+        try:
+            _validate_persisted_candidate_lineage(persisted, registry)
+        except ValueError as exc:
+            raise BuilderEngineError(
+                "internal_error",
+                "Сохранённый план кандидатов не соответствует библиотеке",
+                diagnostic=str(exc),
+            ) from exc
         approved = await review_loader(registry)
         try:
             return resolve_pattern_candidate_pack(
@@ -506,6 +602,22 @@ class OrchestratorStageHandler:
             if self._routed_engine_factory is not None and request.engine is EngineName.DIRECT
             else engine
         )
+        has_candidate_context = isinstance(
+            stage_input.context.get("pattern_candidate_plan"), dict
+        )
+        has_legacy_context = isinstance(
+            stage_input.context.get("composition_plan"), dict
+        )
+        if has_candidate_context and has_legacy_context:
+            raise BuilderEngineError(
+                "internal_error",
+                "Контекст запуска содержит несовместимые планы композиции",
+            )
+        pattern_candidate_mode = (
+            has_candidate_context
+            if (has_candidate_context or has_legacy_context)
+            else self._pattern_candidate_plan_v2_enabled
+        )
         direction_proposal_engine = engine
         direction_judge_engine = engine
         if (
@@ -532,6 +644,7 @@ class OrchestratorStageHandler:
                 previous=stage_input.previous_artifact,
                 context=stage_input.context,
                 claim=claim,
+                pattern_candidate_mode=pattern_candidate_mode,
             )
         finally:
             closed: set[int] = set()
@@ -609,6 +722,7 @@ class OrchestratorStageHandler:
         previous: WidgetArtifact | None,
         context: dict,
         claim: RunClaim,
+        pattern_candidate_mode: bool,
     ) -> StageResult:
         # The orchestrator imports the visual/browser audit stack.  Only a
         # worker executes it; importing PostgresWorkerQueue in the API process
@@ -638,7 +752,7 @@ class OrchestratorStageHandler:
                     )
                 selected_direction = DirectionProposal.from_dict(raw_direction)
             if stage is Stage.COMPOSITION:
-                if self._pattern_candidate_plan_v2_enabled:
+                if pattern_candidate_mode:
                     persisted = await self._candidate_plan(claim.run_id)
                     if persisted is not None:
                         # A staged composition may be replayed after a worker
@@ -719,7 +833,7 @@ class OrchestratorStageHandler:
                     usage=usage + planned.usage,
                     context=next_context,
                 )
-            if stage is not Stage.ART_DIRECTION and not self._pattern_candidate_plan_v2_enabled:
+            if stage is not Stage.ART_DIRECTION and not pattern_candidate_mode:
                 raw_plan = next_context.get("composition_plan")
                 if not isinstance(raw_plan, dict):
                     raise BuilderEngineError(
@@ -739,7 +853,7 @@ class OrchestratorStageHandler:
                     ) from exc
         pattern_candidate_pack: ResolvedPatternCandidatePack | None = None
         if (
-            self._pattern_candidate_plan_v2_enabled
+            pattern_candidate_mode
             and request.engine is EngineName.DIRECT
             and stage
             in {
@@ -2550,27 +2664,25 @@ class PostgresWorkerQueue:
                 plan = PatternCandidatePlan.from_dict(raw_candidate_plan)
                 repository = PatternCandidateRepository(database)
                 existing = await repository.load_plan(run.id)
-                if existing is not None:
-                    if existing.plan != plan:
-                        raise RuntimeError(
-                            "staged candidate composition conflicts with persisted plan"
-                        )
-                else:
-                    direction_artifact_id = await database.scalar(
-                        select(GenerationArtifact.id)
-                        .where(
-                            GenerationArtifact.run_id == run.id,
-                            GenerationArtifact.stage == Stage.ART_DIRECTION.value,
-                        )
-                        .order_by(GenerationArtifact.revision.desc())
-                        .limit(1)
+                registry = load_builtin_atomic_registry()
+                direction_artifact_id = await database.scalar(
+                    select(GenerationArtifact.id)
+                    .where(
+                        GenerationArtifact.run_id == run.id,
+                        GenerationArtifact.stage == Stage.ART_DIRECTION.value,
                     )
+                    .order_by(GenerationArtifact.revision.desc())
+                    .limit(1)
+                )
+                selector_model_call_id = None
+                if result.output_refs:
                     selector_query = (
                         select(ModelCall.id)
                         .where(
                             ModelCall.run_id == run.id,
                             ModelCall.operation == "pattern_candidate_plan",
                             ModelCall.status == "completed",
+                            ModelCall.request_id.in_(result.output_refs),
                         )
                         .order_by(ModelCall.created_at.desc(), ModelCall.id.desc())
                         .limit(1)
@@ -2579,15 +2691,23 @@ class PostgresWorkerQueue:
                         selector_query = selector_query.where(
                             ModelCall.stage_attempt_id == attempt_id
                         )
-                    if result.output_refs:
-                        selector_query = selector_query.where(
-                            ModelCall.request_id.in_(result.output_refs)
-                        )
                     selector_model_call_id = await database.scalar(selector_query)
+                if existing is not None:
+                    _validate_persisted_candidate_lineage(existing, registry)
+                    if _candidate_plan_replay_conflicts(
+                        existing,
+                        plan=plan,
+                        direction_artifact_id=direction_artifact_id,
+                        selector_model_call_id=selector_model_call_id,
+                    ):
+                        raise RuntimeError(
+                            "staged candidate composition conflicts with persisted plan"
+                        )
+                else:
                     await repository.create_plan(
                         run_id=run.id,
                         plan=plan,
-                        registry=load_builtin_atomic_registry(),
+                        registry=registry,
                         direction_artifact_id=direction_artifact_id,
                         selector_model_call_id=selector_model_call_id,
                     )
@@ -2671,7 +2791,16 @@ class PostgresWorkerQueue:
                 run_id=run.id,
                 artifact_id=artifact_record.id,
             )
-        if self._pattern_candidate_plan_v2_enabled:
+        has_candidate_context = isinstance(
+            result.context.get("pattern_candidate_plan"), dict
+        )
+        has_legacy_context = isinstance(
+            result.context.get("composition_plan"), dict
+        )
+        candidate_mode = has_candidate_context or (
+            self._pattern_candidate_plan_v2_enabled and not has_legacy_context
+        )
+        if candidate_mode:
             await self._persist_pattern_stage_provenance(
                 database,
                 run_id=run.id,
@@ -2726,6 +2855,7 @@ class PostgresWorkerQueue:
         if persisted is None:
             return
         registry = load_builtin_atomic_registry()
+        _validate_persisted_candidate_lineage(persisted, registry)
         rows = (
             await database.execute(
                 select(
@@ -2750,27 +2880,25 @@ class PostgresWorkerQueue:
                 review_state = definition.provenance.get("review_state")
             if review_state == "approved":
                 approved.add(key)
-        try:
-            pack = resolve_pattern_candidate_pack(
-                persisted.plan,
-                Stage(stage),
-                registry,
-                effective_approved=approved,
-            )
-        except (TypeError, ValueError):
-            # A malformed plan is already rejected at stage.result_staged; do
-            # not turn a replay of an older legacy run into a new failure.
-            return
+        pack = resolve_pattern_candidate_pack(
+            persisted.plan,
+            Stage(stage),
+            registry,
+            effective_approved=approved,
+        )
         item_by_key = {
             (item.pattern_id, item.version): item for item in persisted.items
         }
-        exposed_items = [
-            item_by_key[(version.pattern_id, version.version)]
-            for version in pack.exposed_versions
-            if (version.pattern_id, version.version) in item_by_key
-        ]
+        exposed_items = []
+        for version in pack.exposed_versions:
+            item = item_by_key.get((version.pattern_id, version.version))
+            if item is None:
+                raise ValueError(
+                    "persisted candidate plan is missing a resolved stage item"
+                )
+            exposed_items.append(item)
         if not exposed_items:
-            return
+            raise ValueError("resolved candidate pack is empty")
         all_model_calls = (
             (
                 await database.execute(

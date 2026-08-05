@@ -37,6 +37,7 @@ from builder_lab.patterns.atomic_models import (
 from builder_lab.patterns.atomic_registry import load_builtin_atomic_registry
 from builder_lab.patterns.candidate_resolver import STAGE_PATTERN_CATEGORIES
 from builder_lab.worker import (
+    _candidate_plan_replay_conflicts,
     OrchestratorStageHandler,
     PostgresWorkerQueue,
     RunClaim,
@@ -55,6 +56,31 @@ def test_candidate_plan_feature_flag_accepts_true(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("KAIGO_PATTERN_CANDIDATE_PLAN_V2_ENABLED", "true")
     config = BuilderLabConfig.from_env()
     assert config.pattern_candidate_plan_v2_enabled is True
+
+
+def test_candidate_replay_without_selector_refs_keeps_persisted_selector_lineage() -> None:
+    plan = _candidate_plan()
+    persisted_selector_id = uuid4()
+    existing = SimpleNamespace(
+        plan=plan,
+        direction_artifact_id=None,
+        selector_model_call_id=persisted_selector_id,
+    )
+
+    # A crash replay can carry no selector request IDs.  Unknown is not a
+    # conflict with the durable selector identity already stored for the run.
+    assert not _candidate_plan_replay_conflicts(
+        existing,
+        plan=plan,
+        direction_artifact_id=None,
+        selector_model_call_id=None,
+    )
+    assert _candidate_plan_replay_conflicts(
+        existing,
+        plan=plan,
+        direction_artifact_id=None,
+        selector_model_call_id=uuid4(),
+    )
 
 
 @pytest.mark.asyncio
@@ -193,7 +219,7 @@ async def test_enabled_antigravity_keeps_legacy_path_without_selector() -> None:
 async def test_enabled_restart_uses_persisted_plan_without_selector() -> None:
     request = BuilderRequest(engine=EngineName.DIRECT, brief="resume")
     plan = _candidate_plan()
-    persisted = SimpleNamespace(plan=plan, items=())
+    persisted = SimpleNamespace(plan=plan, groups=(), items=())
     selector_calls = 0
 
     class Queue:
@@ -204,7 +230,10 @@ async def test_enabled_restart_uses_persisted_plan_without_selector() -> None:
                     "tests.builder_lab_cases.test_validation",
                     fromlist=["artifact"],
                 ).artifact(revision=1, stage=Stage.ART_DIRECTION),
-                context={"selected_direction": _direction().to_dict()},
+                context={
+                    "selected_direction": _direction().to_dict(),
+                    "pattern_candidate_plan": plan.to_dict(),
+                },
             )
 
         async def load_pattern_candidate_plan(self, _run_id):
@@ -243,7 +272,7 @@ async def test_enabled_restart_uses_persisted_plan_without_selector() -> None:
         queue=Queue(),
         engine_factories={EngineName.DIRECT: lambda: engine},
         reference_analyzer=lambda _url: None,
-        pattern_candidate_plan_v2_enabled=True,
+        pattern_candidate_plan_v2_enabled=False,
     )
     claim = RunClaim(
         run_id=uuid4(),
@@ -308,10 +337,74 @@ async def test_persisted_composition_plan_is_loaded_before_selector() -> None:
 
 
 @pytest.mark.asyncio
+async def test_legacy_context_wins_when_candidate_flag_is_enabled() -> None:
+    from tests.builder_lab_cases.test_worker import (
+        _composition_direction,
+        _composition_payload,
+    )
+
+    request = BuilderRequest(engine=EngineName.DIRECT, brief="legacy context")
+    composition_payload = _composition_payload()
+    captured = []
+
+    class Queue:
+        async def stage_input(self, _claim):
+            return StageInput(
+                request=request,
+                previous_artifact=__import__(
+                    "tests.builder_lab_cases.test_validation",
+                    fromlist=["artifact"],
+                ).artifact(revision=1, stage=Stage.ART_DIRECTION),
+                context={
+                    "selected_direction": _composition_direction().to_dict(),
+                    "composition_plan": composition_payload,
+                },
+            )
+
+        async def load_pattern_candidate_plan(self, _run_id):
+            raise AssertionError("legacy context must not load candidate plans")
+
+    class Engine:
+        async def generate(self, **kwargs):
+            captured.append(kwargs)
+            return EngineResult(
+                artifact=__import__(
+                    "tests.builder_lab_cases.test_validation",
+                    fromlist=["artifact"],
+                ).artifact(revision=2, stage=kwargs["stage"]),
+            )
+
+        async def close(self):
+            return None
+
+    handler = OrchestratorStageHandler(
+        queue=Queue(),
+        engine_factories={EngineName.DIRECT: lambda: Engine()},
+        reference_analyzer=lambda _url: None,
+        pattern_candidate_plan_v2_enabled=True,
+    )
+    claim = RunClaim(
+        run_id=uuid4(),
+        project_id=uuid4(),
+        worker_id="test",
+        mode="direct",
+        next_stage="foundation",
+        last_completed_stage="composition",
+        lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+    )
+
+    result = await handler(claim)
+
+    assert result.artifact is not None
+    assert captured[0]["composition"].plan.to_dict() == composition_payload
+    assert captured[0]["pattern_candidate_pack"] is None
+
+
+@pytest.mark.asyncio
 async def test_stage_repairs_and_visual_gate_share_same_candidate_pack() -> None:
     request = BuilderRequest(engine=EngineName.DIRECT, brief="visual")
     plan = _candidate_plan()
-    persisted = SimpleNamespace(plan=plan, items=())
+    persisted = SimpleNamespace(plan=plan, groups=(), items=())
     previous = __import__(
         "tests.builder_lab_cases.test_validation",
         fromlist=["artifact"],
