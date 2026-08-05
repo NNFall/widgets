@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import math
@@ -3114,13 +3115,25 @@ class PostgresWorkerQueue:
             if staged is None or not isinstance(staged.payload.get("result"), dict):
                 raise RuntimeError("stage result must be persisted before finalize")
             result = StageResult.from_dict(staged.payload["result"])
-            artifact_record = await self._materialize_result(
-                database,
-                run,
-                result,
-                now,
-                attempt_id=claim.attempt_id,
-            )
+            materializer = self._materialize_result
+            if "attempt_id" in inspect.signature(materializer).parameters:
+                artifact_record = await materializer(
+                    database,
+                    run,
+                    result,
+                    now,
+                    attempt_id=claim.attempt_id,
+                )
+            else:
+                # Keep test/custom queue overrides written against the legacy
+                # four-argument hook working while the built-in materializer
+                # receives stage-attempt identity for candidate provenance.
+                artifact_record = await materializer(
+                    database,
+                    run,
+                    result,
+                    now,
+                )
             if artifact_record is not None:
                 await database.execute(
                     update(ModelCall)
