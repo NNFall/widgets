@@ -8,10 +8,10 @@ separate module so a v3 atomic catalog can evolve without changing that API.
 from __future__ import annotations
 
 import re
-import string
 from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
+from math import log2
 from types import MappingProxyType
 from typing import Any, Mapping, TypeAlias
 
@@ -22,10 +22,15 @@ JSONValue: TypeAlias = JSONScalar | tuple["JSONValue", ...] | Mapping[str, "JSON
 _IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _WORD_RE = re.compile(r"[^\W\d_]+(?:['’\-][^\W\d_]+)*", re.UNICODE)
-_CODE_MARKER_RE = re.compile(
-    r"(?:=>|</?\w[^>]*>|[{}\[\];]|\b(?:const|def|eval|export|function|import|let|var)\b)",
+_CODE_STRUCTURE_RE = re.compile(
+    r"(?:=>|</?\w[^>]*>|[{}\[\]]|"
+    r"\b(?:const|def|let|var)\s+[A-Za-z_$][\w$]*\s*(?:=|\()|"
+    r"\bfunction\s*(?:[A-Za-z_$][\w$]*\s*)?\(|"
+    r"\b(?:eval|import|export)\s*(?:\(|\{|\*|[\"']))",
     re.IGNORECASE,
 )
+_HEX_BLOB_RE = re.compile(r"^[0-9a-f]+$", re.IGNORECASE)
+_BASE64_BLOB_RE = re.compile(r"^[A-Za-z0-9+/=_-]+$")
 
 
 class AtomicPatternCategory(str, Enum):
@@ -118,10 +123,7 @@ def _identifier(value: object, *, name: str) -> str:
 def _validate_natural_language(value: str) -> None:
     """Apply a bounded deterministic prose heuristic to selector descriptions."""
 
-    if _CODE_MARKER_RE.search(value):
-        raise ValueError("ai_description must be natural-language text")
-    punctuation = sum(char in string.punctuation for char in value)
-    if punctuation / max(1, len(value)) > 0.28:
+    if _CODE_STRUCTURE_RE.search(value):
         raise ValueError("ai_description must be natural-language text")
 
     words = _WORD_RE.findall(value)
@@ -135,6 +137,19 @@ def _validate_natural_language(value: str) -> None:
     dominant_count = max(Counter(normalized_words).values())
     if dominant_count > max(4, (len(normalized_words) + 1) // 2):
         raise ValueError("ai_description contains a repeated-token blob")
+    for token in re.findall(r"\S+", value):
+        candidate = token.strip(".,:;!?()[]{}\"'")
+        if len(candidate) < 64:
+            continue
+        if not (_HEX_BLOB_RE.fullmatch(candidate) or _BASE64_BLOB_RE.fullmatch(candidate)):
+            continue
+        frequencies = Counter(candidate)
+        entropy = -sum(
+            (count / len(candidate)) * log2(count / len(candidate))
+            for count in frequencies.values()
+        )
+        if _HEX_BLOB_RE.fullmatch(candidate) or entropy >= 2.5:
+            raise ValueError("ai_description contains an encoded blob token")
 
 
 @dataclass(frozen=True, slots=True)

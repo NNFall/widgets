@@ -43,46 +43,44 @@ _IMPLEMENTATION_ASSETS = ("fragment.html", "styles.css", "behavior.js")
 _MAX_ASSET_BYTES = 64 * 1024
 _MAX_CATALOG_BYTES = 512 * 1024
 
-# Keep this list deliberately capability-oriented.  It is checked against the
-# exact implementation bytes, not selector-facing prose.
-_FORBIDDEN_MARKERS = (
-    "http://",
-    "https://",
-    "@import",
-    "fetch(",
-    "xmlhttprequest",
-    "websocket",
-    "eventsource",
-    "localstorage",
-    "sessionstorage",
-    "indexeddb",
-    "document.cookie",
-    "navigator.sendbeacon",
-    "sendbeacon",
-    "cookiestore",
-    "navigator.storage",
-    "caches.",
-    "javascript:",
-    "require(",
-)
-_FORBIDDEN_CALL_RE = re.compile(
-    r"\b(?:eval|fetch|function|import|require)\s*\(|\bnew\s+function\b",
-    re.IGNORECASE,
-)
-_FORBIDDEN_IMPORT_RE = re.compile(
-    r"\b(?:import|export)\s*(?:\{|\*|[\"']|[A-Za-z_$][\w$]*\s+from\b)",
-    re.IGNORECASE,
-)
-_FORBIDDEN_URL_RE = re.compile(
+_EXTERNAL_URL_RE = re.compile(
     r"(?:https?|ftp|wss?|data|blob):\s*(?://|[^\s\"'`)>]+)|//[^\s\"'`)>]+",
     re.IGNORECASE,
 )
-_FORBIDDEN_STORAGE_RE = re.compile(
-    r"\bdocument\s*(?:\.\s*cookie|\[\s*['\"]cookie['\"]\s*\])"
-    r"|\b(?:localstorage|sessionstorage|indexeddb|cookiestore)\b"
-    r"|\bnavigator\s*(?:\.\s*storage|\[\s*['\"]storage['\"]\s*\])",
-    re.IGNORECASE,
+_CSS_IMPORT_RE = re.compile(r"(?:^|[^\w])@import\b", re.IGNORECASE)
+_DANGEROUS_IDENTIFIERS = frozenset(
+    {
+        "fetch",
+        "xmlhttprequest",
+        "websocket",
+        "eventsource",
+        "eval",
+        "import",
+        "localstorage",
+        "sessionstorage",
+        "indexeddb",
+        "caches",
+        "sendbeacon",
+        "cookie",
+        "cookiestore",
+        "storage",
+    }
 )
+_DANGEROUS_MEMBER_STRINGS = _DANGEROUS_IDENTIFIERS | {
+    "function",
+    "open",
+    "request",
+    "get",
+    "post",
+    "put",
+    "delete",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _ImplementationToken:
+    kind: str
+    value: str
 
 
 class AtomicPatternRegistryError(ValueError):
@@ -232,14 +230,28 @@ class AtomicPatternRegistry:
             and definition.status is AtomicPatternStatus.ACTIVE
         )
 
-    def selector_catalog(self) -> tuple[dict[str, JSONValue], ...]:
-        """Return deterministic metadata for active and approved v3 patterns."""
+    def selector_catalog(
+        self,
+        *,
+        effective_review_states: Mapping[tuple[str, int], str] | None = None,
+    ) -> tuple[dict[str, JSONValue], ...]:
+        """Return active metadata using optional effective review overrides."""
 
         return tuple(
             definition.selector_dict()
             for definition in self.definitions
             if definition.status is AtomicPatternStatus.ACTIVE
-            and definition.provenance.get("review_state") == "approved"
+            and (
+                (
+                    effective_review_states.get(
+                        (definition.pattern_id, definition.version),
+                        definition.provenance.get("review_state"),
+                    )
+                    if effective_review_states is not None
+                    else definition.provenance.get("review_state")
+                )
+                == "approved"
+            )
         )
 
 
@@ -372,23 +384,157 @@ def _decode_asset(raw: bytes, name: str) -> str:
 
 
 def _validate_implementation(assets: tuple[str, str, str]) -> None:
-    combined = "\n".join(assets).lower()
-    marker = next((item for item in _FORBIDDEN_MARKERS if item in combined), None)
-    if marker is None and _FORBIDDEN_CALL_RE.search(combined):
-        marker = "forbidden call"
-    if marker is None and _FORBIDDEN_IMPORT_RE.search(combined):
-        marker = "module import"
-    if marker is None and _FORBIDDEN_URL_RE.search(combined):
-        marker = "external URL"
-    if marker is None and _FORBIDDEN_STORAGE_RE.search(combined):
-        marker = "storage capability"
-    if marker is not None:
-        raise AtomicPatternRegistryError(
-            f"forbidden implementation capability: {marker}"
-        )
+    html, css, javascript = assets
+    _validate_external_urls(html, line_comments=False, html_comments=True)
+    _validate_external_urls(css, line_comments=False, html_comments=False)
+    _validate_external_urls(javascript, line_comments=True, html_comments=False)
+    _scan_javascript_capabilities(javascript)
     html = assets[0].lower()
     if "<script" in html or "style=" in html:
         raise AtomicPatternRegistryError("fragment HTML must not contain inline code")
+
+
+def _validate_external_urls(
+    source: str,
+    *,
+    line_comments: bool,
+    html_comments: bool,
+) -> None:
+    uncommented = _strip_comments(
+        source,
+        line_comments=line_comments,
+        html_comments=html_comments,
+    )
+    if not line_comments and not html_comments and _CSS_IMPORT_RE.search(uncommented):
+        raise AtomicPatternRegistryError("forbidden implementation capability: CSS import")
+    if _EXTERNAL_URL_RE.search(uncommented):
+        raise AtomicPatternRegistryError("forbidden implementation capability: external URL")
+
+
+def _scan_javascript_capabilities(source: str) -> None:
+    tokens = _tokenize(source, line_comments=True)
+    for index, token in enumerate(tokens):
+        if token.kind == "identifier":
+            normalized = token.value.casefold()
+            if normalized in _DANGEROUS_IDENTIFIERS or token.value == "Function":
+                raise AtomicPatternRegistryError(
+                    f"forbidden implementation capability: {token.value}"
+                )
+            continue
+        if token.kind != "string":
+            continue
+        if token.value.casefold() not in _DANGEROUS_MEMBER_STRINGS:
+            continue
+        previous = tokens[index - 1] if index else None
+        if previous is not None and previous.value in {"[", "."}:
+            raise AtomicPatternRegistryError(
+                f"forbidden implementation capability: member {token.value}"
+            )
+
+
+def _tokenize(source: str, *, line_comments: bool) -> tuple[_ImplementationToken, ...]:
+    tokens: list[_ImplementationToken] = []
+    index = 0
+    length = len(source)
+    while index < length:
+        character = source[index]
+        if character.isspace():
+            index += 1
+            continue
+        if line_comments and source.startswith("//", index):
+            newline = source.find("\n", index + 2)
+            index = length if newline < 0 else newline + 1
+            continue
+        if source.startswith("/*", index):
+            end = source.find("*/", index + 2)
+            index = length if end < 0 else end + 2
+            continue
+        if character in {"'", '"', "`"}:
+            quote = character
+            start = index + 1
+            index = start
+            value: list[str] = []
+            while index < length:
+                current = source[index]
+                if current == "\\" and index + 1 < length:
+                    value.append(source[index + 1])
+                    index += 2
+                    continue
+                if current == quote:
+                    index += 1
+                    break
+                value.append(current)
+                index += 1
+            tokens.append(_ImplementationToken("string", "".join(value)))
+            continue
+        if character.isalpha() or character in {"_", "$"}:
+            start = index
+            index += 1
+            while index < length and (
+                source[index].isalnum() or source[index] in {"_", "$"}
+            ):
+                index += 1
+            tokens.append(_ImplementationToken("identifier", source[start:index]))
+            continue
+        if character.isdigit():
+            start = index
+            index += 1
+            while index < length and (source[index].isalnum() or source[index] in {".", "_"}):
+                index += 1
+            tokens.append(_ImplementationToken("number", source[start:index]))
+            continue
+        tokens.append(_ImplementationToken("punctuator", character))
+        index += 1
+    return tuple(tokens)
+
+
+def _strip_comments(
+    source: str,
+    *,
+    line_comments: bool,
+    html_comments: bool,
+) -> str:
+    output: list[str] = []
+    index = 0
+    length = len(source)
+    while index < length:
+        if html_comments and source.startswith("<!--", index):
+            end = source.find("-->", index + 4)
+            index = length if end < 0 else end + 3
+            output.append(" ")
+            continue
+        if line_comments and source.startswith("//", index):
+            end = source.find("\n", index + 2)
+            index = length if end < 0 else end
+            output.append("\n")
+            continue
+        if source.startswith("/*", index):
+            end = source.find("*/", index + 2)
+            if end < 0:
+                output.append(" ")
+                break
+            comment = source[index : end + 2]
+            output.append("\n" * comment.count("\n"))
+            index = end + 2
+            continue
+        character = source[index]
+        if character in {"'", '"', "`"}:
+            quote = character
+            start = index
+            index += 1
+            while index < length:
+                current = source[index]
+                if current == "\\" and index + 1 < length:
+                    index += 2
+                    continue
+                index += 1
+                if current == quote:
+                    break
+            output.append(source[start:index])
+            continue
+        output.append(character)
+        index += 1
+    return "".join(output)
 
 
 def _implementation_hash_bytes(assets: tuple[tuple[str, bytes], ...]) -> str:

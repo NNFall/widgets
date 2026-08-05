@@ -291,6 +291,108 @@ def test_v3_registry_rejects_protocol_relative_url(tmp_path: Path) -> None:
         AtomicPatternRegistry.load(root)
 
 
+def test_v3_registry_rejects_comment_spaced_fetch_call(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "behavior.js").write_text("fetch/*c*/('external')", encoding="utf-8")
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
+def test_v3_registry_rejects_comment_spaced_cookie_member(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "behavior.js").write_text(
+        "document/*c*/.cookie", encoding="utf-8"
+    )
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
+def test_v3_registry_rejects_computed_fetch_member(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "behavior.js").write_text(
+        'globalThis["fetch"]("external")', encoding="utf-8"
+    )
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
+def test_v3_registry_rejects_computed_cache_member(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "behavior.js").write_text(
+        'globalThis["caches"]["open"]("key")', encoding="utf-8"
+    )
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
+def test_v3_registry_allows_safe_anonymous_callback(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "behavior.js").write_text("function() { return 1; }", encoding="utf-8")
+    rewrite_raw_asset_hash(pattern)
+
+    definition = AtomicPatternRegistry.load(root).resolve("widget-open-technical", 1)
+
+    assert definition.javascript == "function() { return 1; }"
+
+
+def test_v3_registry_ignores_local_state_line_comment(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "behavior.js").write_text(
+        "//local-state\nconst value = 1;", encoding="utf-8"
+    )
+    rewrite_raw_asset_hash(pattern)
+
+    assert AtomicPatternRegistry.load(root).resolve("widget-open-technical", 1)
+
+
+def test_v3_registry_ignores_local_state_css_comment(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "styles.css").write_text(
+        "/* //local-state */\n.fixture { color: black; }", encoding="utf-8"
+    )
+    rewrite_raw_asset_hash(pattern)
+
+    assert AtomicPatternRegistry.load(root).resolve("widget-open-technical", 1)
+
+
+def test_v3_registry_ignores_local_state_html_comment(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "fragment.html").write_text(
+        "<!-- //local-state -->\n<div class=\"fixture\">ok</div>", encoding="utf-8"
+    )
+    rewrite_raw_asset_hash(pattern)
+
+    assert AtomicPatternRegistry.load(root).resolve("widget-open-technical", 1)
+
+
+def test_v3_registry_rejects_external_html_url(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "fragment.html").write_text(
+        '<img src="//cdn.invalid/pixel" alt="external">', encoding="utf-8"
+    )
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
 def test_v3_hash_uses_unambiguous_asset_framing(tmp_path: Path) -> None:
     first = tmp_path / "first"
     second = tmp_path / "second"
@@ -336,6 +438,29 @@ def test_selector_catalog_requires_active_approved_definition(tmp_path: Path) ->
     assert [item["pattern_id"] for item in catalog] == ["approved"]
 
 
+def test_selector_catalog_review_override_can_approve_or_reject(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    write_atomic_pattern(root / "manifest-ready", pattern_id="manifest-ready")
+    write_atomic_pattern(root / "manifest-approved", pattern_id="manifest-approved")
+    for name, state in (("manifest-ready", "ready_for_review"),):
+        manifest_path = root / name / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["provenance"]["review_state"] = state
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+
+    registry = AtomicPatternRegistry.load(root)
+    catalog = registry.selector_catalog(
+        effective_review_states={
+            ("manifest-ready", 1): "approved",
+            ("manifest-approved", 1): "rejected",
+        }
+    )
+
+    assert [item["pattern_id"] for item in catalog] == ["manifest-ready"]
+
+
 @pytest.mark.parametrize(
     "description",
     [
@@ -372,6 +497,47 @@ def test_v3_registry_accepts_english_and_russian_prose(
     definition = AtomicPatternRegistry.load(root).resolve("widget-open-technical", 1)
 
     assert definition.ai_description == description
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "Let the description explain how the function preserves the runtime contract while the interface adapts calmly across approved visual contexts.",
+        "Описание объясняет состояние runtime и контракт оболочки; визуальная адаптация остаётся безопасной, ясной и согласованной с направлением продукта.",
+    ],
+)
+def test_v3_registry_accepts_natural_prose_words_and_punctuation(
+    tmp_path: Path,
+    description: str,
+) -> None:
+    root = tmp_path / "catalog"
+    write_atomic_pattern(root / "widget-open-technical-v1", ai_description=description)
+
+    definition = AtomicPatternRegistry.load(root).resolve("widget-open-technical", 1)
+
+    assert definition.ai_description == description
+
+
+@pytest.mark.parametrize(
+    "blob",
+    [
+        "QWxhZGRpbjpvcGVuIHNlc2FtZQ" * 6,
+        "deadbeefcafebabe" * 10,
+    ],
+)
+def test_v3_registry_rejects_long_encoded_blob_tokens(
+    tmp_path: Path,
+    blob: str,
+) -> None:
+    root = tmp_path / "catalog"
+    description = (
+        "A neutral technical description explains runtime behavior and preserves "
+        f"the contract token {blob} for a local preview reference."
+    )
+    write_atomic_pattern(root / "widget-open-technical-v1", ai_description=description)
+
+    with pytest.raises(AtomicPatternRegistryError, match="ai_description"):
+        AtomicPatternRegistry.load(root)
 
 
 @pytest.mark.parametrize("mutation", ["remove", "extra"])
