@@ -1239,21 +1239,33 @@ async def _settle_viewport_assets_nonfatal(
     skipped_reasons: list[str],
     image_timeout_reason: str | None,
 ) -> None:
+    def resolved_image_timeout_reason(error: BaseException) -> str | None:
+        if image_timeout_reason is not None:
+            return image_timeout_reason
+        if isinstance(error, TimeoutError) or (
+            type(error).__name__ == "TimeoutError"
+            and type(error).__module__.startswith("playwright.")
+        ):
+            return "initial_viewport_image_settle_timeout"
+        return None
+
     try:
         await _wait_for_fonts_and_viewport_images(page, timeout_ms)
     except FontReadyTimeout as exc:
         if "font_ready_timeout" not in skipped_reasons:
             skipped_reasons.append("font_ready_timeout")
         if exc.image_error is not None:
-            if image_timeout_reason is None:
+            timeout_reason = resolved_image_timeout_reason(exc.image_error)
+            if timeout_reason is None:
                 raise exc.image_error
-            if image_timeout_reason not in skipped_reasons:
-                skipped_reasons.append(image_timeout_reason)
-    except Exception:
-        if image_timeout_reason is None:
+            if timeout_reason not in skipped_reasons:
+                skipped_reasons.append(timeout_reason)
+    except Exception as exc:
+        timeout_reason = resolved_image_timeout_reason(exc)
+        if timeout_reason is None:
             raise
-        if image_timeout_reason not in skipped_reasons:
-            skipped_reasons.append(image_timeout_reason)
+        if timeout_reason not in skipped_reasons:
+            skipped_reasons.append(timeout_reason)
 
 
 async def _wait_for_visual_quiet(

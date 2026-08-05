@@ -1766,6 +1766,38 @@ class PostgresWorkerQueue:
                             now,
                         )
                         return _TerminalRun(run_id=run.id)
+                    if staged is None:
+                        expired_attempt_id = await self._latest_attempt_id(
+                            database,
+                            run.id,
+                            next_stage,
+                        )
+                        expired_record = await self._stage_attempt(
+                            database,
+                            run_id=run.id,
+                            stage=next_stage,
+                            attempt_id=expired_attempt_id,
+                        )
+                        if expired_record.ordinal >= MAX_STAGE_EXECUTIONS:
+                            expired_claim = self._claim_from_run(
+                                run,
+                                attempt_id=expired_attempt_id,
+                            )
+                            await self._fail_locked(
+                                database,
+                                run,
+                                expired_claim,
+                                BuilderEngineError(
+                                    "internal_error",
+                                    "Генерация остановлена после нескольких потерь рабочего процесса",
+                                    diagnostic=(
+                                        f"stage {next_stage!r} exhausted "
+                                        f"{MAX_STAGE_EXECUTIONS} expired leases"
+                                    ),
+                                ),
+                                now,
+                            )
+                            return _TerminalRun(run_id=run.id)
                 run.state = "running"
                 run.current_stage = next_stage
                 run.started_at = run.started_at or now

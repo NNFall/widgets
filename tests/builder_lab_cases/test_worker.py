@@ -56,6 +56,7 @@ from builder_lab.worker import (
     BuilderWorker,
     DurableVisualStore,
     LeaseLostError,
+    MAX_STAGE_EXECUTIONS,
     OrchestratorStageHandler,
     PostgresWorkerQueue,
     RunClaim,
@@ -1799,6 +1800,60 @@ async def test_expired_lease_interrupts_attempt_before_replacement_claim(
                 stale,
                 StageResult(public_message="stale result"),
             )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_repeated_expired_leases_stop_after_bounded_stage_executions(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id)
+    try:
+        claim = await queue.claim("worker-1")
+        assert isinstance(claim, RunClaim)
+
+        for execution in range(2, MAX_STAGE_EXECUTIONS + 1):
+            async with factory() as database, database.begin():
+                run = await database.get(GenerationRun, run_id)
+                assert run is not None
+                run.lease_expires_at = datetime.now(timezone.utc) - timedelta(
+                    seconds=1
+                )
+            claim = await queue.claim(f"worker-{execution}")
+            assert isinstance(claim, RunClaim)
+
+        async with factory() as database, database.begin():
+            run = await database.get(GenerationRun, run_id)
+            assert run is not None
+            run.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+
+        terminal = await queue.claim("worker-over-limit")
+
+        assert terminal is not None
+        assert not isinstance(terminal, RunClaim)
+        async with factory() as database:
+            run = await database.get(GenerationRun, run_id)
+            attempts = (
+                await database.execute(
+                    select(GenerationStageAttempt)
+                    .where(
+                        GenerationStageAttempt.run_id == run_id,
+                        GenerationStageAttempt.stage == "reference_analysis",
+                    )
+                    .order_by(GenerationStageAttempt.ordinal)
+                )
+            ).scalars().all()
+            assert run is not None
+            assert run.state == "failed"
+            assert run.error_code == "internal_error"
+            assert len(attempts) == MAX_STAGE_EXECUTIONS
+            assert [attempt.status for attempt in attempts[:-1]] == [
+                "interrupted"
+            ] * (MAX_STAGE_EXECUTIONS - 1)
+            assert attempts[-1].status == "failed"
     finally:
         await engine.dispose()
 

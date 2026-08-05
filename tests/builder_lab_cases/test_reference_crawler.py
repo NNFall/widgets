@@ -1134,27 +1134,26 @@ class BrowserLifecycleTests(unittest.TestCase):
 
         self.assertEqual(reasons, ["font_ready_timeout"])
 
-    def test_initial_font_timeout_does_not_mask_concurrent_image_failure(self):
+    def test_initial_image_timeout_is_nonfatal_and_recorded(self):
         reasons = []
 
         class FakePage:
             async def evaluate(self, _script, *_args):
-                return "timeout"
+                return "ready"
 
             async def wait_for_function(self, _script, *, timeout):
                 raise TimeoutError(f"image wait timed out after {timeout}ms")
 
-        with self.assertRaisesRegex(TimeoutError, "image wait timed out"):
-            asyncio.run(
-                reference_crawler_module._settle_viewport_assets_nonfatal(
-                    FakePage(),
-                    timeout_ms=1234,
-                    skipped_reasons=reasons,
-                    image_timeout_reason=None,
-                )
+        asyncio.run(
+            reference_crawler_module._settle_viewport_assets_nonfatal(
+                FakePage(),
+                timeout_ms=1234,
+                skipped_reasons=reasons,
+                image_timeout_reason=None,
             )
+        )
 
-        self.assertEqual(reasons, ["font_ready_timeout"])
+        self.assertEqual(reasons, ["initial_viewport_image_settle_timeout"])
 
     def test_scrolled_font_and_image_timeouts_record_both_reasons(self):
         reasons = []
