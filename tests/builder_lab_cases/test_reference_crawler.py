@@ -756,6 +756,107 @@ class SelectiveLocalGuard(PermissiveLocalGuard):
 
 
 class BrowserLifecycleTests(unittest.TestCase):
+    def test_subframe_policy_block_does_not_mask_the_capture_failure(self):
+        failure = reference_crawler_module._capture_failure_message(
+            reference_crawler_module.ReferenceCaptureError(
+                "reference scroll position could not be restored"
+            ),
+            (
+                "cross-origin subframe document blocked: https://example.org/frame",
+            ),
+        )
+
+        self.assertEqual(failure, "reference scroll position could not be restored")
+
+    def test_main_document_policy_block_remains_the_capture_failure(self):
+        failure = reference_crawler_module._capture_failure_message(
+            RuntimeError("navigation aborted"),
+            ("cross-origin document blocked: https://example.org/",),
+        )
+
+        self.assertEqual(failure, "cross-origin document blocked")
+
+    def test_domcontentloaded_timeout_keeps_a_meaningfully_rendered_document(self):
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+        class RenderedPage:
+            url = "https://mindbox.ru/"
+
+            async def goto(self, *_args, **_kwargs):
+                raise PlaywrightTimeoutError("DOMContentLoaded timed out")
+
+            async def evaluate(self, _script):
+                return {
+                    "href": self.url,
+                    "bodyExists": True,
+                    "textLength": 9_488,
+                    "elementCount": 1_561,
+                    "scrollHeight": 9_117,
+                }
+
+        warnings = asyncio.run(
+            reference_crawler_module._goto_reference_document(
+                RenderedPage(),
+                "https://mindbox.ru/",
+                timeout_ms=45_000,
+            )
+        )
+
+        self.assertEqual(warnings, ("domcontentloaded_timeout_rendered",))
+
+    def test_domcontentloaded_timeout_still_rejects_a_blank_document(self):
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+        class BlankPage:
+            url = "about:blank"
+
+            async def goto(self, *_args, **_kwargs):
+                raise PlaywrightTimeoutError("DOMContentLoaded timed out")
+
+            async def evaluate(self, _script):
+                return {
+                    "href": self.url,
+                    "bodyExists": True,
+                    "textLength": 0,
+                    "elementCount": 0,
+                    "scrollHeight": 0,
+                }
+
+        with self.assertRaisesRegex(PlaywrightTimeoutError, "DOMContentLoaded"):
+            asyncio.run(
+                reference_crawler_module._goto_reference_document(
+                    BlankPage(),
+                    "https://example.com/",
+                    timeout_ms=45_000,
+                )
+            )
+
+    def test_load_timeout_after_navigation_is_nonfatal_for_rendered_document(self):
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+        class RenderedPage:
+            url = "https://mindbox.ru/"
+
+            async def wait_for_load_state(self, *_args, **_kwargs):
+                raise PlaywrightTimeoutError("load timed out")
+
+            async def evaluate(self, _script):
+                return {
+                    "href": self.url,
+                    "bodyExists": True,
+                    "textLength": 9_488,
+                    "elementCount": 1_561,
+                    "scrollHeight": 9_117,
+                }
+
+        warnings = asyncio.run(
+            reference_crawler_module._wait_for_reference_load(
+                RenderedPage(), timeout_ms=5_000
+            )
+        )
+
+        self.assertEqual(warnings, ("load_timeout_rendered",))
+
     def test_default_desktop_capture_uses_wide_full_context_viewport(self):
         settings = VisualReferenceCrawler()._settings("desktop")
         self.assertEqual((settings.width, settings.height), (1920, 1080))

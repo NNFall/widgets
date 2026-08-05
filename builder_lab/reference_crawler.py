@@ -1828,17 +1828,19 @@ async def _capture_loaded_page(
     settings: CaptureSettings,
     guard: UrlGuard | None,
     telemetry: CaptureTelemetry,
+    initial_skipped_reasons: Sequence[str] = (),
 ) -> ReferencePageEvidence:
     started = time.monotonic()
     phase_started = started
     timings_ms: dict[str, int | float] = {}
     observed_texts: list[str] = []
-    skipped_reasons: list[str] = []
+    skipped_reasons = list(initial_skipped_reasons)
     samples: list[Mapping[str, Any]] = []
 
     timeout_ms = settings.page_timeout_seconds * 1000
-    await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
-    await page.wait_for_load_state("load", timeout=timeout_ms)
+    skipped_reasons.extend(
+        await _wait_for_reference_load(page, timeout_ms=min(timeout_ms, 5_000))
+    )
     if any(
         item.startswith("cross-origin document blocked:")
         for item in telemetry.policy_blocks
@@ -2092,6 +2094,101 @@ async def _capture_loaded_page(
     )
 
 
+async def _has_meaningfully_rendered_document(page: Any) -> bool:
+    try:
+        probe = await page.evaluate(
+            """() => {
+              const body = document.body;
+              const root = document.scrollingElement || document.documentElement;
+              return {
+                href: location.href,
+                bodyExists: Boolean(body),
+                textLength: (body?.innerText || '').trim().length,
+                elementCount: body?.querySelectorAll('*').length || 0,
+                scrollHeight: root?.scrollHeight || 0,
+              };
+            }"""
+        )
+    except Exception:
+        return False
+    if not isinstance(probe, Mapping) or not probe.get("bodyExists"):
+        return False
+    try:
+        href = str(probe.get("href", ""))
+        text_length = int(probe.get("textLength", 0))
+        element_count = int(probe.get("elementCount", 0))
+        scroll_height = int(probe.get("scrollHeight", 0))
+    except (TypeError, ValueError):
+        return False
+    if urlsplit(href).scheme not in {"http", "https"}:
+        return False
+    return scroll_height >= 200 and (
+        text_length >= 40 or element_count >= 8
+    )
+
+
+async def _goto_reference_document(
+    page: Any,
+    url: str,
+    *,
+    timeout_ms: int,
+) -> tuple[str, ...]:
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+    try:
+        await page.goto(
+            url,
+            wait_until="domcontentloaded",
+            timeout=timeout_ms,
+        )
+    except PlaywrightTimeoutError:
+        if not await _has_meaningfully_rendered_document(page):
+            raise
+        return ("domcontentloaded_timeout_rendered",)
+    return ()
+
+
+async def _wait_for_reference_load(
+    page: Any,
+    *,
+    timeout_ms: int,
+) -> tuple[str, ...]:
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+    try:
+        await page.wait_for_load_state("load", timeout=timeout_ms)
+    except PlaywrightTimeoutError:
+        if not await _has_meaningfully_rendered_document(page):
+            raise
+        return ("load_timeout_rendered",)
+    return ()
+
+
+_FATAL_DOCUMENT_POLICY_PREFIXES = (
+    "cross-origin document blocked:",
+    "cross-origin document redirect blocked:",
+    "malformed document URL blocked:",
+    "popup document blocked:",
+    "robots policy blocked document:",
+    "unexpected document redirect blocked:",
+)
+
+
+def _capture_failure_message(
+    exc: BaseException,
+    policy_blocks: Sequence[str],
+) -> str:
+    policy_reason = next(
+        (
+            item.split(":", 1)[0]
+            for item in policy_blocks
+            if item.startswith(_FATAL_DOCUMENT_POLICY_PREFIXES)
+        ),
+        None,
+    )
+    return policy_reason or _exception_text(exc)
+
+
 async def _trace_failure(context: Any, ttl_seconds: int) -> TraceEvidence | None:
     try:
         with tempfile.TemporaryDirectory(prefix="kaigo-reference-trace-") as temp_dir:
@@ -2171,10 +2268,10 @@ async def capture_reference_page(
         telemetry.attach_page(page)
         await context.tracing.start(screenshots=True, snapshots=True, sources=False)
         try:
-            await page.goto(
+            navigation_warnings = await _goto_reference_document(
+                page,
                 url,
-                wait_until="domcontentloaded",
-                timeout=settings.page_timeout_seconds * 1000,
+                timeout_ms=settings.page_timeout_seconds * 1000,
             )
             evidence = await _capture_loaded_page(
                 page,
@@ -2185,21 +2282,13 @@ async def capture_reference_page(
                 settings=settings,
                 guard=guard,
                 telemetry=telemetry,
+                initial_skipped_reasons=navigation_warnings,
             )
         except Exception as exc:
             trace = await _trace_failure(context, trace_ttl_seconds)
-            policy_reason = next(
-                (
-                    item.split(":", 1)[0]
-                    for item in telemetry.policy_blocks
-                    if "document" in item and "blocked" in item
-                ),
-                None,
-            )
             message = (
                 telemetry.byte_limit_error
-                or policy_reason
-                or _sanitize_text(str(exc))
+                or _capture_failure_message(exc, telemetry.policy_blocks)
             )
             raise ReferenceCaptureError(message, trace=trace) from exc
         else:
