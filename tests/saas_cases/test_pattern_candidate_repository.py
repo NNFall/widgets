@@ -729,6 +729,22 @@ async def test_deleted_model_call_keeps_exposure_identity_distinct_from_no_call(
                 model_call_id=None,
             )
             assert replay.id == no_call_id
+            no_call_claim = await repository.record_usage_claim(
+                run_id=run_id,
+                stage=Stage.CONVERSATION,
+                candidate_item_id=item.id,
+                usage_mode="primary",
+                model_call_id=None,
+            )
+            assert no_call_claim.exposure_id == no_call_id
+            with pytest.raises(ValueError, match="model call"):
+                await repository.record_usage_claim(
+                    run_id=run_id,
+                    stage=Stage.CONVERSATION,
+                    exposure_id=with_call_id,
+                    usage_mode="primary",
+                    model_call_id=None,
+                )
     finally:
         await engine.dispose()
 

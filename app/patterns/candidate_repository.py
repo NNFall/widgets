@@ -72,6 +72,11 @@ def _stage_value(stage: Stage | str) -> str:
     return value
 
 
+def _model_call_identity(model_call_id: UUID | None) -> UUID:
+    """Return the durable exposure identity for a nullable model call."""
+    return model_call_id or _NULL_MODEL_CALL_ID
+
+
 @dataclass(frozen=True, slots=True)
 class PersistedPatternCandidateItem:
     id: UUID
@@ -540,7 +545,7 @@ class PatternCandidateRepository:
         if stage_value not in tuple(group.stage_mapping or ()):
             raise ValueError("candidate category is not permitted for stage")
         await self._validate_model_call(model_call_id, run_id, stage_value)
-        idempotency_model_call_id = model_call_id or _NULL_MODEL_CALL_ID
+        idempotency_model_call_id = _model_call_identity(model_call_id)
         filters = [PatternStageExposure.run_id == run_id, PatternStageExposure.stage == stage_value, PatternStageExposure.candidate_item_id == candidate_item_id]
         filters.append(
             PatternStageExposure.idempotency_model_call_id == idempotency_model_call_id
@@ -587,6 +592,7 @@ class PatternCandidateRepository:
             raise ValueError("usage mode is invalid")
         if candidate_item_id is None and exposure_id is None:
             raise ValueError("candidate item or exposure is required")
+        idempotency_model_call_id = _model_call_identity(model_call_id)
         if exposure_id is not None:
             exposure = await self._session.scalar(select(PatternStageExposure).where(PatternStageExposure.id == exposure_id))
             if exposure is None:
@@ -601,19 +607,23 @@ class PatternCandidateRepository:
                 raise ValueError("candidate item is not exposed for run and stage")
             exposures = (await self._session.execute(
                 select(PatternStageExposure)
-                .where(PatternStageExposure.run_id == run_id, PatternStageExposure.stage == stage_value, PatternStageExposure.candidate_item_id == candidate_item_id)
+                .where(
+                    PatternStageExposure.run_id == run_id,
+                    PatternStageExposure.stage == stage_value,
+                    PatternStageExposure.candidate_item_id == candidate_item_id,
+                    PatternStageExposure.idempotency_model_call_id == idempotency_model_call_id,
+                )
                 .order_by(PatternStageExposure.created_at, PatternStageExposure.id)
             )).scalars().all()
-            matching = [row for row in exposures if row.model_call_id == model_call_id]
-            if not matching:
+            if not exposures:
                 raise ValueError("candidate item is not exposed")
-            if len(matching) > 1:
+            if len(exposures) > 1:
                 raise ValueError("candidate exposure is ambiguous")
-            exposure = matching[0]
+            exposure = exposures[0]
         if candidate_item_id is not None and exposure.candidate_item_id != candidate_item_id:
             raise ValueError("exposure candidate does not match")
         await self._validate_model_call(model_call_id, run_id, stage_value)
-        if exposure.model_call_id != model_call_id:
+        if exposure.idempotency_model_call_id != idempotency_model_call_id:
             raise ValueError("model call does not match exposure")
         existing = await self._session.scalar(select(PatternStageUsageClaim).where(PatternStageUsageClaim.exposure_id == exposure.id))
         if existing is not None:
