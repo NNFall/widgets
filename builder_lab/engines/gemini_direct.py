@@ -581,12 +581,14 @@ class GeminiDirectEngine:
         selected_direction: DirectionProposal,
         selector_catalog: tuple[dict[str, Any], ...],
         correction: str | None = None,
+        optional_categories: tuple[str, ...] = (),
     ) -> PatternCandidatePlanResult:
         prompt = build_pattern_candidate_plan_prompt(
             request=request,
             selected_direction=selected_direction,
             selector_catalog=selector_catalog,
             correction=correction,
+            optional_categories=optional_categories,
         )
         response = await self._generate_structured(
             prompt=prompt,
@@ -604,11 +606,16 @@ class GeminiDirectEngine:
             payload = _response_payload(response)
             plan = PatternCandidatePlan.from_dict(payload)
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            provider_request_id = (
+                getattr(response, "request_id", None)
+                or getattr(response, "response_id", None)
+            )
             raise BuilderEngineError(
                 "invalid_structured_output",
                 "РЎРµСЂРІРёСЃ РіРµРЅРµСЂР°С†РёРё РІРµСЂРЅСѓР» РЅРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ РїР»Р°РЅ РєР°РЅРґРёРґР°С‚РѕРІ",
                 diagnostic=f"{type(exc).__name__}: {exc}",
                 usage=_usage(response),
+                provider_request_id=provider_request_id,
             ) from exc
         provider_request_id = (
             getattr(response, "request_id", None)

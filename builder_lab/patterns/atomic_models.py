@@ -486,8 +486,8 @@ class PatternCandidatePlan:
             _identifier(self.direction_id, name="direction_id"),
         )
         groups = tuple(self.groups)
-        if not 1 <= len(groups) <= len(AtomicPatternCategory):
-            raise ValueError("groups must contain between one and fourteen categories")
+        if not 0 <= len(groups) <= len(AtomicPatternCategory):
+            raise ValueError("groups must contain between zero and fourteen categories")
         if any(not isinstance(item, PatternCandidateGroup) for item in groups):
             raise ValueError("groups contain an invalid value")
         categories = [item.category for item in groups]

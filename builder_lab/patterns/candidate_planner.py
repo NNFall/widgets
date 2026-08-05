@@ -104,6 +104,23 @@ def _metadata_review_state(item: Mapping[str, Any]) -> object:
     return item.get("review_state")
 
 
+def _filter_selector_catalog(
+    *,
+    registry: AtomicPatternRegistry,
+    selector_catalog: Sequence[Mapping[str, Any]],
+    effective_approved: Mapping[tuple[str, int], object]
+    | Collection[tuple[str, int]]
+    | None,
+) -> tuple[Mapping[str, Any], ...]:
+    """Keep only exact active/effectively-approved metadata for the selector."""
+
+    return _eligible_catalog(
+        registry=registry,
+        selector_catalog=selector_catalog,
+        effective_approved=effective_approved,
+    )
+
+
 def _eligible_catalog(
     *,
     registry: AtomicPatternRegistry,
@@ -257,6 +274,24 @@ def validate_pattern_candidate_plan(
             if key not in selected_definitions:
                 raise PatternCandidateValidationError("candidate could not be resolved")
 
+    declared_categories = {group.category for group in parsed.groups}
+    expected_categories = set(eligible_by_category) | set(optional)
+    if declared_categories != expected_categories:
+        missing = sorted(
+            category.value for category in expected_categories - declared_categories
+        )
+        extra = sorted(
+            category.value for category in declared_categories - expected_categories
+        )
+        details = []
+        if missing:
+            details.append("missing=" + ",".join(missing))
+        if extra:
+            details.append("unexpected=" + ",".join(extra))
+        raise PatternCandidateValidationError(
+            "plan categories do not match eligible categories (" + "; ".join(details) + ")"
+        )
+
     # The model enforces canonical ranks, but retaining this explicit check
     # protects callers that pass a hand-built object from a different version.
     for group in parsed.groups:
@@ -274,10 +309,9 @@ def validate_pattern_candidate_plan(
             other = selected_by_pattern.get(incompatible_id)
             if other is None:
                 continue
-            if definition.pattern_id not in other.incompatible_with:
-                raise PatternCandidateValidationError(
-                    "incompatibilities must be symmetric"
-                )
+            raise PatternCandidateValidationError(
+                "selected candidates are incompatible"
+            )
     return parsed
 
 
@@ -304,31 +338,39 @@ def _fallback_plan(
     for category in optional:
         grouped.setdefault(category, [])
 
+    selected: list[AtomicPatternDefinition] = []
     groups: list[PatternCandidateGroup] = []
     for category in sorted(grouped, key=lambda value: value.value):
         entries = sorted(
             grouped[category],
             key=lambda item: (str(item["category"]), str(item["pattern_id"]), int(item["version"])),
-        )[:5]
+        )
+        chosen: list[PatternCandidate] = []
+        for item in entries:
+            definition = registry.resolve(str(item["pattern_id"]), int(item["version"]))
+            if any(
+                definition.pattern_id in other.incompatible_with
+                or other.pattern_id in definition.incompatible_with
+                for other in selected
+            ):
+                continue
+            chosen.append(
+                PatternCandidate(
+                    pattern_id=definition.pattern_id,
+                    version=definition.version,
+                    rank=len(chosen) + 1,
+                    reason="Deterministic server fallback ordered by category and exact version.",
+                )
+            )
+            selected.append(definition)
+            if len(chosen) == 5:
+                break
         groups.append(
             PatternCandidateGroup(
                 category=category,
-                candidates=tuple(
-                    PatternCandidate(
-                        pattern_id=str(item["pattern_id"]),
-                        version=int(item["version"]),
-                        rank=rank,
-                        reason="Deterministic server fallback ordered by category and exact version.",
-                    )
-                    for rank, item in enumerate(entries, start=1)
-                ),
+                candidates=tuple(chosen),
             )
         )
-    if not groups:
-        # The schema requires at least one group.  An empty optional category is
-        # the only safe representation when the effective catalog is empty.
-        category = next(iter(optional), AtomicPatternCategory.BACKGROUND_EFFECT)
-        groups.append(PatternCandidateGroup(category=category, candidates=()))
     return PatternCandidatePlan(
         schema_version=2,
         direction_id=direction_id,
@@ -373,7 +415,18 @@ async def plan_pattern_candidates(
 ) -> PatternCandidatePlanResult:
     """Call the untrusted selector once, retry once with diagnostics, then fallback."""
 
-    catalog = tuple(selector_catalog) if selector_catalog is not None else registry.selector_catalog()
+    raw_catalog = (
+        tuple(selector_catalog)
+        if selector_catalog is not None
+        else registry.selector_catalog()
+    )
+    optional = _normalise_optional_categories(optional_categories)
+    optional_values = tuple(category.value for category in sorted(optional, key=lambda item: item.value))
+    catalog = _filter_selector_catalog(
+        registry=registry,
+        selector_catalog=raw_catalog,
+        effective_approved=effective_approved,
+    )
     total_usage = TokenUsage()
     request_ids: list[str] = []
     diagnostics: list[str] = []
@@ -386,6 +439,7 @@ async def plan_pattern_candidates(
                 selected_direction=selected_direction,
                 selector_catalog=tuple(catalog),
                 correction=current_correction,
+                optional_categories=optional_values,
             )
             raw_plan, usage, ids = _result_parts(raw_result)
             if isinstance(usage, TokenUsage):
@@ -398,7 +452,7 @@ async def plan_pattern_candidates(
                 registry=registry,
                 selector_catalog=catalog,
                 effective_approved=effective_approved,
-                optional_categories=optional_categories,
+                optional_categories=optional,
                 selected_direction=selected_direction,
             )
             return PatternCandidatePlanResult(
@@ -427,7 +481,15 @@ async def plan_pattern_candidates(
         registry=registry,
         selector_catalog=catalog,
         effective_approved=effective_approved,
-        optional_categories=optional_categories,
+        optional_categories=optional,
+    )
+    fallback = validate_pattern_candidate_plan(
+        fallback,
+        registry=registry,
+        selector_catalog=catalog,
+        effective_approved=effective_approved,
+        optional_categories=optional,
+        selected_direction=selected_direction,
     )
     return PatternCandidatePlanResult(
         plan=fallback,

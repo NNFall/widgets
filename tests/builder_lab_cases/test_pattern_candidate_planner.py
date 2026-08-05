@@ -32,11 +32,12 @@ from builder_lab.prompts import (
 )
 
 
-def builder_request() -> BuilderRequest:
+def builder_request(*, reference_context: str = "") -> BuilderRequest:
     return BuilderRequest(
         engine=EngineName.DIRECT,
         brief="Compact assistant widget for an architecture studio.",
         locale="en",
+        reference_context=reference_context,
     )
 
 
@@ -101,6 +102,21 @@ def test_selector_prompt_contains_full_ai_description_but_no_assets() -> None:
     assert "implementation code" in prompt.lower()
 
 
+def test_selector_prompt_includes_bounded_untrusted_reference_and_optional_categories() -> None:
+    reference = "site-context-marker " + ("reference " * 700)
+    prompt = build_pattern_candidate_plan_prompt(
+        request=builder_request(reference_context=reference),
+        selected_direction=direction(),
+        selector_catalog=catalog(),
+        optional_categories=(AtomicPatternCategory.WIDGET_OPEN,),
+    )
+
+    assert "UNTRUSTED_GROUNDED_REFERENCE_JSON" in prompt
+    assert "site-context-marker" in prompt
+    assert "widget_open" in prompt
+    assert reference not in prompt
+
+
 def test_schema_and_models_pin_schema_version_two() -> None:
     assert PATTERN_CANDIDATE_PLAN_JSON_SCHEMA["properties"]["schema_version"] == {
         "type": "integer",
@@ -137,7 +153,11 @@ def test_validation_rejects_unknown_version_and_category() -> None:
         validate_pattern_candidate_plan(
             plan_for(unknown_version),
             registry=registry,
-            selector_catalog=catalog(registry),
+            selector_catalog=tuple(
+                item
+                for item in catalog(registry)
+                if item["category"] == "widget_open"
+            ),
         )
 
     wrong_category = PatternCandidateGroup(
@@ -261,7 +281,7 @@ def test_validation_rejects_asymmetric_incompatibility() -> None:
     incompatible_registry = AtomicPatternRegistry(
         (
             replace(first, incompatible_with=(second.pattern_id,)),
-            second,
+            replace(second, incompatible_with=(first.pattern_id,)),
         )
     )
     plan = plan_for(
@@ -274,11 +294,35 @@ def test_validation_rejects_asymmetric_incompatibility() -> None:
             candidates=(PatternCandidate(second.pattern_id, 1, 1, "close"),),
         ),
     )
-    with pytest.raises(PatternCandidateValidationError, match="symmetric"):
+    with pytest.raises(PatternCandidateValidationError, match="incompatible"):
         validate_pattern_candidate_plan(
             plan,
             registry=incompatible_registry,
             selector_catalog=tuple(item.selector_dict() for item in incompatible_registry.definitions),
+        )
+
+
+def test_validation_rejects_omitted_eligible_and_declared_optional_categories() -> None:
+    registry = approved_registry()
+    subset = tuple(
+        item
+        for item in catalog(registry)
+        if item["category"] in {"widget_open", "widget_close"}
+    )
+    with pytest.raises(PatternCandidateValidationError, match="categories"):
+        validate_pattern_candidate_plan(
+            plan_for(candidate(AtomicPatternCategory.WIDGET_OPEN)),
+            registry=registry,
+            selector_catalog=subset,
+        )
+    with pytest.raises(PatternCandidateValidationError, match="categories"):
+        validate_pattern_candidate_plan(
+            plan_for(candidate(AtomicPatternCategory.WIDGET_OPEN)),
+            registry=registry,
+            selector_catalog=(
+                next(item for item in subset if item["category"] == "widget_open"),
+            ),
+            optional_categories=(AtomicPatternCategory.WIDGET_CLOSE,),
         )
 
 
@@ -299,10 +343,24 @@ class FakeSelectorEngine:
 
 def valid_payload(registry: AtomicPatternRegistry | None = None):
     registry = registry or approved_registry()
+    by_category: dict[AtomicPatternCategory, list] = {}
+    for item in registry.definitions:
+        by_category.setdefault(item.category, []).append(item)
     return plan_for(
         *(
-            candidate(item.category)
-            for item in registry.definitions[:2]
+            PatternCandidateGroup(
+                category=category,
+                candidates=tuple(
+                    PatternCandidate(
+                        pattern_id=item.pattern_id,
+                        version=item.version,
+                        rank=rank,
+                        reason="Matches the requested direction and runtime contract.",
+                    )
+                    for rank, item in enumerate(items[:5], start=1)
+                ),
+            )
+            for category, items in sorted(by_category.items(), key=lambda pair: pair[0].value)
         )
     )
 
@@ -333,6 +391,77 @@ async def test_repeated_invalid_selector_output_uses_deterministic_fallback() ->
     assert len(engine.calls[1]["correction"]) <= 1200
 
 
+@pytest.mark.asyncio
+async def test_fallback_is_sorted_compatible_and_server_validated() -> None:
+    original = approved_registry()
+    first = original.resolve("widget-open-technical", 1)
+    close = original.resolve("widget-close-technical", 1)
+    open_v2 = replace(
+        first,
+        pattern_id="widget-open-alt-technical",
+        incompatible_with=(),
+    )
+    open_v3 = replace(
+        first,
+        pattern_id="widget-open-alt-two-technical",
+        incompatible_with=(),
+    )
+    fallback_registry = AtomicPatternRegistry(
+        tuple(
+            replace(item, incompatible_with=(close.pattern_id,))
+            if item.pattern_id == first.pattern_id
+            else replace(item, incompatible_with=(first.pattern_id,))
+            if item.pattern_id == close.pattern_id
+            else item
+            for item in original.definitions
+        )
+        + (open_v2, open_v3)
+    )
+    engine = FakeSelectorEngine([
+        plan_for(candidate(AtomicPatternCategory.WIDGET_OPEN)),
+        plan_for(candidate(AtomicPatternCategory.WIDGET_OPEN)),
+    ])
+
+    result = await plan_pattern_candidates(
+        engine,
+        request=builder_request(),
+        selected_direction=direction(),
+        registry=fallback_registry,
+    )
+
+    assert result.used_fallback is True
+    validate_pattern_candidate_plan(
+        result.plan,
+        registry=fallback_registry,
+        selector_catalog=fallback_registry.selector_catalog(),
+    )
+    selected = {
+        item.pattern_id
+        for group in result.plan.groups
+        for item in group.candidates
+    }
+    assert not {first.pattern_id, close.pattern_id} <= selected
+
+
+@pytest.mark.asyncio
+async def test_effective_approved_catalog_is_filtered_before_selector_call() -> None:
+    registry = approved_registry()
+    filtered_key = ("widget-open-technical", 1)
+    engine = FakeSelectorEngine([plan_for(candidate(AtomicPatternCategory.WIDGET_OPEN))])
+
+    await plan_pattern_candidates(
+        engine,
+        request=builder_request(),
+        selected_direction=direction(),
+        registry=registry,
+        selector_catalog=catalog(registry),
+        effective_approved={filtered_key},
+    )
+
+    sent_ids = {(item["pattern_id"], item["version"]) for item in engine.calls[0]["selector_catalog"]}
+    assert sent_ids == {filtered_key}
+
+
 class RaisingSelectorEngine:
     def __init__(self):
         self.calls = 0
@@ -354,6 +483,55 @@ async def test_selector_exception_retries_once_then_uses_fallback() -> None:
     assert engine.calls == 2
     assert result.used_fallback is True
     assert result.plan.groups
+
+
+@pytest.mark.asyncio
+async def test_empty_catalog_fallback_does_not_invent_non_optional_category() -> None:
+    invalid = plan_for(candidate(AtomicPatternCategory.WIDGET_OPEN))
+    result = await plan_pattern_candidates(
+        FakeSelectorEngine([invalid, invalid]),
+        request=builder_request(),
+        selected_direction=direction(),
+        registry=approved_registry(),
+        selector_catalog=(),
+        optional_categories=(),
+    )
+    assert result.used_fallback is True
+    assert result.plan.groups == ()
+
+
+@pytest.mark.asyncio
+async def test_invalid_structured_response_preserves_each_provider_request_id() -> None:
+    from builder_lab.engines.gemini_direct import GeminiDirectEngine
+
+    class Router:
+        def __init__(self):
+            self.calls = 0
+
+        async def generate(self, **kwargs):
+            self.calls += 1
+            return SimpleNamespace(
+                parsed={"schema_version": 1},
+                text="",
+                response_id=f"invalid-{self.calls}",
+                usage_metadata=None,
+                model_version="gemini-3.6-flash",
+            )
+
+    router = Router()
+    engine = GeminiDirectEngine(
+        model_router=router,
+        routing_role="selector-role",
+        run_id="run-1",
+    )
+    result = await plan_pattern_candidates(
+        engine,
+        request=builder_request(),
+        selected_direction=direction(),
+        registry=approved_registry(),
+    )
+    assert result.used_fallback is True
+    assert result.provider_request_ids == ("invalid-1", "invalid-2")
 
 
 @pytest.mark.asyncio
@@ -397,14 +575,17 @@ async def test_selector_returns_one_candidate_when_only_one_is_eligible() -> Non
     selector_catalog = tuple(
         item for item in catalog(registry) if item["category"] == "widget_open"
     )
-    plan = valid_payload(registry)
+    plan = plan_for(candidate(AtomicPatternCategory.WIDGET_OPEN))
+    engine = FakeSelectorEngine([plan])
     result = await plan_pattern_candidates(
-        FakeSelectorEngine([plan]),
+        engine,
         request=builder_request(),
         selected_direction=direction(),
         registry=registry,
         selector_catalog=selector_catalog,
     )
+    assert result.used_fallback is False
+    assert len(engine.calls) == 1
     assert len(result.plan.groups) == 1
     assert len(result.plan.groups[0].candidates) == 1
 
@@ -424,6 +605,8 @@ async def test_optional_category_without_eligible_candidates_may_be_empty() -> N
         optional_categories={AtomicPatternCategory.WIDGET_OPEN},
     )
     assert result.plan.groups[0].candidates == ()
+    assert result.used_fallback is False
+    assert result.plan.groups[0].category is AtomicPatternCategory.WIDGET_OPEN
 
 
 @pytest.mark.asyncio
@@ -470,8 +653,10 @@ async def test_direct_engine_structured_method_uses_pattern_operation_and_router
         request=builder_request(),
         selected_direction=direction(),
         selector_catalog=catalog(),
+        optional_categories=("widget_open",),
     )
     assert result.plan.schema_version == 2
     assert calls[0]["request"].temperature == 0.2
     assert calls[0]["context"].operation == "pattern_candidate_plan"
     assert result.provider_request_id == "pattern-request-1"
+    assert "widget_open" in calls[0]["request"].prompt

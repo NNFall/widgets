@@ -85,12 +85,14 @@ class BuilderEngineError(RuntimeError):
         *,
         diagnostic: str | None = None,
         usage: TokenUsage | None = None,
+        provider_request_id: str | None = None,
     ) -> None:
         super().__init__(public_message)
         self.error_code = error_code
         self.public_message = public_message
         self.diagnostic = diagnostic
         self.usage = usage or TokenUsage()
+        self.provider_request_id = provider_request_id
 
 
 class BuilderEngine(Protocol):
@@ -128,6 +130,7 @@ class DirectBuilderEngine(BuilderEngine, Protocol):
         selected_direction: DirectionProposal,
         selector_catalog: tuple[dict[str, Any], ...],
         correction: str | None = None,
+        optional_categories: tuple[str, ...] = (),
     ) -> PatternCandidatePlanResult: ...
 
     async def develop_concept_role(
