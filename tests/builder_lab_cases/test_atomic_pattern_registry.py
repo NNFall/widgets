@@ -293,6 +293,28 @@ def test_v3_registry_rejects_dot_member_browser_sinks(
 @pytest.mark.parametrize(
     "behavior",
     [
+        "open('/telemetry')",
+        "location = '/telemetry'",
+        'setTimeout("fetch(\'/telemetry\')", 0)',
+        'setInterval("fetch(\'/telemetry\')", 0)',
+    ],
+)
+def test_v3_registry_rejects_bare_browser_global_sinks_and_timers(
+    tmp_path: Path,
+    behavior: str,
+) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "behavior.js").write_text(behavior, encoding="utf-8")
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
+@pytest.mark.parametrize(
+    "behavior",
+    [
         r'globalThis["f\x65tch"]("x")',
         r'globalThis["f\u0065tch"]("x")',
     ],

@@ -79,6 +79,10 @@ _HTML_URL_ATTRIBUTES = frozenset(
 _DANGEROUS_IDENTIFIERS = frozenset(
     {
         "fetch",
+        "open",
+        "location",
+        "settimeout",
+        "setinterval",
         "xmlhttprequest",
         "websocket",
         "eventsource",
