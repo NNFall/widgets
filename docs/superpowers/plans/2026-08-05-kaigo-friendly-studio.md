@@ -31,7 +31,7 @@
 - Modify: `frontend/src/studio/useBuilderRun.ts`
 - Test: `frontend/src/studio/SaasStudioFlow.test.tsx`
 
-- [ ] **Step 1: Write the failing presentation tests**
+- [x] **Step 1: Write the failing presentation tests**
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -59,13 +59,13 @@ describe('Studio presentation', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run: `.\frontend\node_modules\.bin\vitest.cmd run --root frontend src/studio/studioPresentation.test.ts --maxWorkers=1`
 
 Expected: FAIL because `studioPresentation.ts` does not exist.
 
-- [ ] **Step 3: Implement the presentation module**
+- [x] **Step 3: Implement the presentation module**
 
 ```ts
 import type { BuilderRunStatus, BuilderStage } from './types';
@@ -112,11 +112,11 @@ export function safeActivityForEvent(event: { type: string; stage: BuilderStage 
 
 Add `current_stage?: BuilderStage | null` and `last_completed_stage?: BuilderStage | null` to `BuilderRunSnapshot`; copy both fields in `adaptSaasRun`.
 
-- [ ] **Step 4: Write a failing equal-sequence terminal-regression test**
+- [x] **Step 4: Write a failing equal-sequence terminal-regression test**
 
 In `SaasStudioFlow.test.tsx`, hydrate a completed run, then return a running snapshot for the same run and `latest_sequence`. Assert the completed state remains visible.
 
-- [ ] **Step 5: Implement the monotonic guard**
+- [x] **Step 5: Implement the monotonic guard**
 
 ```ts
 const previous = runRef.current;
@@ -130,13 +130,13 @@ if (
 ) return;
 ```
 
-- [ ] **Step 6: Run focused tests and verify GREEN**
+- [x] **Step 6: Run focused tests and verify GREEN**
 
 Run: `.\frontend\node_modules\.bin\vitest.cmd run --root frontend src/studio/studioPresentation.test.ts src/studio/SaasStudioFlow.test.tsx --maxWorkers=1`
 
 Expected: both files pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add frontend/src/studio/studioPresentation.ts frontend/src/studio/studioPresentation.test.ts frontend/src/studio/types.ts frontend/src/studio/useBuilderRun.ts frontend/src/studio/SaasStudioFlow.test.tsx

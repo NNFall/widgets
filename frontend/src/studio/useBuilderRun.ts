@@ -545,7 +545,7 @@ function adaptPreview(preview: SaasRunSnapshot['preview']): WidgetArtifact | nul
   };
 }
 
-function adaptSaasRun(project: SaasProject, run: SaasRunSnapshot): BuilderRunSnapshot {
+export function adaptSaasRunSnapshot(project: SaasProject, run: SaasRunSnapshot): BuilderRunSnapshot {
   const preview = adaptPreview(run.preview);
   const status = saasStatus(run);
   const createdAt = Date.parse(run.created_at);
@@ -568,6 +568,8 @@ function adaptSaasRun(project: SaasProject, run: SaasRunSnapshot): BuilderRunSna
     },
     status,
     progress: run.progress,
+    current_stage: run.current_stage,
+    last_completed_stage: run.last_completed_stage,
     created_at: run.created_at,
     updated_at: run.finished_at ?? run.started_at ?? run.created_at,
     latest_sequence: run.latest_sequence,
@@ -581,6 +583,16 @@ function adaptSaasRun(project: SaasProject, run: SaasRunSnapshot): BuilderRunSna
     error_code: run.error_code,
     cancel_requested: false,
   };
+}
+
+export function isSaasRunRegression(
+  previous: SaasRunSnapshot | null,
+  next: SaasRunSnapshot,
+  observedSequence: number,
+): boolean {
+  if (!previous || previous.id !== next.id) return false;
+  if (next.latest_sequence < Math.max(previous.latest_sequence, observedSequence)) return true;
+  return TERMINAL_STATUSES.has(saasStatus(previous)) && !TERMINAL_STATUSES.has(saasStatus(next));
 }
 
 function saasError(error: unknown, fallback: string): StudioError {
@@ -766,13 +778,13 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
   const applyRun = useCallback((owner: SaasProject, run: SaasRunSnapshot) => {
     if (run.project_id !== owner.id) return;
     const previous = runRef.current;
-    if (previous?.id === run.id && run.latest_sequence < Math.max(previous.latest_sequence, lastSequenceRef.current)) return;
+    if (isSaasRunRegression(previous, run, lastSequenceRef.current)) return;
     if (previous?.id !== run.id) lastSequenceRef.current = 0;
     runRef.current = run;
     const hydratedSequence = Math.max(0, ...(run.events ?? []).map((event) => event.sequence));
     lastSequenceRef.current = Math.max(lastSequenceRef.current, hydratedSequence);
     setRunId(run.id);
-    setSnapshot(adaptSaasRun(owner, run));
+    setSnapshot(adaptSaasRunSnapshot(owner, run));
     setEvents((current) => {
       const unique = new Map<number, BuilderEvent>();
       if (previous?.id === run.id) {

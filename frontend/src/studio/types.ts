@@ -73,6 +73,8 @@ export interface BuilderRunSnapshot {
   request: BuilderRequest;
   status: BuilderRunStatus;
   progress?: number;
+  current_stage?: BuilderStage | null;
+  last_completed_stage?: BuilderStage | null;
   created_at: string;
   updated_at: string;
   latest_sequence: number;

@@ -3,6 +3,8 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { StudioPage } from './StudioPage';
+import type { SaasProject, SaasRunSnapshot } from './types';
+import { adaptSaasRunSnapshot, isSaasRunRegression } from './useBuilderRun';
 
 const PROJECT_ID = '5d34bcab-cfd3-4ca2-8398-eb59f34aab92';
 const RUN_ID = 'a7c3081e-936c-41fc-85c0-e3484484c726';
@@ -121,6 +123,42 @@ afterEach(() => {
 });
 
 describe('durable SaaS Studio flow', () => {
+  it('preserves backend stage progress in the adapted Studio snapshot', () => {
+    const owner = project() as SaasProject;
+    const source = run({
+      status: 'running',
+      state: 'running',
+      current_stage: 'conversation',
+      last_completed_stage: 'identity',
+    }) as SaasRunSnapshot;
+
+    expect(adaptSaasRunSnapshot(owner, source)).toMatchObject({
+      current_stage: 'conversation',
+      last_completed_stage: 'identity',
+    });
+  });
+
+  it('rejects a non-terminal snapshot after the same run became terminal', () => {
+    const completed = run({
+      status: 'completed',
+      state: 'completed',
+      progress: 100,
+      latest_sequence: 4,
+    }) as SaasRunSnapshot;
+    const staleRunning = run({
+      status: 'running',
+      state: 'running',
+      progress: 72,
+      latest_sequence: 4,
+    }) as SaasRunSnapshot;
+
+    expect(isSaasRunRegression(completed, staleRunning, 4)).toBe(true);
+    expect(isSaasRunRegression(completed, {
+      ...staleRunning,
+      id: 'replacement-run',
+    }, 4)).toBe(false);
+  });
+
   it('creates a new owned project from an empty Studio without calling legacy Builder', async () => {
     window.history.replaceState(
       {},
