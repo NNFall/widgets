@@ -160,6 +160,11 @@ const server = http.createServer((request, response) => {
   const url = new URL(request.url ?? '/', `http://127.0.0.1:${port}`);
   const method = request.method ?? 'GET';
 
+  if (method === 'POST' && url.pathname === '/api/analytics/entry') {
+    response.writeHead(204, { 'Cache-Control': 'no-store' });
+    response.end();
+    return;
+  }
   if (method === 'GET' && url.pathname === '/api/auth/session') {
     sendJson(response, {
       enabled: true,
