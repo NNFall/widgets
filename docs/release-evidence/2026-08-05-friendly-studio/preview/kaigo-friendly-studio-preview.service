@@ -1,0 +1,22 @@
+[Unit]
+Description=Kaigo Friendly Studio isolated preview API
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/kaigo-previews/friendly-studio
+Environment=NODE_ENV=production
+Environment=PORT=18110
+ExecStart=/usr/local/bin/node /opt/kaigo-previews/friendly-studio/docs/release-evidence/2026-08-05-friendly-studio/manual-studio-api.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

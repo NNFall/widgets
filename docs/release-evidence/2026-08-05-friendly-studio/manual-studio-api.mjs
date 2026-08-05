@@ -1,5 +1,10 @@
 import http from 'node:http';
 
+const configuredPort = Number.parseInt(process.env.PORT ?? '8080', 10);
+const port = Number.isInteger(configuredPort) && configuredPort > 0 && configuredPort <= 65_535
+  ? configuredPort
+  : 8080;
+
 const projectId = 'manual-friendly-studio';
 const runId = 'manual-friendly-run';
 const versionId = 'manual-friendly-version-2';
@@ -152,7 +157,7 @@ function sendJson(response, body, status = 200) {
 }
 
 const server = http.createServer((request, response) => {
-  const url = new URL(request.url ?? '/', 'http://127.0.0.1:8080');
+  const url = new URL(request.url ?? '/', `http://127.0.0.1:${port}`);
   const method = request.method ?? 'GET';
 
   if (method === 'GET' && url.pathname === '/api/auth/session') {
@@ -262,6 +267,6 @@ const server = http.createServer((request, response) => {
   sendJson(response, { error: { code: 'manual_fixture_not_found' } }, 404);
 });
 
-server.listen(8080, '127.0.0.1', () => {
-  console.log('Manual Friendly Studio API ready at http://127.0.0.1:8080');
+server.listen(port, '127.0.0.1', () => {
+  console.log(`Manual Friendly Studio API ready at http://127.0.0.1:${port}`);
 });
