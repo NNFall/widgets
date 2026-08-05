@@ -1,4 +1,13 @@
-import { ArrowRight, CheckCircle, ChatsCircle, LinkSimple, MagnifyingGlass } from '@phosphor-icons/react';
+import {
+  ArrowRight,
+  CheckCircle,
+  ChatsCircle,
+  CloudArrowUp,
+  Code,
+  CreditCard,
+  LinkSimple,
+  MagnifyingGlass,
+} from '@phosphor-icons/react';
 
 import { Reveal } from '../shared/Reveal';
 import { useMotionActivity } from '../shared/MotionActivity';
@@ -59,6 +68,24 @@ const steps = [
   },
 ] as const;
 
+const launchSteps = [
+  {
+    title: 'Выберите тариф',
+    copy: 'Он открывает доработки и публикацию.',
+    Icon: CreditCard,
+  },
+  {
+    title: 'Опубликуйте версию',
+    copy: 'Вы сами выбираете готовый вариант и сайты.',
+    Icon: CloudArrowUp,
+  },
+  {
+    title: 'Установите одной строкой',
+    copy: 'Скопируйте код или передайте его разработчику.',
+    Icon: Code,
+  },
+] as const;
+
 export function HowItWorksSection() {
   const campaignStudioHref = studioHref();
   const { active, ref } = useMotionActivity<HTMLElement>();
@@ -101,7 +128,23 @@ export function HowItWorksSection() {
             </Reveal>
           ))}
         </div>
-        <Reveal className="section-action"><a className="primary-button" href={campaignStudioHref}>Создать первый вариант</a></Reveal>
+        <Reveal className="how-launch" preset="heading">
+          <div className="how-launch__copy">
+            <p className="section-kicker">После бесплатной проверки</p>
+            <h3>Дальше: три шага до запуска на сайте</h3>
+            <p>Виджет не появится на сайте без вашего подтверждения. Сначала вы принимаете результат, затем управляете запуском.</p>
+          </div>
+          <ol aria-label="Шаги после проверки">
+            {launchSteps.map(({ title, copy, Icon }, index) => (
+              <li key={title}>
+                <span aria-hidden><Icon size={21} /></span>
+                <div><strong>{title}</strong><small>{copy}</small></div>
+                <i aria-hidden>{index + 1}</i>
+              </li>
+            ))}
+          </ol>
+        </Reveal>
+        <Reveal className="section-action"><a className="primary-button" href={campaignStudioHref}>Создать бесплатную версию</a></Reveal>
       </div>
     </section>
   );

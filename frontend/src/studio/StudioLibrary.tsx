@@ -35,6 +35,13 @@ function projectDate(value: string) {
   }).format(date);
 }
 
+function projectActionLabel(status: string) {
+  if (status === 'completed' || status === 'free_result_ready' || status === 'published') return 'Посмотреть';
+  if (status === 'running' || status === 'generating' || status === 'queued') return 'Следить';
+  if (status === 'failed' || status === 'cancelled') return 'Исправить';
+  return 'Открыть';
+}
+
 export function StudioLibrary({ onOpenProject, onCreateProject }: StudioLibraryProps) {
   const [requestVersion, setRequestVersion] = useState(0);
   const [state, setState] = useState<LibraryState>({ kind: 'loading' });
@@ -112,7 +119,7 @@ export function StudioLibrary({ onOpenProject, onCreateProject }: StudioLibraryP
                 {projectStatusLabel(project.status)}
               </span>
               <button type="button" onClick={() => onOpenProject(project.id)}>
-                Открыть <ArrowRight aria-hidden size={17} />
+                {projectActionLabel(project.status)} <ArrowRight aria-hidden size={17} />
               </button>
             </article>
           ))}

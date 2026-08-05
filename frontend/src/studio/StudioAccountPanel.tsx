@@ -30,6 +30,28 @@ const PLAN_LABELS: Record<string, string> = {
   starter_monthly: 'Starter',
 };
 
+const PLAN_BENEFITS = [
+  'Доработка новыми версиями',
+  'Публикация на выбранных сайтах',
+  'Код установки и безопасные обновления',
+] as const;
+
+function PlanBenefits({ active }: { active: boolean }) {
+  return (
+    <section className="studio-account__benefits" aria-labelledby="studio-account-benefits-title">
+      <h4 id="studio-account-benefits-title">{active ? 'В тариф уже входит' : 'После оплаты откроется'}</h4>
+      <ul>
+        {PLAN_BENEFITS.map((benefit) => (
+          <li key={benefit}>
+            <CheckCircle aria-hidden size={19} weight="fill" />
+            <span>{benefit}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function formatDate(value: string | null) {
   if (!value) return 'Дата появится после оплаты';
   const date = new Date(value);
@@ -107,6 +129,7 @@ export function StudioAccountPanel({ onOpenPublication }: StudioAccountPanelProp
           <strong>Для продолжения нужен тариф</strong>
           <p>Тариф открывает новые версии, публикацию и установку на сайт.</p>
         </div>
+        <PlanBenefits active={false} />
         <button type="button" className="studio-account__primary" onClick={onOpenPublication}>
           Посмотреть тарифы <ArrowRight aria-hidden size={18} weight="bold" />
         </button>
@@ -144,6 +167,8 @@ export function StudioAccountPanel({ onOpenPublication }: StudioAccountPanelProp
           <p>{subscription.auto_renew ? `Следующее продление — ${formatDate(renewalDate)}` : `Доступ оплачен до ${formatDate(subscription.current_period_end)}`}</p>
         </div>
       </div>
+
+      <PlanBenefits active />
 
       <button type="button" className="studio-account__primary" onClick={onOpenPublication}>
         Управлять подпиской и публикацией <ArrowRight aria-hidden size={18} weight="bold" />

@@ -37,6 +37,11 @@ describe('LandingPage sections', () => {
     render(<LandingPage />);
 
     expect(screen.getByRole('heading', { name: 'Как это работает' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Дальше: три шага до запуска на сайте' })).toBeVisible();
+    expect(screen.getByText('Выберите тариф')).toBeVisible();
+    expect(screen.getByText('Опубликуйте версию')).toBeVisible();
+    expect(screen.getByText('Установите одной строкой')).toBeVisible();
+    expect(screen.getByText(/виджет не появится на сайте без вашего подтверждения/i)).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Что видит Kaigo' })).toBeVisible();
     expect(screen.getByRole('heading', { name: /Не просто чат/ })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Готовый вариант — под вашим контролем' })).toBeVisible();

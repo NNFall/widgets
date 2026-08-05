@@ -77,7 +77,9 @@ describe('StudioLibrary', () => {
       minute: '2-digit',
     }).format(new Date('2026-08-05T10:15:00Z')))).toHaveLength(3);
 
-    await user.click(screen.getAllByRole('button', { name: 'Открыть' })[1]);
+    expect(screen.getByRole('button', { name: 'Посмотреть' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Следить' })).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Следить' }));
     expect(onOpenProject).toHaveBeenCalledWith('project-running');
 
     await user.click(screen.getByRole('button', { name: 'Новый виджет' }));

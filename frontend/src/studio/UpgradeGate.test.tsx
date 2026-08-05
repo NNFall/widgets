@@ -618,6 +618,8 @@ describe('UpgradeGate', () => {
 
   it('keeps developer publication details collapsed for a business owner', async () => {
     vi.useRealTimers();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
     vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
     vi.mocked(api.getProjectPublication).mockResolvedValue({
       publication: {
@@ -651,6 +653,10 @@ describe('UpgradeGate', () => {
 
     expect(await screen.findByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
     expect(screen.getByLabelText('На каких сайтах разрешить виджет')).toBeVisible();
+    expect(screen.getByRole('list', { name: 'Путь до запуска виджета' })).toBeVisible();
+    expect(screen.getByText('Остался один шаг')).toBeVisible();
+    expect(screen.getByText(/передайте код человеку, который управляет сайтом/i)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Скопировать код установки' })).toBeVisible();
     expect(screen.queryByText(/Stable embed URL/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/HTTPS origin/i)).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent('starter_monthly');
@@ -661,6 +667,12 @@ describe('UpgradeGate', () => {
     );
     expect(developerDisclosure).not.toHaveAttribute('open');
     expect(snippet).not.toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Скопировать код установки' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(
+      '<script src="https://widgets.kaigo.space/embed/stable-widget.js" async></script>',
+    ));
+    expect(await screen.findByText('Код скопирован. Его можно отправить разработчику.')).toBeVisible();
 
     fireEvent.click(screen.getByText('Код для разработчика'));
     expect(snippet).toBeVisible();

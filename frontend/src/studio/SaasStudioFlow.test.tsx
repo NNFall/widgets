@@ -988,6 +988,10 @@ describe('durable SaaS Studio flow', () => {
     expect(within(accountDialog).getByText('Бесплатный режим')).toBeVisible();
     expect(within(accountDialog).getByText('Первая экспресс-версия — бесплатно')).toBeVisible();
     expect(within(accountDialog).getByText('Для продолжения нужен тариф')).toBeVisible();
+    expect(within(accountDialog).getByText('После оплаты откроется')).toBeVisible();
+    expect(within(accountDialog).getByText('Доработка новыми версиями')).toBeVisible();
+    expect(within(accountDialog).getByText('Публикация на выбранных сайтах')).toBeVisible();
+    expect(within(accountDialog).getByText('Код установки и безопасные обновления')).toBeVisible();
     await user.keyboard('{Escape}');
 
     await user.click(screen.getByRole('button', { name: 'Открыть версии' }));
@@ -999,6 +1003,10 @@ describe('durable SaaS Studio flow', () => {
     await user.click(screen.getByRole('button', { name: 'Открыть публикацию' }));
     const publicationDialog = screen.getByRole('dialog', { name: 'Публикация виджета' });
     expect(within(publicationDialog).getByText('Подключите виджет к сайту')).toBeVisible();
+    expect(within(publicationDialog).getByRole('list', { name: 'Путь до запуска виджета' })).toBeVisible();
+    expect(within(publicationDialog).getByText('Тариф')).toBeVisible();
+    expect(within(publicationDialog).getByText('Публикация')).toBeVisible();
+    expect(within(publicationDialog).getByText('Установка')).toBeVisible();
     expect(within(publicationDialog).getByRole('button', { name: 'Опубликовать и подключить' })).toBeEnabled();
   });
 

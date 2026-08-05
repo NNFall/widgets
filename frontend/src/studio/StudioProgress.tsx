@@ -23,7 +23,11 @@ function stageState(
 ): StageState {
   if (status === 'completed' || index <= completedIndex) return 'completed';
   if (index === currentIndex) return 'current';
-  if (currentIndex < 0 && status === 'running' && index === Math.min(completedIndex + 1, STUDIO_STAGES.length - 1)) {
+  if (
+    currentIndex < 0
+    && status === 'running'
+    && index === Math.min(completedIndex + 1, STUDIO_STAGES.length - 1)
+  ) {
     return 'current';
   }
   return 'upcoming';
@@ -41,20 +45,32 @@ export function StudioProgress({
   const progressValue = Math.max(0, Math.min(100, Math.round(progress)));
   const currentIndex = STUDIO_STAGES.findIndex(({ id }) => id === currentStage);
   const completedIndex = STUDIO_STAGES.findIndex(({ id }) => id === lastCompletedStage);
-  const running = status === 'queued' || status === 'running';
+  const live = status === 'queued' || status === 'running';
+  const working = status === 'running';
   const displayedCurrentIndex = currentIndex >= 0
     ? currentIndex
-    : running
+    : working
       ? Math.min(completedIndex + 1, STUDIO_STAGES.length - 1)
       : -1;
+  const displayedStage = displayedCurrentIndex >= 0 ? STUDIO_STAGES[displayedCurrentIndex] : null;
+  const hasStagePresentation = live && displayedStage !== null;
+  const kicker = hasStagePresentation
+    ? `Сейчас идёт этап ${displayedCurrentIndex + 1} из ${STUDIO_STAGES.length}`
+    : status === 'completed'
+      ? 'Результат'
+      : status === 'failed' || status === 'cancelled'
+        ? 'Требуется действие'
+        : 'Ход создания';
+  const heading = hasStagePresentation ? displayedStage.label : presentation.title;
+  const detail = hasStagePresentation ? displayedStage.activity : presentation.detail;
 
   return (
-    <section className="studio-progress-card" aria-labelledby="studio-progress-title">
+    <section className="studio-progress-card" aria-labelledby="studio-progress-title" data-status={status ?? 'idle'}>
       <div className="studio-progress-card__heading">
         <div>
-          <p className="studio-kicker">Ход создания</p>
-          <h2 id="studio-progress-title">{presentation.title}</h2>
-          <p>{presentation.detail}</p>
+          <p className="studio-kicker">{kicker}</p>
+          <h2 id="studio-progress-title">{heading}</h2>
+          <p>{detail}</p>
         </div>
         <strong aria-label={`Готово на ${progressValue} процентов`}>{progressValue}%</strong>
       </div>
@@ -88,12 +104,7 @@ export function StudioProgress({
         })}
       </ol>
 
-      {displayedCurrentIndex >= 0 && running && (
-        <p className="studio-progress-card__step">
-          Этап {displayedCurrentIndex + 1} из {STUDIO_STAGES.length}
-        </p>
-      )}
-      {running && (
+      {live && (
         <StudioActivity
           running
           events={events}

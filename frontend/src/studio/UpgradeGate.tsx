@@ -1,4 +1,4 @@
-import { ArrowRight, CheckCircle, Clock, Sparkle } from '@phosphor-icons/react';
+import { ArrowRight, CheckCircle, Clock, Copy, Sparkle } from '@phosphor-icons/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
@@ -30,6 +30,8 @@ type UpgradeState =
   | 'active'
   | 'checkout_error'
   | 'recovery_error';
+
+type CopyState = 'idle' | 'copied' | 'error';
 
 interface UpgradeGateProps {
   csrfToken: string | null;
@@ -101,6 +103,7 @@ export function UpgradeGate({
   const [priorReleases, setPriorReleases] = useState<RollbackRelease[]>([]);
   const [publicationPending, setPublicationPending] = useState(false);
   const [publicationError, setPublicationError] = useState<string | null>(null);
+  const [copyState, setCopyState] = useState<CopyState>('idle');
   const idempotencyKeyRef = useRef<string | null>(null);
   const autoRenewIntentRef = useRef<boolean | null>(null);
 
@@ -467,6 +470,36 @@ export function UpgradeGate({
       ? 'Виджет уже доступен на разрешённых сайтах. Новую версию можно опубликовать здесь же.'
       : 'Укажите сайты, проверьте виджет и опубликуйте его. Код подключения появится после публикации.'
     : 'Первая версия сохранена. Тариф открывает публикацию, доработки и подключение виджета к сайту.';
+  const launchSteps = [
+    {
+      title: 'Тариф',
+      copy: active ? 'Подключён и готов к работе' : 'Открывает доработки и запуск',
+      state: active ? 'completed' : 'current',
+    },
+    {
+      title: 'Публикация',
+      copy: publication ? 'Выбранная версия уже доступна' : 'Вы сами выбираете момент запуска',
+      state: publication ? 'completed' : active ? 'current' : 'upcoming',
+    },
+    {
+      title: 'Установка',
+      copy: publication ? 'Осталось добавить код на сайт' : 'Код появится после публикации',
+      state: publication ? 'current' : 'upcoming',
+    },
+  ] as const;
+
+  const copyEmbedCode = async () => {
+    if (!embedSnippet || !navigator.clipboard?.writeText) {
+      setCopyState('error');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(embedSnippet);
+      setCopyState('copied');
+    } catch {
+      setCopyState('error');
+    }
+  };
 
   return (
     <aside id="studio-publication" className="studio-upgrade" aria-labelledby="studio-upgrade-title">
@@ -476,19 +509,35 @@ export function UpgradeGate({
       <div>
         <h2 id="studio-upgrade-title">{heading}</h2>
         <p>{description}</p>
+        <ol className="studio-upgrade__launch-steps" aria-label="Путь до запуска виджета">
+          {launchSteps.map((step, index) => (
+            <li key={step.title} data-state={step.state} aria-current={step.state === 'current' ? 'step' : undefined}>
+              <span aria-hidden>{step.state === 'completed' ? <CheckCircle size={16} weight="fill" /> : index + 1}</span>
+              <div>
+                <strong>{step.title}</strong>
+                <small>{step.copy}</small>
+              </div>
+            </li>
+          ))}
+        </ol>
         {!active && (
-          <label className="studio-upgrade__renewal-consent">
-            <input
-              type="checkbox"
-              checked={autoRenewConsent}
-              onChange={(event) => setAutoRenewConsent(event.target.checked)}
-              disabled={working || idempotencyKeyRef.current !== null}
-            />
-            <span>
-              <strong>Продлевать тариф автоматически</strong>
-              <small>ЮKassa сохранит способ оплаты только после успешного платежа. Автопродление можно отключить в любой момент.</small>
-            </span>
-          </label>
+          <>
+            <p className="studio-upgrade__safety-note">
+              Оплата откроется в защищённом окне ЮKassa. Виджет не появится на сайте, пока вы сами не нажмёте «Опубликовать».
+            </p>
+            <label className="studio-upgrade__renewal-consent">
+              <input
+                type="checkbox"
+                checked={autoRenewConsent}
+                onChange={(event) => setAutoRenewConsent(event.target.checked)}
+                disabled={working || idempotencyKeyRef.current !== null}
+              />
+              <span>
+                <strong>Продлевать тариф автоматически</strong>
+                <small>ЮKassa сохранит способ оплаты только после успешного платежа. Автопродление можно отключить в любой момент.</small>
+              </span>
+            </label>
+          </>
         )}
         {working && (
           <p className="studio-upgrade__status" role="status">
@@ -544,6 +593,16 @@ export function UpgradeGate({
                     ? `Версия ${publishedVersionOrdinal} опубликована и доступна на разрешённых сайтах.`
                     : 'Виджет опубликован и доступен на разрешённых сайтах.'}
                 </p>
+                <section className="studio-upgrade__handoff" aria-labelledby="studio-upgrade-handoff-title">
+                  <span>Остался один шаг</span>
+                  <h3 id="studio-upgrade-handoff-title">Установите виджет на сайт</h3>
+                  <p>Скопируйте код установки или передайте код человеку, который управляет сайтом. Последующие обновления будут приходить по тому же адресу.</p>
+                  <button type="button" onClick={() => void copyEmbedCode()}>
+                    <Copy aria-hidden size={18} weight="bold" /> Скопировать код установки
+                  </button>
+                  {copyState === 'copied' && <p className="studio-upgrade__copy-status" role="status">Код скопирован. Его можно отправить разработчику.</p>}
+                  {copyState === 'error' && <p className="studio-upgrade__copy-status studio-upgrade__copy-status--error" role="alert">Не получилось скопировать автоматически. Откройте код ниже и скопируйте вручную.</p>}
+                </section>
                 <details className="studio-upgrade__developer">
                   <summary>Код для разработчика</summary>
                   <div>

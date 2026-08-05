@@ -1,4 +1,4 @@
-import { Clock, PaperPlaneTilt } from '@phosphor-icons/react';
+import { CloudArrowUp, Clock, Eye, LinkSimple, PaperPlaneTilt } from '@phosphor-icons/react';
 import type { FormEvent } from 'react';
 
 interface StudioComposerProps {
@@ -14,6 +14,24 @@ interface StudioComposerProps {
   onBriefChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }
+
+const journey = [
+  {
+    title: 'Добавьте сайт',
+    copy: 'Нужна только публичная ссылка.',
+    Icon: LinkSimple,
+  },
+  {
+    title: 'Проверьте виджет',
+    copy: 'Посмотрите результат и задайте вопросы.',
+    Icon: Eye,
+  },
+  {
+    title: 'Опубликуйте',
+    copy: 'Подключите только когда всё устраивает.',
+    Icon: CloudArrowUp,
+  },
+] as const;
 
 export function StudioComposer({
   title = 'Создайте первый AI-виджет',
@@ -36,6 +54,18 @@ export function StudioComposer({
         <p className="studio-kicker">Бесплатная экспресс-версия</p>
         <Heading id="studio-composer-title">{title}</Heading>
         <p>{description}</p>
+        <ol className="studio-composer__journey" aria-label="Путь до запуска">
+          {journey.map(({ title: stepTitle, copy, Icon }, index) => (
+            <li key={stepTitle}>
+              <span aria-hidden><Icon size={18} weight="bold" /></span>
+              <div>
+                <strong>{stepTitle}</strong>
+                <small>{copy}</small>
+              </div>
+              <i aria-hidden>{index + 1}</i>
+            </li>
+          ))}
+        </ol>
         <form onSubmit={onSubmit}>
           <label htmlFor="saas-studio-url">Ссылка на сайт</label>
           <input

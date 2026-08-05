@@ -173,7 +173,9 @@ export function StudioProjectWorkbench({
 
         <aside className="studio-conversation" aria-label="Чат с Kaigo">
           <header className="studio-conversation__header">
-            <span className="studio-conversation__avatar" aria-hidden>K</span>
+            <span className="studio-conversation__avatar" aria-hidden data-running={running ? 'true' : 'false'}>
+              <span>K</span>
+            </span>
             <div>
               <h1>Чат с Kaigo</h1>
               <p><span /> AI-дизайнер работает с вашим виджетом</p>

@@ -64,6 +64,7 @@ describe('Studio accessibility contracts', () => {
   it('removes CSS and Motion spring movement when reduced motion is requested', () => {
     const reducedMotionRules = stylesSource.slice(stylesSource.lastIndexOf('@media (prefers-reduced-motion: reduce)'));
     expect(reducedMotionRules).toMatch(/\.studio-activity__message[\s\S]*animation:\s*none !important/);
+    expect(reducedMotionRules).toMatch(/\.studio-library__project\s*>\s*button[\s\S]*transition:\s*none !important/);
     expect(studioPageSource).toMatch(/useReducedMotion\(\)/);
     expect(studioPageSource).toMatch(/reducedMotion\s*\?\s*\{\s*duration:\s*0\s*\}/);
   });
@@ -95,5 +96,17 @@ describe('Studio accessibility contracts', () => {
   it('uses the Kaigo coral accent for the active conversation', () => {
     expect(stylesSource).toMatch(/\.studio-conversation__avatar\s*\{[^}]*background:\s*var\(--coral\)/s);
     expect(stylesSource).toMatch(/\.studio-conversation\s+\.studio-progress-card__bar\s+span\s*\{[^}]*background:\s*var\(--coral\)/s);
+  });
+
+  it('keeps the publication action legible through hover and press states', () => {
+    expect(stylesSource).toMatch(
+      /\.studio-app--workbench\s+\.studio-header__actions\s+\.studio-header__publish\[data-ready='true'\]:hover:not\(:disabled\)\s*\{[^}]*color:\s*#fff[^}]*background:\s*#a83f20/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.studio-app--workbench\s+\.studio-header__actions\s+\.studio-header__publish\[data-ready='false'\]:hover:not\(:disabled\)\s*\{[^}]*color:\s*#6f3826[^}]*background:\s*#ffe8dc/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.studio-app--workbench\s+\.studio-header__actions\s+\.studio-header__publish:active:not\(:disabled\)\s*\{[^}]*translateY\(0\)\s+scale\(\.98\)/s,
+    );
   });
 });

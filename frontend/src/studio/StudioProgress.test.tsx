@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { StudioProgress } from './StudioProgress';
@@ -18,12 +18,15 @@ describe('StudioProgress', () => {
       />,
     );
 
-    expect(screen.getByRole('heading', { name: 'Создаём ваш виджет' })).toBeInTheDocument();
-    expect(screen.getByRole('list', { name: 'Этапы создания виджета' })).toBeInTheDocument();
-    expect(screen.getByText('Диалог').closest('li')).toHaveAttribute('aria-current', 'step');
-    expect(screen.getByText('Диалог').closest('li')).toHaveAttribute('data-state', 'current');
-    expect(screen.getByText('Стиль и бренд').closest('li')).toHaveAttribute('data-state', 'completed');
-    expect(screen.getByText('Проверка качества').closest('li')).toHaveAttribute('data-state', 'upcoming');
+    expect(screen.getByText('Сейчас идёт этап 4 из 7')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Диалог' })).toBeInTheDocument();
+    expect(screen.getByText('Настраиваем полезный диалог с посетителем')).toBeInTheDocument();
+    const stages = screen.getByRole('list', { name: 'Этапы создания виджета' });
+    expect(stages).toBeInTheDocument();
+    expect(within(stages).getByText('Диалог').closest('li')).toHaveAttribute('aria-current', 'step');
+    expect(within(stages).getByText('Диалог').closest('li')).toHaveAttribute('data-state', 'current');
+    expect(within(stages).getByText('Стиль и бренд').closest('li')).toHaveAttribute('data-state', 'completed');
+    expect(within(stages).getByText('Проверка качества').closest('li')).toHaveAttribute('data-state', 'upcoming');
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '52');
   });
 
@@ -44,6 +47,8 @@ describe('StudioProgress', () => {
       expect(item).toHaveAttribute('data-state', 'completed');
       expect(item).not.toHaveAttribute('aria-current');
     }
+    expect(screen.getByText('Результат')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Виджет готов' })).toBeInTheDocument();
   });
 
   it('uses only backend progress and clamps it to the progressbar range', () => {
@@ -112,6 +117,9 @@ describe('StudioProgress', () => {
         activityFallback="Готовим запуск"
       />,
     );
+    expect(screen.getByRole('heading', { name: 'Готовим запуск' })).toBeInTheDocument();
+    expect(screen.getByText('Kaigo начнёт работу автоматически.')).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Этапы создания виджета' }).querySelector('[aria-current="step"]')).toBeNull();
     expect(screen.getByRole('status')).toHaveTextContent('Готовим запуск');
 
     rerender(

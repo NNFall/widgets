@@ -86,7 +86,11 @@ export function StudioActivity({ running, events, stage, fallback, status }: Stu
       aria-atomic="true"
       data-motion={reducedMotion ? 'reduced' : 'allowed'}
     >
-      <span className="studio-activity__message" key={visible.key}>{visible.text}</span>
+      <span className="studio-activity__pulse" aria-hidden="true" />
+      <span className="studio-activity__copy">
+        <small>Kaigo сейчас</small>
+        <span className="studio-activity__message" key={visible.key}>{visible.text}</span>
+      </span>
     </p>
   );
 }
