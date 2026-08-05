@@ -332,11 +332,11 @@ describe('StudioPage', () => {
     render(<StudioPage />);
     const canvas = await screen.findByTestId('studio-preview-canvas');
     expect(canvas).toHaveAttribute('data-viewport', 'desktop');
-    expect(screen.getByRole('button', { name: 'Desktop' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'На компьютере' })).toHaveAttribute('aria-pressed', 'true');
 
-    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+    await user.click(screen.getByRole('button', { name: 'На телефоне' }));
     expect(canvas).toHaveAttribute('data-viewport', 'mobile');
-    expect(screen.getByRole('button', { name: 'Mobile' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'На телефоне' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('shows a human terminal error and keeps raw provider details disclosed separately', async () => {

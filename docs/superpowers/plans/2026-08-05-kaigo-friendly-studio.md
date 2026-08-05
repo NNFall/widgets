@@ -383,33 +383,33 @@ git commit -m "fix: make studio session errors recoverable"
 - Modify: `frontend/src/studio/ProjectVersionHistory.test.tsx`
 - Modify: `frontend/src/studio/StudioPreview.tsx`
 
-- [ ] **Step 1: Write failing version expansion tests**
+- [x] **Step 1: Write failing version expansion tests**
 
 Use a 320-character request. Assert `Показать полностью` reveals all text, `Свернуть` restores the preview, and the active row renders `Текущая версия` without a restore button.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Run: `.\frontend\node_modules\.bin\vitest.cmd run --root frontend src/studio/ProjectVersionHistory.test.tsx --maxWorkers=1`
 
 Expected: FAIL because long text has no disclosure and the active row uses a disabled restore button.
 
-- [ ] **Step 3: Implement expandable versions**
+- [x] **Step 3: Implement expandable versions**
 
 Track expanded IDs with `useState<Set<string>>`. Normalize but retain the complete request. Render a 240-character preview only while collapsed. Replace artifact-revision copy with version language and use a status badge for the active row.
 
-- [ ] **Step 4: Write failing friendly-workspace tests**
+- [x] **Step 4: Write failing friendly-workspace tests**
 
 For a completed SaaS project, assert the project domain in the header and the presence of `Мои виджеты`, `Новый виджет`, `Что изменить в виджете?`, and `Текущая версия`. Assert default content contains none of `Сессия`, `Gemini staged`, `Antigravity agent`, `runtime`, `launcher`, or `sandbox`, and uses `Версия` instead of `Ревизия`.
 
-- [ ] **Step 5: Recompose `StudioPage`**
+- [x] **Step 5: Recompose `StudioPage`**
 
 Remove advanced engine controls from SaaS mode. Replace the rail timeline with `StudioProgress`. Put refinement and versions below the preview. Use the project hostname instead of the run UUID. Add Studio navigation actions that update local history without changing backend state. Keep `/builder` controls isolated.
 
-- [ ] **Step 6: Clarify preview controls**
+- [x] **Step 6: Clarify preview controls**
 
 Use `На компьютере` and `На телефоне`, preserve `aria-pressed`, and show a safe concise preview description by default rather than the raw art-direction report.
 
-- [ ] **Step 7: Run and verify GREEN**
+- [x] **Step 7: Run and verify GREEN**
 
 Run: `.\frontend\node_modules\.bin\vitest.cmd run --root frontend src/studio/ProjectVersionHistory.test.tsx src/studio/StudioPage.test.tsx src/studio/SaasStudioFlow.test.tsx --maxWorkers=1`
 

@@ -130,6 +130,11 @@ export function StudioPreview({
     : qualityStatus === 'pending'
       ? 'Проверяется'
       : 'Нужна доработка';
+  const friendlyPreviewMessage = qualityStatus === 'accepted' || qualityStatus === 'verified'
+    ? 'Виджет готов к просмотру. Проверьте его на компьютере и телефоне.'
+    : qualityStatus === 'pending'
+      ? 'Kaigo собирает новую версию. Предпросмотр обновится автоматически.'
+      : 'Этой версии нужна доработка перед публикацией.';
 
   return (
     <section className="studio-preview" aria-labelledby="studio-preview-title">
@@ -140,18 +145,18 @@ export function StudioPreview({
         </div>
         <div className="studio-preview__switcher" aria-label="Размер предпросмотра">
           <button type="button" aria-pressed={viewport === 'desktop'} onClick={() => onViewportChange('desktop')}>
-            <Desktop aria-hidden size={18} weight="regular" /> Desktop
+            <Desktop aria-hidden size={18} weight="regular" /> На компьютере
           </button>
           <button type="button" aria-pressed={viewport === 'mobile'} onClick={() => onViewportChange('mobile')}>
-            <DeviceMobile aria-hidden size={18} weight="regular" /> Mobile
+            <DeviceMobile aria-hidden size={18} weight="regular" /> На телефоне
           </button>
         </div>
       </div>
       <div className="studio-preview__meta" aria-live="polite">
         <Sparkle aria-hidden size={20} weight="fill" />
         <div>
-          <span>Визуальная концепция</span>
-          <p>{artDirection || 'Появится после первой собранной версии'}</p>
+          <span>{projectMode ? 'Состояние виджета' : 'Визуальная концепция'}</span>
+          <p>{projectMode ? friendlyPreviewMessage : artDirection || 'Появится после первой собранной версии'}</p>
         </div>
         <strong data-quality={qualityStatus}>{qualityLabel}</strong>
       </div>
@@ -171,7 +176,7 @@ export function StudioPreview({
           <div className="studio-preview__empty">
             <span><Eye aria-hidden size={28} weight="regular" /></span>
             <strong>Первый вариант появится здесь</strong>
-            <p>Kaigo покажет каждую принятую ревизию без перезагрузки страницы.</p>
+            <p>Kaigo покажет каждую сохранённую версию здесь без перезагрузки страницы.</p>
           </div>
         )}
       </div>

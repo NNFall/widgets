@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SaasProjectVersion } from './types';
 import { ProjectVersionHistory } from './ProjectVersionHistory';
@@ -33,6 +33,8 @@ const versions: SaasProjectVersion[] = [
   },
 ];
 
+afterEach(cleanup);
+
 describe('ProjectVersionHistory', () => {
   it('identifies active and selected versions and exposes separate select/restore actions', () => {
     const onSelect = vi.fn();
@@ -52,11 +54,10 @@ describe('ProjectVersionHistory', () => {
 
     expect(screen.getByRole('region', { name: 'История версий' })).toBeVisible();
     expect(screen.getByText('Версия 2')).toBeVisible();
-    expect(screen.getByText('Ревизия артефакта 7')).toBeVisible();
-    expect(screen.getByText('Ревизия артефакта 3')).toBeVisible();
+    expect(screen.queryByText(/Ревизия артефакта/)).not.toBeInTheDocument();
     expect(screen.getByText('Доработка')).toBeVisible();
     expect(screen.getByText('Сделай приветствие короче')).toBeVisible();
-    expect(screen.getByText('Активная версия')).toBeVisible();
+    expect(screen.getByText('Текущая версия')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Просмотреть версию 1' })).toHaveAttribute(
       'aria-current',
       'true',
@@ -67,6 +68,31 @@ describe('ProjectVersionHistory', () => {
 
     expect(onSelect).toHaveBeenCalledWith('version-2');
     expect(onRestore).toHaveBeenCalledWith('version-1');
-    expect(screen.getByRole('button', { name: 'Восстановить версию 2' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Восстановить версию 2' })).not.toBeInTheDocument();
+  });
+
+  it('reveals and collapses a complete long change request', () => {
+    const longRequest = 'Сделай ответы короче, добавь больше воздуха и сохрани спокойный тон бренда. '
+      .repeat(6)
+      .slice(0, 320);
+
+    render(
+      <ProjectVersionHistory
+        versions={[{ ...versions[0], change_request: longRequest }]}
+        activeVersionId="version-2"
+        selectedVersionId="version-2"
+        mutationPending={false}
+        running={false}
+        onSelect={vi.fn()}
+        onRestore={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText(longRequest)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Показать полностью' }));
+    expect(screen.getByText(longRequest)).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Свернуть' }));
+    expect(screen.queryByText(longRequest)).not.toBeInTheDocument();
   });
 });

@@ -814,10 +814,11 @@ describe('durable SaaS Studio flow', () => {
       throw new Error(`unexpected request: ${url}`);
     }));
 
-    render(<StudioPage />);
-
-    const metrics = await screen.findByLabelText('Метрики запуска');
-    expect(within(metrics).getByText('60')).toBeVisible();
+    const adapted = adaptSaasRunSnapshot(
+      project(completed) as SaasProject,
+      completed as SaasRunSnapshot,
+    );
+    expect(adapted.usage.total_tokens).toBe(60);
   });
 
   it('uses the server progress instead of estimating from event count', async () => {
@@ -895,7 +896,7 @@ describe('durable SaaS Studio flow', () => {
     expect(await screen.findByRole('button', { name: 'Опубликовать и подключить' })).toBeEnabled();
     expect(screen.getByLabelText('Что изменить в виджете?')).toBeVisible();
     expect(screen.getByText(
-      'Доработка запускается на тарифе и сохраняется новой версией',
+      'Каждая доработка сохранится отдельной версией — предыдущие варианты не потеряются.',
     )).toBeVisible();
   });
 
@@ -1026,6 +1027,14 @@ describe('durable SaaS Studio flow', () => {
     render(<StudioPage />);
 
     expect(await screen.findByRole('region', { name: 'История версий' })).toBeVisible();
+    expect(screen.getByText('example.com')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Мои виджеты' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Новый виджет' })).toBeVisible();
+    expect(screen.getByText('Текущая версия')).toBeVisible();
+    const friendlyContent = document.body.textContent ?? '';
+    for (const technicalTerm of ['Сессия', 'Gemini staged', 'Antigravity agent', 'runtime', 'launcher', 'sandbox', 'Ревизия']) {
+      expect(friendlyContent).not.toContain(technicalTerm);
+    }
     await user.type(
       screen.getByLabelText('Что изменить в виджете?'),
       'Сделай приветствие короче',
@@ -1281,7 +1290,10 @@ describe('durable SaaS Studio flow', () => {
     render(<StudioPage />);
 
     await user.click(await screen.findByRole('button', { name: 'Просмотреть версию 1' }));
-    expect(await screen.findByText('Точная историческая концепция')).toBeVisible();
+    const selectedVersionSummary = screen.getByLabelText('Состояние выбранной версии');
+    expect(within(selectedVersionSummary).getByText('1')).toBeVisible();
+    expect(screen.getByText('Виджет готов к просмотру. Проверьте его на компьютере и телефоне.')).toBeVisible();
+    expect(screen.queryByText('Точная историческая концепция')).not.toBeInTheDocument();
     expect(requests.some(({ url }) => url === '/api/artifacts/artifact-version-1')).toBe(true);
     const domains = await screen.findByLabelText('Разрешённые домены');
     await user.type(domains, 'https://example.com');

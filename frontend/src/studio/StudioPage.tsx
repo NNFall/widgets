@@ -18,6 +18,7 @@ import { KaigoLogo } from '../shared/KaigoLogo';
 import { campaignFromSearch } from '../shared/campaign';
 import { canonicalWebsiteUrl } from '../shared/UrlComposer';
 import { StudioPreview } from './StudioPreview';
+import { StudioProgress } from './StudioProgress';
 import { StudioTimeline } from './StudioTimeline';
 import { StudioComposer } from './StudioComposer';
 import { StudioLibrary } from './StudioLibrary';
@@ -54,12 +55,19 @@ function selectedArtifact(snapshot: BuilderRunSnapshot | null) {
   return snapshot?.draft_artifact ?? snapshot?.artifact ?? null;
 }
 
-function progressFor(snapshot: BuilderRunSnapshot | null, eventCount: number) {
+function progressFor(snapshot: BuilderRunSnapshot | null) {
   if (!snapshot) return 0;
   if (snapshot.status === 'completed') return 100;
   if (typeof snapshot.progress === 'number') return Math.max(0, Math.min(100, Math.round(snapshot.progress)));
-  if (snapshot.status === 'failed' || snapshot.status === 'cancelled') return Math.min(96, 16 + eventCount * 7);
-  return Math.min(92, 12 + eventCount * 7 + (selectedArtifact(snapshot) ? 18 : 0));
+  return 0;
+}
+
+function projectDomain(sourceUrl: string) {
+  try {
+    return new URL(sourceUrl).hostname.replace(/^www\./, '') || 'Проект Kaigo';
+  } catch {
+    return 'Проект Kaigo';
+  }
 }
 
 function readyQuality(status: string | undefined) {
@@ -130,6 +138,7 @@ export function StudioPage() {
   const [projectPending, setProjectPending] = useState(false);
   const hydratedRun = useRef<string | null>(null);
   const previewAnchorRef = useRef<HTMLElement>(null);
+  const newWidgetIntentRef = useRef(false);
   const artifact = controller.selectedArtifact;
   const activeVersionId = controller.activeVersionId ?? controller.project?.active_version_id ?? null;
   const selectedVersion = controller.selectedVersion;
@@ -137,14 +146,18 @@ export function StudioPage() {
   const previewRevision = artifact?.revision
     ?? selectedVersion?.artifact_revision
     ?? null;
+  const displayedVersionNumber = selectedVersion?.ordinal
+    ?? controller.versions.find((version) => version.id === activeVersionId)?.ordinal
+    ?? previewRevision;
   const persistence = errorPersistenceState(controller.snapshot);
   const freeResultReady = controller.versionsAvailable
     ? Boolean(selectedVersion && artifact)
     : readyFreeResult(controller.snapshot);
   const status = controller.snapshot?.status ?? null;
   const running = status === 'created' || status === 'queued' || status === 'running';
+  const headerProjectDomain = projectDomain(controller.project?.source_url ?? sourceUrl);
   const controlsLocked = running || controller.mutationPending;
-  const progress = progressFor(controller.snapshot, controller.events.length);
+  const progress = progressFor(controller.snapshot);
   const refinable = controller.versionsAvailable
     ? Boolean(
         artifact
@@ -177,6 +190,15 @@ export function StudioPage() {
     window.addEventListener('popstate', syncProjectFromLocation);
     return () => window.removeEventListener('popstate', syncProjectFromLocation);
   }, []);
+
+  useEffect(() => {
+    if (projectId || !newWidgetIntentRef.current) return;
+    newWidgetIntentRef.current = false;
+    document.getElementById('studio-new-widget')?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    });
+  }, [projectId]);
 
   const formattedSession = useMemo(() => {
     if (!controller.runId) return 'Новая сессия';
@@ -264,6 +286,12 @@ export function StudioPage() {
     });
   };
 
+  const openStudioHome = (focusNewWidget: boolean) => {
+    newWidgetIntentRef.current = focusNewWidget;
+    window.history.pushState({}, '', focusNewWidget ? '/studio#studio-new-widget' : '/studio');
+    setProjectId(null);
+  };
+
   if (!projectId && !legacyBuilder) {
     return (
       <div className="studio-app studio-app--home">
@@ -342,11 +370,17 @@ export function StudioPage() {
           <KaigoLogo />
         </a>
         <div className="studio-header__session">
-          <span>{formattedSession}</span>
+          <span>{controller.projectMode ? headerProjectDomain : formattedSession}</span>
           <strong data-connection={controller.connection}>{controller.activityMessage}</strong>
           {controller.connection === 'polling' && <small>Резервный режим обновления</small>}
         </div>
         <div className="studio-header__actions">
+          {controller.projectMode && (
+            <>
+              <button type="button" className="studio-header__library" onClick={() => openStudioHome(false)}>Мои виджеты</button>
+              <button type="button" className="studio-header__new" onClick={() => openStudioHome(true)}>Новый виджет</button>
+            </>
+          )}
           <button type="button" className="studio-header__preview" onClick={scrollToPreview}>
             <Eye aria-hidden size={19} /> Предпросмотр
           </button>
@@ -367,7 +401,7 @@ export function StudioPage() {
         </div>
       </header>
 
-      <main className="studio-shell">
+      <main className={controller.projectMode ? 'studio-shell studio-shell--friendly' : 'studio-shell'}>
         <motion.aside
           className="studio-rail"
           initial={false}
@@ -416,7 +450,7 @@ export function StudioPage() {
               disabled={controlsLocked}
             />
 
-            <details className="studio-advanced">
+            {!controller.projectMode && <details className="studio-advanced">
               <summary>Параметры прототипа</summary>
               <div>
                 <label htmlFor="studio-engine">Движок</label>
@@ -436,32 +470,41 @@ export function StudioPage() {
                   disabled={controller.projectMode || controlsLocked || engine !== 'direct'}
                 />
               </div>
-            </details>
+            </details>}
 
             {formError && <p className="studio-form__error" role="alert">{formError}</p>}
-            <button type="submit" className="studio-create" disabled={controller.projectMode || running || controller.isHydrating || controller.mutationPending}>
+            {!controller.projectMode && <button type="submit" className="studio-create" disabled={running || controller.isHydrating || controller.mutationPending}>
               {controller.isHydrating || controller.mutationPending ? <Clock aria-hidden size={20} /> : <PaperPlaneTilt aria-hidden size={20} weight="fill" />}
               {running ? 'Генерация идёт' : 'Создать AI-виджет'}
               {!running && !controller.isHydrating && !controller.mutationPending && <ArrowRight aria-hidden size={18} />}
-            </button>
+            </button>}
           </form>
 
           {controller.runId && (
-            <div className="studio-progress" aria-label="Прогресс генерации">
-              <div><span>Прогресс</span><strong>{progress}%</strong></div>
-              <div className="studio-progress__track"><span style={{ transform: `scaleX(${progress / 100})` }} /></div>
-              <p>{controller.activityMessage}</p>
-            </div>
+            <StudioProgress
+              status={status}
+              progress={progress}
+              currentStage={controller.snapshot?.current_stage}
+              lastCompletedStage={controller.snapshot?.last_completed_stage}
+              events={controller.events}
+              activityFallback={controller.activityMessage}
+            />
           )}
 
-          <div className="studio-run-actions">
-            <button type="button" onClick={() => void controller.cancelRun()} disabled={!running || controller.mutationPending}>
-              <StopCircle aria-hidden size={18} /> Отменить генерацию
-            </button>
-            <button type="button" onClick={() => void controller.retryRun()} disabled={controller.mutationPending || (status !== 'failed' && status !== 'cancelled')}>
-              <ArrowsClockwise aria-hidden size={18} /> Повторить запуск
-            </button>
-          </div>
+          {(!controller.projectMode || running || status === 'failed' || status === 'cancelled') && (
+            <div className="studio-run-actions">
+              {(!controller.projectMode || running) && (
+                <button type="button" onClick={() => void controller.cancelRun()} disabled={!running || controller.mutationPending}>
+                  <StopCircle aria-hidden size={18} /> Отменить генерацию
+                </button>
+              )}
+              {(!controller.projectMode || status === 'failed' || status === 'cancelled') && (
+                <button type="button" onClick={() => void controller.retryRun()} disabled={controller.mutationPending || (status !== 'failed' && status !== 'cancelled')}>
+                  <ArrowsClockwise aria-hidden size={18} /> Повторить запуск
+                </button>
+              )}
+            </div>
+          )}
 
           {(controller.error || formError) && controller.error && (
             <ErrorNotice error={controller.error} persistence={persistence} />
@@ -469,7 +512,7 @@ export function StudioPage() {
 
           <StudioTimeline events={controller.events} running={running} />
 
-          <form className="studio-refine" onSubmit={submitRefinement}>
+          {!controller.projectMode && <form className="studio-refine" onSubmit={submitRefinement}>
               <label htmlFor="studio-refinement">Что изменить в виджете?</label>
               <div>
                 <textarea
@@ -501,19 +544,7 @@ export function StudioPage() {
                   ? 'Доработка запускается на тарифе и сохраняется новой версией'
                   : 'Ctrl + Enter тоже отправляет пожелание'
                 : 'Доработка откроется после проверенной версии'}</p>
-          </form>
-
-          {controller.projectMode && controller.versionsAvailable && controller.versions.length > 0 && (
-            <ProjectVersionHistory
-              versions={controller.versions}
-              activeVersionId={activeVersionId}
-              selectedVersionId={selectedVersion?.id ?? null}
-              mutationPending={controller.mutationPending}
-              running={running}
-              onSelect={(versionId) => void controller.selectVersion(versionId)}
-              onRestore={(versionId) => void controller.restoreVersion(versionId)}
-            />
-          )}
+          </form>}
         </motion.aside>
 
         <motion.section
@@ -523,15 +554,28 @@ export function StudioPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ type: 'spring', stiffness: 95, damping: 22, delay: 0.08 }}
         >
-          <div className="studio-workspace__metrics" aria-label="Метрики запуска">
-            <div><span>Ревизия</span><strong>{previewRevision ?? '—'}</strong></div>
-            <div><span>Токены</span><strong>{controller.snapshot ? numberFormatter.format(controller.snapshot.usage.total_tokens) : '—'}</strong></div>
-            <div><span>Время</span><strong>{controller.snapshot ? `${decimalFormatter.format(controller.snapshot.elapsed_seconds)} с` : '—'}</strong></div>
-            <div className="studio-workspace__quality">
-              <CheckCircle aria-hidden size={19} weight={readyQuality(artifact?.quality_status ?? controller.snapshot?.quality_status) ? 'fill' : 'regular'} />
-              <span>{(artifact?.quality_status ?? controller.snapshot?.quality_status) === 'accepted' ? 'Готово' : (artifact?.quality_status ?? controller.snapshot?.quality_status) === 'verified' ? 'Проверено' : 'Черновик'}</span>
+          {controller.projectMode ? (
+            <div className="studio-workspace__summary" aria-label="Состояние выбранной версии">
+              <div>
+                <span>Версия</span>
+                <strong>{displayedVersionNumber ?? '—'}</strong>
+              </div>
+              <div className="studio-workspace__quality">
+                <CheckCircle aria-hidden size={19} weight={readyQuality(artifact?.quality_status ?? controller.snapshot?.quality_status) ? 'fill' : 'regular'} />
+                <span>{(artifact?.quality_status ?? controller.snapshot?.quality_status) === 'accepted' ? 'Готово к работе' : (artifact?.quality_status ?? controller.snapshot?.quality_status) === 'verified' ? 'Проверено' : 'Черновик'}</span>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="studio-workspace__metrics" aria-label="Метрики запуска">
+              <div><span>Ревизия</span><strong>{previewRevision ?? '—'}</strong></div>
+              <div><span>Токены</span><strong>{controller.snapshot ? numberFormatter.format(controller.snapshot.usage.total_tokens) : '—'}</strong></div>
+              <div><span>Время</span><strong>{controller.snapshot ? `${decimalFormatter.format(controller.snapshot.elapsed_seconds)} с` : '—'}</strong></div>
+              <div className="studio-workspace__quality">
+                <CheckCircle aria-hidden size={19} weight={readyQuality(artifact?.quality_status ?? controller.snapshot?.quality_status) ? 'fill' : 'regular'} />
+                <span>{(artifact?.quality_status ?? controller.snapshot?.quality_status) === 'accepted' ? 'Готово' : (artifact?.quality_status ?? controller.snapshot?.quality_status) === 'verified' ? 'Проверено' : 'Черновик'}</span>
+              </div>
+            </div>
+          )}
           <StudioPreview
             runId={previewRunId}
             revision={previewRevision}
@@ -542,6 +586,57 @@ export function StudioPage() {
             viewport={viewport}
             onViewportChange={setViewport}
           />
+          {controller.projectMode && (
+            <section className="studio-workspace__editing" aria-labelledby="studio-editing-title">
+              <header>
+                <p className="studio-kicker">Следующий шаг</p>
+                <h2 id="studio-editing-title">Доработка и версии</h2>
+                <p>Опишите изменение обычными словами. Предыдущие варианты останутся в истории.</p>
+              </header>
+              <form className="studio-refine" onSubmit={submitRefinement}>
+                <label htmlFor="studio-refinement">Что изменить в виджете?</label>
+                <div>
+                  <textarea
+                    id="studio-refinement"
+                    maxLength={2_000}
+                    placeholder="Например: сделай приветствие короче и добавь кнопку записи"
+                    value={refinement}
+                    onChange={(event) => setRefinement(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === 'Enter'
+                        && (event.ctrlKey || event.metaKey)
+                        && refinable
+                        && !controller.mutationPending
+                        && refinement.trim()
+                      ) {
+                        event.preventDefault();
+                        event.currentTarget.form?.requestSubmit();
+                      }
+                    }}
+                    disabled={!refinable || controller.mutationPending}
+                  />
+                  <button type="submit" disabled={!refinable || controller.mutationPending || !refinement.trim()} aria-label="Применить изменение">
+                    <PaperPlaneTilt aria-hidden size={19} weight="fill" />
+                  </button>
+                </div>
+                <p>{refinable
+                  ? 'Каждая доработка сохранится отдельной версией — предыдущие варианты не потеряются.'
+                  : 'Доработка станет доступна после проверенной версии.'}</p>
+              </form>
+              {controller.versionsAvailable && controller.versions.length > 0 && (
+                <ProjectVersionHistory
+                  versions={controller.versions}
+                  activeVersionId={activeVersionId}
+                  selectedVersionId={selectedVersion?.id ?? null}
+                  mutationPending={controller.mutationPending}
+                  running={running}
+                  onSelect={(versionId) => void controller.selectVersion(versionId)}
+                  onRestore={(versionId) => void controller.restoreVersion(versionId)}
+                />
+              )}
+            </section>
+          )}
           {controller.projectMode
             && projectId
             && freeResultReady
@@ -559,8 +654,10 @@ export function StudioPage() {
             />
           )}
           <div className="studio-workspace__footer">
-            <Code aria-hidden size={18} />
-            <span>Preview использует изолированный runtime сборщика: launcher, composer и chat bridge работают внутри sandbox.</span>
+            {controller.projectMode ? <CheckCircle aria-hidden size={18} /> : <Code aria-hidden size={18} />}
+            <span>{controller.projectMode
+              ? 'Проверьте виджет на компьютере и телефоне перед публикацией.'
+              : 'Preview использует изолированный runtime сборщика: launcher, composer и chat bridge работают внутри sandbox.'}</span>
           </div>
         </motion.section>
       </main>

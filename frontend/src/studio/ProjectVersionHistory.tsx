@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 import type { SaasProjectVersion } from './types';
 
 interface ProjectVersionHistoryProps {
@@ -24,9 +26,8 @@ const dateFormatter = new Intl.DateTimeFormat('ru-RU', {
   minute: '2-digit',
 });
 
-function boundedChangeRequest(value: string) {
-  const compact = value.replace(/\s+/g, ' ').trim();
-  return compact.length > 240 ? `${compact.slice(0, 237)}…` : compact;
+function normalizedChangeRequest(value: string) {
+  return value.replace(/\s+/g, ' ').trim();
 }
 
 export function ProjectVersionHistory({
@@ -38,6 +39,17 @@ export function ProjectVersionHistory({
   onSelect,
   onRestore,
 }: ProjectVersionHistoryProps) {
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
+
+  const toggleExpanded = (versionId: string) => {
+    setExpandedIds((current) => {
+      const next = new Set(current);
+      if (next.has(versionId)) next.delete(versionId);
+      else next.add(versionId);
+      return next;
+    });
+  };
+
   return (
     <section className="studio-versions" aria-label="История версий">
       <header>
@@ -48,6 +60,14 @@ export function ProjectVersionHistory({
         {versions.map((version) => {
           const active = version.id === activeVersionId;
           const selected = version.id === selectedVersionId;
+          const changeRequest = version.change_request
+            ? normalizedChangeRequest(version.change_request)
+            : '';
+          const expandable = changeRequest.length > 240;
+          const expanded = expandedIds.has(version.id);
+          const displayedRequest = expandable && !expanded
+            ? `${changeRequest.slice(0, 237)}…`
+            : changeRequest;
           return (
             <article
               key={version.id}
@@ -57,13 +77,26 @@ export function ProjectVersionHistory({
               <div>
                 <strong>Версия {version.ordinal}</strong>
                 <span>{kindLabel[version.kind]}</span>
-                <span>Ревизия артефакта {version.artifact_revision}</span>
-                {active && <span className="studio-versions__active">Активная версия</span>}
+                {active && <span className="studio-versions__active">Текущая версия</span>}
                 <time dateTime={version.created_at}>
                   {dateFormatter.format(new Date(version.created_at))}
                 </time>
               </div>
-              {version.change_request && <p>{boundedChangeRequest(version.change_request)}</p>}
+              {changeRequest && (
+                <div className="studio-versions__request">
+                  <p>{displayedRequest}</p>
+                  {expandable && (
+                    <button
+                      type="button"
+                      className="studio-versions__expand"
+                      aria-expanded={expanded}
+                      onClick={() => toggleExpanded(version.id)}
+                    >
+                      {expanded ? 'Свернуть' : 'Показать полностью'}
+                    </button>
+                  )}
+                </div>
+              )}
               <button
                 type="button"
                 disabled={mutationPending}
@@ -73,14 +106,16 @@ export function ProjectVersionHistory({
               >
                 {selected ? 'Выбрана' : 'Просмотреть'}
               </button>
-              <button
-                type="button"
-                disabled={active || running || mutationPending}
-                onClick={() => onRestore(version.id)}
-                aria-label={`Восстановить версию ${version.ordinal}`}
-              >
-                {active ? 'Активна' : 'Восстановить'}
-              </button>
+              {!active && (
+                <button
+                  type="button"
+                  disabled={running || mutationPending}
+                  onClick={() => onRestore(version.id)}
+                  aria-label={`Восстановить версию ${version.ordinal}`}
+                >
+                  Восстановить
+                </button>
+              )}
             </article>
           );
         })}
