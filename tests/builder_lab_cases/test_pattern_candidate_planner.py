@@ -502,6 +502,91 @@ async def test_fallback_backtracks_earlier_category_to_preserve_later_required_g
 
 
 @pytest.mark.asyncio
+async def test_selector_catalog_is_rebuilt_from_registry_before_provider_call() -> None:
+    registry = approved_registry()
+    target = ("widget-open-technical", 1)
+    tampered_catalog = []
+    for item in catalog(registry):
+        copy = dict(item)
+        if (copy["pattern_id"], copy["version"]) == target:
+            copy["ai_description"] = "INJECTED SECRET HTML <script>alert(1)</script>"
+            copy["technical_contract"] = "forged-contract"
+            copy["fragment.html"] = "SHOULD NEVER REACH PROVIDER"
+            copy["secret"] = "provider-key"
+        tampered_catalog.append(copy)
+
+    engine = FakeSelectorEngine([valid_payload(registry)])
+    result = await plan_pattern_candidates(
+        engine,
+        request=builder_request(),
+        selected_direction=direction(),
+        registry=registry,
+        selector_catalog=tuple(tampered_catalog),
+    )
+
+    assert result.used_fallback is False
+    sent = next(
+        item
+        for item in engine.calls[0]["selector_catalog"]
+        if (item["pattern_id"], item["version"]) == target
+    )
+    assert sent == registry.resolve(*target).selector_dict()
+    assert "fragment.html" not in sent
+    assert "secret" not in sent
+    assert sent["ai_description"] != "INJECTED SECRET HTML <script>alert(1)</script>"
+    assert sent["technical_contract"] != "forged-contract"
+
+
+@pytest.mark.asyncio
+async def test_fallback_finds_minimum_pair_before_combination_budget_is_spent() -> None:
+    original = approved_registry()
+    open_definition = original.resolve("widget-open-technical", 1)
+    retained = tuple(
+        item
+        for item in original.definitions
+        if item.pattern_id != open_definition.pattern_id
+    )
+    open_ids = tuple(f"widget-open-{index:03d}" for index in range(22))
+    bad_ids = open_ids[:12]
+    definitions = tuple(
+        replace(
+            open_definition,
+            pattern_id=pattern_id,
+            incompatible_with=tuple(
+                other
+                for other in open_ids
+                if other != pattern_id
+            )
+            if pattern_id in bad_ids
+            else (),
+        )
+        for pattern_id in open_ids
+    )
+    registry = AtomicPatternRegistry(retained + definitions)
+
+    invalid = plan_for(candidate(AtomicPatternCategory.WIDGET_OPEN))
+    result = await plan_pattern_candidates(
+        FakeSelectorEngine([invalid, invalid]),
+        request=builder_request(),
+        selected_direction=direction(),
+        registry=registry,
+    )
+
+    assert result.used_fallback is True
+    groups = {group.category: group for group in result.plan.groups}
+    assert [
+        item.pattern_id
+        for item in groups[AtomicPatternCategory.WIDGET_OPEN].candidates
+    ][:2] == ["widget-open-012", "widget-open-013"]
+    assert len(groups[AtomicPatternCategory.WIDGET_OPEN].candidates) == 5
+    validate_pattern_candidate_plan(
+        result.plan,
+        registry=registry,
+        selector_catalog=registry.selector_catalog(),
+    )
+
+
+@pytest.mark.asyncio
 async def test_effective_approved_catalog_is_filtered_before_selector_call() -> None:
     registry = approved_registry()
     filtered_key = ("widget-open-technical", 1)

@@ -152,7 +152,11 @@ def _eligible_catalog(
         category = item.get("category")
         if category != definition.category.value:
             continue
-        eligible.append(item)
+        # The caller-owned catalog is only an exact-version allowlist plus
+        # effective review state.  Never forward its mutable metadata: a
+        # stale or compromised caller could otherwise inject assets, secrets,
+        # or a forged selector description into the provider prompt.
+        eligible.append(definition.selector_dict())
     return tuple(
         sorted(
             eligible,
@@ -336,13 +340,13 @@ def _definitions_are_compatible(
 def _fallback_options(
     entries: Sequence[AtomicPatternDefinition],
 ) -> tuple[tuple[AtomicPatternDefinition, ...], ...]:
-    """Enumerate stable, bounded compatible subsets for one category.
+    """Enumerate stable, bounded compatible minimum subsets for one category.
 
-    A category with at least two eligible entries may submit any two through
-    five candidates.  The server fallback prefers the largest shortlist and
-    then the lexicographically earliest exact versions.  Limiting combination
-    inspection keeps a pathological catalog from turning fallback into an
-    unbounded search.
+    Feasibility is established at the contract minimum first: one candidate
+    when exactly one definition is eligible, otherwise two.  Optional
+    maximization happens only after every category has a valid minimum set, so
+    a large catalog cannot spend the search budget on five-way combinations
+    and hide a feasible pair.
     """
 
     if not entries:
@@ -354,17 +358,16 @@ def _fallback_options(
         sorted(entries, key=lambda item: (item.pattern_id, item.version))
     )
     minimum = 2
-    maximum = min(5, len(ordered))
     options: list[tuple[AtomicPatternDefinition, ...]] = []
-    inspected = 0
-    for size in range(maximum, minimum - 1, -1):
-        for indexes in combinations(range(len(ordered)), size):
-            inspected += 1
-            if inspected > _MAX_FALLBACK_COMBINATIONS_PER_CATEGORY:
-                return tuple(options)
-            candidate_set = tuple(ordered[index] for index in indexes)
-            if _definitions_are_compatible(candidate_set):
-                options.append(candidate_set)
+    for inspected, indexes in enumerate(
+        combinations(range(len(ordered)), minimum),
+        start=1,
+    ):
+        if inspected > _MAX_FALLBACK_COMBINATIONS_PER_CATEGORY:
+            break
+        candidate_set = tuple(ordered[index] for index in indexes)
+        if _definitions_are_compatible(candidate_set):
+            options.append(candidate_set)
     return tuple(options)
 
 
@@ -419,6 +422,51 @@ def _solve_fallback_assignment(
     return search(0, ())
 
 
+def _maximize_fallback_assignment(
+    grouped: Mapping[
+        AtomicPatternCategory,
+        Sequence[AtomicPatternDefinition],
+    ],
+    assignment: Mapping[
+        AtomicPatternCategory,
+        Sequence[AtomicPatternDefinition],
+    ],
+) -> dict[AtomicPatternCategory, tuple[AtomicPatternDefinition, ...]]:
+    """Deterministically add compatible candidates after minimum feasibility."""
+
+    categories = tuple(sorted(grouped, key=lambda value: value.value))
+    selected = [
+        definition
+        for category in categories
+        for definition in assignment[category]
+    ]
+    expanded = {
+        category: list(assignment[category])
+        for category in categories
+    }
+    for category in categories:
+        entries = tuple(
+            sorted(
+                grouped[category],
+                key=lambda item: (item.pattern_id, item.version),
+            )
+        )
+        maximum = 1 if len(entries) == 1 else min(5, len(entries))
+        for definition in entries:
+            if len(expanded[category]) >= maximum:
+                break
+            if definition in expanded[category]:
+                continue
+            if not _definitions_are_compatible(tuple(selected) + (definition,)):
+                continue
+            expanded[category].append(definition)
+            selected.append(definition)
+    return {
+        category: tuple(expanded[category])
+        for category in categories
+    }
+
+
 def _fallback_plan(
     *,
     direction_id: str,
@@ -449,6 +497,7 @@ def _fallback_plan(
         raise PatternCandidateValidationError(
             "deterministic fallback could not satisfy candidate compatibility constraints"
         )
+    assignment = _maximize_fallback_assignment(grouped, assignment)
 
     groups: list[PatternCandidateGroup] = []
     for category in sorted(grouped, key=lambda value: value.value):
