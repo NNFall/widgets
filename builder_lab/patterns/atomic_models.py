@@ -31,6 +31,9 @@ _CODE_STRUCTURE_RE = re.compile(
 )
 _HEX_BLOB_RE = re.compile(r"^[0-9a-f]+$", re.IGNORECASE)
 _BASE64_BLOB_RE = re.compile(r"^[A-Za-z0-9+/=_-]+$")
+_BLOB_EDGE_PUNCTUATION = ".,:;!?()[]{}\"'`"
+_MIN_MULTI_TOKEN_BLOB_CHUNK = 16
+_MIN_MULTI_TOKEN_BLOB_TOTAL = 96
 
 
 class AtomicPatternCategory(str, Enum):
@@ -150,6 +153,49 @@ def _validate_natural_language(value: str) -> None:
         )
         if _HEX_BLOB_RE.fullmatch(candidate) or entropy >= 2.5:
             raise ValueError("ai_description contains an encoded blob token")
+    _validate_multitoken_encoded_blob(value)
+
+
+def _validate_multitoken_encoded_blob(value: str) -> None:
+    """Reject long consecutive encoded chunks while preserving ordinary prose."""
+
+    candidates: list[str] = []
+    for raw_token in re.findall(r"\S+", value):
+        candidate = raw_token.strip(_BLOB_EDGE_PUNCTUATION)
+        if (
+            len(candidate) >= _MIN_MULTI_TOKEN_BLOB_CHUNK
+            and _BASE64_BLOB_RE.fullmatch(candidate)
+        ):
+            candidates.append(candidate)
+            continue
+        if len(candidates) >= 3:
+            _check_multitoken_blob_run(candidates)
+        candidates = []
+    if len(candidates) >= 3:
+        _check_multitoken_blob_run(candidates)
+
+
+def _check_multitoken_blob_run(candidates: list[str]) -> None:
+    compact = "".join(candidates)
+    if len(compact) < _MIN_MULTI_TOKEN_BLOB_TOTAL:
+        return
+    if all(_HEX_BLOB_RE.fullmatch(candidate) for candidate in candidates):
+        raise ValueError("ai_description contains an encoded blob sequence")
+
+    signal_count = sum(
+        character.isupper()
+        or character.isdigit()
+        or character in "+/=_-"
+        for character in compact
+    )
+    signal_ratio = signal_count / len(compact)
+    frequencies = Counter(compact)
+    entropy = -sum(
+        (count / len(compact)) * log2(count / len(compact))
+        for count in frequencies.values()
+    )
+    if signal_ratio >= 0.12 and entropy >= 3.2:
+        raise ValueError("ai_description contains an encoded blob sequence")
 
 
 @dataclass(frozen=True, slots=True)

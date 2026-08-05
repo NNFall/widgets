@@ -6,6 +6,8 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from html import unescape
+from html.parser import HTMLParser
 from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
@@ -44,10 +46,30 @@ _MAX_ASSET_BYTES = 64 * 1024
 _MAX_CATALOG_BYTES = 512 * 1024
 
 _EXTERNAL_URL_RE = re.compile(
-    r"(?:https?|ftp|wss?|data|blob):\s*(?://|[^\s\"'`)>]+)|//[^\s\"'`)>]+",
+    r"(?:https?|ftp|wss?|data|blob|javascript):\s*(?://|[^\s\"'`)>]+)|//[^\s\"'`)>]+",
     re.IGNORECASE,
 )
 _CSS_IMPORT_RE = re.compile(r"(?:^|[^\w])@import\b", re.IGNORECASE)
+_HTML_URL_ATTRIBUTES = frozenset(
+    {
+        "action",
+        "background",
+        "cite",
+        "data",
+        "formaction",
+        "href",
+        "icon",
+        "longdesc",
+        "manifest",
+        "ping",
+        "poster",
+        "profile",
+        "src",
+        "srcset",
+        "usemap",
+        "xlink:href",
+    }
+)
 _DANGEROUS_IDENTIFIERS = frozenset(
     {
         "fetch",
@@ -81,6 +103,56 @@ _DANGEROUS_MEMBER_STRINGS = _DANGEROUS_IDENTIFIERS | {
 class _ImplementationToken:
     kind: str
     value: str
+
+
+class _FragmentHTMLValidator(HTMLParser):
+    """Validate fragment structure without interpreting visible text as code."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._inspect_tag(tag, attrs)
+
+    def handle_startendtag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        self._inspect_tag(tag, attrs)
+
+    @staticmethod
+    def _inspect_tag(
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        if tag.casefold() == "script":
+            raise AtomicPatternRegistryError(
+                "forbidden implementation capability: inline code"
+            )
+        for raw_name, raw_value in attrs:
+            name = "".join(raw_name.split()).casefold()
+            if name == "style" or name.startswith("on"):
+                raise AtomicPatternRegistryError(
+                    "forbidden implementation capability: inline code"
+                )
+            if raw_value is None or name not in _HTML_URL_ATTRIBUTES:
+                continue
+            if _EXTERNAL_URL_RE.search(unescape(raw_value)):
+                raise AtomicPatternRegistryError(
+                    "forbidden implementation capability: external URL"
+                )
+
+
+def _validate_fragment_html(source: str) -> None:
+    parser = _FragmentHTMLValidator()
+    try:
+        parser.feed(source)
+        parser.close()
+    except AtomicPatternRegistryError:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise AtomicPatternRegistryError("fragment HTML is invalid") from exc
 
 
 class AtomicPatternRegistryError(ValueError):
@@ -385,13 +457,10 @@ def _decode_asset(raw: bytes, name: str) -> str:
 
 def _validate_implementation(assets: tuple[str, str, str]) -> None:
     html, css, javascript = assets
-    _validate_external_urls(html, line_comments=False, html_comments=True)
+    _validate_fragment_html(html)
     _validate_external_urls(css, line_comments=False, html_comments=False)
     _validate_external_urls(javascript, line_comments=True, html_comments=False)
     _scan_javascript_capabilities(javascript)
-    html = assets[0].lower()
-    if "<script" in html or "style=" in html:
-        raise AtomicPatternRegistryError("fragment HTML must not contain inline code")
 
 
 def _validate_external_urls(
@@ -423,13 +492,44 @@ def _scan_javascript_capabilities(source: str) -> None:
             continue
         if token.kind != "string":
             continue
-        if token.value.casefold() not in _DANGEROUS_MEMBER_STRINGS:
+        member_value = _constant_computed_member_value(tokens, index)
+        if member_value is not None:
+            value, _ = member_value
+        else:
+            value = token.value
+        if value.casefold() not in _DANGEROUS_MEMBER_STRINGS:
             continue
         previous = tokens[index - 1] if index else None
         if previous is not None and previous.value in {"[", "."}:
             raise AtomicPatternRegistryError(
-                f"forbidden implementation capability: member {token.value}"
+                f"forbidden implementation capability: member {value}"
             )
+
+
+def _constant_computed_member_value(
+    tokens: tuple[_ImplementationToken, ...],
+    index: int,
+) -> tuple[str, int] | None:
+    """Fold a string-only computed member such as ``["send" + "Beacon"]``."""
+
+    if index == 0 or tokens[index - 1].value != "[":
+        return None
+    if tokens[index].kind != "string":
+        return None
+    parts = [tokens[index].value]
+    cursor = index + 1
+    while cursor < len(tokens):
+        if tokens[cursor].value == "]":
+            return "".join(parts), cursor
+        if (
+            tokens[cursor].value != "+"
+            or cursor + 1 >= len(tokens)
+            or tokens[cursor + 1].kind != "string"
+        ):
+            return None
+        parts.append(tokens[cursor + 1].value)
+        cursor += 2
+    return None
 
 
 def _tokenize(source: str, *, line_comments: bool) -> tuple[_ImplementationToken, ...]:

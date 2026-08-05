@@ -393,6 +393,83 @@ def test_v3_registry_rejects_external_html_url(tmp_path: Path) -> None:
         AtomicPatternRegistry.load(root)
 
 
+def test_v3_registry_rejects_javascript_html_url(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "fragment.html").write_text(
+        '<a href = "javascript:alert(1)">open</a>', encoding="utf-8"
+    )
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
+def test_v3_registry_rejects_inline_fetch_event_attribute(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "fragment.html").write_text(
+        '<button ONCLICK = "fetch(\'external\')">open</button>', encoding="utf-8"
+    )
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
+def test_v3_registry_rejects_inline_storage_event_attribute(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    # Keep the fixture literal readable while preserving the exact HTML bytes.
+    (pattern / "fragment.html").write_text(
+        '<div OnMouseOver = "localStorage.getItem(\'x\')">open</div>',
+        encoding="utf-8",
+    )
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
+def test_v3_registry_rejects_inline_eval_event_attribute(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "fragment.html").write_text(
+        '<button oNKeYDown = "eval(\'x\')">open</button>', encoding="utf-8"
+    )
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
+def test_v3_registry_allows_safe_data_and_aria_attributes_and_text(tmp_path: Path) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "fragment.html").write_text(
+        '<p data-state="function" aria-label="fetch eval">function fetch eval</p>',
+        encoding="utf-8",
+    )
+    rewrite_raw_asset_hash(pattern)
+
+    assert AtomicPatternRegistry.load(root).resolve("widget-open-technical", 1)
+
+
+def test_v3_registry_rejects_constant_concatenated_send_beacon_member(
+    tmp_path: Path,
+) -> None:
+    root = valid_atomic_catalog(tmp_path)
+    pattern = root / "widget-open-technical-v1"
+    (pattern / "behavior.js").write_text(
+        'navigator[ /*split*/ "send" + /*split*/ "Beacon" ]("x")',
+        encoding="utf-8",
+    )
+    rewrite_raw_asset_hash(pattern)
+
+    with pytest.raises(AtomicPatternRegistryError, match="forbidden"):
+        AtomicPatternRegistry.load(root)
+
+
 def test_v3_hash_uses_unambiguous_asset_framing(tmp_path: Path) -> None:
     first = tmp_path / "first"
     second = tmp_path / "second"
@@ -538,6 +615,64 @@ def test_v3_registry_rejects_long_encoded_blob_tokens(
 
     with pytest.raises(AtomicPatternRegistryError, match="ai_description"):
         AtomicPatternRegistry.load(root)
+
+
+def test_v3_registry_rejects_multi_token_hex_blob(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    chunks = (
+        "deadbeefcafebabe0123456789abcdef",
+        "abcdef0123456789deadbeefcafebabe",
+        "0123456789abcdefcafebabedeadbeef",
+        "cafebabedeadbeefabcdef0123456789",
+        "beefdead01234567abcdef89cafebabe",
+        "3456789abcdef0deadbeefcafebabe12",
+        "89abcdef0123cafebabedeadbeef4567",
+        "fedcba9876543210beadface01234567",
+    )
+    payload = " ".join(chunks)
+    description = (
+        "A neutral technical description explains runtime behavior and preserves "
+        f"the compact reference payload {payload} for local review."
+    )
+    write_atomic_pattern(root / "widget-open-technical-v1", ai_description=description)
+
+    with pytest.raises(AtomicPatternRegistryError, match="ai_description"):
+        AtomicPatternRegistry.load(root)
+
+
+def test_v3_registry_rejects_multi_token_base64_blob(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    chunks = (
+        "QWxhZGRpbjpvcGVuIHNlc2FtZQ".replace(" ", ""),
+        "U29tZUJhc2U2NFNlcXVlbmNlMDEyMzQ",
+        "VGhp c0lz QVN1 c3Bp Y2lv dXNC bG9i".replace(" ", ""),
+        "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo",
+        "MTIzNDU2Nzg5MGFiY2RlZmdoaWprbG1ub3A",
+        "QmFzZTY0U2VnbWVudFdpdGhVbmV4cGVjdGVk",
+    )
+    payload = " ".join(chunks)
+    description = (
+        "A neutral technical description explains runtime behavior and preserves "
+        f"the compact reference payload {payload} for local review."
+    )
+    write_atomic_pattern(root / "widget-open-technical-v1", ai_description=description)
+
+    with pytest.raises(AtomicPatternRegistryError, match="ai_description"):
+        AtomicPatternRegistry.load(root)
+
+
+def test_v3_registry_accepts_normal_multi_sentence_english_prose(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    description = (
+        "This neutral pattern description explains the runtime state and its stable contract. "
+        "It preserves predictable behavior while allowing a visual direction to adapt calmly. "
+        "The selector can use the explanation without receiving implementation code."
+    )
+    write_atomic_pattern(root / "widget-open-technical-v1", ai_description=description)
+
+    definition = AtomicPatternRegistry.load(root).resolve("widget-open-technical", 1)
+
+    assert definition.ai_description == description
 
 
 @pytest.mark.parametrize("mutation", ["remove", "extra"])
