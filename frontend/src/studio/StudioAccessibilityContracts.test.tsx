@@ -68,23 +68,19 @@ describe('Studio accessibility contracts', () => {
     expect(studioPageSource).toMatch(/reducedMotion\s*\?\s*\{\s*duration:\s*0\s*\}/);
   });
 
-  it('uses page scrolling, readable controls, and a compact responsive shell', () => {
-    expect(stylesSource).toMatch(/\.studio-shell\s*\{[^}]*max-width:\s*1480px/s);
-    expect(stylesSource).toMatch(/\.studio-rail\s*\{[^}]*overflow-y:\s*visible/s);
-    expect(stylesSource).not.toMatch(/\.studio-timeline__list\s*\{[^}]*max-height:\s*330px/s);
+  it('locks the project workbench to the viewport and scrolls only inside its panes', () => {
+    expect(stylesSource).toMatch(/\.studio-app--workbench\s*\{[^}]*height:\s*100dvh[^}]*overflow:\s*hidden/s);
+    expect(stylesSource).toMatch(/\.studio-workbench\s*\{[^}]*grid-template-columns:\s*minmax\(360px,\s*420px\)\s+minmax\(0,\s*1fr\)/s);
+    expect(stylesSource).toMatch(/\.studio-conversation__feed\s*\{[^}]*overflow-y:\s*auto/s);
+    expect(stylesSource).toMatch(/\.studio-preview-pane\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s);
     expect(stylesSource).toMatch(/min-height:\s*44px/);
     expect(stylesSource).toMatch(/@media \(max-width:\s*390px\)/);
   });
 
-  it('defines the friendly mobile flow as status, preview, action, editing, publication and details', () => {
+  it('uses explicit chat and preview panes on compact screens', () => {
     const mobileRules = stylesSource.slice(stylesSource.indexOf('@media (max-width: 860px)'));
-    expect(mobileRules).toMatch(/\.studio-shell--friendly\s*>\s*\.studio-rail[\s\S]*display:\s*contents/);
-    expect(mobileRules).toMatch(/\.studio-intro[\s\S]*order:\s*1/);
-    expect(mobileRules).toMatch(/\.studio-progress-card[\s\S]*order:\s*2/);
-    expect(mobileRules).toMatch(/\.studio-preview-region[\s\S]*order:\s*3/);
-    expect(mobileRules).toMatch(/\.studio-run-actions[\s\S]*order:\s*4/);
-    expect(mobileRules).toMatch(/\.studio-workspace__editing[\s\S]*order:\s*5/);
-    expect(mobileRules).toMatch(/\.studio-publication-region[\s\S]*order:\s*6/);
-    expect(mobileRules).toMatch(/\.studio-technical[\s\S]*order:\s*7/);
+    expect(mobileRules).toMatch(/\.studio-workbench__mobile-tabs\s*\{[^}]*display:\s*grid/s);
+    expect(mobileRules).toMatch(/\.studio-workbench\[data-mobile-pane='chat'\][\s\S]*\.studio-preview-pane\s*\{[^}]*display:\s*none/s);
+    expect(mobileRules).toMatch(/\.studio-workbench\[data-mobile-pane='preview'\][\s\S]*\.studio-conversation\s*\{[^}]*display:\s*none/s);
   });
 });

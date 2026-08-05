@@ -63,8 +63,10 @@ test('Studio creates an owned project and renders the refreshed SaaS run @deskto
   await technicalDetails.click();
   await expect(technicalDetails.getByText('Виджет прошёл визуальную проверку')).toBeVisible();
   await technicalDetails.click();
-  await expect(page.locator('.studio-workspace__quality').getByText('Проверено', { exact: true })).toBeVisible();
-  await expect(page.getByText('Текущая версия')).toBeVisible();
+  await expect(page.getByRole('complementary', { name: 'Чат с Kaigo' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Предпросмотр виджета' })).toBeVisible();
+  await expect(page.getByLabel('Состояние выбранной версии')).toContainText('Версия 2');
+  await expect(page.getByLabel('Состояние выбранной версии')).toContainText('Проверено');
   await expect(page.getByLabel('Что изменить в виджете?')).toBeVisible();
 
   const frame = page.getByTitle('Предпросмотр AI-сотрудника Kaigo');
@@ -90,12 +92,15 @@ test('Studio resumes the server-owned project with friendly status and preview a
   builderApi.seedRun('run-resume');
   await page.goto(`/studio?project=${builderApi.projectId}`);
 
-  await expect(page.getByLabel('Ссылка на сайт')).toHaveValue('https://example.com');
-  await expect(page.getByLabel('Пожелание к AI-сотруднику')).toHaveValue(
+  const projectContext = page.locator('details.studio-conversation__context');
+  await expect(projectContext).not.toHaveAttribute('open');
+  await projectContext.getByText('Контекст проекта').click();
+  await expect(projectContext.getByText('https://example.com', { exact: true })).toBeVisible();
+  await expect(projectContext.getByText(
     'Уверенный консультант, который говорит простым языком.',
-  );
+  )).toBeVisible();
   await expect(page.getByText('example.com').first()).toBeVisible();
-  await expect(page.getByLabel('Состояние выбранной версии')).toContainText('Версия2');
+  await expect(page.getByLabel('Состояние выбранной версии')).toContainText('Версия 2');
   await expect(page.getByText('12 345', { exact: true })).not.toBeVisible();
   await expect(page.getByText('24,8 с', { exact: true })).not.toBeVisible();
   await expect(page.getByTitle('Предпросмотр AI-сотрудника Kaigo')).toHaveAttribute(
@@ -108,9 +113,9 @@ test('Studio resumes the server-owned project with friendly status and preview a
     method === 'GET' && pathname === `/api/projects/${builderApi.projectId}`,
   ).length;
   await page.reload();
-  await expect(page.getByLabel('Ссылка на сайт')).toHaveValue('https://example.com');
+  await expect(page.locator('details.studio-conversation__context')).not.toHaveAttribute('open');
   await expect(page.getByTitle('Предпросмотр AI-сотрудника Kaigo')).toBeVisible();
-  await expect(page.getByText('Текущая версия')).toBeVisible();
+  await expect(page.getByLabel('Состояние выбранной версии')).toContainText('Версия 2');
   await expect.poll(() => builderApi.requests.filter(({ method, pathname }) =>
     method === 'GET' && pathname === `/api/projects/${builderApi.projectId}`,
   ).length).toBeGreaterThan(projectReadsBeforeReload);
@@ -152,6 +157,7 @@ test('active subscription publishes the current verified artifact with a stable 
   builderApi.activateSubscription();
   await page.goto(`/studio?project=${builderApi.projectId}`);
 
+  await page.getByRole('button', { name: 'Открыть публикацию' }).click();
   await expect(page.getByRole('heading', { name: 'Всё готово к публикации' })).toBeVisible();
   await page.getByLabel('На каких сайтах разрешить виджет').fill(
     'https://example.com\nhttps://shop.example.com',
@@ -180,6 +186,7 @@ test('active subscription publishes the current verified artifact with a stable 
     '<script src="https://widgets.kaigo.space/embed/stable-playwright-widget.js" async></script>',
   );
   await expect(restoredSnippet).not.toBeVisible();
+  await page.getByRole('button', { name: 'Открыть публикацию' }).click();
   await expect(page.getByLabel('На каких сайтах разрешить виджет')).toHaveValue(
     'https://example.com\nhttps://shop.example.com',
   );
@@ -190,36 +197,36 @@ test('Studio mobile restores a SaaS project, switches preview and has no overflo
   builderApi.seedRun('run-mobile');
   await page.goto(`/studio?project=${builderApi.projectId}`);
 
-  await expect(page.getByRole('heading', { name: 'Студия Kaigo' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Чат с Kaigo' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Чат' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('region', { name: 'Предпросмотр виджета' })).toBeHidden();
+  await page.getByRole('button', { name: 'Предпросмотр', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Предпросмотр', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('region', { name: 'Предпросмотр виджета' })).toBeVisible();
   await expect(page.getByTestId('studio-preview-canvas')).toHaveAttribute('data-viewport', 'desktop');
   await page.getByRole('button', { name: 'На телефоне' }).click();
   await expect(page.getByRole('button', { name: 'На телефоне' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('studio-preview-canvas')).toHaveAttribute('data-viewport', 'mobile');
   await expect(page.getByTitle('Предпросмотр AI-сотрудника Kaigo')).toHaveAttribute('sandbox', 'allow-scripts');
-  await expect(page.getByText('Текущая версия')).toBeVisible();
-  await page.getByRole('button', { name: 'Показать полностью' }).click();
-  await expect(page.getByRole('button', { name: 'Свернуть' })).toBeVisible();
+  await expect(page.getByLabel('Состояние выбранной версии')).toContainText('Версия 2');
   await expectNoHorizontalOverflow(page);
 
-  const mobileFlow = await page.locator('.studio-shell--friendly').evaluate((shell) => {
-    const selectors = [
-      '.studio-intro',
-      '.studio-progress-card',
-      '.studio-preview-region',
-      '.studio-workspace__editing',
-      '.studio-publication-region',
-      '.studio-technical',
-    ];
-    return selectors.map((selector) => {
-      const element = shell.querySelector<HTMLElement>(selector);
-      return { selector, top: element ? element.getBoundingClientRect().top + window.scrollY : -1 };
-    });
+  const viewportLock = await page.locator('.studio-app--workbench').evaluate((shell) => {
+    const bounds = shell.getBoundingClientRect();
+    return {
+      top: bounds.top,
+      bottom: bounds.bottom,
+      documentOverflow: document.documentElement.scrollHeight - window.innerHeight,
+    };
   });
-  expect(mobileFlow.every(({ top }) => top >= 0)).toBe(true);
-  expect(mobileFlow.map(({ top }) => top)).toEqual(
-    [...mobileFlow.map(({ top }) => top)].sort((left, right) => left - right),
-  );
-  await expect(page.locator('.studio-shell--friendly .studio-form')).toBeHidden();
+  expect(viewportLock.top).toBe(0);
+  expect(viewportLock.bottom).toBeLessThanOrEqual(845);
+  expect(viewportLock.documentOverflow).toBeLessThanOrEqual(1);
+
+  await page.getByRole('button', { name: 'Открыть версии' }).click();
+  await expect(page.getByRole('dialog', { name: 'История версий' })).toBeVisible();
+  await page.getByRole('button', { name: 'Закрыть панель' }).click();
+  await expect(page.getByRole('dialog', { name: 'История версий' })).toHaveCount(0);
 
   await expect(page).toHaveScreenshot('studio-mobile.png', {
     animations: 'disabled',

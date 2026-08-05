@@ -23,6 +23,7 @@ import { StudioTimeline } from './StudioTimeline';
 import { StudioComposer } from './StudioComposer';
 import { StudioLibrary } from './StudioLibrary';
 import { ProjectVersionHistory } from './ProjectVersionHistory';
+import { StudioProjectWorkbench } from './StudioProjectWorkbench';
 import { UpgradeGate } from './UpgradeGate';
 import type {
   BuilderEngine,
@@ -364,6 +365,23 @@ export function StudioPage() {
           )}
         </main>
       </div>
+    );
+  }
+
+  if (controller.projectMode && projectId) {
+    return (
+      <StudioProjectWorkbench
+        controller={controller}
+        projectId={projectId}
+        domain={headerProjectDomain}
+        sourceUrl={controller.project?.source_url ?? sourceUrl}
+        brief={controller.project?.brief ?? brief}
+        errorNotice={controller.error ? (
+          <ErrorNotice error={controller.error} persistence={persistence} />
+        ) : undefined}
+        onOpenProject={openProject}
+        onOpenStudioHome={openStudioHome}
+      />
     );
   }
 

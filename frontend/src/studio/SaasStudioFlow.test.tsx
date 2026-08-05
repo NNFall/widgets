@@ -296,7 +296,9 @@ describe('durable SaaS Studio flow', () => {
     render(<StudioPage />);
 
     expect((await screen.findAllByText('Запуск в очереди'))[0]).toBeVisible();
-    expect(await screen.findByDisplayValue('https://example.com')).toHaveAttribute('readonly');
+    const projectContext = screen.getByText('Контекст проекта').closest('details');
+    expect(projectContext).not.toHaveAttribute('open');
+    expect(within(projectContext!).getByText('https://example.com')).toBeInTheDocument();
     expect(fetchMock.mock.calls.slice(0, 3).map(([url]) => String(url))).toEqual([
       '/api/auth/session',
       `/api/projects/${PROJECT_ID}`,
@@ -637,8 +639,9 @@ describe('durable SaaS Studio flow', () => {
 
     render(<StudioPage />);
 
-    const headerStatus = document.querySelector('.studio-header__session strong');
-    await waitFor(() => expect(headerStatus).toHaveTextContent('Собираем основу будущего виджета'));
+    await waitFor(() => expect(
+      document.querySelector('.studio-header__session strong'),
+    ).toHaveTextContent('Собираем основу будущего виджета'));
     expect(screen.queryByText(rawMessage)).not.toBeInTheDocument();
   });
 
@@ -743,8 +746,10 @@ describe('durable SaaS Studio flow', () => {
       throw new Error(`unexpected request: ${url}`);
     }));
 
+    const user = userEvent.setup();
     render(<StudioPage />);
 
+    await user.click(await screen.findByRole('button', { name: 'Открыть публикацию' }));
     expect(await screen.findByRole('button', { name: 'Опубликовать и подключить' })).toBeVisible();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
@@ -963,15 +968,26 @@ describe('durable SaaS Studio flow', () => {
       throw new Error(`unexpected request: ${url}`);
     }));
 
+    const user = userEvent.setup();
     render(<StudioPage />);
 
-    expect((await screen.findAllByText('Проверено')).length).toBeGreaterThanOrEqual(1);
-    expect(await screen.findByText('Подключите виджет к сайту')).toBeVisible();
-    expect(await screen.findByRole('button', { name: 'Опубликовать и подключить' })).toBeEnabled();
+    const workbench = await screen.findByRole('main', { name: 'Рабочая студия' });
+    expect(within(workbench).getByRole('complementary', { name: 'Чат с Kaigo' })).toBeVisible();
+    expect(within(workbench).getByRole('region', { name: 'Предпросмотр виджета' })).toBeVisible();
     expect(screen.getByLabelText('Что изменить в виджете?')).toBeVisible();
-    expect(screen.getByText(
-      'Каждая доработка сохранится отдельной версией — предыдущие варианты не потеряются.',
-    )).toBeVisible();
+    expect(screen.queryByRole('region', { name: 'История версий' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Подключите виджет к сайту')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Открыть версии' }));
+    const versionsDialog = screen.getByRole('dialog', { name: 'История версий' });
+    expect(within(versionsDialog).getByRole('region', { name: 'История версий' })).toBeVisible();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'История версий' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Открыть публикацию' }));
+    const publicationDialog = screen.getByRole('dialog', { name: 'Публикация виджета' });
+    expect(within(publicationDialog).getByText('Подключите виджет к сайту')).toBeVisible();
+    expect(within(publicationDialog).getByRole('button', { name: 'Опубликовать и подключить' })).toBeEnabled();
   });
 
   it('lets the owner correct a claimed URL and brief before the first run', async () => {
@@ -1100,15 +1116,17 @@ describe('durable SaaS Studio flow', () => {
 
     render(<StudioPage />);
 
+    expect(screen.queryByRole('region', { name: 'История версий' })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Открыть версии' }));
     expect(await screen.findByRole('region', { name: 'История версий' })).toBeVisible();
-    expect(screen.getByText('example.com')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Мои виджеты' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Новый виджет' })).toBeVisible();
+    expect(screen.getAllByText('example.com').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Открыть мои виджеты' })).toBeVisible();
     expect(screen.getByText('Текущая версия')).toBeVisible();
     const friendlyContent = document.body.textContent ?? '';
     for (const technicalTerm of ['Сессия', 'Gemini staged', 'Antigravity agent', 'runtime', 'launcher', 'sandbox', 'Ревизия']) {
       expect(friendlyContent).not.toContain(technicalTerm);
     }
+    await user.keyboard('{Escape}');
     await user.type(
       screen.getByLabelText('Что изменить в виджете?'),
       'Сделай приветствие короче',
@@ -1188,7 +1206,6 @@ describe('durable SaaS Studio flow', () => {
       throw new Error(`unexpected request: ${url}`);
     }));
     const user = userEvent.setup();
-
     render(<StudioPage />);
     await user.type(
       await screen.findByLabelText('Что изменить в виджете?'),
@@ -1261,6 +1278,7 @@ describe('durable SaaS Studio flow', () => {
       throw new Error(`unexpected request: ${url}`);
     }));
 
+    const user = userEvent.setup();
     render(<StudioPage />);
 
     const preview = await screen.findByTitle('Предпросмотр AI-сотрудника Kaigo');
@@ -1268,6 +1286,7 @@ describe('durable SaaS Studio flow', () => {
       'src',
       expect.stringContaining('/api/runs/run-version-1/preview/document?revision=1'),
     );
+    await user.click(screen.getByRole('button', { name: 'Открыть публикацию' }));
     expect(await screen.findByRole('button', { name: 'Опубликовать и подключить' })).toBeVisible();
   });
 
@@ -1363,12 +1382,14 @@ describe('durable SaaS Studio flow', () => {
 
     render(<StudioPage />);
 
+    await user.click(await screen.findByRole('button', { name: 'Открыть версии' }));
     await user.click(await screen.findByRole('button', { name: 'Просмотреть версию 1' }));
     const selectedVersionSummary = screen.getByLabelText('Состояние выбранной версии');
     expect(within(selectedVersionSummary).getByText('1')).toBeVisible();
     expect(screen.getByText('Виджет готов к просмотру. Проверьте его на компьютере и телефоне.')).toBeVisible();
     expect(screen.queryByText('Точная историческая концепция')).not.toBeInTheDocument();
     expect(requests.some(({ url }) => url === '/api/artifacts/artifact-version-1')).toBe(true);
+    await user.click(screen.getByRole('button', { name: 'Открыть публикацию' }));
     const domains = await screen.findByLabelText('На каких сайтах разрешить виджет');
     await user.type(domains, 'https://example.com');
     const publishButton = await screen.findByRole('button', { name: 'Опубликовать виджет' });
@@ -1483,11 +1504,13 @@ describe('durable SaaS Studio flow', () => {
 
     render(<StudioPage />);
 
+    await user.click(await screen.findByRole('button', { name: 'Открыть версии' }));
     await user.click(await screen.findByRole('button', { name: 'Просмотреть версию 1' }));
     expect(screen.getByTitle('Предпросмотр AI-сотрудника Kaigo')).toHaveAttribute(
       'src',
       expect.stringContaining('/api/runs/run-version-1/preview/document?revision=1'),
     );
+    await user.click(screen.getByRole('button', { name: 'Открыть версии' }));
     await user.click(await screen.findByRole('button', { name: 'Восстановить версию 1' }));
 
     await waitFor(() => expect(restored).toBe(true));
