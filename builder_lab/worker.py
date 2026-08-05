@@ -856,6 +856,7 @@ class PostgresWorkerQueue:
         lease_seconds: float = 60.0,
         retry_backoff_seconds: float = 5.0,
         forensic_recorder: GenerationForensicRecorder | None = None,
+        pattern_candidate_plan_v2_enabled: bool = False,
     ) -> None:
         if lease_seconds <= 0 or retry_backoff_seconds <= 0:
             raise ValueError("worker timing values must be positive")
@@ -863,6 +864,9 @@ class PostgresWorkerQueue:
         self.lease_seconds = float(lease_seconds)
         self.retry_backoff_seconds = float(retry_backoff_seconds)
         self._forensic_recorder = forensic_recorder
+        self._pattern_candidate_plan_v2_enabled = bool(
+            pattern_candidate_plan_v2_enabled
+        )
         bind = session_factory.kw.get("bind")
         self._dialect_name = bind.dialect.name if bind is not None else ""
         namespace = id(bind)
@@ -2664,13 +2668,14 @@ class PostgresWorkerQueue:
                 run_id=run.id,
                 artifact_id=artifact_record.id,
             )
-        await self._persist_pattern_stage_provenance(
-            database,
-            run_id=run.id,
-            stage=run.current_stage,
-            result=result,
-            attempt_id=attempt_id,
-        )
+        if self._pattern_candidate_plan_v2_enabled:
+            await self._persist_pattern_stage_provenance(
+                database,
+                run_id=run.id,
+                stage=run.current_stage,
+                result=result,
+                attempt_id=attempt_id,
+            )
         for event in result.events:
             event_type = str(event.get("event_type", "")).strip()
             message = str(event.get("message", "")).strip()

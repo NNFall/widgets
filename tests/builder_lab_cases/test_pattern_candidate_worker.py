@@ -470,7 +470,11 @@ async def test_finalize_persists_exact_stage_exposures_and_safe_usage_claim(tmp_
                 "request_id": "foundation-call",
             }
 
-        queue = PostgresWorkerQueue(factory, lease_seconds=30)
+        queue = PostgresWorkerQueue(
+            factory,
+            lease_seconds=30,
+            pattern_candidate_plan_v2_enabled=True,
+        )
         async with factory() as database, database.begin():
             await queue._persist_pattern_stage_provenance(
                 database,

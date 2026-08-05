@@ -529,6 +529,11 @@ async def run() -> None:
             factory,
             lease_seconds=lease_seconds,
             forensic_recorder=forensic_recorder,
+            pattern_candidate_plan_v2_enabled=getattr(
+                config,
+                "pattern_candidate_plan_v2_enabled",
+                False,
+            ),
         )
         trial_settlements = TrialSettlementReconciler(factory)
         if configured_handler == BUILTIN_STAGE_HANDLER:
