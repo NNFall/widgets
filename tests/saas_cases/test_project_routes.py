@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -39,7 +40,9 @@ from app.saas.models import (
     FunnelEvent,
     FunnelJourney,
     ModelCall,
+    PaymentAttempt,
     Project,
+    Subscription,
     TrialEntitlement,
     UsageLedger,
     UserIdentity,
@@ -186,6 +189,58 @@ async def _project_app(
     client = TestClient(TestServer(app))
     await client.start_server()
     return engine, factory, client, owner_id, foreign_id
+
+
+async def _seed_paid_subscription(
+    factory,
+    project_id,
+    *,
+    user_id: int = 10,
+    credit_tokens: int = 2_000_000,
+) -> None:
+    async with factory() as database, database.begin():
+        now = datetime.now(UTC)
+        payment = PaymentAttempt(
+            user_id=user_id,
+            project_id=project_id,
+            provider="test",
+            merchant_account_fingerprint="d" * 64,
+            idempotency_key=f"test-paid-generation:{project_id}",
+            plan_code="developer_unlimited",
+            plan_snapshot={},
+            plan_fingerprint="developer-test",
+            amount_minor=1,
+            currency="RUB",
+            status="succeeded",
+            payload={},
+        )
+        database.add(payment)
+        await database.flush()
+        database.add(
+            Subscription(
+                user_id=user_id,
+                provider="test",
+                payment_attempt_id=payment.id,
+                plan_code="developer_unlimited",
+                plan_snapshot={},
+                plan_fingerprint="developer-test",
+                status="active",
+                current_period_start=now,
+                current_period_end=now + timedelta(days=30),
+            )
+        )
+        database.add(
+            UsageLedger(
+                user_id=user_id,
+                project_id=project_id,
+                payment_attempt_id=payment.id,
+                bucket="generation_tokens",
+                entry_type="subscription.credit",
+                amount=credit_tokens,
+                idempotency_key=f"test-paid-credit:{project_id}",
+                payload={},
+            )
+        )
 
 
 @pytest.mark.asyncio
@@ -484,6 +539,62 @@ async def test_create_run_is_202_idempotent_and_never_calls_engine_inline(
                     .where(UsageLedger.entry_type == "trial.reserve")
                 )
                 == 2
+            )
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_create_run_uses_active_subscription_after_trial_is_consumed(
+    tmp_path,
+) -> None:
+    engine, factory, client, project_id, _ = await _project_app(tmp_path)
+    try:
+        async with factory() as database, database.begin():
+            database.add(
+                TrialEntitlement(
+                    user_id=10,
+                    state="consumed",
+                    granted_units=1,
+                    reserved_units=0,
+                    consumed_units=1,
+                    reservation_epoch=1,
+                )
+            )
+        await _seed_paid_subscription(factory, project_id)
+        await client.post("/test/login/10")
+
+        response = await client.post(
+            f"/api/projects/{project_id}/runs",
+            json={"mode": "express"},
+            headers={
+                "Idempotency-Key": "paid-first-run",
+                "X-CSRF-Token": "test-csrf",
+            },
+        )
+
+        assert response.status == 202
+        run_id = UUID((await response.json())["id"])
+        async with factory() as database:
+            paid_reservation = await database.scalar(
+                select(UsageLedger).where(
+                    UsageLedger.run_id == run_id,
+                    UsageLedger.entry_type == "generation.reserve",
+                )
+            )
+            assert paid_reservation is not None
+            assert paid_reservation.amount == -500_000
+            assert (
+                await database.scalar(
+                    select(func.count())
+                    .select_from(UsageLedger)
+                    .where(
+                        UsageLedger.run_id == run_id,
+                        UsageLedger.entry_type == "trial.reserve",
+                    )
+                )
+                == 0
             )
     finally:
         await client.close()
@@ -831,6 +942,68 @@ async def test_retry_rejects_consumed_trial_and_different_key_after_replacement(
             assert (
                 await database.scalar(select(func.count()).select_from(GenerationRun))
                 == 1
+            )
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_retry_consumed_trial_uses_active_subscription_tokens(tmp_path) -> None:
+    engine, factory, client, project_id, _ = await _project_app(tmp_path)
+    try:
+        await client.post("/test/login/10")
+        created = await client.post(
+            f"/api/projects/{project_id}/runs",
+            json={"mode": "express"},
+            headers={
+                "Idempotency-Key": "paid-retry-source",
+                "X-CSRF-Token": "test-csrf",
+            },
+        )
+        source_run_id = UUID((await created.json())["id"])
+        async with factory() as database, database.begin():
+            source = await database.get(GenerationRun, source_run_id)
+            project = await database.get(Project, project_id)
+            assert source is not None and project is not None
+            source.state = "failed"
+            source.failure_category = "user"
+            source.error_code = "invalid_request"
+            project.status = "failed"
+        await _seed_paid_subscription(factory, project_id)
+
+        retried = await client.post(
+            f"/api/runs/{source_run_id}/retry",
+            json={},
+            headers={
+                "Idempotency-Key": "paid-retry-replacement",
+                "X-CSRF-Token": "test-csrf",
+            },
+        )
+
+        assert retried.status == 202, await retried.text()
+        replacement_id = UUID((await retried.json())["id"])
+        async with factory() as database:
+            source = await database.get(GenerationRun, source_run_id)
+            assert source is not None and source.trial_settlement == "consumed"
+            paid_reservation = await database.scalar(
+                select(UsageLedger).where(
+                    UsageLedger.run_id == replacement_id,
+                    UsageLedger.entry_type == "generation.reserve",
+                )
+            )
+            assert paid_reservation is not None
+            assert paid_reservation.amount == -500_000
+            assert (
+                await database.scalar(
+                    select(func.count())
+                    .select_from(UsageLedger)
+                    .where(
+                        UsageLedger.run_id == replacement_id,
+                        UsageLedger.entry_type == "trial.reserve",
+                    )
+                )
+                == 0
             )
     finally:
         await client.close()

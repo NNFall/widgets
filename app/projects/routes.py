@@ -844,7 +844,23 @@ async def create_run(request: web.Request) -> web.Response:
                     key,
                     request.app[GENERATION_FORENSICS_CONFIG_KEY],
                     funnel_journeys_enabled=_funnel_journeys_enabled(request),
+                    reserve_trial=False,
                 )
+                try:
+                    await TrialService(factory).reserve_trial_in_session(
+                        database,
+                        user_id,
+                        run.id,
+                        request_id=key,
+                    )
+                except TrialUnavailable:
+                    await _require_active_subscription(database, user_id)
+                    await GenerationCreditService(factory).reserve_in_session(
+                        database,
+                        user_id=user_id,
+                        project_id=project.id,
+                        run_id=run.id,
+                    )
             await record_funnel_event(
                 database,
                 event_type="run_queued",
@@ -951,11 +967,16 @@ async def retry_run(request: web.Request) -> web.Response:
         project_id = project.id
 
     outcome = await TrialSettlementReconciler(factory).settle_run(source_run_id)
+    paid_retry = outcome in {"paid", "consumed"}
     if outcome == "consumed":
-        raise web.HTTPConflict(
-            text=_error("trial_consumed"), content_type="application/json"
-        )
-    paid_retry = outcome == "paid"
+        async with factory() as database:
+            try:
+                await _require_active_subscription(database, user_id)
+            except web.HTTPConflict:
+                raise web.HTTPConflict(
+                    text=_error("trial_consumed"),
+                    content_type="application/json",
+                ) from None
     if not paid_retry and outcome != "compensated":
         raise web.HTTPConflict(
             text=_error("trial_retry_unavailable"), content_type="application/json"
@@ -997,7 +1018,7 @@ async def retry_run(request: web.Request) -> web.Response:
                             text=_error("run_is_not_active"),
                             content_type="application/json",
                         )
-                    expected_settlement = "paid" if paid_retry else "compensated"
+                    expected_settlement = outcome if paid_retry else "compensated"
                     if (
                         source.state not in {"failed", "cancelled"}
                         or source.trial_settlement != expected_settlement
