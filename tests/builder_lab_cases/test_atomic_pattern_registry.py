@@ -640,6 +640,31 @@ def test_v3_registry_rejects_multi_token_hex_blob(tmp_path: Path) -> None:
         AtomicPatternRegistry.load(root)
 
 
+def test_v3_registry_rejects_short_chunk_multi_token_hex_blob(tmp_path: Path) -> None:
+    root = tmp_path / "catalog"
+    chunks = (
+        "deadbeef",
+        "cafebabe",
+        "feedface",
+        "01234567",
+        "89abcdef",
+        "beadface",
+        "abcdef01",
+        "facecafe",
+        "badc0ffe",
+        "ace0face",
+    )
+    payload = " ".join(chunks)
+    description = (
+        "A neutral technical description explains runtime behavior and preserves "
+        f"the compact reference payload {payload} for local review."
+    )
+    write_atomic_pattern(root / "widget-open-technical-v1", ai_description=description)
+
+    with pytest.raises(AtomicPatternRegistryError, match="ai_description"):
+        AtomicPatternRegistry.load(root)
+
+
 def test_v3_registry_rejects_multi_token_base64_blob(tmp_path: Path) -> None:
     root = tmp_path / "catalog"
     chunks = (

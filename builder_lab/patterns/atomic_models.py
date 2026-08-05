@@ -32,6 +32,9 @@ _CODE_STRUCTURE_RE = re.compile(
 _HEX_BLOB_RE = re.compile(r"^[0-9a-f]+$", re.IGNORECASE)
 _BASE64_BLOB_RE = re.compile(r"^[A-Za-z0-9+/=_-]+$")
 _BLOB_EDGE_PUNCTUATION = ".,:;!?()[]{}\"'`"
+_MIN_SEGMENTED_HEX_CHUNK = 8
+_MIN_SEGMENTED_HEX_CHUNKS = 4
+_MIN_SEGMENTED_HEX_TOTAL = 64
 _MIN_MULTI_TOKEN_BLOB_CHUNK = 16
 _MIN_MULTI_TOKEN_BLOB_TOTAL = 96
 
@@ -160,8 +163,17 @@ def _validate_multitoken_encoded_blob(value: str) -> None:
     """Reject long consecutive encoded chunks while preserving ordinary prose."""
 
     candidates: list[str] = []
+    hex_candidates: list[str] = []
     for raw_token in re.findall(r"\S+", value):
         candidate = raw_token.strip(_BLOB_EDGE_PUNCTUATION)
+        if (
+            len(candidate) >= _MIN_SEGMENTED_HEX_CHUNK
+            and _HEX_BLOB_RE.fullmatch(candidate)
+        ):
+            hex_candidates.append(candidate)
+        else:
+            _check_segmented_hex_blob_run(hex_candidates)
+            hex_candidates = []
         if (
             len(candidate) >= _MIN_MULTI_TOKEN_BLOB_CHUNK
             and _BASE64_BLOB_RE.fullmatch(candidate)
@@ -171,8 +183,18 @@ def _validate_multitoken_encoded_blob(value: str) -> None:
         if len(candidates) >= 3:
             _check_multitoken_blob_run(candidates)
         candidates = []
+    _check_segmented_hex_blob_run(hex_candidates)
     if len(candidates) >= 3:
         _check_multitoken_blob_run(candidates)
+
+
+def _check_segmented_hex_blob_run(candidates: list[str]) -> None:
+    if (
+        len(candidates) >= _MIN_SEGMENTED_HEX_CHUNKS
+        and sum(len(candidate) for candidate in candidates)
+        >= _MIN_SEGMENTED_HEX_TOTAL
+    ):
+        raise ValueError("ai_description contains an encoded blob sequence")
 
 
 def _check_multitoken_blob_run(candidates: list[str]) -> None:
