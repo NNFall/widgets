@@ -986,6 +986,10 @@ def test_builder_egress_contract_contains_both_worker_interfaces_and_docker_dns(
         "KAIGO_REFERENCE_NATIVE_TRANSPORT: "
         "${KAIGO_REFERENCE_NATIVE_TRANSPORT:-false}"
     ) in worker
+    assert (
+        "KAIGO_REFERENCE_VIEWPORT_CONCURRENCY: "
+        "${KAIGO_REFERENCE_VIEWPORT_CONCURRENCY:-2}"
+    ) in worker
     assert "127.0.0.0/8" in guard
     assert "10.0.0.0/8" in guard
     assert 'echo "-A ${FORWARD_CHAIN} -j RETURN"' in guard

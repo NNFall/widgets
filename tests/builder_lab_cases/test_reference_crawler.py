@@ -1782,6 +1782,78 @@ class BrowserLifecycleTests(unittest.TestCase):
         self.assertEqual(desktop.page_id, "home")
         self.assertEqual(mobile.page_id, "home-mobile")
 
+    def test_single_page_viewports_can_run_sequentially_on_small_workers(self):
+        crawler = VisualReferenceCrawler(
+            guard=PermissiveLocalGuard(),
+            limits=ReferenceCrawlLimits(max_pages=1, max_retries=0),
+        )
+        order = []
+        active = 0
+        peak_active = 0
+
+        class FakePage:
+            async def close(self):
+                return None
+
+        class FakeCrawleePage:
+            page = FakePage()
+
+        class FakePool:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def new_page(self, *, page_id):
+                return FakeCrawleePage()
+
+        async def capture(_page, _url, *, page_id, category, viewport, **_kwargs):
+            nonlocal active, peak_active
+            active += 1
+            peak_active = max(peak_active, active)
+            order.append(viewport)
+            await asyncio.sleep(0)
+            active -= 1
+            return ReferencePageEvidence(
+                page_id=page_id,
+                category=category,
+                requested_url="https://example.com/",
+                final_url="https://example.com/",
+                depth=0,
+            )
+
+        async def run():
+            with (
+                patch.dict(
+                    os.environ,
+                    {"KAIGO_REFERENCE_VIEWPORT_CONCURRENCY": "1"},
+                ),
+                patch.object(
+                    reference_crawler_module,
+                    "_single_page_browser_pool",
+                    return_value=FakePool(),
+                ),
+                patch.object(
+                    reference_crawler_module,
+                    "_capture_reference_page_on_page",
+                    capture,
+                ),
+            ):
+                return await crawler._capture_single_page_viewports(
+                    "https://example.com/",
+                    robots_policy=object(),
+                    byte_budget=CrawlByteBudget(1024),
+                    remaining_timeout=lambda: 5.0,
+                )
+
+        desktop, mobile = asyncio.run(run())
+
+        self.assertEqual(order, ["desktop", "mobile"])
+        self.assertEqual(peak_active, 1)
+        self.assertEqual(desktop.page_id, "home")
+        self.assertEqual(mobile.page_id, "home-mobile")
+
     def test_single_browser_pool_serves_both_viewports_and_closes_pages(self):
         crawler = VisualReferenceCrawler(
             guard=PermissiveLocalGuard(),

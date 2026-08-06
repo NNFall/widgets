@@ -994,6 +994,11 @@ def _native_browser_transport_enabled() -> bool:
     }
 
 
+def _viewport_capture_concurrency() -> int:
+    configured = os.getenv("KAIGO_REFERENCE_VIEWPORT_CONCURRENCY", "2").strip()
+    return 1 if configured == "1" else 2
+
+
 async def _guarded_native_context_route(
     route: Any,
     request: Any,
@@ -2763,10 +2768,14 @@ class VisualReferenceCrawler:
                 assert last_error is not None
                 return last_error
 
-            desktop, mobile = await asyncio.gather(
-                capture(page_id="home", viewport="desktop"),
-                capture(page_id="home-mobile", viewport="mobile"),
-            )
+            if _viewport_capture_concurrency() == 1:
+                desktop = await capture(page_id="home", viewport="desktop")
+                mobile = await capture(page_id="home-mobile", viewport="mobile")
+            else:
+                desktop, mobile = await asyncio.gather(
+                    capture(page_id="home", viewport="desktop"),
+                    capture(page_id="home-mobile", viewport="mobile"),
+                )
             return desktop, mobile
 
     async def crawl(self, source_url: str) -> ReferenceCrawlResult:
