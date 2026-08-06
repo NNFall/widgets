@@ -1538,20 +1538,36 @@ async def _wait_for_visual_quiet(
 
 _SCROLL_STATE_SCRIPT = r"""() => {
   const root = document.scrollingElement || document.documentElement;
-  const nodes = [...document.querySelectorAll('body *')].slice(0, 5000);
-  const candidates = nodes.filter((el) => {
-    const s = getComputedStyle(el);
-    return /(auto|scroll|overlay)/.test(s.overflowY) && el.scrollHeight > el.clientHeight + 80;
-  }).map((el) => ({
-    el,
-    score: Math.max(0, el.clientWidth * el.clientHeight) * (el.scrollHeight - el.clientHeight)
-  })).sort((a,b) => b.score-a.score);
-  const scroller = candidates[0]?.el || root;
+  const cached = globalThis.__kaigoScrollProbe;
+  let scroller;
+  let transformNodes;
+  let potentialVirtual;
+  if (cached && cached.scroller && cached.scroller.isConnected) {
+    scroller = cached.scroller;
+    transformNodes = (cached.transformNodes || []).filter((el) => el.isConnected);
+    potentialVirtual = Boolean(cached.potentialVirtual);
+  } else {
+    const nodes = [...document.querySelectorAll('body *')].slice(0, 5000);
+    const candidates = nodes.filter((el) => {
+      const s = getComputedStyle(el);
+      return /(auto|scroll|overlay)/.test(s.overflowY) && el.scrollHeight > el.clientHeight + 80;
+    }).map((el) => ({
+      el,
+      score: Math.max(0, el.clientWidth * el.clientHeight) * (el.scrollHeight - el.clientHeight)
+    })).sort((a,b) => b.score-a.score);
+    scroller = candidates[0]?.el || root;
+    transformNodes = nodes.filter((el) => {
+      const t = getComputedStyle(el).transform;
+      return t && t !== 'none';
+    }).slice(0, 40);
+    const rootOverflow = `${getComputedStyle(document.documentElement).overflowY}|${getComputedStyle(document.body).overflowY}`;
+    potentialVirtual = /(hidden|clip)/.test(rootOverflow) && nodes.some((el) => {
+      const s = getComputedStyle(el);
+      return (s.willChange || '').includes('transform') || (s.transform && s.transform !== 'none');
+    });
+    globalThis.__kaigoScrollProbe = {scroller, transformNodes, potentialVirtual};
+  }
   if (!scroller.dataset.kaigoScrollId) scroller.dataset.kaigoScrollId = 'active';
-  const transformNodes = nodes.filter((el) => {
-    const t = getComputedStyle(el).transform;
-    return t && t !== 'none';
-  }).slice(0, 40);
   const rawRect = scroller === root
     ? {left: 0, top: 0, right: innerWidth, bottom: innerHeight}
     : scroller.getBoundingClientRect();
@@ -1564,16 +1580,11 @@ _SCROLL_STATE_SCRIPT = r"""() => {
   const visible = [];
   for (let y = 40; y < innerHeight; y += Math.max(80, Math.floor(innerHeight / 8))) {
     for (const el of document.elementsFromPoint(innerWidth / 2, y)) {
-      const text = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ');
+      const text = (el.textContent || '').trim().replace(/\s+/g, ' ');
       if (text && text.length < 180 && !visible.includes(text)) visible.push(text);
       if (visible.length >= 20) break;
     }
   }
-  const rootOverflow = `${getComputedStyle(document.documentElement).overflowY}|${getComputedStyle(document.body).overflowY}`;
-  const potentialVirtual = /(hidden|clip)/.test(rootOverflow) && nodes.some((el) => {
-    const s = getComputedStyle(el);
-    return (s.willChange || '').includes('transform') || (s.transform && s.transform !== 'none');
-  });
   return {
     kind: scroller === root ? 'document' : 'element',
     top: scroller === root ? (scrollY || root.scrollTop || 0) : scroller.scrollTop,
@@ -1659,6 +1670,40 @@ async def _settle_scrolled_viewport(
             timeout_ms=min(2500, timeout_ms),
             skipped_reasons=skipped_reasons,
             image_timeout_reason=image_timeout_reason,
+        )
+    )
+    tasks = (visual_task, asset_task)
+    try:
+        await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
+async def _settle_initial_viewport(
+    page: Any,
+    *,
+    settings: CaptureSettings,
+    skipped_reasons: list[str],
+) -> None:
+    timeout_ms = min(5000, settings.page_timeout_seconds * 1000)
+    visual_task = asyncio.create_task(
+        _wait_for_visual_quiet(
+            page,
+            minimum_ms=settings.scroll_delay_ms,
+            quiet_ms=450,
+            maximum_ms=timeout_ms,
+        )
+    )
+    asset_task = asyncio.create_task(
+        _settle_viewport_assets_nonfatal(
+            page,
+            timeout_ms=timeout_ms,
+            skipped_reasons=skipped_reasons,
+            image_timeout_reason=None,
         )
     )
     tasks = (visual_task, asset_task)
@@ -2042,14 +2087,11 @@ async def _capture_loaded_page(
     telemetry.raise_if_oversize()
     if guard is not None:
         await asyncio.to_thread(guard.validate_redirect, page.url)
-    await _settle_viewport_assets_nonfatal(
+    await _settle_initial_viewport(
         page,
-        timeout_ms=min(timeout_ms, 5000),
+        settings=settings,
         skipped_reasons=skipped_reasons,
-        image_timeout_reason=None,
     )
-    await page.wait_for_timeout(settings.warmup_ms)
-    await _wait_for_visual_quiet(page)
     telemetry.raise_if_oversize()
     initial_hidden = await page.evaluate(
         """() => [...document.querySelectorAll('body *')].slice(0, 5000).filter((el) => {

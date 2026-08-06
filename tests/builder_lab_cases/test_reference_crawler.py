@@ -1467,10 +1467,17 @@ class BrowserLifecycleTests(unittest.TestCase):
         self.assertEqual(settle_positions, ["middle", "bottom", "bottom"])
         short_delays = [delay for delay in delays if 100 <= delay <= 250]
         self.assertEqual(len(short_delays), 5)
+        self.assertNotIn(settings.warmup_ms, delays)
         self.assertNotIn(settings.final_settle_ms, delays)
         self.assertNotIn("warm_pass", evidence.timings_ms)
         self.assertNotIn("reset_pass", evidence.timings_ms)
         self.assertEqual(evidence.reset_strategy, "single-pass")
+
+    def test_scroll_state_probe_is_discovered_once_and_reused(self):
+        script = reference_crawler_module._SCROLL_STATE_SCRIPT
+
+        self.assertIn("globalThis.__kaigoScrollProbe", script)
+        self.assertIn("cached.scroller.isConnected", script)
 
     def test_visual_settle_failure_cancels_and_awaits_asset_sibling(self):
         asset_started = asyncio.Event()
