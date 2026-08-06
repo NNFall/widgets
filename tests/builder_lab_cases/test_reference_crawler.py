@@ -1023,6 +1023,51 @@ class BrowserLifecycleTests(unittest.TestCase):
             any(item.startswith("analytics blocked:") for item in telemetry.policy_blocks)
         )
 
+    def test_native_route_validates_then_uses_browser_transport(self):
+        class FakeRoute:
+            continued = False
+            aborted = False
+
+            async def continue_(self):
+                self.continued = True
+
+            async def abort(self, _reason):
+                self.aborted = True
+
+        class FakeRequest:
+            url = "https://example.com/assets/app.js"
+            method = "GET"
+            resource_type = "script"
+            redirected_from = None
+
+        class RecordingGuard:
+            def __init__(self):
+                self.urls = []
+
+            def validate_redirect(self, url):
+                self.urls.append(url)
+
+        route = FakeRoute()
+        guard = RecordingGuard()
+        telemetry = reference_crawler_module.CaptureTelemetry(
+            max_page_bytes=256 * 1024
+        )
+        asyncio.run(
+            reference_crawler_module._guarded_native_context_route(
+                route,
+                FakeRequest(),
+                guard=guard,
+                robots=None,
+                allowed_document_origin=("https", "example.com", 443),
+                primary_page={"page": None},
+                telemetry=telemetry,
+            )
+        )
+
+        self.assertEqual(guard.urls, [FakeRequest.url])
+        self.assertTrue(route.continued)
+        self.assertFalse(route.aborted)
+
     def test_reverse_reset_settles_once_only_after_top_is_restored(self):
         initial_state = {
             "top": 0,

@@ -5,6 +5,7 @@ import hashlib
 from io import BytesIO
 import ipaddress
 import json
+import os
 import re
 import socket
 import tempfile
@@ -662,6 +663,7 @@ class CaptureTelemetry:
     accounted: bool = False
     _charge_sequence: int = 0
     byte_limit_error: str | None = None
+    native_transport: bool = False
     http_client: Any | None = field(default=None, repr=False)
 
     @staticmethod
@@ -714,6 +716,11 @@ class CaptureTelemetry:
                 size = 0
             if size > self.max_page_bytes:
                 self.declared_oversize.set()
+            if self.native_transport and size > 0:
+                try:
+                    self.record_network_bytes(size)
+                except ReferenceCaptureError:
+                    self.declared_oversize.set()
 
         def on_request_failed(request: Any) -> None:
             label = sanitize_url_for_log(request.url)
@@ -959,6 +966,100 @@ def _redirect_chain(request: Any) -> tuple[str, ...]:
     return tuple(chain)
 
 
+def _native_browser_transport_enabled() -> bool:
+    return os.getenv("KAIGO_REFERENCE_NATIVE_TRANSPORT", "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+async def _guarded_native_context_route(
+    route: Any,
+    request: Any,
+    *,
+    guard: UrlGuard | None,
+    robots: GuardedRobotsPolicy | None,
+    allowed_document_origin: tuple[str, str, int],
+    primary_page: dict[str, Any],
+    telemetry: CaptureTelemetry,
+) -> None:
+    """Validate browser traffic while leaving transfer/CORS to Chromium.
+
+    This mode is opt-in because production must pair it with the immutable
+    builder-network egress guard. It avoids copying every page resource through
+    Python while retaining per-request URL, method, document-origin, popup,
+    robots, redirect-loop, and analytics policy checks.
+    """
+
+    async def block(reason: str, url: str | None = None) -> None:
+        telemetry.record_policy_block(reason, url or request.url)
+        await route.abort("blockedbyclient")
+
+    parsed = urlsplit(request.url)
+    if parsed.scheme not in {"http", "https"}:
+        await block("non-http scheme blocked")
+        return
+    if request.method.upper() not in {"GET", "HEAD"}:
+        await block("non-read request blocked")
+        return
+    if _is_non_content_tracking_request(request.url, request.resource_type):
+        await block("analytics blocked")
+        return
+    if request.resource_type in {"media", "eventsource"}:
+        await block(f"{request.resource_type} blocked")
+        return
+
+    is_document = request.resource_type == "document"
+    if is_document:
+        try:
+            request_origin = _origin_key(request.url)
+        except ValueError:
+            await block("malformed document URL blocked")
+            return
+        try:
+            request_frame = request.frame
+            request_page = request_frame.page
+            is_main_frame = request_frame == request_page.main_frame
+        except Exception:
+            request_page = None
+            is_main_frame = True
+        expected_page = primary_page.get("page")
+        if expected_page is not None and request_page is not expected_page:
+            await block("popup document blocked")
+            return
+        if request_origin != allowed_document_origin:
+            await block(
+                "cross-origin document blocked"
+                if is_main_frame
+                else "cross-origin subframe document blocked"
+            )
+            return
+        if robots is not None:
+            try:
+                await robots.require_allowed(request.url)
+            except (RobotsDenied, UnsafeReferenceUrl):
+                await block("robots policy blocked document")
+                return
+
+    current = _without_fragment(request.url)
+    chain = _redirect_chain(request)
+    if len(chain) >= 8:
+        await block("resource redirect hop limit blocked", current)
+        return
+    if current in chain:
+        await block("resource redirect loop blocked", current)
+        return
+    if guard is not None:
+        try:
+            await asyncio.to_thread(guard.validate_redirect, current)
+        except UnsafeReferenceUrl:
+            await block("unsafe destination blocked", current)
+            return
+    await route.continue_()
+
+
 async def _guarded_context_route(
     route: Any,
     request: Any,
@@ -1144,8 +1245,10 @@ async def _install_context_policy(
     allowed_document_origin: tuple[str, str, int],
     telemetry: CaptureTelemetry,
 ) -> None:
+    native_transport = _native_browser_transport_enabled()
+    telemetry.native_transport = native_transport
     telemetry.attach_context(context)
-    telemetry.http_client = _new_streaming_client()
+    telemetry.http_client = None if native_transport else _new_streaming_client()
 
     def close_transport(*_args: Any) -> None:
         try:
@@ -1154,9 +1257,14 @@ async def _install_context_policy(
             pass
 
     context.on("close", close_transport)
+    route_handler = (
+        _guarded_native_context_route
+        if native_transport
+        else _guarded_context_route
+    )
     await context.route(
         "**/*",
-        lambda route, request: _guarded_context_route(
+        lambda route, request: route_handler(
             route,
             request,
             guard=guard,
