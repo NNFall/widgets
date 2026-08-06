@@ -49,9 +49,9 @@ def crawl_result() -> ReferenceCrawlResult:
         depth=0,
         screenshots=tuple(
             screenshot(f"desktop-{position}", "home", "desktop", position)
-            for position in ("top", "middle", "bottom")
+            for position in ("top", "after_top", "middle", "bottom")
         ),
-        timings_ms={"navigation": 123.4, "warm_pass": 456.7, "warm_steps": 4},
+        timings_ms={"navigation": 123.4, "evidence_pass": 456.7, "evidence_steps": 4},
         coverage_status="complete",
     )
     mobile = ReferencePageEvidence(
@@ -216,11 +216,13 @@ class ReferencePipelineTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    async def test_captures_six_states_and_returns_bounded_grounded_context(self):
+    async def test_captures_seven_states_and_reports_capture_before_ai_analysis(self):
         crawler = FakeCrawler(crawl_result())
         analyzer_calls = []
+        progress = []
 
         async def analyzer(**kwargs):
+            progress.append(("analyzer_called", {}))
             analyzer_calls.append(kwargs)
             self.assertTrue(kwargs["capture_manifest"].is_file())
             self.assertTrue(kwargs["evidence_root"].is_dir())
@@ -228,6 +230,7 @@ class ReferencePipelineTests(unittest.IsolatedAsyncioTestCase):
                 [label for label, _path in kwargs["screenshot_inputs"]],
                 [
                     "desktop.top",
+                    "desktop.after_top",
                     "desktop.middle",
                     "desktop.bottom",
                     "mobile.top",
@@ -236,6 +239,9 @@ class ReferencePipelineTests(unittest.IsolatedAsyncioTestCase):
                 ],
             )
             return analysis_payload()
+
+        async def report(phase, payload):
+            progress.append((phase, payload))
 
         pipeline = GeminiReferencePipeline(
             crawler=crawler,
@@ -246,7 +252,10 @@ class ReferencePipelineTests(unittest.IsolatedAsyncioTestCase):
             base_url="https://generativelanguage.googleapis.com",
         )
 
-        result = await pipeline.analyze("https://example.com/")
+        result = await pipeline.analyze(
+            "https://example.com/",
+            progress_callback=report,
+        )
 
         self.assertEqual(crawler.urls, ["https://example.com/"])
         self.assertEqual(len(analyzer_calls), 1)
@@ -256,14 +265,19 @@ class ReferencePipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.summary, analysis_payload()["analysis"]["visual_summary"])
         self.assertEqual(result.usage.total_tokens, 18)
         self.assertEqual(
+            [phase for phase, _payload in progress],
+            ["capture_completed", "analysis_started", "analyzer_called"],
+        )
+        self.assertEqual(progress[0][1]["screenshot_count"], 7)
+        self.assertEqual(
             result.capture_metrics,
             {
                 "total_ms": 0.0,
                 "viewports": {
                     "desktop": {
                         "navigation": 123.4,
-                        "warm_pass": 456.7,
-                        "warm_steps": 4,
+                        "evidence_pass": 456.7,
+                        "evidence_steps": 4,
                     },
                     "mobile": {
                         "navigation": 98.7,

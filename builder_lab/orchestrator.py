@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import time
 from collections.abc import Callable
@@ -359,10 +360,47 @@ class BuilderOrchestrator:
             event_type="reference.started",
             stage=None,
             status="running",
-            message="Открываем сайт и делаем desktop/mobile снимки",
+            message="Открываем и прокручиваем сайт для снимков",
         )
+        async def report_progress(phase: str, payload: dict[str, Any]) -> None:
+            if phase == "capture_completed":
+                await self.store.append_event(
+                    run_id,
+                    event_type="reference.capture_completed",
+                    stage=None,
+                    status="completed",
+                    message="Сайт загружен, подготовлено 7 снимков",
+                    capture_metrics=payload.get("capture_metrics"),
+                )
+                return
+            if phase == "analysis_started":
+                await self.store.append_event(
+                    run_id,
+                    event_type="reference.analysis_started",
+                    stage=None,
+                    status="running",
+                    message="AI анализирует сайт и продумывает направление виджета",
+                )
+                return
+            raise ValueError(f"unknown reference progress phase: {phase}")
+
         try:
-            analysis = await self._reference_analyzer(request.source_url)
+            analyzer_parameters = inspect.signature(
+                self._reference_analyzer
+            ).parameters.values()
+            supports_progress = any(
+                parameter.name == "progress_callback"
+                or parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in analyzer_parameters
+            )
+            analysis = await self._reference_analyzer(
+                request.source_url,
+                **(
+                    {"progress_callback": report_progress}
+                    if supports_progress
+                    else {}
+                ),
+            )
         except asyncio.CancelledError:
             raise
         except ReferencePipelineError as exc:

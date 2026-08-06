@@ -1307,7 +1307,7 @@ class BrowserLifecycleTests(unittest.TestCase):
             )
         )
 
-    def test_evidence_pass_settles_only_at_middle_and_bottom_anchors(self):
+    def test_single_evidence_pass_captures_desktop_after_top_middle_and_bottom(self):
         initial = {
             "top": 0,
             "height": 3000,
@@ -1320,9 +1320,15 @@ class BrowserLifecycleTests(unittest.TestCase):
             "visible": ["top"],
             "kind": "document",
         }
+        after_top = {
+            **initial,
+            "top": 900,
+            "visibleSignature": "after-top",
+            "visible": ["after-top"],
+        }
         middle = {
             **initial,
-            "top": 1100,
+            "top": 1500,
             "visibleSignature": "middle",
             "visible": ["middle"],
         }
@@ -1332,7 +1338,7 @@ class BrowserLifecycleTests(unittest.TestCase):
             "visibleSignature": "bottom",
             "visible": ["bottom"],
         }
-        states = [initial, middle, bottom, bottom, bottom]
+        states = [initial, after_top, middle, bottom, bottom, bottom]
         settle_positions = []
         delays = []
 
@@ -1380,11 +1386,8 @@ class BrowserLifecycleTests(unittest.TestCase):
         async def no_assets(_page, **_kwargs):
             return None
 
-        async def fake_warm(_page, **_kwargs):
-            return initial, (), 3
-
-        async def fake_reset(_page, **_kwargs):
-            return (), 3
+        async def forbidden_legacy_pass(*_args, **_kwargs):
+            raise AssertionError("single-pass capture must not warm-scroll or reset")
 
         async def fake_scroll(_page, _state, _step):
             return "wheel"
@@ -1425,8 +1428,16 @@ class BrowserLifecycleTests(unittest.TestCase):
                 "_settle_viewport_assets_nonfatal",
                 no_assets,
             ),
-            patch.object(reference_crawler_module, "_warm_reference_page", fake_warm),
-            patch.object(reference_crawler_module, "_restore_reference_start", fake_reset),
+            patch.object(
+                reference_crawler_module,
+                "_warm_reference_page",
+                forbidden_legacy_pass,
+            ),
+            patch.object(
+                reference_crawler_module,
+                "_restore_reference_start",
+                forbidden_legacy_pass,
+            ),
             patch.object(reference_crawler_module, "_scroll_once", fake_scroll),
             patch.object(
                 reference_crawler_module,
@@ -1449,11 +1460,17 @@ class BrowserLifecycleTests(unittest.TestCase):
             )
 
         self.assertEqual(evidence.coverage_status, "complete")
-        self.assertEqual([shot.position for shot in evidence.screenshots], ["top", "middle", "bottom"])
-        self.assertEqual(settle_positions, ["bottom", "bottom"])
+        self.assertEqual(
+            [shot.position for shot in evidence.screenshots],
+            ["top", "after_top", "middle", "bottom"],
+        )
+        self.assertEqual(settle_positions, ["middle", "bottom", "bottom"])
         short_delays = [delay for delay in delays if 100 <= delay <= 250]
-        self.assertEqual(len(short_delays), 4)
+        self.assertEqual(len(short_delays), 5)
         self.assertNotIn(settings.final_settle_ms, delays)
+        self.assertNotIn("warm_pass", evidence.timings_ms)
+        self.assertNotIn("reset_pass", evidence.timings_ms)
+        self.assertEqual(evidence.reset_strategy, "single-pass")
 
     def test_visual_settle_failure_cancels_and_awaits_asset_sibling(self):
         asset_started = asyncio.Event()

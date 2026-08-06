@@ -504,9 +504,8 @@ class OrchestratorStageHandler:
         reference_analyzer: Callable[[str], Awaitable[ReferenceAnalysisResult]],
         visual_gate_factory: Callable[[RunClaim], Any] | None = None,
         routed_engine_factory: Callable[[RunClaim, str], BuilderEngine] | None = None,
-        routed_reference_analyzer: Callable[
-            [RunClaim, str], Awaitable[ReferenceAnalysisResult]
-        ] | None = None,
+        routed_reference_analyzer: Callable[..., Awaitable[ReferenceAnalysisResult]]
+        | None = None,
         pattern_candidate_plan_v2_enabled: bool = False,
     ) -> None:
         self._queue = queue
@@ -682,12 +681,52 @@ class OrchestratorStageHandler:
                 public_message="Анализ исходного сайта завершён",
                 request=request,
             )
+        async def report_progress(phase: str, payload: dict[str, Any]) -> None:
+            if phase == "capture_completed":
+                await self._queue.append_attempt_event(
+                    claim,
+                    event_type="reference.capture_completed",
+                    stage=None,
+                    status="completed",
+                    message="Сайт загружен, подготовлено 7 снимков",
+                    capture_metrics=payload.get("capture_metrics"),
+                )
+                return
+            if phase == "analysis_started":
+                await self._queue.append_attempt_event(
+                    claim,
+                    event_type="reference.analysis_started",
+                    stage=None,
+                    status="running",
+                    message="AI анализирует сайт и продумывает направление виджета",
+                )
+                return
+            raise ValueError(f"unknown reference progress phase: {phase}")
+
         try:
-            analysis = (
-                await self._routed_reference_analyzer(claim, request.source_url)
-                if self._routed_reference_analyzer is not None
-                else await self._reference_analyzer(request.source_url)
-            )
+            if self._routed_reference_analyzer is not None:
+                analysis = await self._routed_reference_analyzer(
+                    claim,
+                    request.source_url,
+                    progress_callback=report_progress,
+                )
+            else:
+                analyzer_parameters = inspect.signature(
+                    self._reference_analyzer
+                ).parameters.values()
+                supports_progress = any(
+                    parameter.name == "progress_callback"
+                    or parameter.kind is inspect.Parameter.VAR_KEYWORD
+                    for parameter in analyzer_parameters
+                )
+                analysis = await self._reference_analyzer(
+                    request.source_url,
+                    **(
+                        {"progress_callback": report_progress}
+                        if supports_progress
+                        else {}
+                    ),
+                )
         except ReferencePipelineError as exc:
             raise BuilderEngineError(
                 exc.error_code,
@@ -1835,7 +1874,7 @@ class PostgresWorkerQueue:
                     run,
                     event_type="stage.started",
                     message=(
-                        "Начат анализ исходного сайта"
+                        "Начата загрузка исходного сайта и подготовка снимков"
                         if next_stage == "reference_analysis"
                         else f"Начат этап: {STAGE_PUBLIC_NAMES[next_stage]}"
                     ),
@@ -2454,6 +2493,7 @@ class PostgresWorkerQueue:
         error_code: str | None = None,
         diagnostic: str | None = None,
         output_refs: tuple[str, ...] = (),
+        capture_metrics: Mapping[str, object] | None = None,
         forensic_payload: Mapping[str, object] | None = None,
         forensic_blobs: tuple[ForensicBlob, ...] = (),
     ) -> None:
@@ -2487,6 +2527,11 @@ class PostgresWorkerQueue:
                     "diagnostic": diagnostic,
                     "worker_id": claim.worker_id,
                     "attempt_id": str(claim.attempt_id),
+                    **(
+                        {"capture_metrics": dict(capture_metrics)}
+                        if capture_metrics is not None
+                        else {}
+                    ),
                 },
                 forensic_payload=forensic_payload,
                 forensic_blobs=forensic_blobs,

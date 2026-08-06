@@ -43,6 +43,7 @@ DEFAULT_MODEL = "gemini-3.5-flash"
 LABEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 REQUIRED_STATES = (
     "desktop.top",
+    "desktop.after_top",
     "desktop.middle",
     "desktop.bottom",
     "mobile.top",
@@ -70,7 +71,7 @@ REFERENCE_ANALYSIS_SCHEMA: dict[str, Any] = {
                     "evidence": {
                         "type": "array",
                         "minItems": 1,
-                        "maxItems": 6,
+                        "maxItems": 7,
                         "uniqueItems": True,
                         "items": {"type": "string"},
                     },
@@ -95,7 +96,7 @@ REFERENCE_ANALYSIS_SCHEMA: dict[str, Any] = {
                             "evidence": {
                                 "type": "array",
                                 "minItems": 1,
-                                "maxItems": 6,
+                                "maxItems": 7,
                                 "uniqueItems": True,
                                 "items": {"type": "string"},
                             },
@@ -318,7 +319,7 @@ def attest_capture_manifest(
             raise ReferenceAnalysisError("invalid_manifest", "Capture screenshot entry is invalid")
         entries.extend(raw_screenshots)
     if len(entries) != len(REQUIRED_STATES) or len(screenshots) != len(REQUIRED_STATES):
-        raise ReferenceAnalysisError("manifest_mismatch", "Capture must contain exactly six screenshots")
+        raise ReferenceAnalysisError("manifest_mismatch", "Capture must contain exactly seven screenshots")
     local = {item.label: item for item in screenshots}
     if set(local) != set(REQUIRED_STATES):
         raise ReferenceAnalysisError("manifest_mismatch", "Capture does not contain all required states")
@@ -473,7 +474,7 @@ def _prompt(source_url: str, labels: Iterable[str]) -> str:
         "Return the strict JSON contract. Enforce these local budgets even when the provider schema omits them: "
         "visual_summary: 24 to 1200 characters; public_facts: 1 to 24 items, with 8 to 500 characters per "
         "statement; each visual token category: 0 to 16 items, with 2 to 80 characters per token and 2 to 240 "
-        "characters per value; every evidence list: 1 to 6 unique labels. Prefer a concise 4 to 12 facts and 2 "
+        "characters per value; every evidence list: 1 to 7 unique labels. Prefer a concise 4 to 12 facts and 2 "
         "to 8 strong tokens per non-empty category. Record only facts visibly printed on the page and visual tokens directly "
         "observable in pixels. Never infer promises, people, capabilities, availability, prices, contacts, or "
         "business claims that are not legible. Cite one or more exact evidence labels for every fact and token. "

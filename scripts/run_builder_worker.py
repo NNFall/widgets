@@ -115,9 +115,15 @@ def make_routed_reference_analyzer(
     model_router: ModelRouter,
     config: BuilderLabConfig,
 ):
-    async def analyze(claim: RunClaim, source_url: str):
+    async def analyze(
+        claim: RunClaim,
+        source_url: str,
+        *,
+        progress_callback=None,
+    ):
         return await reference_pipeline.analyze(
             source_url,
+            progress_callback=progress_callback,
             structured_backend=RoutedStructuredGenerationBackend(
                 router=model_router,
                 role="reference_analyst",

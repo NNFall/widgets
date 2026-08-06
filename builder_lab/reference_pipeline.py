@@ -25,6 +25,7 @@ from .reference_models import ReferenceCrawlResult, ScreenshotEvidence
 
 REFERENCE_STATES = (
     "desktop.top",
+    "desktop.after_top",
     "desktop.middle",
     "desktop.bottom",
     "mobile.top",
@@ -59,6 +60,7 @@ class ReferenceAnalysisResult:
 
 
 ReferenceAnalyzer = Callable[..., Awaitable[dict[str, Any]]]
+ReferenceProgressCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
 def _reference_capture_metrics(crawl: ReferenceCrawlResult) -> dict[str, Any]:
@@ -217,7 +219,7 @@ def compile_reference_context(payload: dict[str, Any]) -> ReferenceAnalysisResul
     )
 
 
-def _six_homepage_states(
+def _required_homepage_states(
     result: ReferenceCrawlResult,
 ) -> dict[str, ScreenshotEvidence]:
     states: dict[str, ScreenshotEvidence] = {}
@@ -295,6 +297,7 @@ class GeminiReferencePipeline:
         source_url: str,
         *,
         structured_backend: StructuredGenerationBackend | None = None,
+        progress_callback: ReferenceProgressCallback | None = None,
     ) -> ReferenceAnalysisResult:
         resolved_backend = (
             structured_backend
@@ -323,7 +326,16 @@ class GeminiReferencePipeline:
                 diagnostic=diagnostic[:1_000],
             )
 
-        states = _six_homepage_states(crawl)
+        states = _required_homepage_states(crawl)
+        capture_metrics = _reference_capture_metrics(crawl)
+        if progress_callback is not None:
+            await progress_callback(
+                "capture_completed",
+                {
+                    "screenshot_count": len(REFERENCE_STATES),
+                    "capture_metrics": capture_metrics,
+                },
+            )
         host = (urlsplit(source_url).hostname or "").lower().rstrip(".")
         with tempfile.TemporaryDirectory(prefix="kaigo-reference-") as temporary:
             root = Path(temporary)
@@ -340,6 +352,11 @@ class GeminiReferencePipeline:
                 encoding="utf-8",
             )
             try:
+                if progress_callback is not None:
+                    await progress_callback(
+                        "analysis_started",
+                        {"screenshot_count": len(REFERENCE_STATES)},
+                    )
                 analysis = await self._analyzer(
                     source_url=source_url,
                     allowed_hosts={host},
@@ -409,7 +426,7 @@ class GeminiReferencePipeline:
         compiled = compile_reference_context(analysis)
         return replace(
             compiled,
-            capture_metrics=_reference_capture_metrics(crawl),
+            capture_metrics=capture_metrics,
         )
 
 
@@ -419,5 +436,6 @@ __all__ = [
     "REFERENCE_STATES",
     "ReferenceAnalysisResult",
     "ReferencePipelineError",
+    "ReferenceProgressCallback",
     "compile_reference_context",
 ]

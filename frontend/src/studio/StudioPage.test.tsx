@@ -171,7 +171,7 @@ describe('StudioPage', () => {
       }));
     });
     expect((await screen.findAllByText('Изучаем структуру и визуальный язык сайта')).length).toBeGreaterThan(0);
-    expect(screen.getByText('Анализ сайта начат')).toBeVisible();
+    expect(screen.getByText('Загрузка сайта начата')).toBeVisible();
     await waitFor(() => expect(document.querySelector('.studio-header__session strong')).toHaveTextContent('Изучаем структуру и визуальный язык сайта'));
   });
 

@@ -102,9 +102,15 @@ class ScreenshotEvidence:
         object.__setattr__(self, "page_id", _validated_id(self.page_id, "page_id"))
         if self.viewport not in {"desktop", "mobile"}:
             raise ValueError("viewport must be desktop or mobile")
-        if self.position not in {"top", "middle", "bottom", "last_observed"}:
+        if self.position not in {
+            "top",
+            "after_top",
+            "middle",
+            "bottom",
+            "last_observed",
+        }:
             raise ValueError(
-                "position must be top, middle, bottom, or last_observed"
+                "position must be top, after_top, middle, bottom, or last_observed"
             )
         if self.mime_type not in _SCREENSHOT_MIMES:
             raise ValueError("unsupported screenshot mime type")
@@ -250,6 +256,7 @@ class ReferencePageEvidence:
             "not_captured",
             "not-required-top-first",
             "wheel-prewarm-return-top",
+            "single-pass",
         }:
             raise ValueError("reset_strategy is invalid")
         if self.coverage_status not in {"complete", "partial", "not_captured"}:

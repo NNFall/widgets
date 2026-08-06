@@ -2063,28 +2063,10 @@ async def _capture_loaded_page(
     )
 
     phase_started = time.monotonic()
-    initial_state, warmup_reasons, warm_steps = await _warm_reference_page(
-        page,
-        settings=settings,
-    )
-    timings_ms["warm_pass"] = round((time.monotonic() - phase_started) * 1000, 1)
-    timings_ms["warm_steps"] = warm_steps
-    skipped_reasons.extend(warmup_reasons)
-
-    phase_started = time.monotonic()
-    reset_reasons, reset_steps = await _restore_reference_start(
-        page,
-        initial_state=initial_state,
-        settings=settings,
-    )
-    timings_ms["reset_pass"] = round((time.monotonic() - phase_started) * 1000, 1)
-    timings_ms["reset_steps"] = reset_steps
-    skipped_reasons.extend(reset_reasons)
-    telemetry.raise_if_oversize()
-
-    phase_started = time.monotonic()
     screenshots: dict[str, ScreenshotEvidence] = {}
     state = await page.evaluate(_SCROLL_STATE_SCRIPT)
+    initial_scroll_top = int(state["top"])
+    initial_client_height = max(1, int(state["client"]))
     observed_texts.extend(state.get("visible", ()))
     samples.append(
         await page.evaluate(
@@ -2158,10 +2140,22 @@ async def _capture_loaded_page(
             if max_native_scroll
             else 0.0
         )
+        anchors: list[str] = []
+        if viewport == "desktop" and "after_top" not in screenshots and (
+            (virtual and meaningful_change)
+            or (
+                not virtual
+                and int(state["top"])
+                >= initial_scroll_top + initial_client_height - 2
+            )
+        ):
+            anchors.append("after_top")
         if "middle" not in screenshots and (
             (virtual and meaningful_change)
             or (not virtual and native_progress >= 0.45)
         ):
+            anchors.append("middle")
+        if anchors:
             await _settle_scrolled_viewport(
                 page,
                 settings=settings,
@@ -2178,15 +2172,16 @@ async def _capture_loaded_page(
                     },
                 )
             )
-            screenshots["middle"] = await _take_screenshot(
-                page,
-                page_id=page_id,
-                viewport=viewport,
-                position="middle",
-                width=settings.width,
-                height=settings.height,
-                telemetry=telemetry,
-            )
+            for anchor in anchors:
+                screenshots[anchor] = await _take_screenshot(
+                    page,
+                    page_id=page_id,
+                    viewport=viewport,
+                    position=anchor,
+                    width=settings.width,
+                    height=settings.height,
+                    telemetry=telemetry,
+                )
         if virtual:
             if state.get("endProven"):
                 exhausted = False
@@ -2238,6 +2233,20 @@ async def _capture_loaded_page(
     )
     coverage_status = "complete" if coverage_complete else "partial"
     final_position = "bottom" if coverage_status == "complete" else "last_observed"
+    if (
+        viewport == "desktop"
+        and "after_top" not in screenshots
+        and coverage_status == "complete"
+    ):
+        screenshots["after_top"] = await _take_screenshot(
+            page,
+            page_id=page_id,
+            viewport=viewport,
+            position="after_top",
+            width=settings.width,
+            height=settings.height,
+            telemetry=telemetry,
+        )
     screenshots[final_position] = await _take_screenshot(
         page,
         page_id=page_id,
@@ -2285,7 +2294,11 @@ async def _capture_loaded_page(
         depth=0 if category == "home" else 1,
         screenshots=tuple(
             screenshots[position]
-            for position in ("top", "middle", final_position)
+            for position in (
+                ("top", "after_top", "middle", final_position)
+                if viewport == "desktop"
+                else ("top", "middle", final_position)
+            )
             if position in screenshots
         ),
         semantic_sample=sample["semantic"],
@@ -2297,7 +2310,7 @@ async def _capture_loaded_page(
         timings_ms=timings_ms,
         transferred_bytes=transferred_bytes,
         scroll_strategy=scroll_strategy,
-        reset_strategy="wheel-prewarm-return-top",
+        reset_strategy="single-pass",
         skipped_reasons=tuple(skipped_reasons),
         coverage_status=coverage_status,
     )

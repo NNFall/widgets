@@ -49,6 +49,7 @@ from builder_lab.models import (
     Stage,
     TokenUsage,
 )
+from builder_lab.reference_pipeline import ReferenceAnalysisResult
 from builder_lab.postgres_store import PostgresRunStore
 from builder_lab.patterns.models import PatternCategory
 from builder_lab.store import RunStore
@@ -89,8 +90,15 @@ async def test_routed_reference_analyzer_awaits_pipeline_result() -> None:
         def __init__(self) -> None:
             self.backend = None
 
-        async def analyze(self, source_url, *, structured_backend):
+        async def analyze(
+            self,
+            source_url,
+            *,
+            structured_backend,
+            progress_callback=None,
+        ):
             self.backend = structured_backend
+            assert progress_callback is None
             assert source_url == expected["source_url"]
             return expected
 
@@ -124,6 +132,62 @@ async def test_routed_reference_analyzer_awaits_pipeline_result() -> None:
     assert context.semantic_attempt == 1
     assert context.candidate_id is None
     assert context.persona is None
+
+
+@pytest.mark.asyncio
+async def test_reference_stage_persists_capture_and_ai_progress_separately() -> None:
+    progress_events = []
+
+    class FakeQueue:
+        async def append_attempt_event(self, claim, **event):
+            progress_events.append((claim, event))
+
+    async def analyzer(source_url, *, progress_callback):
+        assert source_url == "https://example.com/"
+        await progress_callback(
+            "capture_completed",
+            {
+                "screenshot_count": 7,
+                "capture_metrics": {"total_ms": 12_345.0, "viewports": {}},
+            },
+        )
+        await progress_callback("analysis_started", {"screenshot_count": 7})
+        return ReferenceAnalysisResult(
+            context="grounded",
+            summary="analysis ready",
+            capture_metrics={"total_ms": 12_345.0, "viewports": {}},
+        )
+
+    handler = OrchestratorStageHandler(
+        queue=FakeQueue(),
+        engine_factories={},
+        reference_analyzer=analyzer,
+    )
+    claim = RunClaim(
+        run_id=uuid4(),
+        project_id=uuid4(),
+        worker_id="worker",
+        mode="direct",
+        next_stage="reference_analysis",
+        last_completed_stage=None,
+        lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=60),
+    )
+
+    result = await handler._analyze_reference(
+        BuilderRequest(
+            engine=EngineName.DIRECT,
+            brief="Build a widget",
+            source_url="https://example.com/",
+        ),
+        claim,
+    )
+
+    assert [event[1]["event_type"] for event in progress_events] == [
+        "reference.capture_completed",
+        "reference.analysis_started",
+    ]
+    assert progress_events[0][1]["capture_metrics"]["total_ms"] == 12_345.0
+    assert result.request.reference_context == "grounded"
 
 
 def test_worker_cli_uses_configured_builtin_handler_by_default(
@@ -1954,7 +2018,10 @@ async def test_checkpoint_event_and_next_stage_are_committed_together(tmp_path) 
                 "stage.started",
                 "stage.completed",
             ]
-            assert events[0].public_message == "Начат анализ исходного сайта"
+            assert (
+                events[0].public_message
+                == "Начата загрузка исходного сайта и подготовка снимков"
+            )
             assert events[1].public_message == "Анализ исходного сайта завершён"
             assert events[-1].payload["next_stage"] == "art_direction"
     finally:

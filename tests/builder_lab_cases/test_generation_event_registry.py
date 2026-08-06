@@ -23,6 +23,8 @@ EXPECTED_GENERATION_EVENT_TYPES = {
     "project.version_activation_conflict",
     "project.version_created",
     "reference.completed",
+    "reference.capture_completed",
+    "reference.analysis_started",
     "reference.failed",
     "reference.started",
     "refinement.started",

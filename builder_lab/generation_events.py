@@ -21,6 +21,8 @@ class GenerationEventType(StrEnum):
     PROVIDER_DISPATCH_ARMED = "provider.dispatch_armed"
     PROJECT_VERSION_ACTIVATION_CONFLICT = "project.version_activation_conflict"
     PROJECT_VERSION_CREATED = "project.version_created"
+    REFERENCE_ANALYSIS_STARTED = "reference.analysis_started"
+    REFERENCE_CAPTURE_COMPLETED = "reference.capture_completed"
     REFERENCE_COMPLETED = "reference.completed"
     REFERENCE_FAILED = "reference.failed"
     REFERENCE_STARTED = "reference.started"
@@ -139,6 +141,10 @@ EVENT_REGISTRY: dict[GenerationEventType, GenerationEventSpec] = {
     ),
     GenerationEventType.PROJECT_VERSION_CREATED: _spec(
         "version_id", "ordinal", "kind", "activated"
+    ),
+    GenerationEventType.REFERENCE_ANALYSIS_STARTED: _spec("status", "stage"),
+    GenerationEventType.REFERENCE_CAPTURE_COMPLETED: _spec(
+        "status", "stage", "capture_metrics"
     ),
     GenerationEventType.REFERENCE_COMPLETED: _spec(
         "status",

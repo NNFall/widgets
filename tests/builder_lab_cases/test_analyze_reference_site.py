@@ -22,6 +22,7 @@ from scripts.analyze_reference_site import (
 
 REQUIRED_LABELS = (
     "desktop.top",
+    "desktop.after_top",
     "desktop.middle",
     "desktop.bottom",
     "mobile.top",
@@ -107,12 +108,12 @@ def evidence_with_manifest(root: Path, *, payloads: dict[str, bytes] | None = No
             {
                 "page_id": "home",
                 "coverage_status": "complete",
-                "screenshots": manifest_screenshots[:3],
+                "screenshots": manifest_screenshots[:4],
             },
             {
                 "page_id": "home-mobile",
                 "coverage_status": "complete",
-                "screenshots": manifest_screenshots[3:],
+                "screenshots": manifest_screenshots[4:],
             },
         ],
     }
