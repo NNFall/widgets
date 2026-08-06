@@ -1578,12 +1578,26 @@ _SCROLL_STATE_SCRIPT = r"""() => {
     height: Math.max(1, Math.min(innerHeight, rawRect.bottom) - Math.max(0, rawRect.top))
   };
   const visible = [];
+  const visibleSignatures = [];
   for (let y = 40; y < innerHeight; y += Math.max(80, Math.floor(innerHeight / 8))) {
-    for (const el of document.elementsFromPoint(innerWidth / 2, y)) {
-      const text = (el.textContent || '').trim().replace(/\s+/g, ' ');
-      if (text && text.length < 180 && !visible.includes(text)) visible.push(text);
-      if (visible.length >= 20) break;
+    const stack = document.elementsFromPoint(innerWidth / 2, y).slice(0, 4);
+    const el = stack.find((item) => !['HTML', 'BODY'].includes(item.tagName)) || stack[0];
+    if (!el) continue;
+    const itemRect = el.getBoundingClientRect();
+    const className = typeof el.className === 'string' ? el.className.slice(0, 80) : '';
+    visibleSignatures.push([
+      el.tagName, el.id || '', className,
+      Math.round(itemRect.top), Math.round(itemRect.height)
+    ].join(':'));
+    let text = el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('alt') || '';
+    if (!text && el.childElementCount <= 3) {
+      text = [...el.childNodes]
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.nodeValue || '')
+        .join(' ');
     }
+    text = text.trim().replace(/\s+/g, ' ');
+    if (text && text.length < 180 && !visible.includes(text)) visible.push(text);
   }
   return {
     kind: scroller === root ? 'document' : 'element',
@@ -1591,8 +1605,10 @@ _SCROLL_STATE_SCRIPT = r"""() => {
     height: scroller.scrollHeight,
     client: scroller === root ? innerHeight : scroller.clientHeight,
     rect,
-    transformSignature: transformNodes.map((el) => `${el.tagName}:${getComputedStyle(el).transform}`).join('|'),
-    visibleSignature: visible.join('|'),
+    transformSignature: potentialVirtual
+      ? transformNodes.map((el) => `${el.tagName}:${getComputedStyle(el).transform}`).join('|')
+      : '',
+    visibleSignature: visibleSignatures.join('|'),
     potentialVirtual,
     endProven: document.documentElement.dataset.kaigoScrollEnd === 'true' || document.body.dataset.kaigoScrollEnd === 'true',
     visible
@@ -1601,6 +1617,21 @@ _SCROLL_STATE_SCRIPT = r"""() => {
 
 
 async def _scroll_once(page: Any, state: Mapping[str, Any], step: int) -> str:
+    if not bool(state.get("potentialVirtual")):
+        await page.evaluate(
+            """(dy) => {
+              const marked = document.querySelector('[data-kaigo-scroll-id="active"]');
+              if (!marked || marked === document.documentElement || marked === document.body) {
+                window.scrollBy({top: dy, left: 0, behavior: 'instant'});
+              } else {
+                marked.scrollBy({top: dy, left: 0, behavior: 'instant'});
+              }
+            }""",
+            step,
+        )
+        await page.wait_for_timeout(50)
+        return "script"
+
     rect = state["rect"]
     target_x = float(rect["x"]) + float(rect["width"]) / 2
     target_y = float(rect["y"]) + float(rect["height"]) / 2

@@ -1478,6 +1478,47 @@ class BrowserLifecycleTests(unittest.TestCase):
 
         self.assertIn("globalThis.__kaigoScrollProbe", script)
         self.assertIn("cached.scroller.isConnected", script)
+        self.assertIn("transformSignature: potentialVirtual", script)
+
+    def test_native_scroll_uses_one_script_without_mouse_wheel(self):
+        wheel_calls = []
+        evaluate_calls = []
+
+        class FakeMouse:
+            async def move(self, *_args):
+                return None
+
+            async def wheel(self, *_args):
+                wheel_calls.append(_args)
+
+        class FakePage:
+            mouse = FakeMouse()
+
+            async def evaluate(self, script, *args):
+                evaluate_calls.append((script, args))
+                return None
+
+            async def wait_for_timeout(self, _delay_ms):
+                return None
+
+        state = {
+            "top": 0,
+            "height": 3000,
+            "client": 900,
+            "rect": {"x": 0, "y": 0, "width": 1440, "height": 900},
+            "transformSignature": "",
+            "visibleSignature": "top",
+            "potentialVirtual": False,
+            "kind": "document",
+        }
+
+        result = asyncio.run(
+            reference_crawler_module._scroll_once(FakePage(), state, 630)
+        )
+
+        self.assertEqual(result, "script")
+        self.assertEqual(wheel_calls, [])
+        self.assertEqual(len(evaluate_calls), 1)
 
     def test_visual_settle_failure_cancels_and_awaits_asset_sibling(self):
         asset_started = asyncio.Event()
