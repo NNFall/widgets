@@ -664,6 +664,14 @@ class CaptureTelemetry:
     _charge_sequence: int = 0
     byte_limit_error: str | None = None
     native_transport: bool = False
+    native_validated_origins: set[tuple[str, str, int]] = field(
+        default_factory=set,
+        repr=False,
+    )
+    native_validation_locks: dict[tuple[str, str, int], asyncio.Lock] = field(
+        default_factory=dict,
+        repr=False,
+    )
     http_client: Any | None = field(default=None, repr=False)
 
     @staticmethod
@@ -766,6 +774,17 @@ class CaptureTelemetry:
         self.http_client = None
         if client is not None and not client.is_closed:
             await client.aclose()
+
+    async def validate_native_destination(self, guard: UrlGuard, url: str) -> None:
+        origin = _origin_key(url)
+        if origin in self.native_validated_origins:
+            return
+        lock = self.native_validation_locks.setdefault(origin, asyncio.Lock())
+        async with lock:
+            if origin in self.native_validated_origins:
+                return
+            await asyncio.to_thread(guard.validate_redirect, url)
+            self.native_validated_origins.add(origin)
 
 
 @dataclass(frozen=True)
@@ -1001,6 +1020,9 @@ async def _guarded_native_context_route(
     if parsed.scheme not in {"http", "https"}:
         await block("non-http scheme blocked")
         return
+    if parsed.username is not None or parsed.password is not None:
+        await block("URL credentials blocked")
+        return
     if request.method.upper() not in {"GET", "HEAD"}:
         await block("non-read request blocked")
         return
@@ -1053,7 +1075,7 @@ async def _guarded_native_context_route(
         return
     if guard is not None:
         try:
-            await asyncio.to_thread(guard.validate_redirect, current)
+            await telemetry.validate_native_destination(guard, current)
         except UnsafeReferenceUrl:
             await block("unsafe destination blocked", current)
             return

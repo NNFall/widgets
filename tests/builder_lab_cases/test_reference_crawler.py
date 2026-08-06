@@ -1068,6 +1068,53 @@ class BrowserLifecycleTests(unittest.TestCase):
         self.assertTrue(route.continued)
         self.assertFalse(route.aborted)
 
+    def test_native_route_coalesces_concurrent_origin_validation(self):
+        class FakeRoute:
+            async def continue_(self):
+                return None
+
+            async def abort(self, _reason):
+                raise AssertionError("public requests must not be aborted")
+
+        class FakeRequest:
+            method = "GET"
+            resource_type = "script"
+            redirected_from = None
+
+            def __init__(self, path):
+                self.url = f"https://example.com/{path}"
+
+        class SlowGuard:
+            def __init__(self):
+                self.calls = 0
+
+            def validate_redirect(self, _url):
+                self.calls += 1
+                time.sleep(0.02)
+
+        async def exercise():
+            guard = SlowGuard()
+            telemetry = reference_crawler_module.CaptureTelemetry(
+                max_page_bytes=256 * 1024
+            )
+            await asyncio.gather(
+                *(
+                    reference_crawler_module._guarded_native_context_route(
+                        FakeRoute(),
+                        FakeRequest(f"asset-{index}.js"),
+                        guard=guard,
+                        robots=None,
+                        allowed_document_origin=("https", "example.com", 443),
+                        primary_page={"page": None},
+                        telemetry=telemetry,
+                    )
+                    for index in range(12)
+                )
+            )
+            return guard.calls
+
+        self.assertEqual(asyncio.run(exercise()), 1)
+
     def test_reverse_reset_settles_once_only_after_top_is_restored(self):
         initial_state = {
             "top": 0,
