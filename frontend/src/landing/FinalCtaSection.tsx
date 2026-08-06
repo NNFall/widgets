@@ -4,6 +4,7 @@ import type { Variants } from 'motion/react';
 
 import { KaigoLogo } from '../shared/KaigoLogo';
 import { UrlComposer } from '../shared/UrlComposer';
+import { WidgetPreviewCard } from '../shared/WidgetPreviewCard';
 import { studioHref } from '../shared/campaign';
 
 const guarantees = [
@@ -104,7 +105,7 @@ export function FinalCtaSection() {
       </motion.div>
       <footer className="site-footer">
         <div className="landing-shell site-footer__inner">
-          <div><KaigoLogo /><p>Персональные AI-виджеты<br />для бизнеса.</p></div>
+          <div><KaigoLogo tone="coral" /><p>Персональные AI-виджеты<br />для бизнеса.</p></div>
           <nav aria-label="Навигация в подвале">
             <a href="#product">Продукт</a><a href="#how-it-works">Как это работает</a><a href="#case-study">Кейсы</a><a href="#faq">Помощь</a><a href={campaignStudioHref}>Студия</a>
           </nav>
@@ -119,12 +120,12 @@ function MiniSite({ after }: { after: boolean }) {
   return (
     <div className={`mini-site mini-site--${after ? 'after' : 'before'}`} aria-hidden="true">
       <div className="mini-site__chrome"><i /><i /><i /></div>
-      <div className="mini-site__nav"><strong>Modern House</strong><span>Проекты</span><span>Услуги</span><span>Контакты</span></div>
-      <div className="mini-site__main"><p>Строим дома,<br />в которых хочется<br />жить</p><img src="/assets/house-cutout.png" alt="" /></div>
+      <div className="mini-site__nav"><strong>Тёплый хлеб</strong><span>Меню</span><span>Торты</span><span>Доставка</span></div>
+      <div className="mini-site__main"><p>Свежая выпечка<br />каждое утро</p><img src="/assets/bakery-cutout.png" alt="" loading="lazy" decoding="async" /></div>
       {after ? (
         <motion.div className="mini-site__widget-shell" variants={finalWidgetVariants}>
           <motion.span className="mini-site__widget-halo" variants={finalWidgetHaloVariants} />
-          <div className="mini-site__widget"><i />Я изучил ваш сайт.<br />Чем помочь?<b>›</b></div>
+          <WidgetPreviewCard compact question="Какие торты можно заказать?" />
         </motion.div>
       ) : null}
     </div>

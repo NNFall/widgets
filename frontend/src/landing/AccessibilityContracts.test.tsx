@@ -60,6 +60,18 @@ describe('landing accessibility contracts', () => {
     }
   });
 
+  it('offers the warm landing logo without changing the default product mark', () => {
+    const { rerender } = render(<KaigoLogo tone="coral" />);
+
+    const warmLogo = screen.getByRole('img', { name: 'Kaigo' });
+    expect(warmLogo).toHaveAttribute('data-tone', 'coral');
+    expect(Array.from(warmLogo.querySelectorAll('stop')).map((stop) => stop.getAttribute('stop-color')))
+      .toEqual(['#ff8a55', '#fe4d1d']);
+
+    rerender(<KaigoLogo />);
+    expect(screen.getByRole('img', { name: 'Kaigo' })).toHaveAttribute('data-tone', 'mint');
+  });
+
   it('uses dark ink on sage and coral interactive-state surfaces', () => {
     expect(stylesSource).toMatch(
       /\.case-panel--after \.case-panel__label > span\s*\{[^}]*color:\s*var\(--ink\)/s,
@@ -81,6 +93,24 @@ describe('landing accessibility contracts', () => {
     );
     expect(stylesSource).toMatch(
       /\.site-header__menu-toggle\s*\{[^}]*width:\s*48px;[^}]*height:\s*48px/s,
+    );
+  });
+
+  it('uses accessible text colors across the warm landing palette', () => {
+    expect(stylesSource).toMatch(
+      /\.landing-page\s*\{[^}]*--coral-text:\s*#a83212;/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.widget-preview-card__input\s*\{[^}]*color:\s*#59636b;/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.widget-preview-card__source\s*\{[^}]*color:\s*#59636b;/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.case-panel--after \.case-panel__label > span\s*\{[^}]*background:\s*#dfe2e4;/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.capability-chat__user\s*\{[^}]*background:\s*#dfe2e4;/s,
     );
   });
 });

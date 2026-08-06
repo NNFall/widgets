@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -27,10 +27,36 @@ describe('LandingPage sections', () => {
   it('uses the agreed B2B promise and free-version copy in the hero', () => {
     render(<LandingPage />);
 
-    expect(screen.getByRole('heading', { name: /Через 10 минут.*вы сможете сказать.*наш бизнес использует AI/i })).toBeVisible();
+    expect(screen.getByRole('heading', { name: /Покажите сайт.*получите первую версию.*AI-консультанта/i })).toBeVisible();
     expect(screen.getByText(/Kaigo бесплатно создаст первую версию AI-виджета/i)).toBeVisible();
+    expect(screen.getByText(/Сначала посмотрите результат и проверьте ответы/i)).toBeVisible();
+    expect(screen.getByText(/Оплата нужна только перед публикацией/i)).toBeVisible();
     expect(screen.getByRole('heading', { name: /Сначала получите.*бесплатную экспресс-версию/i })).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Получить бесплатную версию' })).toHaveLength(2);
+  });
+
+  it('uses different business examples and one consistent vertical widget model', () => {
+    render(<LandingPage />);
+
+    expect(document.querySelector('main.landing-page')).not.toBeNull();
+    expect(document.querySelector('[data-site-variant="bakery"]')).not.toBeNull();
+    expect(document.querySelector('[data-site-variant="ceramics"]')).not.toBeNull();
+    expect(document.querySelector('[data-site-variant="architecture"]')).not.toBeNull();
+    expect(screen.getAllByText('Тёплый хлеб').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Тихая форма').length).toBeGreaterThan(0);
+
+    const widgets = document.querySelectorAll('[data-widget-shape="vertical"]');
+    expect(widgets.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('describes the creation path as three readable ordered steps', () => {
+    render(<LandingPage />);
+
+    const process = screen.getByRole('list', { name: 'Путь от ссылки до готового виджета' });
+    expect(within(process).getAllByRole('listitem')).toHaveLength(3);
+    expect(within(process).getByText('https://teply-hleb.ru')).toBeVisible();
+    expect(within(process).getByText(/Проверяем страницы, услуги, стиль и частые вопросы/i)).toBeVisible();
+    expect(within(process).getByText(/Какие торты можно заказать к субботе/i)).toBeVisible();
   });
 
   it('renders the complete marketing narrative', () => {
@@ -84,10 +110,10 @@ describe('LandingPage sections', () => {
   it('does not expose demo-only controls or unavailable legal pages as actions', () => {
     render(<LandingPage />);
 
-    expect(screen.queryByRole('button', { name: 'Хочу консультацию по проекту' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Какие торты можно заказать к субботе?' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Предпросмотр' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Опубликовать' })).not.toBeInTheDocument();
-    expect(screen.getByText('Хочу консультацию по проекту', { selector: 'span' })).toBeVisible();
+    expect(screen.getByText('Какие торты можно заказать к субботе?', { selector: 'span' })).toBeVisible();
     expect(screen.getByText('Предпросмотр', { selector: 'span' })).toBeVisible();
     expect(screen.getByText('Опубликовать', { selector: 'span' })).toBeVisible();
     expect(screen.queryByRole('link', { name: 'Политика конфиденциальности' })).not.toBeInTheDocument();

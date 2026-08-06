@@ -65,6 +65,7 @@ export function AnalysisSection() {
                 motionActive={active}
                 reducedMotion={reducedMotion}
                 testIds={false}
+                siteVariant="ceramics"
               />
             </div>
           </Reveal>

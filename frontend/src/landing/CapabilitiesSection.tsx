@@ -92,20 +92,20 @@ export function CapabilitiesSection() {
           <Reveal className="chat-showcase-reveal" delay={CAPABILITY_CHAT_REVEAL_DELAY_SECONDS} preset="scale">
             <div className="chat-showcase">
               <div className="chat-showcase__chrome"><span /><span /><span /></div>
-              <div className="chat-showcase__head"><KaigoLogo className="kaigo-logo--compact" /><span><strong>Kaigo AI</strong><small>Онлайн</small></span></div>
+              <div className="chat-showcase__head"><KaigoLogo className="kaigo-logo--compact" tone="coral" /><span><strong>Kaigo AI</strong><small>Онлайн</small></span></div>
               <div className="chat-showcase__body" data-chat-phase={conversationPhase}>
-                <div className="chat-showcase__message"><KaigoLogo className="kaigo-logo--compact" /><p>Расскажите, что вы ищете —<br />я помогу сориентироваться.</p></div>
+                <div className="chat-showcase__message"><KaigoLogo className="kaigo-logo--compact" tone="coral" /><p>Расскажите, что вы ищете.<br />Я помогу сориентироваться.</p></div>
                 <div className="chat-showcase__suggestions">
-                  <span className={conversationPhase === 'suggestion' ? 'is-selected' : ''}>Хочу консультацию по проекту</span>
-                  <span>Сколько стоит строительство?</span>
-                  <span>Посмотреть реализованные проекты</span>
+                  <span className={conversationPhase === 'suggestion' ? 'is-selected' : ''}>Какие торты можно заказать к субботе?</span>
+                  <span>Есть доставка по городу?</span>
+                  <span>Что можно забрать сегодня?</span>
                 </div>
                 <div className="capability-chat__turns" aria-label="Пример диалога с AI-сотрудником">
-                  <p className="capability-chat__user">Хочу консультацию по проекту</p>
+                  <p className="capability-chat__user">Какие торты можно заказать к субботе?</p>
                   <div className="capability-chat__typing" aria-hidden="true"><span /><span /><span /></div>
                   <div className="capability-chat__answer">
-                    <KaigoLogo className="kaigo-logo--compact" />
-                    <p>Конечно. Расскажите о доме — помогу выбрать подходящий проект и следующий шаг.</p>
+                    <KaigoLogo className="kaigo-logo--compact" tone="coral" />
+                    <p>К субботе доступны четыре начинки. Уточните число гостей, и я подскажу размер и срок заказа.</p>
                   </div>
                 </div>
                 <div className="chat-showcase__input"><span>Введите сообщение...</span><ArrowRight size={19} weight="bold" /></div>

@@ -65,7 +65,7 @@ export function StudioSection() {
                 <span className="studio-demo__action studio-demo__publish-label"><UploadSimple size={18} />Опубликовать</span>
               </div>
               <div className="studio-demo__preview">
-                <BrowserMockup widgetVisible motionComplete motionActive={active} reducedMotion={reducedMotion} testIds={false} />
+                <BrowserMockup widgetVisible motionComplete motionActive={active} reducedMotion={reducedMotion} testIds={false} siteVariant="ceramics" />
               </div>
             </div>
           </div>

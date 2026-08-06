@@ -1,3 +1,6 @@
+import { useEffect } from 'react';
+
+import { ensureLandingJourney } from '../shared/journey';
 import { AnalysisSection } from './AnalysisSection';
 import { CapabilitiesSection } from './CapabilitiesSection';
 import { CaseStudySection } from './CaseStudySection';
@@ -14,7 +17,7 @@ export function LandingPage() {
   }, []);
 
   return (
-    <main>
+    <main className="landing-page">
       <HeroSection />
       <FreeResultSection />
       <HowItWorksSection />
@@ -27,6 +30,3 @@ export function LandingPage() {
     </main>
   );
 }
-import { useEffect } from 'react';
-
-import { ensureLandingJourney } from '../shared/journey';

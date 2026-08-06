@@ -131,7 +131,9 @@ describe('HeroOrbitScene', () => {
       screen.getAllByTestId('process-card').map((card) => card.getAttribute('data-reveal-direction')),
     ).toEqual(['upper-left', 'left', 'lower-left']);
     expect(screen.getByTestId('browser-mockup')).toHaveAttribute('data-variant', 'hero');
+    expect(screen.getByTestId('browser-mockup')).toHaveAttribute('data-site-variant', 'bakery');
     expect(screen.getByTestId('widget-preview')).toHaveAttribute('data-variant', 'hero');
+    expect(screen.getByTestId('widget-preview')).toHaveAttribute('data-widget-shape', 'vertical');
   });
 
   it('uses actual upper-left, left, and lower-left card vectors on desktop and mobile', () => {
@@ -232,7 +234,7 @@ describe('HeroOrbitScene', () => {
 
   it('locks the desktop headline width and pulses through transform and opacity only', () => {
     expect(stylesSource).toMatch(/\.hero-section\s*\{[^}]*overflow(?:-x)?:\s*clip;/s);
-    expect(stylesSource).toMatch(/\.hero-copy h1\s*\{[^}]*max-width:\s*10\.8ch;/s);
+    expect(stylesSource).toMatch(/\.hero-copy h1\s*\{[^}]*max-width:\s*13\.4ch;/s);
     expect(stylesSource).toContain('.widget-preview::before');
 
     const pulseKeyframes = stylesSource.match(/@keyframes widget-pulse\s*\{([\s\S]*?)\n\}/)?.[1];
@@ -290,15 +292,15 @@ describe('HeroOrbitScene', () => {
     );
   });
 
-  it('gives only the hero widget the larger desktop and mobile payoff sizes', () => {
+  it('gives the hero widget a readable vertical desktop and mobile payoff size', () => {
     expect(stylesSource).toMatch(
-      /\.browser-stack--hero\s+\.widget-preview\s*\{[^}]*width:\s*47%;/s,
+      /\.browser-stack--hero\s+\.widget-preview\s*\{[^}]*width:\s*35%;[^}]*min-height:\s*300px;/s,
     );
     expect(stylesSource).toMatch(
-      /@media \(max-width:\s*640px\)[\s\S]*?\.browser-stack--hero\s+\.widget-preview\s*\{[^}]*width:\s*58%;/s,
+      /@media \(max-width:\s*640px\)[\s\S]*?\.browser-stack--hero\s+\.widget-preview\s*\{[^}]*width:\s*60%;[^}]*min-height:\s*190px;/s,
     );
     expect(browserMockupSource).toMatch(/variant\s*=\s*'default'/);
-    expect(heroOrbitSceneSource).toMatch(/<BrowserMockup[\s\S]*?variant="hero"/);
+    expect(heroOrbitSceneSource).toMatch(/<BrowserMockup[\s\S]*?siteVariant="bakery"[\s\S]*?variant="hero"/);
   });
 
   it('limits widget will-change to the arrival phase', () => {
@@ -317,5 +319,10 @@ describe('HeroOrbitScene', () => {
     expect(screen.getByTestId('hero-scene')).toHaveAccessibleDescription(
       'Анимация показывает, как Kaigo анализирует исходный сайт и добавляет готовый AI-виджет.',
     );
+  });
+
+  it('loads only the first-screen business image eagerly', () => {
+    expect(browserMockupSource).toContain("loading={heroVariant ? 'eager' : 'lazy'}");
+    expect(browserMockupSource).toContain("fetchPriority={heroVariant ? 'high' : 'auto'}");
   });
 });

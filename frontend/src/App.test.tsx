@@ -24,14 +24,13 @@ describe('App', () => {
   it('renders the selected Kaigo hero and full navigation', () => {
     render(<App />);
 
-    expect(screen.getByRole('heading', { name: /Через 10 минут.*вы сможете сказать.*наш бизнес использует AI/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Покажите сайт.*получите первую версию.*AI-консультанта/i })).toBeInTheDocument();
     expect(
       Array.from(document.querySelectorAll('.hero-title-line'), (line) => line.textContent),
     ).toEqual([
-      'Через 10 минут',
-      'вы сможете сказать:',
-      'наш бизнес',
-      'использует AI',
+      'Покажите сайт.',
+      'Получите первую версию',
+      'AI-консультанта',
     ]);
     expect(screen.getByText(/Kaigo бесплатно создаст первую версию AI-виджета/i)).toBeVisible();
     const navigation = within(screen.getByRole('navigation', { name: 'Основная навигация' }));
@@ -202,7 +201,7 @@ describe('App', () => {
 
     render(<App />);
 
-    expect(screen.getByRole('heading', { name: /Через 10 минут.*вы сможете сказать.*наш бизнес использует AI/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Покажите сайт.*получите первую версию.*AI-консультанта/i })).toBeInTheDocument();
     expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(9);
   });
 });

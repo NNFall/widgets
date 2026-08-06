@@ -155,6 +155,7 @@ export function HeroOrbitScene() {
           motionComplete={motionComplete}
           motionActive={motionActive}
           reducedMotion={reducedMotion}
+          siteVariant="bakery"
           variant="hero"
         />
         <div

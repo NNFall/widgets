@@ -1,7 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 
-const EXACT_HERO = 'Через 10 минут вы сможете сказать: наш бизнес использует AI';
+const EXACT_HERO = 'Покажите сайт. Получите первую версию AI-консультанта';
 const EXACT_DESCRIPTION = 'Добавьте ссылку на сайт и бесплатно получите первую версию персонального AI-виджета для вашего бизнеса. Обычно первая версия готова за 10–20 минут; сложные сайты могут потребовать больше времени.';
 
 async function expectNoHorizontalOverflow(page: Page) {
@@ -33,7 +33,36 @@ async function revealLanding(page: Page) {
     await sections.nth(index).scrollIntoViewIfNeeded();
     await page.waitForTimeout(80);
   }
+  const howCards = page.locator('#how-it-works .how-card__entrance');
+  for (let index = 0; index < await howCards.count(); index += 1) {
+    await howCards.nth(index).scrollIntoViewIfNeeded();
+    await page.waitForTimeout(80);
+  }
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+}
+
+async function expectVisibleInside(
+  locator: Locator,
+  container: Locator,
+  minimumRatio = 0.95,
+  label = 'element',
+) {
+  const elementBox = await locator.boundingBox();
+  const containerBox = await container.boundingBox();
+  expect(elementBox, `${label} must have a rendered box`).not.toBeNull();
+  expect(containerBox, `${label} container must have a rendered box`).not.toBeNull();
+
+  const intersectionWidth = Math.max(0, Math.min(
+    (elementBox?.x ?? 0) + (elementBox?.width ?? 0),
+    (containerBox?.x ?? 0) + (containerBox?.width ?? 0),
+  ) - Math.max(elementBox?.x ?? 0, containerBox?.x ?? 0));
+  const intersectionHeight = Math.max(0, Math.min(
+    (elementBox?.y ?? 0) + (elementBox?.height ?? 0),
+    (containerBox?.y ?? 0) + (containerBox?.height ?? 0),
+  ) - Math.max(elementBox?.y ?? 0, containerBox?.y ?? 0));
+  const elementArea = (elementBox?.width ?? 0) * (elementBox?.height ?? 0);
+  const visibleRatio = elementArea > 0 ? (intersectionWidth * intersectionHeight) / elementArea : 0;
+  expect.soft(visibleRatio, `${label} visible area`).toBeGreaterThanOrEqual(minimumRatio);
 }
 
 async function expectMinimumTarget(locator: Locator, minimum = 44, label = 'interactive target') {
@@ -227,7 +256,7 @@ test('landing compact desktop fits the first screen and exposes the brand @compa
   }));
   await expectCompactFirstScreen(page);
 
-  await expect.soft(page).toHaveTitle('Kaigo — AI для вашего бизнеса за 10 минут');
+  await expect.soft(page).toHaveTitle('Kaigo — AI-консультант для вашего сайта');
   await expect.soft(page.locator('meta[name="description"]')).toHaveAttribute('content', EXACT_DESCRIPTION);
   await expect.soft(page.locator('link[rel="icon"]')).toHaveAttribute('href', '/favicon.svg');
 });
@@ -378,6 +407,8 @@ test('landing mobile preserves content order, menu, controls and comparison @mob
   await before.click();
   await expect(before).toHaveAttribute('aria-pressed', 'true');
   await expect(after).toHaveAttribute('aria-pressed', 'false');
+  await after.click();
+  await expect(after).toHaveAttribute('aria-pressed', 'true');
   await expectNoHorizontalOverflow(page);
   const undersizedButtons = await page.locator('button:visible').evaluateAll((buttons) =>
     buttons.flatMap((button) => {
@@ -393,6 +424,25 @@ test('landing mobile preserves content order, menu, controls and comparison @mob
   expect(undersizedButtons).toEqual([]);
 
   await revealLanding(page);
+  const howCards = page.locator('#how-it-works .how-card__entrance');
+  await expect(howCards).toHaveCount(3);
+  for (let index = 0; index < 3; index += 1) {
+    await expect(howCards.nth(index), `How card ${index + 1} must be revealed`).toHaveCSS('opacity', '1');
+  }
+
+  const finalWidget = page.locator('.final-site-card--after .widget-preview-card');
+  const finalSite = page.locator('.final-site-card--after .mini-site');
+  await expectVisibleInside(finalWidget, finalSite, 0.95, 'final vertical widget');
+  const finalWidgetBox = await finalWidget.boundingBox();
+  expect.soft(
+    (finalWidgetBox?.height ?? 0) / Math.max(finalWidgetBox?.width ?? 1, 1),
+    'final widget must remain vertical on mobile',
+  ).toBeGreaterThanOrEqual(1.4);
+  const finalWidgetFontSize = await finalWidget.evaluate((element) =>
+    Number.parseFloat(getComputedStyle(element).fontSize),
+  );
+  expect.soft(finalWidgetFontSize, 'final widget text must remain legible on mobile')
+    .toBeGreaterThanOrEqual(8);
   await expect(page).toHaveScreenshot('landing-full-390.png', {
     animations: 'disabled',
     fullPage: true,
