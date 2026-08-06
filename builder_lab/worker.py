@@ -377,9 +377,13 @@ class StageResult:
                 or len(event_message) > 2_000
             ):
                 raise ValueError("stage result events are invalid")
-            if set(event) - {"event_type", "message", "status"}:
+            if set(event) - {"event_type", "message", "status", "capture_metrics"}:
                 raise ValueError("stage result events contain unsupported fields")
             if "status" in event and not isinstance(event["status"], str):
+                raise ValueError("stage result events are invalid")
+            if "capture_metrics" in event and not isinstance(
+                event["capture_metrics"], dict
+            ):
                 raise ValueError("stage result events are invalid")
         context = _strict_json_clone(self.context, field_name="context")
         if not isinstance(context, dict):
@@ -705,6 +709,7 @@ class OrchestratorStageHandler:
                 {
                     "event_type": "reference.completed",
                     "status": "completed",
+                    "capture_metrics": analysis.capture_metrics,
                     "message": "Анализ исходного сайта завершён",
                 },
             ),
@@ -2845,17 +2850,20 @@ class PostgresWorkerQueue:
             message = str(event.get("message", "")).strip()
             if not event_type or not message:
                 raise ValueError("stage result event is invalid")
+            event_payload = {
+                "stage": run.current_stage,
+                "status": str(event.get("status", "completed")),
+                "output_refs": list(result.output_refs),
+            }
+            if "capture_metrics" in event:
+                event_payload["capture_metrics"] = event["capture_metrics"]
             await self._append_event(
                 database,
                 run,
                 event_type=event_type,
                 message=message,
                 now=now,
-                payload={
-                    "stage": run.current_stage,
-                    "status": str(event.get("status", "completed")),
-                    "output_refs": list(result.output_refs),
-                },
+                payload=event_payload,
             )
         return artifact_record
 

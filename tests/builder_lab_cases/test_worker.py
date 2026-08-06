@@ -2912,12 +2912,17 @@ def test_stage_result_accepts_reference_completed_event() -> None:
             {
                 "event_type": "reference.completed",
                 "status": "completed",
+                "capture_metrics": {
+                    "total_ms": 12_345.6,
+                    "viewports": {"desktop": {"navigation": 450.2}},
+                },
                 "message": "Анализ исходного сайта завершён",
             },
         ),
     )
 
     assert result.events[0]["event_type"] == "reference.completed"
+    assert result.events[0]["capture_metrics"]["total_ms"] == 12_345.6
 
 
 @pytest.mark.asyncio

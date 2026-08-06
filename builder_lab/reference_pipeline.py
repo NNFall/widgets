@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import math
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit
@@ -54,9 +55,35 @@ class ReferenceAnalysisResult:
     context: str
     summary: str
     usage: TokenUsage = TokenUsage()
+    capture_metrics: dict[str, Any] = field(default_factory=dict)
 
 
 ReferenceAnalyzer = Callable[..., Awaitable[dict[str, Any]]]
+
+
+def _reference_capture_metrics(crawl: ReferenceCrawlResult) -> dict[str, Any]:
+    viewports: dict[str, dict[str, int | float]] = {}
+    for page in crawl.pages:
+        viewport = page.screenshots[0].viewport if page.screenshots else ""
+        if viewport not in {"desktop", "mobile"}:
+            continue
+        timings: dict[str, int | float] = {}
+        for raw_key, raw_value in page.timings_ms.items():
+            if (
+                not isinstance(raw_key, str)
+                or isinstance(raw_value, bool)
+                or not isinstance(raw_value, (int, float))
+                or not math.isfinite(raw_value)
+                or raw_value < 0
+            ):
+                continue
+            timings[raw_key] = raw_value
+        viewports[viewport] = timings
+    total_ms = max(
+        0.0,
+        round((crawl.completed_at - crawl.started_at).total_seconds() * 1000, 1),
+    )
+    return {"total_ms": total_ms, "viewports": viewports}
 
 
 def _usage(payload: dict[str, Any]) -> TokenUsage:
@@ -379,7 +406,11 @@ class GeminiReferencePipeline:
                     ),
                     diagnostic=f"{type(exc).__name__}: {str(exc)[:1_000]}",
                 ) from exc
-        return compile_reference_context(analysis)
+        compiled = compile_reference_context(analysis)
+        return replace(
+            compiled,
+            capture_metrics=_reference_capture_metrics(crawl),
+        )
 
 
 __all__ = [

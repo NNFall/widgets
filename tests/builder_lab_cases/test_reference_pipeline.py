@@ -51,6 +51,7 @@ def crawl_result() -> ReferenceCrawlResult:
             screenshot(f"desktop-{position}", "home", "desktop", position)
             for position in ("top", "middle", "bottom")
         ),
+        timings_ms={"navigation": 123.4, "warm_pass": 456.7, "warm_steps": 4},
         coverage_status="complete",
     )
     mobile = ReferencePageEvidence(
@@ -63,6 +64,7 @@ def crawl_result() -> ReferenceCrawlResult:
             screenshot(f"mobile-{position}", "home-mobile", "mobile", position)
             for position in ("top", "middle", "bottom")
         ),
+        timings_ms={"navigation": 98.7, "evidence_pass": 321.0, "evidence_steps": 5},
         coverage_status="complete",
     )
     return ReferenceCrawlResult.succeeded(
@@ -253,6 +255,24 @@ class ReferencePipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertLessEqual(len(result.context), 8_000)
         self.assertEqual(result.summary, analysis_payload()["analysis"]["visual_summary"])
         self.assertEqual(result.usage.total_tokens, 18)
+        self.assertEqual(
+            result.capture_metrics,
+            {
+                "total_ms": 0.0,
+                "viewports": {
+                    "desktop": {
+                        "navigation": 123.4,
+                        "warm_pass": 456.7,
+                        "warm_steps": 4,
+                    },
+                    "mobile": {
+                        "navigation": 98.7,
+                        "evidence_pass": 321.0,
+                        "evidence_steps": 5,
+                    },
+                },
+            },
+        )
 
     async def test_rejects_incomplete_or_failed_capture(self):
         failed = ReferenceCrawlResult.failed(

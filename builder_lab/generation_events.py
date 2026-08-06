@@ -145,6 +145,7 @@ EVENT_REGISTRY: dict[GenerationEventType, GenerationEventSpec] = {
         "stage",
         "usage",
         "output_refs",
+        "capture_metrics",
         stage_result_allowed=True,
     ),
     GenerationEventType.REFERENCE_FAILED: _spec("status", "stage", "error_code"),
@@ -250,6 +251,21 @@ _ISSUE_FIELDS = ("code", "field", "message", "severity")
 _MAX_PUBLIC_INTEGER = (1 << 63) - 1
 _MAX_USAGE_COUNTERS = 16
 _MAX_PUBLIC_FIELDS_SCANNED = 64
+_MAX_CAPTURE_METRIC = 3_600_000
+_CAPTURE_TIMING_FIELDS = frozenset(
+    {
+        "navigation",
+        "load_and_initial_settle",
+        "warm_pass",
+        "warm_steps",
+        "reset_pass",
+        "reset_steps",
+        "evidence_pass",
+        "evidence_steps",
+        "final_settle_and_screenshots",
+        "total",
+    }
+)
 
 
 def _public_text(value: object, *, limit: int) -> str | None:
@@ -293,6 +309,47 @@ def _public_usage(value: object) -> dict[str, JsonValue] | None:
             counter = _public_integer(raw_value)
             if counter is not None:
                 result[key] = counter
+    except Exception:
+        return {}
+    return result
+
+
+def _public_capture_number(value: object) -> int | float | None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0
+        or value > _MAX_CAPTURE_METRIC
+    ):
+        return None
+    return value if isinstance(value, int) else round(value, 1)
+
+
+def _public_capture_metrics(value: object) -> dict[str, JsonValue] | None:
+    if not isinstance(value, Mapping):
+        return None
+    result: dict[str, JsonValue] = {}
+    try:
+        total_ms = _public_capture_number(value.get("total_ms"))
+        if total_ms is not None:
+            result["total_ms"] = total_ms
+        raw_viewports = value.get("viewports")
+        viewports: dict[str, JsonValue] = {}
+        if isinstance(raw_viewports, Mapping):
+            for viewport in ("desktop", "mobile"):
+                raw_timings = raw_viewports.get(viewport)
+                if not isinstance(raw_timings, Mapping):
+                    continue
+                timings: dict[str, JsonValue] = {}
+                for field in _CAPTURE_TIMING_FIELDS:
+                    metric = _public_capture_number(raw_timings.get(field))
+                    if metric is not None:
+                        timings[field] = metric
+                if timings:
+                    viewports[viewport] = timings
+        if viewports:
+            result["viewports"] = viewports
     except Exception:
         return {}
     return result
@@ -371,6 +428,8 @@ def _project_value(field: str, value: object) -> JsonValue | None:
         return value if isinstance(value, bool) else None
     if field == "usage":
         return _public_usage(value)
+    if field == "capture_metrics":
+        return _public_capture_metrics(value)
     if field == "not_before":
         return _public_timestamp(value)
     if field == "output_refs":
