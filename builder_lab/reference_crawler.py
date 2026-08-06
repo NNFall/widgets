@@ -2230,6 +2230,19 @@ async def _wait_for_reference_load(
     from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
     try:
+        ready_state = await page.evaluate("() => document.readyState")
+    except Exception:
+        ready_state = None
+    if ready_state == "complete":
+        return ()
+    if ready_state == "interactive":
+        # Navigation already waited for DOMContentLoaded. A separate `load`
+        # gate can be held indefinitely by analytics, fonts, or other
+        # background resources, while the document is ready for bounded asset
+        # settling and the lazy-load sweep below.
+        return ("load_deferred_after_domcontentloaded",)
+
+    try:
         await page.wait_for_load_state("load", timeout=timeout_ms)
     except PlaywrightTimeoutError:
         if not await _has_meaningfully_rendered_document(page):

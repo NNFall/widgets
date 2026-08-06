@@ -858,6 +858,22 @@ class BrowserLifecycleTests(unittest.TestCase):
 
         self.assertEqual(warnings, ("load_timeout_rendered",))
 
+    def test_interactive_document_does_not_wait_for_background_load_event(self):
+        class InteractivePage:
+            async def evaluate(self, _script):
+                return "interactive"
+
+            async def wait_for_load_state(self, *_args, **_kwargs):
+                raise AssertionError("load event must not gate an interactive document")
+
+        warnings = asyncio.run(
+            reference_crawler_module._wait_for_reference_load(
+                InteractivePage(), timeout_ms=5_000
+            )
+        )
+
+        self.assertEqual(warnings, ("load_deferred_after_domcontentloaded",))
+
     def test_default_desktop_capture_uses_wide_full_context_viewport(self):
         settings = VisualReferenceCrawler()._settings("desktop")
         self.assertEqual((settings.width, settings.height), (1920, 1080))
