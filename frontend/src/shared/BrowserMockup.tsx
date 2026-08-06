@@ -17,6 +17,7 @@ type BrowserMockupProps = {
 
 type SiteConfig = {
   brand: string;
+  domain: string;
   nav: readonly string[];
   headline: readonly string[];
   action: string;
@@ -41,6 +42,7 @@ const heroWidgetVariants: Variants = {
 const sites: Record<SiteVariant, SiteConfig> = {
   architecture: {
     brand: 'Modern House',
+    domain: 'modern-house.ru',
     nav: ['Проекты', 'Услуги', 'Цены', 'О компании', 'Контакты'],
     headline: ['Строим дома,', 'в которых хочется', 'жить'],
     action: 'Оставить заявку',
@@ -56,6 +58,7 @@ const sites: Record<SiteVariant, SiteConfig> = {
   },
   bakery: {
     brand: 'Тёплый хлеб',
+    domain: 'teply-hleb.ru',
     nav: ['Меню', 'Торты', 'Доставка', 'О пекарне', 'Контакты'],
     headline: ['Свежая выпечка,', 'к которой хочется', 'возвращаться'],
     action: 'Смотреть меню',
@@ -71,6 +74,7 @@ const sites: Record<SiteVariant, SiteConfig> = {
   },
   ceramics: {
     brand: 'Тихая форма',
+    domain: 'tihaya-forma.ru',
     nav: ['Коллекции', 'Мастерская', 'Доставка', 'О нас', 'Контакты'],
     headline: ['Посуда, которую', 'хочется держать', 'в руках'],
     action: 'Смотреть коллекцию',
@@ -109,7 +113,13 @@ export function BrowserMockup({
     >
       <div className="browser-stack__backing" aria-hidden="true" />
       <div className="browser-mockup">
-        <div className="browser-mockup__chrome" aria-hidden="true"><span /><span /><span /></div>
+        <div className="browser-mockup__chrome" aria-hidden="true">
+          <span /><span /><span />
+          <div className="browser-mockup__address">
+            <span>Ваш сайт</span>
+            <strong>{site.domain}</strong>
+          </div>
+        </div>
         <div className="browser-mockup__nav">
           <strong>{site.brand}</strong>
           {site.nav.map((item) => <span key={item}>{item}</span>)}

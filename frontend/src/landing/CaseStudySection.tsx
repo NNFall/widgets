@@ -5,6 +5,7 @@ import { useCallback, useState, useSyncExternalStore } from 'react';
 import { BrowserMockup } from '../shared/BrowserMockup';
 import { useMotionActivity } from '../shared/MotionActivity';
 import { Reveal } from '../shared/Reveal';
+import { studioHref } from '../shared/campaign';
 
 export const MOBILE_CASE_MEDIA_QUERY = '(max-width: 767px)';
 
@@ -36,6 +37,7 @@ export function useMediaQuery(query: string): boolean {
 }
 
 export function CaseStudySection() {
+  const campaignStudioHref = studioHref();
   const [activeView, setActiveView] = useState<'before' | 'after'>('after');
   const { active, reducedMotion, ref } = useMotionActivity<HTMLElement>();
   const mobileComparison = useMediaQuery(MOBILE_CASE_MEDIA_QUERY);
@@ -53,8 +55,15 @@ export function CaseStudySection() {
     >
       <div className="landing-shell">
         <Reveal className="case-heading">
-          <p className="section-kicker section-kicker--pill">Кейс: AI-консультант для строительной компании</p>
-          <h2>Один и тот же сайт<br />до и после Kaigo</h2>
+          <div className="case-heading__copy">
+            <p className="section-kicker section-kicker--pill">Кейс: строительная компания</p>
+            <h2>Один сайт. Два опыта.</h2>
+          </div>
+          <div className="case-heading__outcome">
+            <span>После Kaigo</span>
+            <strong>Теперь ваш сайт отвечает посетителю через AI</strong>
+            <p>Человек получает помощь в момент выбора, не разыскивая нужную страницу сам.</p>
+          </div>
         </Reveal>
 
         <div className="case-toggle" role="group" aria-label="Показать состояние сайта">
@@ -69,7 +78,7 @@ export function CaseStudySection() {
               aria-hidden={beforeInactive || undefined}
               inert={beforeInactive || undefined}
             >
-              <div className="case-panel__label"><span>До</span><p>Посетитель сам ищет проекты, условия и способ оставить заявку.</p></div>
+              <div className="case-panel__label"><span>До</span><p>Информация есть, но посетитель сам ищет проекты, условия и способ оставить заявку.</p></div>
               <div className="case-browser"><BrowserMockup widgetVisible={false} motionComplete={false} motionActive={false} reducedMotion testIds={false} /></div>
             </div>
           </Reveal>
@@ -79,8 +88,8 @@ export function CaseStudySection() {
               aria-hidden={afterInactive || undefined}
               inert={afterInactive || undefined}
             >
-              <div className="case-panel__label"><span>После</span><p>AI-виджет отвечает по услугам, помогает выбрать проект и подводит к обращению.</p></div>
-              <div className="case-browser" data-case-widget="enhanced">
+              <div className="case-panel__label"><span>После</span><p>AI-консультант встроен в сайт, отвечает по услугам и помогает сделать следующий шаг.</p></div>
+              <div className="case-browser" data-case-widget="enhanced" data-widget-placement="embedded">
                 <motion.div
                   className="case-browser__after-reveal"
                   key={activeView === 'after' ? 'case-after-active' : 'case-after-idle'}
@@ -100,7 +109,10 @@ export function CaseStudySection() {
           <span><CheckCircle size={25} />Знает услуги</span>
           <span><ShieldCheck size={25} />Сохраняет стиль сайта</span>
           <span><Sparkle size={25} />Помогает сделать следующий шаг</span>
-          <a className="primary-button" href="#how-it-works">Посмотреть, как создавался виджет</a>
+          <div className="case-footer__action" data-testid="case-action">
+            <a className="primary-button" href={campaignStudioHref}>Создать виджет для своего сайта</a>
+            <small>Сначала получите бесплатный предпросмотр</small>
+          </div>
         </Reveal>
       </div>
     </section>

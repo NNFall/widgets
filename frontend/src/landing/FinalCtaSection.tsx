@@ -61,12 +61,15 @@ const finalWidgetHaloVariants = {
 export function FinalCtaSection() {
   const reducedMotion = Boolean(useReducedMotion());
   const campaignStudioHref = studioHref();
+  const viewportMotionAvailable = import.meta.env.MODE !== 'test'
+    && typeof IntersectionObserver !== 'undefined';
 
   return (
     <section className="landing-section final-cta-section" id="final-cta" data-landing-section>
       <motion.div
         className="landing-shell final-cta-content final-cta-motion"
-        initial={reducedMotion ? false : 'hidden'}
+        data-layout="split"
+        initial={reducedMotion || !viewportMotionAvailable ? false : 'hidden'}
         animate={reducedMotion ? 'visible' : undefined}
         whileInView="visible"
         viewport={{ once: true, amount: 0.18 }}
@@ -82,12 +85,14 @@ export function FinalCtaSection() {
             className="final-site-card__motion final-site-card__motion--before"
             variants={beforeCardVariants}
           >
+            <span className="final-site-card__label">Сайт без Kaigo</span>
             <div className="final-site-card final-site-card--before"><MiniSite after={false} /></div>
           </motion.div>
           <motion.div
             className="final-site-card__motion final-site-card__motion--after"
             variants={afterCardVariants}
           >
+            <span className="final-site-card__label">Сайт с AI-консультантом</span>
             <div className="final-site-card final-site-card--after"><MiniSite after /></div>
           </motion.div>
         </motion.div>
@@ -96,6 +101,7 @@ export function FinalCtaSection() {
             ariaLabel="Ссылка на сайт — финальная форма"
             submitAriaLabel="Получить бесплатную версию"
           />
+          <small className="final-composer__note">Ссылка нужна только для анализа. Карту не попросим.</small>
         </motion.div>
         <motion.div className="guarantee-row" variants={guaranteeRowVariants}>
           {guarantees.map(({ label, Icon }) => (

@@ -33,9 +33,9 @@ async function revealLanding(page: Page) {
     await sections.nth(index).scrollIntoViewIfNeeded();
     await page.waitForTimeout(80);
   }
-  const howCards = page.locator('#how-it-works .how-card__entrance');
-  for (let index = 0; index < await howCards.count(); index += 1) {
-    await howCards.nth(index).scrollIntoViewIfNeeded();
+  const howReveals = page.locator('#how-it-works .how-live-preview, #how-it-works .how-launch');
+  for (let index = 0; index < await howReveals.count(); index += 1) {
+    await howReveals.nth(index).scrollIntoViewIfNeeded();
     await page.waitForTimeout(80);
   }
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
@@ -286,6 +286,27 @@ test('landing desktop completes the hero story without overflow @desktop', async
     maxDiffPixelRatio: 0.015,
   });
   await revealLanding(page);
+  await expect(page.locator('.hero-browser-stage .browser-mockup__address')).toContainText('Ваш сайт');
+  await expect(page.locator('.hero-browser-stage .browser-mockup__address')).toContainText('teply-hleb.ru');
+  await expect(page.getByTestId('how-live-preview')).toBeVisible();
+  await expect(page.getByTestId('how-publish-path')).toBeVisible();
+
+  const caseSectionHeight = await page.locator('#case-study').evaluate((section) =>
+    section.getBoundingClientRect().height,
+  );
+  expect.soft(caseSectionHeight, 'before/after case should fit inside a 1080px screen')
+    .toBeLessThanOrEqual(1_080);
+  await expectVisibleInside(
+    page.locator('.case-panel--after .widget-preview-card'),
+    page.locator('.case-panel--after .browser-stack'),
+    0.95,
+    'case study AI widget',
+  );
+  const finalDesktopWidgetBox = await page.locator('.final-site-card--after .widget-preview-card').boundingBox();
+  expect.soft(
+    (finalDesktopWidgetBox?.height ?? 0) / Math.max(finalDesktopWidgetBox?.width ?? 1, 1),
+    'final widget should read as a vertical product on desktop',
+  ).toBeGreaterThanOrEqual(1.35);
   await expect(page).toHaveScreenshot('landing-full-1920.png', {
     animations: 'disabled',
     fullPage: true,
@@ -357,7 +378,7 @@ test('landing navigation, composer, case toggle and FAQ are functional @desktop'
     .getByRole('link', { name: 'Кейсы' })
     .click();
   await expect(page).toHaveURL(/#case-study$/);
-  await expect(page.getByRole('heading', { name: /Один и тот же сайт/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Один сайт. Два опыта.' })).toBeVisible();
 
   const faqButton = page.getByRole('button', { name: 'Сколько времени занимает создание?' });
   await faqButton.focus();
@@ -424,10 +445,10 @@ test('landing mobile preserves content order, menu, controls and comparison @mob
   expect(undersizedButtons).toEqual([]);
 
   await revealLanding(page);
-  const howCards = page.locator('#how-it-works .how-card__entrance');
-  await expect(howCards).toHaveCount(3);
-  for (let index = 0; index < 3; index += 1) {
-    await expect(howCards.nth(index), `How card ${index + 1} must be revealed`).toHaveCSS('opacity', '1');
+  const howReveals = page.locator('#how-it-works .how-live-preview, #how-it-works .how-launch');
+  await expect(howReveals).toHaveCount(2);
+  for (let index = 0; index < 2; index += 1) {
+    await expect(howReveals.nth(index), `How process part ${index + 1} must be revealed`).toHaveCSS('opacity', '1');
   }
 
   const finalWidget = page.locator('.final-site-card--after .widget-preview-card');

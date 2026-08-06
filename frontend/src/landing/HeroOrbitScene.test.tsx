@@ -127,11 +127,14 @@ describe('HeroOrbitScene', () => {
   it('marks each card with a distinct directional reveal and opts the hero into its own widget variant', () => {
     render(<HeroOrbitScene />);
 
+    const browser = screen.getByTestId('browser-mockup');
     expect(
       screen.getAllByTestId('process-card').map((card) => card.getAttribute('data-reveal-direction')),
     ).toEqual(['upper-left', 'left', 'lower-left']);
-    expect(screen.getByTestId('browser-mockup')).toHaveAttribute('data-variant', 'hero');
-    expect(screen.getByTestId('browser-mockup')).toHaveAttribute('data-site-variant', 'bakery');
+    expect(browser).toHaveAttribute('data-variant', 'hero');
+    expect(browser).toHaveAttribute('data-site-variant', 'bakery');
+    expect(within(browser).getByText('Ваш сайт')).toBeVisible();
+    expect(within(browser).getByText('teply-hleb.ru')).toBeVisible();
     expect(screen.getByTestId('widget-preview')).toHaveAttribute('data-variant', 'hero');
     expect(screen.getByTestId('widget-preview')).toHaveAttribute('data-widget-shape', 'vertical');
   });

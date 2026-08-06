@@ -13,12 +13,12 @@ describe('LandingPage sections', () => {
     const sections = Array.from(document.querySelectorAll('section[data-landing-section]'));
     expect(sections).toHaveLength(9);
     expect(sections[1]).toHaveClass('free-result-section');
-    expect(screen.getByRole('heading', { name: 'Сначала результат — потом оплата' })).toBeVisible();
-    expect(screen.getByText(/одна готовая экспресс-версия бесплатно/i)).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Сначала посмотрите результат. Оплатите только публикацию.' })).toBeVisible();
+    expect(screen.getByText(/экспресс-версия бесплатно/i)).toBeVisible();
     expect(screen.getByText(/Google или Яндекс/i)).toBeVisible();
-    expect(screen.getByText(/без карты/i)).toBeVisible();
-    expect(screen.getByText(/сначала предпросмотр и чат/i)).toBeVisible();
-    expect(screen.getByText(/платите только за публикацию и подключение готового виджета/i)).toBeVisible();
+    expect(screen.getByText(/карта не нужна для генерации/i)).toBeVisible();
+    expect(screen.getByText(/проверьте виджет в чате/i)).toBeVisible();
+    expect(screen.getByText(/тариф понадобится, когда решите опубликовать/i)).toBeVisible();
     expect(screen.getByText(/одна на подтверждённый аккаунт/i)).toBeVisible();
     expect(screen.getByText(/обычно 10–20 минут, сложные сайты дольше/i)).toBeVisible();
     expect(screen.getAllByRole('textbox', { name: 'Пожелание к AI-виджету' })).toHaveLength(2);
@@ -54,16 +54,17 @@ describe('LandingPage sections', () => {
 
     const process = screen.getByRole('list', { name: 'Путь от ссылки до готового виджета' });
     expect(within(process).getAllByRole('listitem')).toHaveLength(3);
-    expect(within(process).getByText('https://teply-hleb.ru')).toBeVisible();
-    expect(within(process).getByText(/Проверяем страницы, услуги, стиль и частые вопросы/i)).toBeVisible();
-    expect(within(process).getByText(/Какие торты можно заказать к субботе/i)).toBeVisible();
+    const board = document.querySelector('.how-process-board') as HTMLElement;
+    expect(within(board).getByText('https://teply-hleb.ru')).toBeVisible();
+    expect(within(board).getByText(/Проверяем страницы, услуги, стиль и частые вопросы/i)).toBeVisible();
+    expect(within(board).getByText(/Какие торты можно заказать к субботе/i)).toBeVisible();
   });
 
   it('renders the complete marketing narrative', () => {
     render(<LandingPage />);
 
     expect(screen.getByRole('heading', { name: 'Как это работает' })).toBeVisible();
-    expect(screen.getByRole('heading', { name: 'Дальше: три шага до запуска на сайте' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Публикуйте только после проверки' })).toBeVisible();
     expect(screen.getByText('Выберите тариф')).toBeVisible();
     expect(screen.getByText('Опубликуйте версию')).toBeVisible();
     expect(screen.getByText('Установите одной строкой')).toBeVisible();

@@ -1,7 +1,8 @@
 import { motion, useReducedMotion } from 'motion/react';
+import type { HTMLMotionProps } from 'motion/react';
 import type { ReactNode } from 'react';
 
-type RevealProps = {
+type RevealProps = Omit<HTMLMotionProps<'div'>, 'children' | 'className' | 'transition'> & {
   children: ReactNode;
   className?: string;
   delay?: number;
@@ -26,7 +27,7 @@ const visibleByPreset = {
   scale: { opacity: 1, scale: 1 },
 } as const;
 
-export function Reveal({ children, className, delay = 0, preset = 'default' }: RevealProps) {
+export function Reveal({ children, className, delay = 0, preset = 'default', ...rest }: RevealProps) {
   const reducedMotion = useReducedMotion();
   const viewportMotionAvailable = import.meta.env.MODE !== 'test'
     && typeof IntersectionObserver !== 'undefined';
@@ -38,6 +39,7 @@ export function Reveal({ children, className, delay = 0, preset = 'default' }: R
 
   return (
     <motion.div
+      {...rest}
       className={className}
       initial={reducedMotion || !viewportMotionAvailable ? false : hiddenByPreset[preset]}
       whileInView={visibleByPreset[preset]}

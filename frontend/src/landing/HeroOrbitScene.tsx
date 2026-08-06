@@ -149,7 +149,7 @@ export function HeroOrbitScene() {
       </div>
 
       <div className="hero-browser-stage">
-        <span className="hero-browser-stage__source-label">исходный сайт</span>
+        <span className="hero-browser-stage__source-label"><strong>Ваш сайт</strong><small>teply-hleb.ru</small></span>
         <BrowserMockup
           widgetVisible={widgetVisible}
           motionComplete={motionComplete}

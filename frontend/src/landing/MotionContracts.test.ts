@@ -12,12 +12,10 @@ import analysisSectionSource from './AnalysisSection.tsx?raw';
 import faqSectionSource from './FaqSection.tsx?raw';
 import finalCtaSectionSource from './FinalCtaSection.tsx?raw';
 import howItWorksSectionSource from './HowItWorksSection.tsx?raw';
-import { HOW_CARD_STAGGER_SECONDS } from './HowItWorksSection';
 import studioSectionSource from './StudioSection.tsx?raw';
 
 describe('landing motion contracts', () => {
-  it('staggers process cards at 180ms while preserving the capability cadence', () => {
-    expect(HOW_CARD_STAGGER_SECONDS).toBe(0.18);
+  it('preserves the capability cadence while simplifying the process story', () => {
     expect(CAPABILITY_CARD_STAGGER_SECONDS).toBe(0.26);
   });
 
@@ -31,22 +29,18 @@ describe('landing motion contracts', () => {
     );
   });
 
-  it('draws the process route once and keeps alternating entrance transforms on shells', () => {
-    expect(howItWorksSectionSource).toContain('className="how-route__path"');
-    expect(stylesSource).toMatch(
-      /\[data-motion-active='true'\]\s+\.how-route__path\s*\{[^}]*animation:\s*how-route-draw 1\.1s[^;]* both;/s,
-    );
-    expect(howItWorksSectionSource).toContain("index % 2 === 0 ? 'fromLeft' : 'fromRight'");
-    expect(howItWorksSectionSource).toContain('className="how-card__entrance"');
-    expect(howItWorksSectionSource).toMatch(/className=\{`how-card how-card--\$\{index \+ 1\}`\}/);
+  it('uses one integrated process surface without an animated route over content', () => {
+    expect(howItWorksSectionSource).toContain('data-journey-layout="unified"');
+    expect(howItWorksSectionSource).toContain('data-testid="how-live-preview"');
+    expect(howItWorksSectionSource).not.toContain('className="how-route__path"');
+    expect(howItWorksSectionSource).not.toContain("index % 2 === 0 ? 'fromLeft' : 'fromRight'");
   });
 
-  it('gates the three process artifact stories behind the section activity boundary', () => {
+  it('gates only the scan and ready signals behind the section activity boundary', () => {
     expect(howItWorksSectionSource).toContain('useMotionActivity<HTMLElement>()');
     expect(howItWorksSectionSource).toContain("data-motion-active={active ? 'true' : 'false'}");
-    expect(howItWorksSectionSource).toContain('how-confirmation-pulse');
-    expect(howItWorksSectionSource).toContain('how-checklist-progress');
-    expect(howItWorksSectionSource).toContain('how-chat-response');
+    expect(howItWorksSectionSource).toContain('how-stage__scan-line');
+    expect(howItWorksSectionSource).toContain('how-stage__status-dot');
   });
 
   it('keeps the analysis browser rotation inside its scale entrance and exposes focus targets', () => {
@@ -73,9 +67,8 @@ describe('landing motion contracts', () => {
 
   it('gates every new infinite section animation and disables it for reduced motion', () => {
     const activeLoops = [
-      'how-confirmation-pulse',
-      'how-checklist-progress',
-      'how-chat-response',
+      'how-stage-scan',
+      'how-status-pulse',
     ];
 
     activeLoops.forEach((name) => {
@@ -90,16 +83,14 @@ describe('landing motion contracts', () => {
     expect(reducedMotionRules).toContain('.how-section');
     expect(reducedMotionRules).toContain('.analysis-section');
     expect(reducedMotionRules).toContain('animation: none !important;');
-    expect(reducedMotionRules).toMatch(/\.how-chat-typing\s*\{[^}]*display:\s*none;/s);
-    expect(reducedMotionRules).toMatch(/\.how-chat-response-window\s*\{[^}]*height:\s*auto;[^}]*overflow:\s*visible;/s);
+    expect(reducedMotionRules).toContain('.how-stage__scan-line');
+    expect(reducedMotionRules).toContain('.how-stage__status-dot');
   });
 
   it('keeps all process and analysis keyframes on transform and opacity only', () => {
     const sectionKeyframes = [
-      'how-route-draw',
-      'how-confirmation-pulse',
-      'how-checklist-progress',
-      'how-chat-response',
+      'how-stage-scan',
+      'how-status-pulse',
     ];
 
     sectionKeyframes.forEach((name) => {
@@ -220,7 +211,7 @@ describe('landing motion contracts', () => {
 
   it('stages the final CTA once from one parent and leaves the footer outside it', () => {
     expect(finalCtaSectionSource).toContain('className="landing-shell final-cta-content final-cta-motion"');
-    expect(finalCtaSectionSource).toContain("initial={reducedMotion ? false : 'hidden'}");
+    expect(finalCtaSectionSource).toContain("initial={reducedMotion || !viewportMotionAvailable ? false : 'hidden'}");
     expect(finalCtaSectionSource).toContain('whileInView="visible"');
     expect(finalCtaSectionSource).toContain('viewport={{ once: true, amount: 0.18 }}');
     expect(finalCtaSectionSource).toContain('className="final-site-card__motion final-site-card__motion--before"');
