@@ -777,14 +777,35 @@ class BrowserLifecycleTests(unittest.TestCase):
 
         self.assertEqual(failure, "cross-origin document blocked")
 
-    def test_domcontentloaded_timeout_keeps_a_meaningfully_rendered_document(self):
+    def test_navigation_waits_only_for_response_commit(self):
+        class CommittedPage:
+            def __init__(self):
+                self.goto_kwargs = None
+
+            async def goto(self, *_args, **kwargs):
+                self.goto_kwargs = kwargs
+
+        page = CommittedPage()
+        warnings = asyncio.run(
+            reference_crawler_module._goto_reference_document(
+                page,
+                "https://mindbox.ru/",
+                timeout_ms=45_000,
+            )
+        )
+
+        self.assertEqual(page.goto_kwargs["wait_until"], "commit")
+        self.assertEqual(page.goto_kwargs["timeout"], 15_000)
+        self.assertEqual(warnings, ("domcontentloaded_deferred_after_commit",))
+
+    def test_commit_timeout_keeps_a_meaningfully_rendered_document(self):
         from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
         class RenderedPage:
             url = "https://mindbox.ru/"
 
             async def goto(self, *_args, **_kwargs):
-                raise PlaywrightTimeoutError("DOMContentLoaded timed out")
+                raise PlaywrightTimeoutError("navigation commit timed out")
 
             async def evaluate(self, _script):
                 return {
@@ -803,16 +824,16 @@ class BrowserLifecycleTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(warnings, ("domcontentloaded_timeout_rendered",))
+        self.assertEqual(warnings, ("navigation_commit_timeout_rendered",))
 
-    def test_domcontentloaded_timeout_still_rejects_a_blank_document(self):
+    def test_commit_timeout_still_rejects_a_blank_document(self):
         from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
         class BlankPage:
             url = "about:blank"
 
             async def goto(self, *_args, **_kwargs):
-                raise PlaywrightTimeoutError("DOMContentLoaded timed out")
+                raise PlaywrightTimeoutError("navigation commit timed out")
 
             async def evaluate(self, _script):
                 return {
@@ -823,7 +844,7 @@ class BrowserLifecycleTests(unittest.TestCase):
                     "scrollHeight": 0,
                 }
 
-        with self.assertRaisesRegex(PlaywrightTimeoutError, "DOMContentLoaded"):
+        with self.assertRaisesRegex(PlaywrightTimeoutError, "navigation commit"):
             asyncio.run(
                 reference_crawler_module._goto_reference_document(
                     BlankPage(),
@@ -832,14 +853,12 @@ class BrowserLifecycleTests(unittest.TestCase):
                 )
             )
 
-    def test_load_timeout_after_navigation_is_nonfatal_for_rendered_document(self):
-        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-
+    def test_loading_state_is_nonfatal_for_rendered_document(self):
         class RenderedPage:
             url = "https://mindbox.ru/"
 
             async def wait_for_load_state(self, *_args, **_kwargs):
-                raise PlaywrightTimeoutError("load timed out")
+                raise AssertionError("load event must not gate rendered content")
 
             async def evaluate(self, _script):
                 return {
@@ -856,7 +875,7 @@ class BrowserLifecycleTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(warnings, ("load_timeout_rendered",))
+        self.assertEqual(warnings, ("load_deferred_after_rendered_document",))
 
     def test_interactive_document_does_not_wait_for_background_load_event(self):
         class InteractivePage:

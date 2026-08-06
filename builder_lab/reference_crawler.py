@@ -2212,14 +2212,14 @@ async def _goto_reference_document(
     try:
         await page.goto(
             url,
-            wait_until="domcontentloaded",
-            timeout=timeout_ms,
+            wait_until="commit",
+            timeout=min(timeout_ms, 15_000),
         )
     except PlaywrightTimeoutError:
         if not await _has_meaningfully_rendered_document(page):
             raise
-        return ("domcontentloaded_timeout_rendered",)
-    return ()
+        return ("navigation_commit_timeout_rendered",)
+    return ("domcontentloaded_deferred_after_commit",)
 
 
 async def _wait_for_reference_load(
@@ -2241,14 +2241,25 @@ async def _wait_for_reference_load(
         # background resources, while the document is ready for bounded asset
         # settling and the lazy-load sweep below.
         return ("load_deferred_after_domcontentloaded",)
+    if await _has_meaningfully_rendered_document(page):
+        return ("load_deferred_after_rendered_document",)
 
     try:
-        await page.wait_for_load_state("load", timeout=timeout_ms)
+        await page.wait_for_function(
+            """() => {
+              const body = document.body;
+              const root = document.scrollingElement || document.documentElement;
+              if (!body || !root || root.scrollHeight < 200) return false;
+              const textLength = (body.innerText || '').trim().length;
+              const elementCount = body.querySelectorAll('*').length;
+              return textLength >= 40 || elementCount >= 8;
+            }""",
+            timeout=timeout_ms,
+        )
     except PlaywrightTimeoutError:
         if not await _has_meaningfully_rendered_document(page):
             raise
-        return ("load_timeout_rendered",)
-    return ()
+    return ("load_deferred_after_rendered_document",)
 
 
 _FATAL_DOCUMENT_POLICY_PREFIXES = (
