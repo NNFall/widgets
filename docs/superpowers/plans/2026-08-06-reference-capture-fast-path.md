@@ -149,14 +149,16 @@ python -m compileall -q builder_lab tests/builder_lab_cases
 git diff --check
 ```
 
-- [ ] **Step 3: Commit only the scoped implementation**
+- [x] **Step 3: Commit only the scoped implementation**
 
 Stage only the crawler, pipeline, event, test, plan, and product-journal files. Preserve all unrelated Telegram, node_modules, output, and user changes.
 
-- [ ] **Step 4: Deploy the builder worker**
+- [x] **Step 4: Deploy the builder worker**
 
 Copy the committed scoped files to `/root/ai_project`, rebuild only `builder-worker`, restart it, verify the worker boot log, and verify `https://kaigo.space/api/health` returns HTTP 200.
 
 - [ ] **Step 5: Run one production reference capture and report timings**
 
 Use the existing developer account/project workflow for one Mindbox capture. Verify the six screenshots, animation/lazy-load evidence, `reference.completed.capture_metrics`, total elapsed time, resource use, and absence of lease loss. Do not claim the target until these measurements complete.
+
+Production control result on 2026-08-06: the six-screenshot acceptance gate remains open. Independent desktop and mobile captures completed with full coverage in 59.9 s and 32.2 s respectively, but a combined production crawl overloaded the 2 GB VPS and did not produce a complete six-frame artifact. Raw HTTP and native Chromium navigation to Mindbox were both sub-three-second, so network geography was ruled out as the primary bottleneck. The deployed worker is healthy at commit `5aee1f4`; the next control run must happen only after browser resource isolation/capacity is addressed. Full measurements and negative evidence are recorded in `docs/release-evidence/2026-08-06-reference-capture-fast-path.md`.
