@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 
 import { LandingPage } from './landing/LandingPage';
+import { ProductTourPage } from './landing/ProductTourPage';
 
 const StudioRoute = lazy(async () => {
   const module = await import('./studio/StudioRoute');
@@ -19,6 +20,10 @@ export function App() {
     window.addEventListener('popstate', syncPathname);
     return () => window.removeEventListener('popstate', syncPathname);
   }, []);
+
+  if (pathname === '/tour') {
+    return <ProductTourPage />;
+  }
 
   if (pathname !== '/studio') {
     return <LandingPage />;

@@ -8,7 +8,7 @@ import { HeroOrbitScene } from './HeroOrbitScene';
 
 const navItems = [
   ['Продукт', '#product'],
-  ['Как это работает', '#how-it-works'],
+  ['Как это работает', '#product-tour'],
   ['Кейсы', '#case-study'],
   ['Вопросы', '#faq'],
 ] as const;

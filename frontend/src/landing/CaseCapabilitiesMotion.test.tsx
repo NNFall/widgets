@@ -47,9 +47,11 @@ describe('case study motion', () => {
   });
 
   it('keeps both comparison panels in the mobile layout instead of display none', () => {
-    const mobileStart = stylesSource.lastIndexOf('@media (max-width: 767px)');
-    const mobileRules = stylesSource.slice(mobileStart);
+    const mobileStart = stylesSource.indexOf('@media (max-width: 767px) {\n  .case-comparison');
+    const mobileEnd = stylesSource.indexOf('\n@media ', mobileStart + 1);
+    const mobileRules = stylesSource.slice(mobileStart, mobileEnd);
 
+    expect(mobileStart).toBeGreaterThan(-1);
     expect(mobileRules).not.toMatch(/\.case-panel\s*\{[^}]*display:\s*none/s);
     expect(mobileRules).toMatch(/\.case-panel-shell\s*\{[^}]*grid-area:\s*case/s);
     expect(mobileRules).toMatch(/\.case-panel\s*\{[^}]*opacity:\s*0/s);

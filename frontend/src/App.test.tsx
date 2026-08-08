@@ -37,7 +37,7 @@ describe('App', () => {
     expect(navigation.getByRole('link', { name: 'Продукт' })).toHaveAttribute('href', '#product');
     expect(navigation.getByRole('link', { name: 'Как это работает' })).toHaveAttribute(
       'href',
-      '#how-it-works',
+      '#product-tour',
     );
     expect(navigation.getByRole('link', { name: 'Кейсы' })).toHaveAttribute('href', '#case-study');
     expect(navigation.getByRole('link', { name: 'Вопросы' })).toHaveAttribute('href', '#faq');
@@ -46,7 +46,7 @@ describe('App', () => {
       'href',
       '/studio',
     );
-    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(9);
+    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(10);
   });
 
   it('preserves only allowlisted campaign parameters on every Studio navigation link', () => {
@@ -196,12 +196,25 @@ describe('App', () => {
     expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(0);
   });
 
+  it.each(['/tour', '/tour/'])('renders the standalone product tour at %s', (pathname) => {
+    window.history.replaceState({}, '', pathname);
+
+    render(<App />);
+
+    expect(document.querySelector('main.product-tour-page')).not.toBeNull();
+    expect(document.title).toBe('Как работает Kaigo — от ссылки до AI-сотрудника');
+    expect(screen.getByRole('heading', { name: 'От вас нужны ссылка и одна фраза' })).toBeVisible();
+    expect(document.querySelectorAll('[data-tour-step]')).toHaveLength(4);
+    expect(screen.getByRole('link', { name: 'Вернуться на лендинг' })).toHaveAttribute('href', '/');
+    expect(screen.queryByRole('heading', { name: /Покажите сайт.*получите первую версию/i })).not.toBeInTheDocument();
+  });
+
   it('renders the landing page for paths that only start with /studio', () => {
     window.history.replaceState({}, '', '/studio-preview');
 
     render(<App />);
 
     expect(screen.getByRole('heading', { name: /Покажите сайт.*получите первую версию.*AI-консультанта/i })).toBeInTheDocument();
-    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(9);
+    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(10);
   });
 });

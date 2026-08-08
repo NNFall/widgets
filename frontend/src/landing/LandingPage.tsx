@@ -9,6 +9,7 @@ import { FinalCtaSection } from './FinalCtaSection';
 import { FreeResultSection } from './FreeResultSection';
 import { HeroSection } from './HeroSection';
 import { HowItWorksSection } from './HowItWorksSection';
+import { ProductTour } from './ProductTour';
 import { StudioSection } from './StudioSection';
 
 export function LandingPage() {
@@ -19,6 +20,7 @@ export function LandingPage() {
   return (
     <main className="landing-page">
       <HeroSection />
+      <ProductTour />
       <FreeResultSection />
       <HowItWorksSection />
       <AnalysisSection />

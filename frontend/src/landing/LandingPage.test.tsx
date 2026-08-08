@@ -11,8 +11,11 @@ describe('LandingPage sections', () => {
     render(<LandingPage />);
 
     const sections = Array.from(document.querySelectorAll('section[data-landing-section]'));
-    expect(sections).toHaveLength(9);
-    expect(sections[1]).toHaveClass('free-result-section');
+    expect(sections).toHaveLength(10);
+    expect(sections[1]).toHaveClass('product-tour-section');
+    expect(sections[2]).toHaveClass('free-result-section');
+    expect(screen.getByRole('heading', { name: 'От вас нужны ссылка и одна фраза' })).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Открыть демонстрацию отдельно' })).toHaveAttribute('href', '/tour');
     expect(screen.getByRole('heading', { name: 'Сначала посмотрите результат. Оплатите только публикацию.' })).toBeVisible();
     expect(screen.getByText(/экспресс-версия бесплатно/i)).toBeVisible();
     expect(screen.getByText(/Google или Яндекс/i)).toBeVisible();
@@ -72,7 +75,7 @@ describe('LandingPage sections', () => {
     expect(screen.getByRole('heading', { name: 'Что видит Kaigo' })).toBeVisible();
     expect(screen.getByRole('heading', { name: /Не просто чат/ })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Готовый вариант — под вашим контролем' })).toBeVisible();
-    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(9);
+    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(10);
     expect(screen.getAllByRole('textbox', { name: /ссылка на.*сайт/i })).toHaveLength(2);
   });
 

@@ -72,6 +72,29 @@ async function expectMinimumTarget(locator: Locator, minimum = 44, label = 'inte
   expect.soft(box?.height ?? 0, `${label} height`).toBeGreaterThanOrEqual(minimum);
 }
 
+async function expectProductTourInsideViewport(page: Page) {
+  const section = page.locator('.product-tour-section');
+  const controls = section.locator('.product-tour__controls');
+  await expect(section).toBeVisible();
+  await expect(section.locator('[data-tour-step]')).toHaveCount(4);
+  await expectVisibleInside(controls, section, 0.99, 'product tour controls');
+  await expectNoHorizontalOverflow(page);
+
+  const geometry = await section.evaluate((element) => {
+    const sectionRect = element.getBoundingClientRect();
+    const controlsRect = element.querySelector('.product-tour__controls')?.getBoundingClientRect();
+    return {
+      sectionBottom: sectionRect.bottom,
+      controlsBottom: controlsRect?.bottom ?? Number.POSITIVE_INFINITY,
+      viewportHeight: window.innerHeight,
+    };
+  });
+  expect.soft(geometry.sectionBottom, 'product tour must end inside the viewport')
+    .toBeLessThanOrEqual(geometry.viewportHeight + 1);
+  expect.soft(geometry.controlsBottom, 'product tour controls must remain available without scrolling')
+    .toBeLessThanOrEqual(geometry.viewportHeight + 1);
+}
+
 async function expectCompactFirstScreen(page: Page) {
   const viewport = page.viewportSize();
   expect(viewport, 'compact project must provide a viewport').not.toBeNull();
@@ -286,6 +309,7 @@ test('landing desktop completes the hero story without overflow @desktop', async
     maxDiffPixelRatio: 0.015,
   });
   await revealLanding(page);
+  await expect(page.locator('[data-landing-section]').nth(1)).toHaveAttribute('id', 'product-tour');
   await expect(page.locator('.hero-browser-stage .browser-mockup__address')).toContainText('Ваш сайт');
   await expect(page.locator('.hero-browser-stage .browser-mockup__address')).toContainText('teply-hleb.ru');
   await expect(page.getByTestId('how-live-preview')).toBeVisible();
@@ -312,6 +336,27 @@ test('landing desktop completes the hero story without overflow @desktop', async
     fullPage: true,
     maxDiffPixelRatio: 0.015,
     timeout: 45_000,
+  });
+});
+
+test('standalone product tour explains the complete result in one screen @desktop', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/tour');
+
+  const tour = page.locator('.product-tour-section');
+  await expect(tour).toHaveAttribute('data-active-step', '1');
+  await expectProductTourInsideViewport(page);
+
+  const steps = tour.locator('.product-tour__steps button');
+  for (let index = 1; index < 4; index += 1) {
+    await steps.nth(index).click();
+    await expect(tour).toHaveAttribute('data-active-step', String(index + 1));
+    await expectProductTourInsideViewport(page);
+  }
+  await expect(tour.locator('code')).toContainText('widget.js');
+  await expect(page).toHaveScreenshot('product-tour-standalone-1920.png', {
+    animations: 'disabled',
+    maxDiffPixelRatio: 0.015,
   });
 });
 
@@ -373,6 +418,13 @@ test('landing navigation, composer, case toggle and FAQ are functional @desktop'
     });
   });
   await page.goto('/');
+
+  const productTourLink = page
+    .getByRole('navigation', { name: 'Основная навигация' })
+    .locator('a[href="#product-tour"]');
+  await productTourLink.click();
+  await expect(page).toHaveURL(/#product-tour$/);
+  await expect(page.locator('#product-tour')).toBeVisible();
 
   await page.getByRole('navigation', { name: 'Основная навигация' })
     .getByRole('link', { name: 'Кейсы' })
@@ -473,6 +525,27 @@ test('landing mobile preserves content order, menu, controls and comparison @mob
   await attachScreenshot(page, testInfo, 'landing-mobile-390.png', { fullPage: true });
 });
 
+test('standalone product tour keeps every step usable on mobile @mobile', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/tour');
+
+  const tour = page.locator('.product-tour-section');
+  const returnLink = page.locator('.product-tour-page__header > a:last-child');
+  await expectMinimumTarget(returnLink, 44, 'return to landing link');
+  await expectProductTourInsideViewport(page);
+
+  const steps = tour.locator('.product-tour__steps button');
+  for (let index = 0; index < 4; index += 1) {
+    await steps.nth(index).click();
+    await expect(tour).toHaveAttribute('data-active-step', String(index + 1));
+    await expectProductTourInsideViewport(page);
+  }
+  await expect(page).toHaveScreenshot('product-tour-standalone-390.png', {
+    animations: 'disabled',
+    maxDiffPixelRatio: 0.02,
+  });
+});
+
 test('landing reaches the final hero state immediately with reduced motion @reduced', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/');
@@ -501,4 +574,13 @@ test('landing has no serious or critical accessibility violations @a11y', async 
     impact === 'serious' || impact === 'critical',
   );
   expect(blocking).toEqual([]);
+
+  await page.goto('/tour');
+  const standaloneResults = await new AxeBuilder({ page })
+    .withTags(['wcag2a', 'wcag2aa'])
+    .analyze();
+  const standaloneBlocking = standaloneResults.violations.filter(({ impact }) =>
+    impact === 'serious' || impact === 'critical',
+  );
+  expect(standaloneBlocking).toEqual([]);
 });

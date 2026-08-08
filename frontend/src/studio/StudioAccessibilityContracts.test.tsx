@@ -62,7 +62,10 @@ describe('Studio accessibility contracts', () => {
   });
 
   it('removes CSS and Motion spring movement when reduced motion is requested', () => {
-    const reducedMotionRules = stylesSource.slice(stylesSource.lastIndexOf('@media (prefers-reduced-motion: reduce)'));
+    const reducedStart = stylesSource.indexOf('@media (prefers-reduced-motion: reduce) {\n  .studio-drawer,');
+    const reducedEnd = stylesSource.indexOf('@keyframes studio-agent-pulse', reducedStart);
+    const reducedMotionRules = stylesSource.slice(reducedStart, reducedEnd);
+    expect(reducedStart).toBeGreaterThan(-1);
     expect(reducedMotionRules).toMatch(/\.studio-activity__message[\s\S]*animation:\s*none !important/);
     expect(reducedMotionRules).toMatch(/\.studio-library__project\s*>\s*button[\s\S]*transition:\s*none !important/);
     expect(studioPageSource).toMatch(/useReducedMotion\(\)/);
