@@ -14,8 +14,8 @@ describe('LandingPage sections', () => {
     expect(sections).toHaveLength(10);
     expect(sections[1]).toHaveClass('product-tour-section');
     expect(sections[2]).toHaveClass('free-result-section');
-    expect(screen.getByRole('heading', { name: 'От вас нужны ссылка и одна фраза' })).toBeVisible();
-    expect(screen.getByRole('link', { name: 'Открыть демонстрацию отдельно' })).toHaveAttribute('href', '/tour');
+    expect(screen.getByRole('heading', { name: 'Вставьте ссылку на ваш сайт' })).toBeVisible();
+    expect(screen.queryByRole('link', { name: 'Открыть демонстрацию отдельно' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Сначала посмотрите результат. Оплатите только публикацию.' })).toBeVisible();
     expect(screen.getByText(/экспресс-версия бесплатно/i)).toBeVisible();
     expect(screen.getByText(/Google или Яндекс/i)).toBeVisible();

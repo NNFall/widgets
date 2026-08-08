@@ -76,7 +76,7 @@ async function expectProductTourInsideViewport(page: Page) {
   const section = page.locator('.product-tour-section');
   const controls = section.locator('.product-tour__controls');
   await expect(section).toBeVisible();
-  await expect(section.locator('[data-tour-step]')).toHaveCount(4);
+  await expect(section.locator('[data-tour-step]')).toHaveCount(3);
   await expectVisibleInside(controls, section, 0.99, 'product tour controls');
   await expectNoHorizontalOverflow(page);
 
@@ -310,6 +310,10 @@ test('landing desktop completes the hero story without overflow @desktop', async
   });
   await revealLanding(page);
   await expect(page.locator('[data-landing-section]').nth(1)).toHaveAttribute('id', 'product-tour');
+  await expect(page.locator('.product-tour-section')).toHaveScreenshot('product-tour-landing-step-1-1920.png', {
+    animations: 'disabled',
+    maxDiffPixelRatio: 0.015,
+  });
   await expect(page.locator('.hero-browser-stage .browser-mockup__address')).toContainText('Ваш сайт');
   await expect(page.locator('.hero-browser-stage .browser-mockup__address')).toContainText('teply-hleb.ru');
   await expect(page.getByTestId('how-live-preview')).toBeVisible();
@@ -346,18 +350,36 @@ test('standalone product tour explains the complete result in one screen @deskto
   const tour = page.locator('.product-tour-section');
   await expect(tour).toHaveAttribute('data-active-step', '1');
   await expectProductTourInsideViewport(page);
+  await expect(page).toHaveScreenshot('product-tour-standalone-step-1-1920.png', {
+    animations: 'disabled',
+    maxDiffPixelRatio: 0.015,
+  });
 
   const steps = tour.locator('.product-tour__steps button');
-  for (let index = 1; index < 4; index += 1) {
+  for (let index = 1; index < 3; index += 1) {
+    await steps.nth(index).click();
+    await expect(tour).toHaveAttribute('data-active-step', String(index + 1));
+    await expectProductTourInsideViewport(page);
+    await expect(page).toHaveScreenshot(`product-tour-standalone-step-${index + 1}-1920.png`, {
+      animations: 'disabled',
+      maxDiffPixelRatio: 0.015,
+    });
+  }
+  await expect(tour.locator('code')).toContainText('widget.js');
+});
+
+test('standalone product tour stays inside a 768px tablet viewport @desktop', async ({ page }) => {
+  await page.setViewportSize({ width: 768, height: 1_024 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/tour');
+
+  const tour = page.locator('.product-tour-section');
+  const steps = tour.locator('.product-tour__steps button');
+  for (let index = 0; index < 3; index += 1) {
     await steps.nth(index).click();
     await expect(tour).toHaveAttribute('data-active-step', String(index + 1));
     await expectProductTourInsideViewport(page);
   }
-  await expect(tour.locator('code')).toContainText('widget.js');
-  await expect(page).toHaveScreenshot('product-tour-standalone-1920.png', {
-    animations: 'disabled',
-    maxDiffPixelRatio: 0.015,
-  });
 });
 
 test('scanner travels continuously across card reveals @desktop', async ({ page }) => {
@@ -535,15 +557,22 @@ test('standalone product tour keeps every step usable on mobile @mobile', async 
   await expectProductTourInsideViewport(page);
 
   const steps = tour.locator('.product-tour__steps button');
-  for (let index = 0; index < 4; index += 1) {
+  for (let index = 0; index < 3; index += 1) {
     await steps.nth(index).click();
     await expect(tour).toHaveAttribute('data-active-step', String(index + 1));
     await expectProductTourInsideViewport(page);
+    await expect(page).toHaveScreenshot(`product-tour-standalone-step-${index + 1}-390.png`, {
+      animations: 'disabled',
+      maxDiffPixelRatio: 0.02,
+    });
   }
-  await expect(page).toHaveScreenshot('product-tour-standalone-390.png', {
-    animations: 'disabled',
-    maxDiffPixelRatio: 0.02,
-  });
+
+  await expectVisibleInside(
+    tour.locator('.tour-publish-visual .tour-digital-site__copy h3'),
+    tour.locator('.tour-publish-visual .tour-window'),
+    1,
+    'published-site headline',
+  );
 });
 
 test('landing reaches the final hero state immediately with reduced motion @reduced', async ({ page }) => {
@@ -576,11 +605,17 @@ test('landing has no serious or critical accessibility violations @a11y', async 
   expect(blocking).toEqual([]);
 
   await page.goto('/tour');
-  const standaloneResults = await new AxeBuilder({ page })
-    .withTags(['wcag2a', 'wcag2aa'])
-    .analyze();
-  const standaloneBlocking = standaloneResults.violations.filter(({ impact }) =>
-    impact === 'serious' || impact === 'critical',
-  );
-  expect(standaloneBlocking).toEqual([]);
+  const tour = page.locator('.product-tour-section');
+  const steps = tour.locator('.product-tour__steps button');
+  for (let index = 0; index < 3; index += 1) {
+    await steps.nth(index).click();
+    await expect(tour).toHaveAttribute('data-active-step', String(index + 1));
+    const standaloneResults = await new AxeBuilder({ page })
+      .withTags(['wcag2a', 'wcag2aa'])
+      .analyze();
+    const standaloneBlocking = standaloneResults.violations.filter(({ impact }) =>
+      impact === 'serious' || impact === 'critical',
+    );
+    expect(standaloneBlocking, `standalone product tour stage ${index + 1}`).toEqual([]);
+  }
 });

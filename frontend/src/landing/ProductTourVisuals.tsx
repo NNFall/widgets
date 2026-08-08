@@ -1,16 +1,16 @@
 import {
+  ArrowRight,
   CheckCircle,
-  ClockCountdown,
+  ChatCircleDots,
   Code,
-  Desktop,
-  DeviceMobile,
   LinkSimple,
-  MagnifyingGlass,
+  PaperPlaneTilt,
   Sparkle,
 } from '@phosphor-icons/react';
 import type { ReactNode } from 'react';
 
-const bakeryImage = '/assets/product-tour-bakery.webp';
+const digitalCoreAvatarImage = '/assets/product-tour-digital-core-avatar.webp';
+const digitalCoreImage = '/assets/product-tour-digital-core.webp';
 
 type TourWindowProps = {
   children: ReactNode;
@@ -32,53 +32,65 @@ function TourWindow({ children, className = '', title }: TourWindowProps) {
 }
 
 type TourWidgetProps = {
-  compact?: boolean;
   final?: boolean;
 };
 
-function TourWidget({ compact = false, final = false }: TourWidgetProps) {
+function TourWidget({ final = false }: TourWidgetProps) {
   return (
-    <div
-      className={`tour-widget${compact ? ' tour-widget--compact' : ''}`}
-      data-widget-shape="vertical"
-    >
+    <div className={`tour-widget${final ? ' tour-widget--final' : ''}`} data-widget-shape="vertical">
       <div className="tour-widget__head">
-        <span><Sparkle size={17} weight="fill" aria-hidden /></span>
-        <div><strong>Помощник пекарни</strong><small><i />На связи</small></div>
+        <span className="tour-widget__avatar">
+          <img alt="" aria-hidden decoding="async" loading="lazy" src={digitalCoreAvatarImage} />
+        </span>
+        <div><strong>Nova, AI-аналитик</strong><small><i />Онлайн</small></div>
+        <Sparkle size={18} weight="fill" aria-hidden />
+      </div>
+      <div className="tour-widget__intro">
+        <strong>Помогу разобраться в данных и автоматизации</strong>
+        <p>Задайте вопрос обычным языком. Я отвечу по материалам NovaFlow.</p>
       </div>
       <div className="tour-widget__messages">
         <p className="tour-widget__question">
-          {final ? 'Какие торты можно заказать к субботе?' : 'Есть доставка сегодня?'}
+          {final ? 'Можно подключить отчёты для руководителя?' : 'Что можно автоматизировать в отделе продаж?'}
         </p>
         <p className="tour-widget__answer">
           {final
-            ? 'Есть четыре начинки. Подскажите число гостей, и я помогу выбрать размер.'
-            : 'Да, доставим после 16:00. Подскажите район и что хотите заказать.'}
+            ? 'Да. Соберём показатели из CRM и покажем их в одном еженедельном отчёте. Подскажите, какой системой вы пользуетесь?'
+            : 'Начнём с заявок и повторных касаний. Я покажу, какие шаги команда делает вручную и что можно передать системе.'}
         </p>
       </div>
-      <div className="tour-widget__input"><span>Ваш вопрос</span><i aria-hidden>→</i></div>
+      <div className="tour-widget__suggestions" aria-label="Примеры вопросов">
+        <span>Интеграции</span><span>Срок запуска</span>
+      </div>
+      <div className="tour-widget__input"><span>Напишите вопрос</span><i aria-hidden><ArrowRight size={15} /></i></div>
     </div>
   );
 }
 
-function BakeryWebsite({ withWidget = false }: { withWidget?: boolean }) {
+function DigitalWebsite({ withWidget = false }: { withWidget?: boolean }) {
   return (
-    <div className={`tour-bakery-site${withWidget ? ' tour-bakery-site--with-widget' : ''}`}>
-      <img
-        alt="Свежая выпечка на рабочем столе пекарни"
-        decoding="async"
-        loading="lazy"
-        src={bakeryImage}
-      />
-      <div className="tour-bakery-site__nav">
-        <strong>Тёплый хлеб</strong>
-        <span>Выпечка</span><span>Торты</span><span>Доставка</span>
+    <div className={`tour-digital-site${withWidget ? ' tour-digital-site--with-widget' : ''}`}>
+      <div className="tour-digital-site__nav">
+        <strong><i aria-hidden>N</i>NovaFlow</strong>
+        <span>Решения</span><span>Интеграции</span><span>Кейсы</span>
+        <b>Обсудить задачу</b>
       </div>
-      <div className="tour-bakery-site__copy">
-        <span>Пекарня у дома</span>
-        <h3>Хлеб, который<br />начинается утром</h3>
-        <p>Свежая выпечка, торты на заказ и доставка по району.</p>
-        <b>Посмотреть меню</b>
+      <div className="tour-digital-site__hero">
+        <div className="tour-digital-site__copy">
+          <span>Автоматизация для растущих команд</span>
+          <h3>Бизнес-процессы<br />без ручной рутины</h3>
+          <p>Связываем CRM, отчёты и рабочие сервисы в одну понятную систему.</p>
+          <b>Посмотреть решения <ArrowRight size={14} aria-hidden /></b>
+        </div>
+        <div className="tour-digital-site__art">
+          <img alt="Металлическое цифровое ядро NovaFlow" decoding="async" loading="lazy" src={digitalCoreImage} />
+          <span>CRM<small>синхронизировано</small></span>
+          <span>24/7<small>процессы работают</small></span>
+          <span>12 ч<small>экономии в неделю</small></span>
+        </div>
+      </div>
+      <div className="tour-digital-site__foot">
+        <span>Продажи</span><span>Аналитика</span><span>Поддержка</span><strong>Все процессы в одном контуре</strong>
       </div>
       {withWidget && <TourWidget final />}
     </div>
@@ -88,90 +100,33 @@ function BakeryWebsite({ withWidget = false }: { withWidget?: boolean }) {
 export function TourIntakeVisual() {
   return (
     <div className="tour-intake-visual">
-      <TourWindow className="tour-window--site" title="Ваш сайт · teply-hleb.ru">
-        <BakeryWebsite />
+      <TourWindow className="tour-window--site" title="Ваш сайт · novaflow.ru">
+        <DigitalWebsite />
       </TourWindow>
-      <div className="tour-intake-fields" role="group" aria-label="Данные для создания виджета">
-        <div>
-          <span>Ссылка на сайт</span>
-          <strong><LinkSimple size={18} aria-hidden />https://teply-hleb.ru</strong>
-        </div>
-        <div>
-          <span>Короткое пожелание</span>
-          <strong className="tour-intake-fields__brief">Хочу красивого AI-консультанта для заказов<i aria-hidden /></strong>
-        </div>
-        <p><CheckCircle size={19} weight="fill" aria-hidden />Этого достаточно, длинная анкета не нужна</p>
+      <div className="tour-intake-dock" role="group" aria-label="Данные для создания AI-сотрудника">
+        <div><span>Ссылка на сайт</span><strong><LinkSimple size={17} aria-hidden />https://novaflow.ru</strong></div>
+        <div><span>Пожелание, если оно есть</span><strong>Нужен понятный консультант по автоматизации</strong></div>
+        <i aria-hidden><PaperPlaneTilt size={18} weight="fill" /></i>
       </div>
     </div>
   );
 }
 
-const analysisFacts = [
-  '12 страниц изучено',
-  '8 услуг и категорий найдено',
-  'Стиль сайта определён',
-] as const;
-
-export function TourAnalysisVisual() {
-  return (
-    <TourWindow className="tour-window--studio" title="Kaigo Studio · Тёплый хлеб">
-      <div className="tour-analysis">
-        <aside className="tour-analysis__rail">
-          <span className="tour-analysis__brand"><Sparkle size={17} weight="fill" aria-hidden />Kaigo</span>
-          <ol aria-label="Ход сборки AI-сотрудника">
-            <li data-complete="true"><i>1</i><span>Сайт открыт<small>teply-hleb.ru</small></span></li>
-            <li data-active="true"><i>2</i><span>Анализируем<small>страницы и стиль</small></span></li>
-            <li><i>3</i><span>Собираем чат<small>ответы и характер</small></span></li>
-          </ol>
-        </aside>
-        <div className="tour-analysis__site">
-          <img alt="Страница пекарни, которую анализирует Kaigo" src={bakeryImage} />
-          <span className="tour-analysis__scan" aria-hidden />
-          <strong><MagnifyingGlass size={19} aria-hidden />Изучаем эту страницу</strong>
-        </div>
-        <div className="tour-analysis__result">
-          <div className="tour-analysis__time"><ClockCountdown size={22} aria-hidden /><span><small>Первая версия</small><strong>Обычно 10–20 минут</strong></span></div>
-          <h3>Kaigo уже понимает ваш бизнес</h3>
-          <ul>
-            {analysisFacts.map((fact) => <li key={fact}><CheckCircle size={18} weight="fill" aria-hidden />{fact}</li>)}
-          </ul>
-          <div className="tour-analysis__prompt">
-            <span>Сейчас</span>
-            <strong>Собираем сценарий разговора</strong>
-            <p>Как встретить посетителя, ответить про ассортимент и помочь оформить заказ.</p>
-            <i aria-hidden><b /><b /><b /></i>
-          </div>
-        </div>
-      </div>
-    </TourWindow>
-  );
-}
-
 export function TourStudioVisual() {
   return (
-    <TourWindow className="tour-window--preview" title="Kaigo Studio · Предпросмотр">
-      <div className="tour-preview">
-        <div className="tour-preview__toolbar">
-          <div><strong>Виджет готов к проверке</strong><small><i />Черновик, ещё не опубликован</small></div>
-          <span><Desktop size={18} aria-hidden />Компьютер</span>
-          <span><DeviceMobile size={18} aria-hidden />Телефон</span>
-          <b>Первая генерация бесплатно</b>
-        </div>
-        <div className="tour-preview__canvas">
-          <div className="tour-preview__desktop">
-            <BakeryWebsite />
-            <TourWidget compact />
-          </div>
-          <div className="tour-preview__phone" aria-label="Предпросмотр виджета на телефоне">
-            <div className="tour-preview__phone-top" aria-hidden />
-            <img alt="Мобильная версия сайта пекарни" src={bakeryImage} />
-            <span><Sparkle size={15} weight="fill" aria-hidden /></span>
-          </div>
-        </div>
-        <div className="tour-preview__request">
-          <span>Пожелание к доработке</span>
-          <strong>Сделайте ответы короче и дружелюбнее</strong>
-          <i><CheckCircle size={17} weight="fill" aria-hidden />Можно проверить чат до оплаты</i>
+    <TourWindow className="tour-window--studio" title="Kaigo Studio · NovaFlow">
+      <div className="tour-studio-visual">
+        <aside className="tour-studio-visual__chat">
+          <div className="tour-studio-visual__brand"><Sparkle size={18} weight="fill" aria-hidden /><strong>Kaigo Studio</strong></div>
+          <div className="tour-studio-visual__ready"><CheckCircle size={20} weight="fill" aria-hidden /><span><strong>Первая версия готова</strong><small>Проверка результата бесплатна</small></span></div>
+          <div className="tour-studio-visual__message"><i>K</i><p>Я изучил страницы NovaFlow. Виджет уже можно бесплатно проверить; доработки доступны после выбора тарифа.</p></div>
+          <div className="tour-studio-visual__message tour-studio-visual__message--user"><p>Хочу сделать ответы короче и добавить вопросы про CRM.</p></div>
+          <div className="tour-studio-visual__composer"><span>Пожелание к следующей версии</span><i aria-hidden><PaperPlaneTilt size={15} weight="fill" /></i></div>
+        </aside>
+        <div className="tour-studio-visual__preview">
+          <div className="tour-studio-visual__preview-head"><span><ChatCircleDots size={17} aria-hidden />Предпросмотр виджета</span><strong>Черновик</strong></div>
+          <div className="tour-studio-visual__canvas"><TourWidget /></div>
+          <p><CheckCircle size={16} weight="fill" aria-hidden />Здесь можно сразу поговорить с AI как посетитель сайта</p>
         </div>
       </div>
     </TourWindow>
@@ -181,13 +136,13 @@ export function TourStudioVisual() {
 export function TourPublishVisual() {
   return (
     <div className="tour-publish-visual">
-      <TourWindow className="tour-window--published" title="teply-hleb.ru · AI-сотрудник подключён">
-        <BakeryWebsite withWidget />
+      <TourWindow className="tour-window--published" title="novaflow.ru · AI-сотрудник подключён">
+        <DigitalWebsite withWidget />
       </TourWindow>
       <div className="tour-install-line">
         <span><Code size={19} aria-hidden />Пример строки для установки</span>
         <code>{'<script src="https://cdn.kaigo.example/widget.js" data-widget="ваш-id"></script>'}</code>
-        <strong><CheckCircle size={18} weight="fill" aria-hidden />Виджет появляется на выбранных страницах сайта</strong>
+        <strong><CheckCircle size={18} weight="fill" aria-hidden />Виджет появится только после вашего подтверждения</strong>
       </div>
     </div>
   );

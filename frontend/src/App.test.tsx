@@ -203,8 +203,8 @@ describe('App', () => {
 
     expect(document.querySelector('main.product-tour-page')).not.toBeNull();
     expect(document.title).toBe('Как работает Kaigo — от ссылки до AI-сотрудника');
-    expect(screen.getByRole('heading', { name: 'От вас нужны ссылка и одна фраза' })).toBeVisible();
-    expect(document.querySelectorAll('[data-tour-step]')).toHaveLength(4);
+    expect(screen.getByRole('heading', { name: 'Вставьте ссылку на ваш сайт' })).toBeVisible();
+    expect(document.querySelectorAll('[data-tour-step]')).toHaveLength(3);
     expect(screen.getByRole('link', { name: 'Вернуться на лендинг' })).toHaveAttribute('href', '/');
     expect(screen.queryByRole('heading', { name: /Покажите сайт.*получите первую версию/i })).not.toBeInTheDocument();
   });
