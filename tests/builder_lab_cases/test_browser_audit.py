@@ -1510,6 +1510,27 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(report.layouts), 8)
 
+    async def test_empty_hidden_suggestions_region_is_allowed(self):
+        suggestions_start = AUDIT_HTML.index('<nav data-region="suggestions">')
+        suggestions_end = AUDIT_HTML.index("</nav>", suggestions_start) + len(
+            "</nav>"
+        )
+        no_suggestions = audit_artifact(
+            body_html=(
+                AUDIT_HTML[:suggestions_start]
+                + '<nav data-region="suggestions"></nav>'
+                + AUDIT_HTML[suggestions_end:]
+            ),
+            css=(
+                AUDIT_CSS
+                + '\n[data-region="suggestions"]:empty{display:none!important}'
+            ),
+        )
+
+        report = await BrowserAudit().audit(no_suggestions)
+
+        self.assertEqual(len(report.layouts), 8)
+
     async def test_subpixel_touch_target_rounding_within_half_pixel_is_tolerated(self):
         subpixel = audit_artifact(
             css=AUDIT_CSS

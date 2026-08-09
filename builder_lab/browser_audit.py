@@ -3049,11 +3049,12 @@ class BrowserAudit:
             if any(region.overlaps for region in layout.regions if region.region in {"messages", "composer"}):
                 failures.append(f"{layout.state.value}: composer overlaps messages")
             actions = [item for item in layout.regions if item.region.startswith("action.") and item.visible]
-            suggestions = [
+            suggestion_actions = [
                 item
                 for item in layout.regions
-                if item.region.startswith("action.suggestion.") and item.visible
+                if item.region.startswith("action.suggestion.")
             ]
+            suggestions = [item for item in suggestion_actions if item.visible]
             close_action = regions.get("action.close")
             send_action = regions.get("action.send")
             retry_action = regions.get("action.retry")
@@ -3156,7 +3157,10 @@ class BrowserAudit:
                 if region is None or not region.visible:
                     suggestions_may_hide = (
                         required == "suggestions"
-                        and "after_turn" in layout.state.value
+                        and (
+                            "after_turn" in layout.state.value
+                            or not suggestion_actions
+                        )
                     )
                     if required != "launcher" and not suggestions_may_hide:
                         failures.append(f"{layout.state.value}: required region {required} is not visible")
