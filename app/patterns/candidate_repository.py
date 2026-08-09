@@ -185,6 +185,22 @@ class PatternCandidateRepository:
         expected_snapshot = dict(expected[2])
         persisted_snapshot.pop("status", None)
         expected_snapshot.pop("status", None)
+        persisted_provenance = persisted_snapshot.get("provenance")
+        expected_provenance = expected_snapshot.get("provenance")
+        if (
+            isinstance(persisted_provenance, Mapping)
+            and isinstance(expected_provenance, Mapping)
+            and "pattern_role" not in persisted_provenance
+            and expected_provenance.get("pattern_role")
+            in {"signature", "structural", "support", "fixture"}
+        ):
+            # ``pattern_role`` was introduced after immutable pattern versions
+            # were already persisted.  Backfill that one explicit quality
+            # classification without allowing an existing role, implementation
+            # hash, or any other selector metadata to drift in place.
+            migrated_provenance = dict(persisted_provenance)
+            migrated_provenance["pattern_role"] = expected_provenance["pattern_role"]
+            persisted_snapshot["provenance"] = migrated_provenance
         if (immutable[0], immutable[1], persisted_snapshot, immutable[3]) != (
             expected[0], expected[1], expected_snapshot, expected[3]
         ):
@@ -200,7 +216,7 @@ class PatternCandidateRepository:
     ) -> None:
         if (
             existing.status != definition.status.value
-            or _json_clone(existing.manifest_snapshot).get("status") != snapshot.get("status")
+            or _json_clone(existing.manifest_snapshot) != _json_clone(snapshot)
         ):
             existing.status = definition.status.value
             existing.manifest_snapshot = _json_clone(snapshot)

@@ -461,6 +461,51 @@ async def test_sync_registry_updates_lifecycle_but_rejects_full_snapshot_or_hash
 
 
 @pytest.mark.asyncio
+async def test_sync_registry_migrates_missing_pattern_role_without_mutating_existing_role() -> None:
+    engine, factory, run_id = await database()
+    registry = load_builtin_atomic_registry()
+    definition = registry.definitions[0]
+    legacy_provenance = dict(definition.provenance)
+    expected_role = legacy_provenance.pop("pattern_role")
+    legacy = replace(definition, provenance=legacy_provenance)
+    legacy_registry = type(registry)(
+        tuple(legacy if item is definition else item for item in registry.definitions)
+    )
+    try:
+        async with factory() as session, session.begin():
+            repository = PatternCandidateRepository(session)
+            await repository.sync_registry(legacy_registry)
+            persisted = await session.scalar(
+                select(WidgetPatternVersion).where(
+                    WidgetPatternVersion.pattern_id == definition.pattern_id,
+                    WidgetPatternVersion.version == definition.version,
+                )
+            )
+            assert persisted is not None
+            assert "pattern_role" not in persisted.manifest_snapshot["provenance"]
+
+            await repository.sync_registry(registry)
+            await session.refresh(persisted)
+            assert persisted.manifest_snapshot["provenance"]["pattern_role"] == expected_role
+
+            changed_role = replace(
+                definition,
+                provenance={**definition.provenance, "pattern_role": "fixture"},
+            )
+            with pytest.raises(ValueError, match="drift"):
+                await repository.sync_registry(
+                    type(registry)(
+                        tuple(
+                            changed_role if item is definition else item
+                            for item in registry.definitions
+                        )
+                    )
+                )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_effective_review_uses_latest_override_and_imported_fallback() -> None:
     engine, factory, run_id = await database()
     registry = load_builtin_atomic_registry()
