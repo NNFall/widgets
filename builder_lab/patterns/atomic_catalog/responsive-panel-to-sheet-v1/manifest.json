@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "responsive-panel-to-sheet",
+  "version": 1,
+  "category": "responsive_transition",
+  "status": "active",
+  "title": "Панель превращается в sheet",
+  "summary": "Одна композиция наглядно меняет боковые отступы, радиусы и закрепление при переходе desktop → mobile.",
+  "ai_description": "Демонстрация сопоставляет поднятую desktop-панель с прижатым к нижнему краю mobile-sheet. Подписи отмечают изменение ширины, радиуса и положения composer без перестановки сообщений. В Pattern Lab композиция показывает исходное состояние, основную фазу и устойчивое завершение, поэтому визуальный смысл читается без скриптов и пояснений разработчика. Модель может адаптировать оттенки, масштаб и темп под бренд, сохраняя иерархию, доступный контраст и заявленную идею: одна композиция наглядно меняет боковые отступы, радиусы и закрепление при переходе desktop → mobile.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "515ad5cf60a832a4ea5d1e02ab884c57ccd6af80eb0bfc881498e8f5a2507089",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "ready_for_review",
+    "pattern_role": "structural"
+  }
+}

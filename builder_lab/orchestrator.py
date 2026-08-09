@@ -53,10 +53,13 @@ DIRECT_STAGES = (
 
 
 def stages_for_mode(mode: str) -> tuple[Stage, ...]:
+    # The in-memory orchestrator is the legacy fallback and has no durable
+    # request-update boundary for reference analysis or persona selection.
+    # The Postgres worker owns both non-artifact stages for normal builds.
     return tuple(
         Stage(stage)
         for stage in get_mode_policy(mode).stage_sequence
-        if stage != "reference_analysis"
+        if stage not in {"reference_analysis", "persona"}
     )
 
 

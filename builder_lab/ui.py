@@ -519,7 +519,7 @@ def render_builder_page(
       let parsedUrl;
       try {{ parsedUrl = new URL(sourceUrl); }} catch (_) {{ showError('Ссылка на сайт некорректна.'); return; }}
       if (parsedUrl.protocol !== 'https:' || parsedUrl.username || parsedUrl.password || parsedUrl.port || parsedUrl.search || parsedUrl.hash) {{ showError('Нужна публичная HTTPS-ссылка без параметров и авторизации.'); return; }}
-      const brief = elements.brief.value.trim() || 'Создай компактного AI-сотрудника, который консультирует посетителей по подтверждённым данным этого сайта.';
+      const brief = elements.brief.value.trim();
       setRunning(true);
       elements.retry.disabled = true;
       elements.status.textContent = 'Создаём запуск';

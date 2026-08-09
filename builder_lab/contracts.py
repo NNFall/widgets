@@ -36,8 +36,10 @@ Chat anatomy and conversation:
 - The launcher is fully visible and clearly interactive. The header briefly identifies
   the AI employee and exposes status. The transcript reads immediately as conversation:
   assistant on the left, visitor on the right, with distinct surfaces and author labels.
-- Keep composer and send available whenever open. Show at most two short quick replies
-  on first open and hide the entire suggestions region after the first user message.
+- Keep composer and send available whenever open. Zero quick replies is the preferred default.
+  Add one or two only when they provide a clear product benefit. Always keep the suggestions
+  region structural but hidden and gap-free when empty, then hide the entire region after the
+  first user message.
 - Pending, retry, and error feedback remain part of the same conversation rather than
   forming a third side. Preserve history across close and reopen.
 

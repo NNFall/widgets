@@ -88,6 +88,25 @@ def fake_response(candidate=None):
     )
 
 
+def persona_payload(**overrides):
+    payload = {
+        "schema_version": "kaigo.assistant-persona.v1",
+        "employee_type": "consultant",
+        "display_name": "Анна",
+        "role_summary": "Спокойно помогает посетителю сориентироваться в услугах бюро.",
+        "voice_style": "professional",
+        "opening_line": "Добрый день! Чем помочь?",
+        "behavior_rules": [
+            "Коротко приветствуй и уточняй задачу посетителя.",
+            "Отвечай кратко и по делу.",
+        ],
+        "safeguards": ["Не придумывай услуги, сроки или цены."],
+        "decision_rationale": "Профессиональный консультант соответствует брифу бюро.",
+    }
+    payload.update(overrides)
+    return payload
+
+
 class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.request = BuilderRequest(
@@ -753,6 +772,92 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.usage.output_tokens, 24)
         self.assertEqual(caught.exception.usage.thinking_tokens, 6)
 
+    async def test_persona_selector_retries_local_validation_and_aggregates_usage(self):
+        def response(payload, response_id):
+            return std_types.SimpleNamespace(
+                text=json.dumps(payload, ensure_ascii=False),
+                parsed=None,
+                response_id=response_id,
+                usage_metadata=std_types.SimpleNamespace(
+                    prompt_token_count=11,
+                    candidates_token_count=4,
+                    thoughts_token_count=1,
+                ),
+                model_version="gemini-3.6-flash",
+            )
+
+        client = FakeClient(
+            response=[
+                response(persona_payload(display_name=""), "persona-invalid"),
+                response(persona_payload(), "persona-valid"),
+            ]
+        )
+        engine = GeminiDirectEngine(
+            api_key="secret",
+            model="gemini-2.5-flash",
+            client=client,
+        )
+
+        result = await engine.select_assistant_persona(request=self.request)
+
+        self.assertEqual(result.persona.display_name, "Анна")
+        self.assertEqual(result.persona.behavior_rules, (
+            "Коротко приветствуй и уточняй задачу посетителя.",
+            "Отвечай кратко и по делу.",
+        ))
+        self.assertEqual(result.provider_request_id, "persona-valid")
+        self.assertEqual(result.usage.prompt_tokens, 22)
+        self.assertEqual(result.usage.output_tokens, 8)
+        self.assertEqual(result.usage.thinking_tokens, 2)
+        self.assertEqual(len(client.models.calls), 2)
+        self.assertIn("CORRECTION", client.models.calls[1]["contents"])
+        schema = client.models.calls[0]["config"].response_json_schema
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(set(schema["required"]), set(schema["properties"]))
+
+    async def test_routed_persona_selector_tracks_semantic_attempt_context(self):
+        invalid = persona_payload(employee_type="mascot")
+        valid = persona_payload(employee_type="information_guide")
+        router = std_types.SimpleNamespace(
+            generate=AsyncMock(
+                side_effect=[
+                    ModelResponse(
+                        text=json.dumps(invalid),
+                        parsed=invalid,
+                        usage=ModelUsage(input_tokens=5, output_tokens=2),
+                        request_id="persona-routed-invalid",
+                    ),
+                    ModelResponse(
+                        text=json.dumps(valid),
+                        parsed=valid,
+                        usage=ModelUsage(input_tokens=7, output_tokens=3),
+                        request_id="persona-routed-valid",
+                    ),
+                ]
+            )
+        )
+        engine = GeminiDirectEngine(
+            model_router=router,
+            routing_role="persona_selector",
+            invocation_context=ModelInvocationContext(
+                stage_attempt_id=uuid4(),
+                stage="persona",
+                operation="persona_selector",
+            ),
+        )
+
+        result = await engine.select_assistant_persona(request=self.request)
+
+        self.assertEqual(result.persona.employee_type, "information_guide")
+        self.assertEqual(result.usage.prompt_tokens, 12)
+        self.assertEqual(result.usage.output_tokens, 5)
+        contexts = [call.kwargs["context"] for call in router.generate.call_args_list]
+        self.assertEqual([context.operation for context in contexts], [
+            "persona_selector",
+            "persona_selector",
+        ])
+        self.assertEqual([context.semantic_attempt for context in contexts], [1, 2])
+
     async def test_concept_role_uses_bounded_output_and_server_owned_role(self):
         payload = {
             "summary": "Редакционная система RAW",
@@ -1009,7 +1114,7 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             "chat bubbles",
             "visible author label",
             "one short assistant welcome message",
-            "at most two quick replies",
+            "zero quick replies is the preferred default",
             "roughly 64–78% of the viewport height",
             "hide the entire suggestions region after the first user message",
             "runtime messages and the initial assistant message must share one visual language",

@@ -76,6 +76,7 @@ class BuilderLabConfig:
     codex_bridge_socket_path: str
     codex_bridge_timeout_seconds: int
     codex_bridge_model: str
+    codex_bridge_visual_judge_model: str
     agentrouter_api_key: str | None
     agentrouter_base_url: str
     agentrouter_timeout_seconds: int
@@ -146,6 +147,10 @@ class BuilderLabConfig:
                 )
             if not self.codex_bridge_model:
                 raise ValueError("KAIGO_CODEX_BRIDGE_MODEL must be non-empty")
+            if not self.codex_bridge_visual_judge_model:
+                raise ValueError(
+                    "KAIGO_CODEX_BRIDGE_VISUAL_JUDGE_MODEL must be non-empty"
+                )
         if self.chat_session_secret is not None and (
             len(self.chat_session_secret.encode("ascii", "ignore")) < 32
             or re.fullmatch(r"[A-Za-z0-9_-]+", self.chat_session_secret) is None
@@ -215,6 +220,10 @@ class BuilderLabConfig:
             codex_bridge_model=os.getenv(
                 "KAIGO_CODEX_BRIDGE_MODEL",
                 "gpt-5.6-luna",
+            ).strip(),
+            codex_bridge_visual_judge_model=os.getenv(
+                "KAIGO_CODEX_BRIDGE_VISUAL_JUDGE_MODEL",
+                "gpt-5.6-sol",
             ).strip(),
             agentrouter_api_key=_first_nonblank("AGENTROUTER_API_KEY"),
             agentrouter_base_url=os.getenv(

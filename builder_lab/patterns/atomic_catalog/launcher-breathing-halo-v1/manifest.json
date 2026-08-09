@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "launcher-breathing-halo",
+  "version": 1,
+  "category": "launcher_idle",
+  "status": "active",
+  "title": "Спокойное дыхание светового контура",
+  "summary": "Launcher остаётся живым благодаря мягкому расширению кольца и едва заметному движению ядра.",
+  "ai_description": "Спокойная зацикленная анимация для закрытого launcher: вокруг основной кнопки медленно расширяется полупрозрачный световой контур, а внутреннее ядро почти незаметно меняет масштаб и насыщенность. Эффект поддерживает ощущение доступного живого помощника, не отвлекая от содержания страницы. Модель может адаптировать цвет, темп, форму и интенсивность свечения под визуальный язык сайта, сохраняя сдержанный характер idle-состояния.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "creative",
+  "incompatible_with": [],
+  "implementation_sha256": "cff72f60542b4677985d2ffe919f03210dffcb2fc1a85a6fdffc277e218de369",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved",
+    "pattern_role": "support"
+  }
+}

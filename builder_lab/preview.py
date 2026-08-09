@@ -22,7 +22,7 @@ _CHANNEL_ID = re.compile(r"^[A-Za-z0-9_-]{22,96}$")
 DEFAULT_VISUAL_CHANNEL = "visual-only-preview-channel"
 TOP_LEVEL_VISUAL_ONLY_MESSAGE = (
     "\u042d\u0442\u043e \u0432\u0438\u0437\u0443\u0430\u043b\u044c\u043d\u044b\u0439 \u043f\u0440\u0435\u0434\u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440. "
-    "\u0414\u0438\u0430\u043b\u043e\u0433 \u0441 AI \u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u0432 \u0441\u0442\u0443\u0434\u0438\u0438."
+    "\u0414\u0438\u0430\u043b\u043e\u0433 \u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u0432 \u0441\u0442\u0443\u0434\u0438\u0438."
 )
 
 
@@ -30,7 +30,7 @@ def preview_iframe_attributes() -> dict[str, str]:
     return {
         "sandbox": "allow-scripts",
         "referrerpolicy": "no-referrer",
-        "title": "Предпросмотр AI-сотрудника Kaigo",
+        "title": "Предпросмотр консультанта Kaigo",
     }
 
 
@@ -52,6 +52,7 @@ def _build_runtime_document(
     *,
     channel_id: str,
     include_generated_javascript: bool,
+    assistant_label: str | None = None,
 ) -> str:
     if not _CHANNEL_ID.fullmatch(channel_id):
         raise ValueError("preview channel_id is invalid")
@@ -70,6 +71,15 @@ try {{
 </script>"""
     revision = int(artifact.revision)
     encoded_channel = json.dumps(channel_id)
+    if assistant_label is not None:
+        if not isinstance(assistant_label, str):
+            raise TypeError("assistant_label must be a string or null")
+        assistant_label = assistant_label.strip()
+        if not assistant_label or len(assistant_label) > 80 or "\x00" in assistant_label:
+            raise ValueError("assistant_label is invalid")
+    encoded_assistant_label = _safe_script(
+        json.dumps(assistant_label, ensure_ascii=False)
+    )
     encoded_visual_only_message = json.dumps(TOP_LEVEL_VISUAL_ONLY_MESSAGE)
     trusted_runtime = "true" if not include_generated_javascript else "false"
     return f"""<!doctype html>
@@ -100,16 +110,54 @@ try {{
   const trustedRuntime = {trusted_runtime};
   const topLevelVisualOnlyMessage = {encoded_visual_only_message};
   const root = document.querySelector('[data-region="root"]');
+  const trustedAssistantLabel = {encoded_assistant_label};
+  const generatedAssistantLabel = root
+    ? String(root.dataset.assistantLabel || root.getAttribute('aria-label') || '').trim()
+    : '';
+  const genericAiLabel = /(?:^|[^A-Za-zА-Яа-яЁё])(?:AI|ИИ)(?:$|[^A-Za-zА-Яа-яЁё])/iu;
   const assistantLabel = String(
-    (root && (root.dataset.assistantLabel || root.getAttribute('aria-label')))
-    || 'AI-КОНСУЛЬТАНТ'
-  ).trim().slice(0, 80) || 'AI-КОНСУЛЬТАНТ';
+    trustedAssistantLabel
+    || (genericAiLabel.test(generatedAssistantLabel) ? '' : generatedAssistantLabel)
+    || 'КОНСУЛЬТАНТ'
+  ).trim().slice(0, 80) || 'КОНСУЛЬТАНТ';
+  if (root) {{
+    root.dataset.assistantLabel = assistantLabel;
+    root.setAttribute('aria-label', assistantLabel);
+    const assistantLabelNodes = root.querySelectorAll(
+      '[data-assistant-name], [data-role="assistant-name"], [data-assistant-label]:not([data-region="root"]), [data-kaigo-assistant-label], [data-region="header"] h1, [data-region="header"] h2, [data-region="header"] h3, [data-region="header"] strong, header h1, header h2, header h3, header strong, .kaigo-widget__message--assistant .kaigo-widget__message-label, [data-message-role="assistant"] [data-message-label], [data-role="assistant-message"] [data-role="message-label"]'
+    );
+    assistantLabelNodes.forEach((node) => {{ node.textContent = assistantLabel; }});
+  }}
   const launcher = document.querySelector('[data-region="launcher"]');
   const panel = document.querySelector('[data-region="panel"]');
   const composer = document.querySelector('[data-region="composer"]');
   const messages = document.querySelector('[data-region="messages"]');
   const suggestionsRegion = document.querySelector('[data-region="suggestions"]');
-  const suggestions = Array.from(document.querySelectorAll('[data-suggestion], [data-region="suggestions"] button'));
+  if (panel) panel.setAttribute('aria-label', `Диалог с ${{assistantLabel}}`);
+  if (launcher) launcher.setAttribute('aria-label', `Открыть диалог с ${{assistantLabel}}`);
+  if (launcher && genericAiLabel.test(String(launcher.textContent || '').trim())) {{
+    launcher.textContent = Array.from(assistantLabel)[0] || 'К';
+  }}
+  if (root) {{
+    root.querySelectorAll('[data-action="close"], [aria-label^="Закрыть"]').forEach((node) => {{
+      node.setAttribute('aria-label', `Закрыть диалог с ${{assistantLabel}}`);
+    }});
+    root.querySelectorAll('[aria-label]').forEach((node) => {{
+      const value = String(node.getAttribute('aria-label') || '');
+      if (genericAiLabel.test(value)) {{
+        node.setAttribute(
+          'aria-label',
+          value.replace(
+            /(?:^|[^A-Za-zА-Яа-яЁё])(?:AI|ИИ)(?=$|[^A-Za-zА-Яа-яЁё])/giu,
+            (match) => `${{match.slice(0, Math.max(0, match.length - 2))}}${{assistantLabel}}`
+          )
+        );
+      }}
+    }});
+  }}
+  const suggestions = suggestionsRegion
+    ? Array.from(suggestionsRegion.querySelectorAll('[data-suggestion], button'))
+    : [];
   let input = composer && composer.querySelector('input, textarea');
   const toggle = root && root.querySelector('.kaigo-toggle, [data-action="toggle"], input[type="checkbox"]');
   const requestPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{{7,95}}$/;
@@ -137,6 +185,10 @@ try {{
     messages.setAttribute('role', 'log');
     messages.setAttribute('aria-live', 'polite');
     messages.setAttribute('aria-relevant', 'additions');
+  }}
+  if (suggestionsRegion) {{
+    suggestionsRegion.hidden = suggestions.length === 0;
+    suggestionsRegion.setAttribute('aria-hidden', suggestions.length === 0 ? 'true' : 'false');
   }}
 
   function cancelAttention() {{
@@ -261,19 +313,33 @@ try {{
     return 'request-' + Array.from(crypto.getRandomValues(new Uint8Array(12)), value => value.toString(16).padStart(2, '0')).join('');
   }}
 
+  function clearComposerIfMatching(text) {{
+    if (!input || input.value !== text) return;
+    input.value = '';
+    autosize();
+  }}
+
+  function restoreComposerIfEmpty(text) {{
+    if (!input || input.value !== '') return;
+    input.value = text;
+    autosize();
+  }}
+
   function postPendingRequest() {{
     if (!pendingRequest) return;
     if (trustedRuntime && window.parent === window) {{
+      const failedComposerValue = pendingRequest.composerValue;
       pendingRequest = null;
       failedRequest = null;
       clearStatus();
       setBusy(false);
+      restoreComposerIfEmpty(failedComposerValue);
       showStatus('error', topLevelVisualOnlyMessage, false);
       return;
     }}
     clearStatus();
     setBusy(true);
-    showStatus('pending', 'Gemini готовит ответ');
+    showStatus('pending', `${{assistantLabel}} готовит ответ`);
     window.parent.postMessage({{
       source: 'kaigo-builder-preview',
       version: 2,
@@ -289,11 +355,13 @@ try {{
     if (!failedRequest || pendingRequest) return;
     pendingRequest = failedRequest;
     failedRequest = null;
+    clearComposerIfMatching(pendingRequest.composerValue);
     postPendingRequest();
   }}
 
   function sendText(text) {{
-    const normalized = String(text || '').trim();
+    const composerValue = String(text || '');
+    const normalized = composerValue.trim();
     if (!normalized || normalized.length > 1000 || pendingRequest) return;
     cancelAttention();
     failedRequest = null;
@@ -304,8 +372,9 @@ try {{
       suggestionsRegion.setAttribute('aria-hidden', 'true');
     }}
     suggestions.forEach(item => {{ item.disabled = true; }});
-    pendingRequest = {{ requestId: requestId(), text: normalized }};
+    pendingRequest = {{ requestId: requestId(), text: normalized, composerValue }};
     appendMessage('user', normalized);
+    clearComposerIfMatching(pendingRequest.composerValue);
     postPendingRequest();
   }}
 
@@ -361,7 +430,6 @@ try {{
       if (typeof data.text !== 'string' || !data.text.trim() || data.text.length > 4000) return;
       clearStatus();
       appendMessage('assistant', data.text.trim());
-      if (input && input.value === pendingRequest.text) input.value = '';
       pendingRequest = null;
       setBusy(false);
       autosize();
@@ -370,6 +438,7 @@ try {{
     if (data.type === 'chat.error') {{
       failedRequest = pendingRequest;
       pendingRequest = null;
+      restoreComposerIfEmpty(failedRequest.composerValue);
       clearStatus();
       setBusy(false);
       showStatus('error', typeof data.message === 'string' ? data.message.slice(0, 320) : 'Связь прервалась. Текст сохранён.', data.retryable !== false);
@@ -411,7 +480,10 @@ def build_preview_document(
 
 
 def build_trusted_runtime_document(
-    artifact: WidgetArtifact, *, channel_id: str = DEFAULT_VISUAL_CHANNEL
+    artifact: WidgetArtifact,
+    *,
+    channel_id: str = DEFAULT_VISUAL_CHANNEL,
+    assistant_label: str | None = None,
 ) -> str:
     """Build a trusted runtime that never embeds or executes artifact JavaScript."""
 
@@ -419,4 +491,5 @@ def build_trusted_runtime_document(
         artifact,
         channel_id=channel_id,
         include_generated_javascript=False,
+        assistant_label=assistant_label,
     )

@@ -1,0 +1,14 @@
+:root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; --accent: #a34e70; --accent-soft: #f2c5d5; --ink: #4a2434; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 280px; min-height: 100vh; overflow: hidden; background: #ece8e2; color: var(--ink); }
+button, input, textarea { font: inherit; }
+.pattern-stage { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: linear-gradient(145deg, #f9f7f3, #e9e5de); }
+.showcase { width: min(460px, 94vw); position: relative; }
+.preview-label { margin: 0 0 12px; color: #756f69; font-size: 11px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.preview-note { margin: 13px 0 0; color: #706b65; font-size: 12px; line-height: 1.45; }
+.control-board{min-height:250px;padding:23px;border-radius:28px;background:#fff;box-shadow:0 25px 60px rgba(31,38,50,.13)}.control-board header{display:flex;align-items:center;padding-bottom:18px;border-bottom:1px solid #ece8e2}.control-board header>div{display:grid}.control-board strong{font-size:14px}.control-board small{color:#7c756f;font-size:9px}nav{display:flex;gap:8px;margin-left:auto}nav button{position:relative;width:44px;height:44px;display:flex;align-items:center;justify-content:center;border:1px solid #e1ddd7;border-radius:14px;background:#f8f6f2;color:var(--ink)}nav button b{font-size:17px}.control-copy{margin-top:32px;padding:18px;border-radius:17px;background:color-mix(in srgb,var(--accent-soft),white 73%);font-size:11px;line-height:1.45}.focus-control{animation:soft_tilt-hover 4.8s ease-in-out infinite;transform-style:preserve-3d}@keyframes soft_tilt-hover{0%,18%,100%{transform:none;box-shadow:0 7px 18px rgba(31,38,50,.1)}48%,76%{transform:perspective(180px) rotateX(8deg) rotateY(-10deg) translateY(-3px);box-shadow:9px 13px 24px color-mix(in srgb,var(--accent),transparent 78%)}}
+html[data-pattern-command='run'] .focus-control,
+html[data-pattern-command='replay'] .focus-control { animation: soft_tilt-hover 1.55s cubic-bezier(.22,.8,.2,1) both; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

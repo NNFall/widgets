@@ -1,5 +1,6 @@
+from builder_lab.contracts import CHAT_V1
 from builder_lab.models import BuilderRequest, EngineName, Stage, WidgetArtifact
-from builder_lab.prompts import build_stage_prompt
+from builder_lab.prompts import ARTIFACT_JSON_SCHEMA, build_stage_prompt
 from builder_lab.visual_models import (
     NormalizedRegion,
     VisualCategory,
@@ -126,3 +127,42 @@ def test_stage_prompt_exposes_numeric_mobile_safe_inset_contract():
     assert "не меньше 8px с каждой стороны" in prompt
     assert "calc(100vw - 16px)" in prompt
     assert "390x844" in prompt
+
+
+def test_stage_prompt_requires_launcher_panel_origin_continuity_and_safe_height():
+    prompt = build_stage_prompt(
+        request=_request(),
+        stage=Stage.FOUNDATION,
+        revision=2,
+        previous_artifact=_artifact(),
+    )
+
+    assert "max-height: calc(100dvh -" in prompt
+    assert "shared bottom-right origin" in prompt
+    assert "launcher and open panel" in prompt
+    assert "close" in prompt and "44" in prompt
+
+
+def test_legacy_artifact_with_eight_quick_replies_round_trips():
+    payload = _artifact().to_dict()
+    payload["suggested_actions"] = [f"Legacy action {index}" for index in range(8)]
+
+    legacy = WidgetArtifact.from_dict(payload)
+
+    assert legacy.to_dict() == payload
+    assert ARTIFACT_JSON_SCHEMA["properties"]["suggested_actions"]["maxItems"] == 2
+
+
+def test_quick_reply_schema_and_prompt_prefer_zero_with_a_structural_region():
+    prompt = build_stage_prompt(
+        request=_request(),
+        stage=Stage.CONVERSATION,
+        revision=6,
+        previous_artifact=_artifact(),
+    )
+
+    assert ARTIFACT_JSON_SCHEMA["properties"]["suggested_actions"]["maxItems"] == 2
+    assert "Zero quick replies is the preferred default" in CHAT_V1.prompt_block
+    assert "Zero quick replies is the preferred default" in prompt
+    assert "Add one or two only when they provide a clear product benefit" in prompt
+    assert "keep the suggestions region structural but hidden and gap-free when empty" in prompt

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -35,6 +36,9 @@ from builder_lab.patterns.atomic_models import (
     PatternCandidatePlan,
 )
 from builder_lab.patterns.atomic_registry import load_builtin_atomic_registry
+from builder_lab.patterns.atomic_quality import compute_atomic_quality_profile
+from builder_lab.patterns.atomic_registry import AtomicPatternRegistry
+import builder_lab.worker as worker_module
 from builder_lab.patterns.candidate_resolver import STAGE_PATTERN_CATEGORIES
 from builder_lab.worker import (
     _candidate_plan_replay_conflicts,
@@ -44,6 +48,56 @@ from builder_lab.worker import (
     StageInput,
     StageResult,
 )
+
+
+_source_registry = load_builtin_atomic_registry
+
+
+def load_builtin_atomic_registry() -> AtomicPatternRegistry:
+    """Use explicit approved visual assets for persisted-plan worker tests."""
+
+    source = _source_registry()
+    signature = {
+        AtomicPatternCategory.WIDGET_OPEN,
+        AtomicPatternCategory.WIDGET_CLOSE,
+        AtomicPatternCategory.LAUNCHER_ATTENTION,
+        AtomicPatternCategory.MESSAGE_SEND,
+        AtomicPatternCategory.ASSISTANT_MESSAGE_ENTER,
+        AtomicPatternCategory.USER_MESSAGE_ENTER,
+    }
+    structural = {
+        AtomicPatternCategory.SHELL_LAYOUT,
+        AtomicPatternCategory.RESPONSIVE_TRANSITION,
+    }
+    definitions = []
+    for definition in source.definitions:
+        if definition.pattern_id.endswith("-technical"):
+            definitions.append(definition)
+            continue
+        role = (
+            "signature"
+            if definition.category in signature
+            else "structural"
+            if definition.category in structural
+            else "support"
+        )
+        definitions.append(
+            replace(
+                definition,
+                provenance={
+                    **definition.provenance,
+                    "review_state": "approved",
+                    "pattern_role": role,
+                },
+            )
+        )
+    return AtomicPatternRegistry(tuple(definitions))
+
+
+# The production worker resolves the built-in catalog internally.  Point this
+# test module at the explicit-role fixture catalog so persisted-plan tests do
+# not depend on which visual assets the pilot currently has approved.
+worker_module.load_builtin_atomic_registry = load_builtin_atomic_registry
 
 
 def test_candidate_plan_feature_flag_defaults_off(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -147,6 +201,8 @@ def _candidate_plan() -> PatternCandidatePlan:
             for item in registry.definitions
             if item.category is category
             and item.provenance.get("review_state") == "approved"
+            and not item.pattern_id.endswith("-technical")
+            and compute_atomic_quality_profile(item).selector_eligible
         )
         groups.append(
             PatternCandidateGroup(

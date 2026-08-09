@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "widget-close-page-turn",
+  "version": 1,
+  "category": "widget_close",
+  "status": "active",
+  "title": "Закрытие перелистыванием",
+  "summary": "Передняя поверхность закрывается самостоятельным 3D-перелистыванием к правому origin и открывает launcher.",
+  "ai_description": "Цельный page-turn sheet сохраняет историю на одной лицевой стороне, затем последовательно поворачивается вокруг безопасного правого центра в перспективной сцене. Отдельная тень подчёркивает угол закрытия, а launcher приходит в финальное состояние без bounce, elastic или скачка позиции. В Pattern Lab композиция показывает исходное состояние, основную фазу и устойчивое завершение, поэтому визуальный смысл читается без скриптов и пояснений разработчика. Модель может адаптировать оттенки, масштаб и темп под бренд, сохраняя иерархию, доступный контраст и заявленную идею: передняя поверхность закрывается самостоятельным 3d-перелистыванием к правому origin и открывает launcher.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "creative",
+  "incompatible_with": [],
+  "implementation_sha256": "b321b96b527a9404ea1c3c492137f8721e7bdd351050d625d1fd8c4d574c2ed7",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "ready_for_review",
+    "pattern_role": "signature"
+  }
+}

@@ -1,0 +1,14 @@
+:root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; --accent: #16705e; --accent-soft: #afe4d5; --ink: #163d34; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 280px; min-height: 100vh; overflow: hidden; background: #ece8e2; color: var(--ink); }
+button, input, textarea { font: inherit; }
+.pattern-stage { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: linear-gradient(145deg, #f9f7f3, #e9e5de); }
+.showcase { width: min(460px, 94vw); position: relative; }
+.preview-label { margin: 0 0 12px; color: #756f69; font-size: 11px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.preview-note { margin: 13px 0 0; color: #706b65; font-size: 12px; line-height: 1.45; }
+.typing-board{min-height:270px;display:grid;align-content:center;gap:14px;padding:28px;border-radius:28px;background:#f8f7f4;box-shadow:0 24px 58px rgba(31,38,50,.12)}.agent{display:flex;align-items:center;gap:9px}.agent>span{width:32px;height:32px;display:grid;place-items:center;border-radius:11px;background:var(--accent);color:white;font-weight:850;font-size:11px}.agent div{display:grid}.agent b{font-size:12px}.agent small{color:#79736d;font-size:9px}.typing-bubble{width:max-content;min-width:104px;padding:10px 14px;border-radius:5px 17px 17px;background:white;box-shadow:0 8px 20px rgba(31,38,50,.08)}.typing-board>p{margin:5px 0 0;color:#7c756f;font-size:10px}.typing-mark{position:relative;width:120px;height:30px}.typing-mark i{position:absolute;left:7px;right:7px;bottom:7px;height:2px;border-radius:2px;background:linear-gradient(90deg,var(--accent),transparent);transform-origin:left}.quill{position:absolute;z-index:2;left:5px;top:0;color:var(--accent);animation:quill_trace-typing 2s ease-in-out infinite}.typing-mark i{animation:quill_trace-line 2s ease-in-out infinite}@keyframes quill_trace-typing{0%,100%{transform:translateX(0) rotate(-12deg)}65%{transform:translateX(96px) rotate(8deg)}}@keyframes quill_trace-line{0%,15%{transform:scaleX(.05);opacity:0}65%{transform:scaleX(1);opacity:1}100%{opacity:0}}
+html[data-pattern-command='run'] .typing-mark .quill,
+html[data-pattern-command='replay'] .typing-mark .quill { animation: quill_trace-typing 1.8s cubic-bezier(.22,.8,.2,1) both; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

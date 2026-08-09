@@ -37,6 +37,7 @@ _MAX_COMMENT = 4_000
 _MAX_FILTER_LENGTH = 64
 _MAX_REVIEW_HISTORY = 100
 _REVIEW_STATES = frozenset({"ready_for_review", "approved", "rejected"})
+_REVIEW_FILTERS = _REVIEW_STATES | {"all"}
 _STATUSES = frozenset(item.value for item in AtomicPatternStatus)
 _CATEGORIES = frozenset(item.value for item in AtomicPatternCategory)
 _COMMANDS = (
@@ -50,6 +51,35 @@ _COMMANDS = (
     "desktop",
     "mobile",
 )
+_CATEGORY_LABELS = {
+    AtomicPatternCategory.LAUNCHER_SHAPE.value: "Форма кнопки открытия",
+    AtomicPatternCategory.LAUNCHER_IDLE.value: "Спокойная анимация кнопки",
+    AtomicPatternCategory.LAUNCHER_ATTENTION.value: "Привлечение внимания",
+    AtomicPatternCategory.SHELL_LAYOUT.value: "Компоновка окна чата",
+    AtomicPatternCategory.WIDGET_OPEN.value: "Открытие виджета",
+    AtomicPatternCategory.WIDGET_CLOSE.value: "Закрытие виджета",
+    AtomicPatternCategory.BACKGROUND_EFFECT.value: "Фоновый эффект",
+    AtomicPatternCategory.ASSISTANT_MESSAGE_ENTER.value: "Появление ответа AI",
+    AtomicPatternCategory.USER_MESSAGE_ENTER.value: "Появление сообщения пользователя",
+    AtomicPatternCategory.TYPING_INDICATOR.value: "Индикатор набора",
+    AtomicPatternCategory.MESSAGE_SEND.value: "Отправка сообщения",
+    AtomicPatternCategory.COMPOSER_FOCUS.value: "Поле ввода в фокусе",
+    AtomicPatternCategory.CONTROL_HOVER.value: "Наведение на кнопки",
+    AtomicPatternCategory.RESPONSIVE_TRANSITION.value: "Адаптация desktop/mobile",
+}
+_REVIEW_LABELS = {
+    "ready_for_review": "Ждёт проверки",
+    "approved": "Одобрено",
+    "rejected": "Отклонено",
+    "all": "Все версии",
+}
+_CATEGORY_COMMANDS = {
+    AtomicPatternCategory.WIDGET_OPEN.value: ("open",),
+    AtomicPatternCategory.WIDGET_CLOSE.value: ("close",),
+    AtomicPatternCategory.ASSISTANT_MESSAGE_ENTER.value: ("assistant-message",),
+    AtomicPatternCategory.USER_MESSAGE_ENTER.value: ("user-message",),
+    AtomicPatternCategory.TYPING_INDICATOR.value: ("typing",),
+}
 
 
 def _allowlisted(email: str) -> bool:
@@ -110,13 +140,6 @@ def _field(row: WidgetPatternVersion, name: str, fallback: str = "") -> str:
     return fallback
 
 
-def _json_text(value: object) -> str:
-    try:
-        return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
-    except (TypeError, ValueError):
-        return "{}"
-
-
 async def _effective_review(database, row: WidgetPatternVersion) -> str:
     return await PatternCandidateRepository(database).effective_review_state(row.id)
 
@@ -127,10 +150,18 @@ async def _sync_builtin_registry(request: web.Request) -> None:
         await PatternCandidateRepository(database).sync_registry(registry)
 
 
-async def _rows(request: web.Request) -> list[tuple[WidgetPatternVersion, str]]:
+async def _rows(
+    request: web.Request,
+) -> tuple[
+    list[tuple[WidgetPatternVersion, str]],
+    list[tuple[WidgetPatternVersion, str]],
+]:
     category = _query_filter(request, "category", _CATEGORIES)
     status = _query_filter(request, "status", _STATUSES)
-    review = _query_filter(request, "review", _REVIEW_STATES)
+    review = _query_filter(request, "review", _REVIEW_FILTERS)
+    if review is None:
+        review = "ready_for_review"
+    effective_review_filter = None if review == "all" else review
     await _sync_builtin_registry(request)
     factory = get_session_factory(request.app)
     async with factory() as database:
@@ -139,10 +170,6 @@ async def _rows(request: web.Request) -> list[tuple[WidgetPatternVersion, str]]:
             WidgetPatternVersion.pattern_id,
             WidgetPatternVersion.version,
         )
-        if category is not None:
-            statement = statement.where(WidgetPatternVersion.category == category)
-        if status is not None:
-            statement = statement.where(WidgetPatternVersion.status == status)
         records = list((await database.scalars(statement)).all())
         latest_reviews: dict[object, str] = {}
         if records:
@@ -177,7 +204,7 @@ async def _rows(request: web.Request) -> list[tuple[WidgetPatternVersion, str]]:
                 latest_reviews.setdefault(
                     review_row.pattern_version_id, review_row.status
                 )
-        result: list[tuple[WidgetPatternVersion, str]] = []
+        catalog: list[tuple[WidgetPatternVersion, str]] = []
         for row in records:
             effective = latest_reviews.get(row.id)
             if effective is None:
@@ -188,12 +215,56 @@ async def _rows(request: web.Request) -> list[tuple[WidgetPatternVersion, str]]:
                     effective = str(provenance["review_state"])
                 else:
                     effective = "ready_for_review"
-            if review is None or effective == review:
-                result.append((row, effective))
-        return result
+            catalog.append((row, effective))
+        result = [
+            (row, effective)
+            for row, effective in catalog
+            if (category is None or row.category == category)
+            and (status is None or row.status == status)
+            and (effective_review_filter is None or effective == effective_review_filter)
+        ]
+        return result, catalog
 
 
-def _list_content(rows: list[tuple[WidgetPatternVersion, str]], request: web.Request) -> str:
+def _selected_option(value: str, current: str | None) -> str:
+    selected = " selected" if value == current else ""
+    label = _CATEGORY_LABELS.get(value) or _REVIEW_LABELS.get(value) or value
+    return f"<option value='{escape(value)}'{selected}>{escape(label)}</option>"
+
+
+def _coverage_content(
+    catalog: list[tuple[WidgetPatternVersion, str]],
+) -> str:
+    approved = sum(effective == "approved" for _row, effective in catalog)
+    ready = sum(effective == "ready_for_review" for _row, effective in catalog)
+    rejected = sum(effective == "rejected" for _row, effective in catalog)
+    represented = len({row.category for row, _effective in catalog})
+    empty = len(_CATEGORIES) - represented
+    return (
+        "<section class='card pattern-coverage'><p class='eyebrow'>Библиотека эффектов</p>"
+        "<h2>Шаблоны для будущих виджетов</h2>"
+        "<p class='muted'>Новый эффект сначала проверяется здесь. После одобрения "
+        "генератор сможет предлагать его для подходящих виджетов.</p>"
+        "<div class='stack'>"
+        f"<div class='column'><strong>{len(catalog)}</strong><br><span class='muted'>всего версий</span></div>"
+        f"<div class='column'><strong>{represented} категорий</strong><br><span class='muted'>{empty} без вариантов</span></div>"
+        f"<div class='column'><strong>{approved}</strong><br><span class='muted'>одобрено</span></div>"
+        f"<div class='column'><strong>{ready}</strong><br><span class='muted'>нужно проверить</span></div>"
+        f"<div class='column'><strong>{rejected}</strong><br><span class='muted'>отклонено</span></div>"
+        "</div><div class='actions'>"
+        "<a href='/admin/pattern-lab?review=ready_for_review'>Нужно проверить →</a>"
+        "<a href='/admin/pattern-lab?review=approved'>Одобренные</a>"
+        "</div></section>"
+    )
+
+
+def _list_content(
+    rows: list[tuple[WidgetPatternVersion, str]],
+    catalog: list[tuple[WidgetPatternVersion, str]],
+    request: web.Request,
+) -> str:
+    category_filter = request.query.get("category") or None
+    review_filter = request.query.get("review") or "ready_for_review"
     query = "&".join(
         f"{escape(str(key))}={escape(str(value))}"
         for key, value in request.query.items()
@@ -201,67 +272,70 @@ def _list_content(rows: list[tuple[WidgetPatternVersion, str]], request: web.Req
     )
     suffix = f"?{query}" if query else ""
     filter_form = (
-        "<section class='card'><form method='get' class='stack'>"
-        "<div class='column'><label>Category<select name='category'><option value=''>Все</option>"
+        "<section class='card pattern-filter-card'><form method='get' class='stack pattern-filters'>"
+        "<div class='column'><label>Категория<select name='category'><option value=''>Все категории</option>"
         + "".join(
-            f"<option value='{escape(value)}'>{escape(value)}</option>"
-            for value in sorted(_CATEGORIES)
+            _selected_option(value, category_filter)
+            for value in sorted(_CATEGORIES, key=lambda item: _CATEGORY_LABELS[item])
         )
         + "</select></label></div>"
-        "<div class='column'><label>Status<select name='status'><option value=''>Все</option>"
+        "<div class='column'><label>Состояние<select name='review'>"
         + "".join(
-            f"<option value='{escape(value)}'>{escape(value)}</option>"
-            for value in sorted(_STATUSES)
+            _selected_option(value, review_filter)
+            for value in ("ready_for_review", "approved", "rejected", "all")
         )
         + "</select></label></div>"
-        "<div class='column'><label>Review<select name='review'><option value=''>Все</option>"
-        + "".join(
-            f"<option value='{escape(value)}'>{escape(value)}</option>"
-            for value in sorted(_REVIEW_STATES)
-        )
-        + "</select></label></div>"
-        "<div class='column'><button type='submit'>Фильтровать</button></div>"
+        "<div class='column filter-action'><button type='submit'>Показать</button></div>"
         "</form></section>"
     )
     if not rows:
-        return filter_form + (
+        return _coverage_content(catalog) + filter_form + (
             "<section class='card notice'><strong>Нет совпадений.</strong> "
-            "Измените фильтры или сначала синхронизируйте встроенный технический каталог.</section>"
+            "Измените фильтры или добавьте новую версию в Git-каталог.</section>"
         )
     rendered = []
     for row, effective in rows:
         title = _field(row, "title", row.pattern_id)
         description = _field(row, "ai_description", row.description)
         rendered.append(
-            "<tr>"
-            f"<td><a href='/admin/pattern-lab/{escape(row.pattern_id)}/{int(row.version)}'>"
-            f"{escape(title)}</a><br><span class='muted'>{escape(row.pattern_id)}</span></td>"
-            f"<td>{escape(row.category)}</td><td>{int(row.version)}</td>"
-            f"<td>{escape(row.status)}</td><td>{escape(effective)}</td>"
-            f"<td><div>{escape(description)}</div><code>{escape(row.implementation_sha256)}</code></td>"
-            "</tr>"
+            "<article class='pattern-row'>"
+            "<div class='pattern-copy'>"
+            f"<h3>{escape(title)}</h3>"
+            f"<p><span class='field-label'>Описание для AI</span>{escape(description)}</p>"
+            "</div><div class='pattern-row-actions'>"
+            f"<span class='category-label'>{escape(_CATEGORY_LABELS[row.category])}</span>"
+            f"<span class='review-state review-{escape(effective)}'>{escape(_REVIEW_LABELS[effective])}</span>"
+            f"<a class='review-link' href='/admin/pattern-lab/{escape(row.pattern_id)}/{int(row.version)}'>"
+            "Проверить →</a></div></article>"
         )
-    return filter_form + (
-        "<section class='card'><table><thead><tr>"
-        "<th>Pattern</th><th>Category</th><th>Version</th><th>Status</th>"
-        "<th>Effective review</th><th>AI description / hash</th>"
-        f"</tr></thead><tbody>{''.join(rendered)}</tbody></table>"
-        f"<p class='muted'>Текущая выборка: {len(rows)}. <a href='/admin/pattern-lab{suffix}'>Обновить</a></p>"
-        "</section>"
+    return _coverage_content(catalog) + filter_form + (
+        "<style>"
+        ".pattern-filter-card{padding-block:18px}.pattern-filters{align-items:end}"
+        ".pattern-filters label{margin-bottom:0}.pattern-filters .filter-action{flex:0 0 auto;min-width:auto}"
+        ".pattern-list{padding:0!important;overflow:hidden}.pattern-list-header{padding:24px 24px 8px}"
+        ".pattern-row{display:grid;grid-template-columns:minmax(0,1fr) 240px;gap:28px;padding:24px;border-top:1px solid #e5e7eb}"
+        ".pattern-copy h3{margin:0 0 12px;font-size:18px;line-height:1.25}.pattern-copy p{max-width:72ch;margin:0;color:#4b5563;line-height:1.6}"
+        ".field-label{display:block;margin-bottom:5px;color:#6b7280;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}"
+        ".pattern-row-actions{display:flex;align-content:flex-start;align-items:flex-start;justify-content:flex-start;gap:8px;flex-wrap:wrap}"
+        ".category-label,.review-state{display:inline-flex;padding:6px 9px;border-radius:8px;background:#f3f4f6;color:#374151;font-size:12px;font-weight:700}"
+        ".review-ready_for_review{background:#fff7ed;color:#9a3412}.review-approved{background:#ecfdf5;color:#047857}.review-rejected{background:#fef2f2;color:#b91c1c}"
+        ".review-link{width:100%;margin-top:8px;font-weight:700;text-decoration:none}"
+        "@media(max-width:760px){.pattern-row{grid-template-columns:1fr;gap:16px;padding:20px}.pattern-list-header{padding:20px 20px 6px}}"
+        "</style>"
+        "<section class='card pattern-list'><div class='pattern-list-header'>"
+        f"<h2>{escape(_REVIEW_LABELS[review_filter]) if review_filter in _REVIEW_LABELS else 'Шаблоны'}</h2>"
+        f"<p class='muted'>Найдено: {len(rows)}. <a href='/admin/pattern-lab{suffix}'>Обновить</a></p></div>"
+        f"<div>{''.join(rendered)}</div></section>"
     )
 
 
 async def pattern_lab_index(request: web.Request) -> web.Response:
     await _require_pattern_admin(request)
-    rows = await _rows(request)
+    rows, catalog = await _rows(request)
     response = render_layout(
-        "Pattern Lab",
-        "<section class='card'><p class='eyebrow'>Technical admin surface</p>"
-        "<h2>Atomic pattern catalog</h2>"
-        "<p class='muted'>Здесь отображаются версии, которые реально видит selector."
-        " Исходные assets берутся только из Git-каталога.</p></section>"
-        + _list_content(rows, request),
-        nav_extra="<a href='/admin/pattern-lab' class='current'>Pattern Lab</a>",
+        "Лаборатория шаблонов",
+        _list_content(rows, catalog, request),
+        nav_extra="<a href='/admin/pattern-lab' class='current'>Шаблоны</a>",
     )
     response.headers.update(_NO_STORE)
     return response
@@ -312,14 +386,31 @@ def _parent_bridge() -> str:
     iframe.contentWindow.postMessage({{protocol, version, command, payload: payload || {{}}}}, '*');
   }};
   document.querySelectorAll('[data-pattern-command]').forEach(function(button) {{
-    button.addEventListener('click', function() {{ patternLabSend(button.dataset.patternCommand); }});
+    button.addEventListener('click', function() {{
+      const command = button.dataset.patternCommand;
+      if (command === 'mobile' || command === 'desktop') {{
+        iframe.dataset.viewport = command;
+        document.querySelectorAll('[data-viewport-control]').forEach(function(control) {{
+          const selected = control.dataset.patternCommand === command;
+          control.classList.toggle('is-active', selected);
+          control.setAttribute('aria-pressed', selected ? 'true' : 'false');
+        }});
+      }} else {{
+        const output = document.getElementById('pattern-events');
+        if (output) output.textContent = 'Перезапускаем…';
+      }}
+      patternLabSend(command);
+    }});
   }});
   window.addEventListener('message', function(event) {{
     if (!iframe || event.source !== iframe.contentWindow) return;
     const data = event.data;
     if (!data || data.protocol !== protocol || data.version !== version || !allowed.has(data.command)) return;
     const output = document.getElementById('pattern-events');
-    if (output) output.textContent = data.command;
+    if (!output) return;
+    if (data.command === 'desktop') output.textContent = 'Режим предпросмотра: desktop';
+    else if (data.command === 'mobile') output.textContent = 'Режим предпросмотра: mobile';
+    else output.textContent = 'Анимация воспроизведена';
   }});
 }})();
 </script>"""
@@ -344,62 +435,76 @@ async def pattern_lab_detail(request: web.Request) -> web.Response:
     review_history_truncated = len(reviews) > _MAX_REVIEW_HISTORY
     reviews = reviews[:_MAX_REVIEW_HISTORY]
     token = await _csrf_token(request)
-    snapshot = _snapshot(row)
     title = _field(row, "title", row.pattern_id)
     summary = _field(row, "summary", row.description)
     ai_description = _field(row, "ai_description", row.description)
-    technical_contract = _field(row, "technical_contract")
-    policy = _field(row, "adaptation_policy")
-    provenance = snapshot.get("provenance", {})
     review_rows = "".join(
         "<tr>"
-        f"<td>{escape(review.reviewer_email)}</td><td>{escape(review.status)}</td>"
+        f"<td>{escape(review.reviewer_email)}</td><td>{escape(_REVIEW_LABELS.get(review.status, review.status))}</td>"
         f"<td>{escape(review.comment)}</td><td>{escape(str(review.created_at))}</td></tr>"
         for review in reviews
     ) or "<tr><td colspan='4'>Рецензий пока нет.</td></tr>"
     review_history_note = (
-        "<p class='muted'>Showing latest 100 reviews; older entries remain in the "
-        "append-only history.</p>"
+        "<p class='muted'>Показаны последние 100 проверок. Более ранние решения "
+        "сохранены в истории.</p>"
         if review_history_truncated
         else ""
     )
-    buttons = "".join(
-        f"<button type='button' data-pattern-command='{escape(command)}'>{escape(command)}</button>"
-        for command in _COMMANDS
+    replay_command = _CATEGORY_COMMANDS.get(row.category, ("replay",))[0]
+    buttons = (
+        f"<button class='replay-control' type='button' data-pattern-command='{escape(replay_command)}'>"
+        "Повторить анимацию</button>"
+        "<div class='viewport-controls' role='group' aria-label='Размер предпросмотра'>"
+        "<button class='viewport-control is-active' type='button' data-viewport-control "
+        "data-pattern-command='desktop' aria-pressed='true'>Desktop</button>"
+        "<button class='viewport-control' type='button' data-viewport-control "
+        "data-pattern-command='mobile' aria-pressed='false'>Mobile</button></div>"
     )
     path = f"/admin/pattern-lab/{escape(row.pattern_id)}/{int(row.version)}"
     content = (
-        "<section class='card'>"
+        "<style>"
+        ".pattern-lab-detail{max-width:1180px;margin-inline:auto}.pattern-lab-detail .intro{padding-bottom:20px}"
+        ".detail-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.detail-heading h2{margin-bottom:8px}"
+        ".detail-description{max-width:72ch;line-height:1.65;color:#374151}.detail-description .field-label{display:block;margin-bottom:6px;color:#6b7280;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}"
+        ".preview-frame[data-viewport='mobile']{display:block;width:390px;max-width:100%;margin-left:auto;margin-right:auto}.preview-frame[data-viewport='desktop']{width:100%}"
+        ".preview-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:16px}"
+        ".viewport-controls{display:inline-flex;padding:3px;border-radius:10px;background:#f3f4f6}.viewport-control{background:transparent;color:#4b5563;padding:7px 11px}.viewport-control:hover{background:#e5e7eb}.viewport-control.is-active{background:#fff;color:#111827;box-shadow:0 1px 4px rgba(15,23,42,.12)}"
+        ".replay-control{min-height:44px}.review-current{margin-top:8px}"
+        "@media(max-width:720px){.detail-heading{display:block}.preview-toolbar{align-items:stretch}.replay-control{width:100%}.viewport-controls{justify-content:center}}"
+        "</style>"
+        "<div class='pattern-lab-detail'>"
+        "<section class='card intro'>"
         "<p><a href='/admin/pattern-lab'>← К каталогу</a></p>"
-        f"<p class='eyebrow'>{escape(row.category)} · v{int(row.version)}</p>"
-        f"<h2>{escape(title)}</h2><p>{escape(summary)}</p>"
-        f"<p><strong>Effective review:</strong> {escape(effective)} · "
-        f"<strong>Lifecycle:</strong> {escape(row.status)}</p>"
-        f"<h3>AI description</h3><p>{escape(ai_description)}</p>"
-        f"<h3>Technical contract</h3><p>{escape(technical_contract)}</p>"
-        f"<h3>Adaptation policy</h3><p>{escape(policy)}</p>"
-        f"<h3>Implementation hash</h3><code>{escape(row.implementation_sha256)}</code>"
-        f"<h3>Provenance</h3><pre>{escape(_json_text(provenance))}</pre>"
-        f"<h3>Selector manifest snapshot</h3><pre>{escape(_json_text(snapshot))}</pre>"
+        f"<p class='eyebrow'>{escape(_CATEGORY_LABELS[row.category])}</p>"
+        "<div class='detail-heading'><div>"
+        f"<h2>{escape(title)}</h2><p>{escape(summary)}</p></div>"
+        f"<span class='review-state review-{escape(effective)}'>{escape(_REVIEW_LABELS[effective])}</span></div>"
+        f"<p class='detail-description'><span class='field-label'>Описание для AI</span>{escape(ai_description)}</p>"
         "</section>"
-        "<section class='card'><h2>Sandbox preview</h2>"
-        f"<iframe id='pattern-preview' class='preview-frame' sandbox=\"allow-scripts\" "
-        f"src='{path}/preview' title='Pattern preview'></iframe>"
-        f"<div class='actions'>{buttons}</div><p id='pattern-events' class='muted'>Нет событий</p>"
+        "<section class='card'><h2>Предпросмотр</h2>"
+        "<p class='muted'>Повторите эффект в любой момент или проверьте его на другой ширине.</p>"
+        f"<iframe id='pattern-preview' class='preview-frame' data-viewport='desktop' sandbox=\"allow-scripts\" "
+        f"src='{path}/preview' title='Предпросмотр шаблона'></iframe>"
+        f"<div class='preview-toolbar'>{buttons}</div><p id='pattern-events' class='muted'>Готово к проверке</p>"
         "</section>"
-        "<section class='card'><h2>Append review</h2>"
+        "<section class='card'><h2>Решение по шаблону</h2>"
+        "<p class='muted'>Одобрите эффект или оставьте конкретное замечание для следующей версии.</p>"
         f"<form method='post' action='{path}/review'>"
         f"<input type=\"hidden\" name=\"csrf_token\" value=\"{escape(token)}\">"
-        "<label>Status<select name='status' required><option value='approved'>approved</option>"
-        "<option value='rejected'>rejected</option></select></label>"
-        "<label>Comment<textarea name='comment' maxlength='4000'></textarea></label>"
-        "<button type='submit'>Append review</button></form></section>"
-        "<section class='card'><h2>Review history</h2><table><thead><tr>"
-        "<th>Reviewer</th><th>Status</th><th>Comment</th><th>Created</th>"
-        f"</tr></thead><tbody>{review_rows}</tbody></table>{review_history_note}</section>"
+        "<label>Решение<select name='status' required><option value='approved'>Одобрить</option>"
+        "<option value='rejected'>Отклонить</option></select></label>"
+        "<label>Комментарий<textarea name='comment' maxlength='4000' placeholder='Что понравилось или что нужно изменить'></textarea></label>"
+        "<button type='submit'>Сохранить решение</button></form></section>"
+        "<section class='card'><h2>История проверок</h2><table><thead><tr>"
+        "<th>Кто проверил</th><th>Решение</th><th>Комментарий</th><th>Дата</th>"
+        f"</tr></thead><tbody>{review_rows}</tbody></table>{review_history_note}</section></div>"
         + _parent_bridge()
     )
-    response = render_layout(f"Pattern {title}", content)
+    response = render_layout(
+        f"Проверка: {title}",
+        content,
+        nav_extra="<a href='/admin/pattern-lab' class='current'>Шаблоны</a>",
+    )
     response.headers.update(_NO_STORE)
     return response
 
@@ -424,8 +529,13 @@ def _preview_bridge() -> str:
     if (event.source !== window.parent) return;
     const data = event.data;
     if (!data || data.protocol !== protocol || data.version !== version || !allowed.has(data.command)) return;
-    document.documentElement.dataset.patternCommand = data.command;
-    window.parent.postMessage({{protocol, version, command: data.command}}, '*');
+    const root = document.documentElement;
+    delete root.dataset.patternCommand;
+    void document.documentElement.offsetWidth;
+    root.dataset.patternCommand = data.command;
+    requestAnimationFrame(function() {{
+      window.parent.postMessage({{protocol, version, command: data.command}}, '*');
+    }});
   }});
 }})();
 </script>"""

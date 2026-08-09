@@ -2,7 +2,11 @@ import unittest
 
 from playwright.async_api import async_playwright
 
-from builder_lab.preview import build_preview_document, build_trusted_runtime_document
+from builder_lab.preview import (
+    TOP_LEVEL_VISUAL_ONLY_MESSAGE,
+    build_preview_document,
+    build_trusted_runtime_document,
+)
 from tests.builder_lab_cases.test_validation import artifact
 
 
@@ -19,11 +23,18 @@ class PreviewRuntimeBrowserTests(unittest.IsolatedAsyncioTestCase):
         await self.browser.close()
         await self.playwright.stop()
 
-    async def mount_runtime(self, candidate=None, *, trusted=False):
+    async def mount_runtime(
+        self,
+        candidate=None,
+        *,
+        trusted=False,
+        assistant_label=None,
+    ):
         builder = build_trusted_runtime_document if trusted else build_preview_document
-        document = builder(
-            candidate or artifact(revision=9), channel_id=CHANNEL
-        )
+        kwargs = {"channel_id": CHANNEL}
+        if trusted:
+            kwargs["assistant_label"] = assistant_label
+        document = builder(candidate or artifact(revision=9), **kwargs)
         await self.page.set_content("<main><iframe id='preview' sandbox='allow-scripts'></iframe></main>")
         await self.page.evaluate(
             """previewDocument => {
@@ -117,6 +128,80 @@ class PreviewRuntimeBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await root.get_attribute("data-state"), "closed")
         self.assertTrue(await launcher.is_visible())
 
+    async def test_trusted_runtime_enforces_persona_across_visible_identity_labels(self):
+        base = artifact(revision=9)
+        candidate = artifact(
+            revision=9,
+            body_html=base.body_html.replace(
+                '<main class="kaigo-widget__messages" data-region="messages" aria-live="polite">',
+                '<main class="kaigo-widget__messages" data-region="messages" aria-live="polite">'
+                '<article class="kaigo-widget__message--assistant">'
+                '<span class="kaigo-widget__message-label">AI-консультант</span>'
+                '</article>',
+            ).replace(
+                '</header>',
+                '<strong>AI-консультант</strong>'
+                '<button data-action="close" aria-label="Закрыть AI-консультанта">×</button>'
+                '</header>',
+            ),
+        )
+
+        frame = await self.mount_runtime(
+            candidate,
+            trusted=True,
+            assistant_label="Анна",
+        )
+        root = frame.locator('[data-region="root"]')
+        launcher = frame.locator('[data-region="launcher"]')
+
+        self.assertEqual(await root.get_attribute("aria-label"), "Анна")
+        self.assertEqual((await launcher.inner_text()).strip(), "А")
+        self.assertEqual(
+            await frame.locator('[data-region="header"] h2').inner_text(),
+            "Анна",
+        )
+        self.assertEqual(
+            await frame.locator('.kaigo-widget__message-label').inner_text(),
+            "Анна",
+        )
+        self.assertNotIn(
+            "AI",
+            " ".join(
+                await frame.locator('[aria-label]').evaluate_all(
+                    "nodes => nodes.map(node => node.getAttribute('aria-label') || '')"
+                )
+            ),
+        )
+
+    async def test_trusted_runtime_neutralizes_legacy_ai_labels_with_separators(self):
+        base = artifact(revision=9)
+        candidate = artifact(
+            revision=9,
+            body_html=(
+                base.body_html
+                .replace("AI-консультант", "AI_consultant")
+                .replace(">AI<", ">AI2<")
+            ),
+        )
+
+        frame = await self.mount_runtime(candidate, trusted=True)
+        root = frame.locator('[data-region="root"]')
+        launcher = frame.locator('[data-region="launcher"]')
+
+        self.assertEqual(await root.get_attribute("aria-label"), "КОНСУЛЬТАНТ")
+        self.assertEqual((await launcher.inner_text()).strip(), "К")
+        self.assertEqual(
+            await frame.locator('[data-region="header"] h2').inner_text(),
+            "КОНСУЛЬТАНТ",
+        )
+        visible_labels = " ".join(
+            await frame.locator('[aria-label]').evaluate_all(
+                "nodes => nodes.map(node => node.getAttribute('aria-label') || '')"
+            )
+        )
+        self.assertNotIn("AI_", visible_labels)
+        self.assertNotIn("AI2", visible_labels)
+
     async def test_top_level_trusted_runtime_fails_chat_as_visual_only_without_staying_busy(
         self,
     ):
@@ -135,9 +220,7 @@ class PreviewRuntimeBrowserTests(unittest.IsolatedAsyncioTestCase):
         await status.wait_for()
         self.assertEqual(
             await status.inner_text(),
-            "\u042d\u0442\u043e \u0432\u0438\u0437\u0443\u0430\u043b\u044c\u043d\u044b\u0439 "
-            "\u043f\u0440\u0435\u0434\u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440. \u0414\u0438\u0430\u043b\u043e\u0433 "
-            "\u0441 AI \u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u0432 \u0441\u0442\u0443\u0434\u0438\u0438.",
+            TOP_LEVEL_VISUAL_ONLY_MESSAGE,
         )
         self.assertEqual(await input_box.input_value(), question)
         self.assertEqual(
@@ -169,14 +252,22 @@ class PreviewRuntimeBrowserTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(await input_box.input_value(), second_question)
 
-    async def test_runtime_hidden_suggestions_cannot_be_reshown_by_generated_css(self):
+    async def test_empty_suggestions_region_is_hidden_without_a_layout_gap(self):
         base = artifact(revision=9)
         body_html = base.body_html.replace(
             "<button type=\"button\">Подобрать решение</button>",
+            "",
+        )
+        empty_region = (
+            '<div class="kaigo-widget__suggestions" '
+            'data-region="suggestions"></div>'
+        )
+        body_html = body_html.replace(
+            empty_region,
             (
-                "<button type=\"button\">Первый вопрос</button>"
-                "<button type=\"button\">Второй вопрос</button>"
-                "<button type=\"button\">Третий вопрос</button>"
+                '<button type="button" data-suggestion="Внешнее действие">'
+                "Внешнее действие</button>"
+                + empty_region
             ),
         )
         frame = await self.mount_runtime(
@@ -184,22 +275,53 @@ class PreviewRuntimeBrowserTests(unittest.IsolatedAsyncioTestCase):
                 revision=9,
                 body_html=body_html,
                 css=base.css
-                + "\n[data-region=\"suggestions\"] button { display:flex; }",
-                suggested_actions=(
-                    "Первый вопрос",
-                    "Второй вопрос",
-                    "Третий вопрос",
-                ),
+                + ("\n[data-region=\"suggestions\"] { display:flex !important; "
+                   "min-height:80px !important; padding:40px !important; }"),
+                suggested_actions=(),
+            )
+        )
+        region = frame.locator('[data-region="suggestions"]')
+
+        self.assertEqual(await region.count(), 1)
+        self.assertFalse(await region.is_visible())
+        self.assertEqual(await region.get_attribute("aria-hidden"), "true")
+        self.assertEqual(
+            await region.evaluate("node => node.getBoundingClientRect().height"),
+            0,
+        )
+        outside_suggestion = frame.locator(
+            '[data-suggestion="Внешнее действие"]'
+        )
+        await outside_suggestion.evaluate("node => node.click()")
+        await self.page.wait_for_timeout(50)
+        self.assertEqual(
+            await self.page.evaluate(
+                "window.bridgeEvents.filter(event => event.type === 'chat.request').length"
+            ),
+            0,
+        )
+
+    async def test_two_suggestions_remain_visible_and_actionable(self):
+        base = artifact(revision=9)
+        body_html = base.body_html.replace(
+            "<button type=\"button\">Подобрать решение</button>",
+            (
+                "<button type=\"button\" data-suggestion=\"Первый вопрос\">Первый вопрос</button>"
+                "<button type=\"button\" data-suggestion=\"Второй вопрос\">Второй вопрос</button>"
+            ),
+        )
+        frame = await self.mount_runtime(
+            artifact(
+                revision=9,
+                body_html=body_html,
+                suggested_actions=("Первый вопрос", "Второй вопрос"),
             )
         )
         suggestions = frame.locator('[data-region="suggestions"] button')
 
-        self.assertEqual(await suggestions.count(), 3)
-        self.assertEqual(
-            [await suggestions.nth(index).is_visible() for index in range(3)],
-            [True, True, False],
-        )
-        self.assertTrue(await suggestions.nth(2).is_disabled())
+        self.assertEqual(await suggestions.count(), 2)
+        self.assertTrue(await suggestions.nth(0).is_visible())
+        self.assertTrue(await suggestions.nth(1).is_visible())
 
     async def test_generated_javascript_cannot_reach_parent_document(self):
         frame = await self.mount_runtime(
@@ -239,21 +361,25 @@ class PreviewRuntimeBrowserTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("\n", await input_box.input_value())
         await input_box.fill("Первый вопрос")
         await input_box.press("Enter")
-        self.assertEqual(await input_box.input_value(), "Первый вопрос")
+        self.assertEqual(await input_box.input_value(), "")
         self.assertEqual(
             await frame.locator('[data-region="composer"]').get_attribute("aria-busy"),
             "true",
         )
+        draft = "Черновик следующего вопроса"
+        await input_box.fill(draft)
         await self.page.evaluate("window.releaseBridgeResponse()")
         await frame.locator('[data-kaigo-runtime-message="assistant"]').wait_for()
-        self.assertEqual(await input_box.input_value(), "")
+        self.assertEqual(await input_box.input_value(), draft)
         self.assertNotIn(
             "Нельзя принять",
             await frame.locator('[data-region="messages"]').inner_text(),
         )
 
+        await input_box.fill("")
         await input_box.fill("Ошибка")
         await input_box.press("Enter")
+        self.assertEqual(await input_box.input_value(), "")
         retry = frame.locator('[data-kaigo-runtime-retry="true"]')
         await retry.wait_for()
         self.assertEqual(await input_box.input_value(), "Ошибка")
@@ -265,12 +391,60 @@ class PreviewRuntimeBrowserTests(unittest.IsolatedAsyncioTestCase):
             await frame.locator('[data-kaigo-runtime-message="user"]').count(), 2
         )
         await retry.click()
+        self.assertEqual(await input_box.input_value(), "")
         await self.page.evaluate("window.releaseBridgeResponse()")
         await frame.locator('[data-kaigo-runtime-message="assistant"]').nth(1).wait_for()
         self.assertEqual(await input_box.input_value(), "")
         self.assertEqual(
             await frame.locator('[data-kaigo-runtime-message="assistant"]').count(), 2
         )
+
+    async def test_error_and_retry_do_not_overwrite_a_new_pending_draft(self):
+        frame = await self.mount_runtime()
+        await frame.locator('[data-region="launcher"]').click()
+        input_box = frame.locator('[data-kaigo-runtime-input="true"]')
+
+        await input_box.fill("Ошибка")
+        await input_box.press("Enter")
+        self.assertEqual(await input_box.input_value(), "")
+        draft = "Не стирай этот черновик"
+        await input_box.fill(draft)
+
+        retry = frame.locator('[data-kaigo-runtime-retry="true"]')
+        await retry.wait_for()
+        self.assertEqual(await input_box.input_value(), draft)
+
+        await retry.click()
+        self.assertEqual(await input_box.input_value(), draft)
+        await self.page.evaluate("window.releaseBridgeResponse()")
+        await frame.locator('[data-kaigo-runtime-message="assistant"]').wait_for()
+        self.assertEqual(await input_box.input_value(), draft)
+
+    async def test_retry_preserves_whitespace_only_edit_of_restored_raw_text(self):
+        frame = await self.mount_runtime()
+        await frame.locator('[data-region="launcher"]').click()
+        input_box = frame.locator('[data-kaigo-runtime-input="true"]')
+        original = "  Ошибка  "
+
+        await input_box.fill(original)
+        await input_box.press("Enter")
+        self.assertEqual(await input_box.input_value(), "")
+        await self.page.wait_for_function(
+            "window.bridgeEvents.some(event => "
+            "event.type === 'chat.request' && event.text === 'Ошибка')"
+        )
+
+        retry = frame.locator('[data-kaigo-runtime-retry="true"]')
+        await retry.wait_for()
+        self.assertEqual(await input_box.input_value(), original)
+        edited = original + " "
+        await input_box.fill(edited)
+
+        await retry.click()
+        self.assertEqual(await input_box.input_value(), edited)
+        await self.page.evaluate("window.releaseBridgeResponse()")
+        await frame.locator('[data-kaigo-runtime-message="assistant"]').wait_for()
+        self.assertEqual(await input_box.input_value(), edited)
 
 
 if __name__ == "__main__":

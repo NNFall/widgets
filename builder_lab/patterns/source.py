@@ -40,28 +40,25 @@ _CANONICAL_REGIONS = (
 )
 _CANONICAL_ACTIONS = ("open", "close", "send")
 _BODY_TEMPLATE = Template(
-    """<section class="kaigo-widget $root_classes" data-region="root" data-state="closed" aria-label="AI-консультант">
-  <button class="kaigo-widget__launcher" type="button" data-region="launcher" data-action="open" aria-label="Открыть AI-консультанта" aria-expanded="false">
+    """<section class="kaigo-widget $root_classes" data-region="root" data-state="closed" aria-label="Консультант">
+  <button class="kaigo-widget__launcher" type="button" data-region="launcher" data-action="open" aria-label="Открыть консультанта" aria-expanded="false">
     $launcher_fragment
   </button>
-  <section class="kaigo-widget__panel" data-region="panel" role="dialog" aria-label="Диалог с AI-консультантом" aria-hidden="true">
+  <section class="kaigo-widget__panel" data-region="panel" role="dialog" aria-label="Диалог с консультантом" aria-hidden="true">
     <div class="kaigo-widget__shell-decoration" aria-hidden="true">$shell_fragment</div>
     <header class="kaigo-widget__header" data-region="header">
-      <div><strong>AI-консультант</strong><span>На связи</span></div>
-      <button type="button" data-action="close" aria-label="Закрыть AI-консультанта">×</button>
+      <div><strong>Консультант</strong><span>На связи</span></div>
+      <button type="button" data-action="close" aria-label="Закрыть консультанта">×</button>
     </header>
     <main class="kaigo-widget__messages" data-region="messages" role="log" aria-live="polite">
       <article class="kaigo-widget__message kaigo-widget__message--assistant">
         <span class="kaigo-widget__message-decoration" aria-hidden="true">$messages_fragment</span>
-        <span class="kaigo-widget__message-label">AI-консультант</span>
+        <span class="kaigo-widget__message-label">Консультант</span>
         <p>Здравствуйте! Я изучил ваш сайт. Чем помочь?</p>
       </article>
     </main>
-    <div class="kaigo-widget__suggestions" data-region="suggestions" aria-label="Быстрые вопросы">
-      <button type="button" data-suggestion="Подобрать вариант">Подобрать вариант</button>
-      <button type="button" data-suggestion="Уточнить условия">Уточнить условия</button>
-    </div>
-    <div class="kaigo-widget__composer" data-region="composer" role="group" aria-label="Сообщение AI-консультанту">
+    <div class="kaigo-widget__suggestions" data-region="suggestions" aria-label="Быстрые вопросы"></div>
+    <div class="kaigo-widget__composer" data-region="composer" role="group" aria-label="Сообщение консультанту">
       <span class="kaigo-widget__composer-decoration" aria-hidden="true">$composer_fragment</span>
       <label class="kaigo-widget__sr-only" for="kaigo-message">Сообщение</label>
       <textarea id="kaigo-message" rows="1" placeholder="Напишите вопрос…" aria-label="Введите сообщение"></textarea>
@@ -126,8 +123,8 @@ class CompiledPatternSource:
             body_html=self.body_html,
             css=self.css,
             javascript="",
-            suggested_actions=("Подобрать вариант", "Уточнить условия"),
-            change_summary="Kaigo собрал безопасную основу AI-консультанта.",
+            suggested_actions=(),
+            change_summary="Kaigo собрал безопасную основу виджета.",
             layout_contract={
                 "runtime_contract": "chat-v1@1",
                 "pattern_source_sha256": self.source_sha256,
@@ -252,8 +249,10 @@ def canonical_anatomy_fingerprint(
             )
     if set(parser.action_counts) != set(_CANONICAL_ACTIONS):
         raise PatternCompilationError("compiled anatomy contains a private action")
-    if parser.suggestion_count != 2:
-        raise PatternCompilationError("compiled anatomy requires exactly two suggestions")
+    if parser.suggestion_count > 2:
+        raise PatternCompilationError(
+            "compiled anatomy requires zero to two suggestions"
+        )
     if parser.ids != ["kaigo-message"]:
         raise PatternCompilationError("compiled anatomy contains a non-canonical id")
     if parser.root_state_count != 1:
@@ -268,11 +267,10 @@ def canonical_anatomy_fingerprint(
         [
             ("button", "launcher", "open"),
             ("button", None, "close"),
-            ("button", None, None),
-            ("button", None, None),
             ("button", None, "send"),
             ("textarea", None, None),
         ]
+        + [("button", None, None)] * parser.suggestion_count
     )
     if Counter(parser.focusable) != expected_focusable:
         raise PatternCompilationError(

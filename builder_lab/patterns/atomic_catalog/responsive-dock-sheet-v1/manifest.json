@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "responsive-dock-sheet",
+  "version": 1,
+  "category": "responsive_transition",
+  "status": "active",
+  "title": "Переход desktop-панели в mobile-sheet",
+  "summary": "Виджет сохраняет чат-иерархию, но на узком экране превращается в нижнюю листовую панель.",
+  "ai_description": "Адаптивный переход меняет не только ширину, но и модель размещения: на desktop виджет выглядит как плавающая панель с выраженными углами и отступом от края, а на мобильном экране становится устойчивым bottom sheet почти на всю ширину с компактным header и удобным composer. Содержимое перестраивается без скачка порядка сообщений. Модель может менять breakpoint, высоту, радиусы и плотность, сохраняя единый визуальный характер и понятный переход между режимами.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "fe784f09b64be1b7cace569cdddcd0892dcf855df1766ac2747817f1d4c0a2d5",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved",
+    "pattern_role": "structural"
+  }
+}

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Mapping, Protocol
 
 from ..models import (
+    AssistantPersona,
     BuilderRequest,
     ConceptRole,
     ConceptRoleBrief,
@@ -25,6 +26,14 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class EngineResult:
     artifact: WidgetArtifact
+    usage: TokenUsage = TokenUsage()
+    provider_request_id: str | None = None
+    diagnostic: str | None = None
+
+
+@dataclass(frozen=True)
+class AssistantPersonaResult:
+    persona: AssistantPersona
     usage: TokenUsage = TokenUsage()
     provider_request_id: str | None = None
     diagnostic: str | None = None
@@ -116,6 +125,12 @@ class BuilderEngine(Protocol):
 
 
 class DirectBuilderEngine(BuilderEngine, Protocol):
+    async def select_assistant_persona(
+        self,
+        *,
+        request: BuilderRequest,
+    ) -> AssistantPersonaResult: ...
+
     async def plan_composition(
         self,
         *,

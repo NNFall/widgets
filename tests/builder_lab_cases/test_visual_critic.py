@@ -44,6 +44,7 @@ from builder_lab.visual_models import (
     ScreenshotEvidence,
     ScreenshotState,
 )
+from tests.builder_lab_cases.test_assistant_persona import _persona
 
 
 def jpeg(width, height, index):
@@ -169,6 +170,28 @@ def response_payload(code="A7B9K2", state="mobile.open_initial", audit=None):
                 "pixel_facts": facts[state.value],
             }
             for index, state in enumerate(ScreenshotState)
+        ],
+        "structured_checks": [
+            {
+                "check": check,
+                "status": "pass",
+                "score": 9,
+                "screenshot_ids": ["desktop.open_initial", "mobile.open_initial"],
+                "visible_evidence": f"Evidence for {check} is visible and consistent.",
+                "issue_type": check,
+            }
+            for check in (
+                "persona_identity_consistency",
+                "launcher_pattern_fidelity",
+                "launcher_panel_origin",
+                "composer_alignment",
+                "close_control_visibility",
+                "mobile_parity",
+                "first_open_density",
+                "brand_fit",
+                "template_genericity",
+                "quick_reply_necessity",
+            )
         ],
         "findings": [],
     }
@@ -441,11 +464,13 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
             client=client,
             role=VisualCriticRole.CONVERSATION_UX,
         )
+        persona = _persona()
 
         result = await critic.critique(
             audit=report(),
             brief="Compact AI assistant.",
             art_direction="Brand-matched chat.",
+            assistant_persona=persona,
         )
 
         self.assertEqual(result.critique.verdict.value, "pass")
@@ -455,6 +480,19 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
             client.aio.models.calls[0]["config"].system_instruction
         ).casefold()
         self.assertIn("conversation_ux", first_instruction)
+        self.assertIn("trusted_assistant_persona_policy", first_instruction)
+        self.assertIn("never change opening_line or behavior_rules", first_instruction)
+        self.assertNotIn(persona.display_name.casefold(), first_instruction)
+        self.assertNotIn(persona.opening_line.casefold(), first_instruction)
+        self.assertNotIn(persona.behavior_rules[0].casefold(), first_instruction)
+        self.assertNotIn(persona.safeguards[0].casefold(), first_instruction)
+        self.assertNotIn(persona.decision_rationale.casefold(), first_instruction)
+        untrusted_payload = str(client.aio.models.calls[0]["contents"])
+        self.assertIn("UNTRUSTED_ASSISTANT_PERSONA_DATA_JSON", untrusted_payload)
+        self.assertIn(persona.display_name, untrusted_payload)
+        self.assertIn(persona.opening_line, untrusted_payload)
+        self.assertIn(persona.behavior_rules[0], untrusted_payload)
+        self.assertNotIn(persona.decision_rationale, untrusted_payload)
         correction_text = "\n".join(
             str(getattr(part, "text", "") or "")
             for part in client.aio.models.calls[1]["contents"]
@@ -480,6 +518,7 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
                 "artifact_fields": ["css"],
                 "repair_instruction": "Reduce the panel border luminance slightly.",
                 "confidence": 0.86,
+                "issue_type": "brand_fit",
             }
         ]
         client = FakeClient(payload)
@@ -630,13 +669,21 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("HIGH", str(config.thinking_config.thinking_level).upper())
         instruction = str(config.system_instruction).lower()
         self.assertIn("untrusted", instruction)
+        self.assertIn("final art direction is the primary visual contract", instruction)
+        self.assertIn("brief is a secondary, optional signal", instruction)
+        self.assertIn("extremely strict", instruction)
+        self.assertIn("invent exactly three additional criteria", instruction)
+        self.assertIn("give each a 0–10 score", instruction)
+        self.assertIn("do not judge animation quality from static screenshots", instruction)
+        self.assertIn("vertical centering", instruction)
+        self.assertIn("premium", instruction)
         self.assertIn("closed: name launcher, button, or control", instruction)
         self.assertIn("open_initial: name panel", instruction)
         self.assertIn("after_turn_2: name message", instruction)
         self.assertIn("ai messages on the left", instruction)
         self.assertIn("user messages on the right", instruction)
         self.assertIn("visually distinct chat bubbles", instruction)
-        self.assertIn("quick replies are absent after the first user turn", instruction)
+        self.assertIn("zero, one, or two are all valid", instruction)
         contents = call["contents"]
         image_parts = [part for part in contents if getattr(part, "inline_data", None)]
         self.assertEqual(len(image_parts), 9)
@@ -646,6 +693,10 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(all(part.inline_data.mime_type == "image/jpeg" for part in image_parts))
         text = "\n".join(str(getattr(part, "text", "") or "") for part in contents)
+        self.assertLess(
+            text.index("UNTRUSTED ART DIRECTION DATA"),
+            text.index("UNTRUSTED BRIEF DATA"),
+        )
         self.assertIn("desktop.closed", text)
         self.assertIn("mobile.after_turn_2", text)
         self.assertEqual(
@@ -739,6 +790,13 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
         for state in ScreenshotState:
             self.assertEqual(result.critique.summary.count(state.value), 1)
         self.assertNotIn("Generic model summary", result.critique.summary)
+
+    async def test_empty_customer_brief_is_allowed_when_art_direction_exists(self):
+        result = await GeminiVisualCritic(client=FakeClient(response_payload())).critique(
+            audit=report(), brief="", art_direction="Direction"
+        )
+
+        self.assertEqual(result.critique.verdict.value, "pass")
 
     async def test_verdict_enum_is_case_insensitive_at_provider_boundary(self):
         payload = response_payload()
@@ -1421,6 +1479,7 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
                 "artifact_fields": ["css"],
                 "repair_instruction": "Align the visual grammar.",
                 "confidence": 0.9,
+                "issue_type": "brand_fit",
             }
         ]
         critic = GeminiVisualCritic(
@@ -1443,6 +1502,7 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
                 "artifact_fields": ["javascript"],
                 "repair_instruction": "Align the visual grammar.",
                 "confidence": 0.9,
+                "issue_type": "brand_fit",
             }
         ]
         critic = GeminiVisualCritic(
@@ -1452,6 +1512,205 @@ class GeminiVisualCriticTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(VisualCriticError) as caught:
             await critic.critique(audit=report(), brief="Brief", art_direction="Direction")
         self.assertEqual(caught.exception.error_code, "invalid_visual_critique")
+
+    async def test_structured_checks_are_mandatory_and_fail_requires_linked_finding(self):
+        payload = response_payload()
+        del payload["structured_checks"]
+        critic = GeminiVisualCritic(api_key="test-key", client=FakeClient(payload))
+        with self.assertRaises(VisualCriticError) as caught:
+            await critic.critique(audit=report(), brief="Brief", art_direction="Direction")
+        self.assertEqual(caught.exception.error_code, "invalid_visual_critique")
+
+        payload = response_payload()
+        check = next(
+            item
+            for item in payload["structured_checks"]
+            if item["check"] == "composer_alignment"
+        )
+        check.update(status="fail", score=5, issue_type="composer_alignment")
+        critic = GeminiVisualCritic(api_key="test-key", client=FakeClient(payload))
+        with self.assertRaises(VisualCriticError) as caught:
+            await critic.critique(audit=report(), brief="Brief", art_direction="Direction")
+        self.assertIn("missing finding", caught.exception.diagnostic or "")
+
+    async def test_structured_check_rejects_unknown_screenshot_id(self):
+        payload = response_payload()
+        payload["structured_checks"][0]["screenshot_ids"] = ["unknown.state"]
+        critic = GeminiVisualCritic(api_key="test-key", client=FakeClient(payload))
+        with self.assertRaises(VisualCriticError) as caught:
+            await critic.critique(audit=report(), brief="Brief", art_direction="Direction")
+        self.assertEqual(caught.exception.error_code, "invalid_visual_critique")
+
+    async def test_launcher_panel_origin_requires_measured_browser_geometry(self):
+        payload = response_payload()
+        check = next(
+            item
+            for item in payload["structured_checks"]
+            if item["check"] == "launcher_panel_origin"
+        )
+        check.update(status="fail", score=4, issue_type="launcher_panel_origin")
+        critic = GeminiVisualCritic(api_key="test-key", client=FakeClient(payload))
+        empty_geometry = object.__new__(BrowserAuditReport)
+        object.__setattr__(empty_geometry, "screenshots", report().screenshots)
+        object.__setattr__(empty_geometry, "layouts", ())
+        with patch("builder_lab.visual_critic._context_crops", return_value=()):
+            with self.assertRaises(VisualCriticError) as caught:
+                await critic.critique(
+                    audit=empty_geometry,
+                    brief="Brief",
+                    art_direction="Direction",
+                )
+        self.assertIn("measured browser geometry", caught.exception.diagnostic or "")
+
+    async def test_launcher_panel_origin_fail_requires_measured_mismatch_not_just_geometry(self):
+        payload = response_payload()
+        check = next(
+            item
+            for item in payload["structured_checks"]
+            if item["check"] == "launcher_panel_origin"
+        )
+        check.update(status="fail", score=4, issue_type="launcher_panel_origin")
+        critic = GeminiVisualCritic(api_key="test-key", client=FakeClient(payload))
+        with self.assertRaises(VisualCriticError) as caught:
+            await critic.critique(
+                audit=report(),
+                brief="Brief",
+                art_direction="Direction",
+            )
+        self.assertIn("requires measured browser geometry", caught.exception.diagnostic or "")
+
+        detached = report()
+        detached_layouts = []
+        for layout in detached.layouts:
+            if layout.state is not LayoutState.DESKTOP_OPEN_INITIAL:
+                detached_layouts.append(layout)
+                continue
+            detached_regions = tuple(
+                replace(region, x=0)
+                if region.region == "panel"
+                else region
+                for region in layout.regions
+            )
+            detached_layouts.append(replace(layout, regions=detached_regions))
+        detached = replace(detached, layouts=tuple(detached_layouts))
+        payload = response_payload()
+        check = next(
+            item
+            for item in payload["structured_checks"]
+            if item["check"] == "launcher_panel_origin"
+        )
+        check.update(status="fail", score=4, issue_type="launcher_panel_origin")
+        payload["verdict"] = "repair"
+        payload["findings"] = [
+            {
+                "finding_id": "launcher-origin",
+                "severity": "major",
+                "category": "responsive_integrity",
+                "screenshot_id": "desktop.open_initial",
+                "evidence": "The open panel is detached from the launcher anchor.",
+                "region": {
+                    "x": 0.1,
+                    "y": 0.1,
+                    "width": 0.4,
+                    "height": 0.4,
+                    "semantic_region": "panel",
+                },
+                "artifact_fields": ["css"],
+                "repair_instruction": "Anchor the panel to the launcher origin.",
+                "confidence": 0.9,
+                "issue_type": "launcher_panel_origin",
+            }
+        ]
+        result = await GeminiVisualCritic(
+            api_key="test-key",
+            client=FakeClient(payload),
+        ).critique(
+            audit=detached,
+            brief="Brief",
+            art_direction="Direction",
+        )
+        self.assertEqual(result.critique.verdict.value, "repair")
+
+    async def test_persona_pass_is_rejected_when_a_major_label_conflict_is_reported(self):
+        payload = response_payload()
+        payload["findings"] = [
+            {
+                "finding_id": "persona-mismatch",
+                "severity": "major",
+                "category": "functional_truth",
+                "screenshot_id": "desktop.open_initial",
+                "evidence": "The selected persona is named Мария, but the public header says AI-КОНСУЛЬТАНТ.",
+                "region": {
+                    "x": 0.2,
+                    "y": 0.1,
+                    "width": 0.6,
+                    "height": 0.2,
+                    "semantic_region": "header",
+                },
+                "artifact_fields": ["body_html"],
+                "repair_instruction": "Use the exact selected persona name and role in the public header.",
+                "confidence": 0.94,
+                "issue_type": "persona_label_mismatch",
+            }
+        ]
+        critic = GeminiVisualCritic(api_key="test-key", client=FakeClient(payload))
+        with self.assertRaises(VisualCriticError) as caught:
+            await critic.critique(audit=report(), brief="Brief", art_direction="Direction")
+        assert "persona" in str(caught.exception).lower()
+
+
+    async def test_runtime_direct_critic_rejects_unsupported_scope_claims(self):
+        payload = response_payload()
+        payload["summary"] = "Studio reference animation timing is incorrect."
+        critic = GeminiVisualCritic(api_key="test-key", client=FakeClient(payload))
+
+        with self.assertRaises(VisualCriticError) as caught:
+            await critic.critique(
+                audit=report(),
+                brief="",
+                art_direction="Direction",
+            )
+
+        self.assertEqual(
+            caught.exception.diagnostic,
+            "unsupported runtime_direct evidence scope: studio,reference,motion",
+        )
+
+    async def test_critic_rejects_extra_finding_fields_like_provider_schema(self):
+        payload = response_payload()
+        payload["verdict"] = "repair"
+        payload["findings"] = [
+            {
+                "finding_id": "extra-field",
+                "severity": "major",
+                "category": "site_fit",
+                "screenshot_id": "desktop.open_initial",
+                "evidence": "A visible mismatch is present.",
+                "region": {
+                    "x": 0.1,
+                    "y": 0.1,
+                    "width": 0.3,
+                    "height": 0.3,
+                    "semantic_region": "panel",
+                },
+                "artifact_fields": ["css"],
+                "repair_instruction": "Align the visible surface.",
+                "confidence": 0.9,
+                "issue_type": "brand_fit",
+                "unexpected": "must be rejected",
+            }
+        ]
+        critic = GeminiVisualCritic(api_key="test-key", client=FakeClient(payload))
+
+        with self.assertRaises(VisualCriticError) as caught:
+            await critic.critique(
+                audit=report(),
+                brief="",
+                art_direction="Direction",
+            )
+
+        self.assertEqual(caught.exception.error_code, "invalid_visual_critique")
+        self.assertIn("finding fields", caught.exception.diagnostic or "")
 
 
 if __name__ == "__main__":

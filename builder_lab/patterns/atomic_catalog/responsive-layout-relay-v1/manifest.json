@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "responsive-layout-relay",
+  "version": 1,
+  "category": "responsive_transition",
+  "status": "active",
+  "title": "Эстафета компоновки",
+  "summary": "Цветные маркеры передают роли header, истории и composer из desktop-панели в mobile-sheet.",
+  "ai_description": "Три цветовых маркера показывают, куда перемещаются header, история и composer при сужении экрана. Связующие линии делают переход desktop → mobile понятным даже в статичном кадре. В Pattern Lab композиция показывает исходное состояние, основную фазу и устойчивое завершение, поэтому визуальный смысл читается без скриптов и пояснений разработчика. Модель может адаптировать оттенки, масштаб и темп под бренд, сохраняя иерархию, доступный контраст и заявленную идею: цветные маркеры передают роли header, истории и composer из desktop-панели в mobile-sheet.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "98db5843b8535df89190c156a5ea3408b099e6012065d52775cc11fc0f5d7db7",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "ready_for_review",
+    "pattern_role": "structural"
+  }
+}

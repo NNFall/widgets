@@ -26,7 +26,8 @@ from app.saas.models import (
     Subscription,
     UserIdentity,
 )
-from builder_lab.models import WidgetArtifact
+from builder_lab.models import AssistantPersona, WidgetArtifact
+from builder_lab.persona import assistant_persona_from_artifact_config
 from builder_lab.validation import validate_artifact
 
 _RELEASE_QUALITY = frozenset({"accepted", "verified"})
@@ -713,6 +714,7 @@ class PublicationService:
         artifact_id: UUID,
         candidate: WidgetArtifact,
         project_version_id: UUID | None,
+        assistant_persona: AssistantPersona | None,
     ) -> dict[str, Any]:
         manifest: dict[str, Any] = {
             "version": 1 if project_version_id is None else 2,
@@ -721,6 +723,8 @@ class PublicationService:
         }
         if project_version_id is not None:
             manifest["project_version_id"] = str(project_version_id)
+        if assistant_persona is not None:
+            manifest["assistant_persona"] = assistant_persona.to_dict()
         return manifest
 
     def _new_release(
@@ -736,6 +740,9 @@ class PublicationService:
             artifact_id=artifact.id,
             candidate=candidate,
             project_version_id=project_version_id,
+            assistant_persona=assistant_persona_from_artifact_config(
+                artifact.config
+            ),
         )
         return PublicationRelease(
             id=uuid4(),
@@ -792,6 +799,17 @@ class PublicationService:
             if version == 1
             else {"version", "artifact_id", "project_version_id", "artifact"}
         )
+        if "assistant_persona" in manifest:
+            expected_manifest_keys.add("assistant_persona")
+        persona_payload = manifest.get("assistant_persona")
+        try:
+            valid_persona = (
+                "assistant_persona" not in manifest
+                or isinstance(persona_payload, dict)
+                and AssistantPersona.from_dict(persona_payload) is not None
+            )
+        except (TypeError, ValueError):
+            valid_persona = False
         valid_linkage = (
             version == 1
             and release.project_version_id is None
@@ -801,6 +819,7 @@ class PublicationService:
         )
         if not (
             valid_manifest_version
+            and valid_persona
             and set(manifest) == expected_manifest_keys
             and valid_linkage
             and manifest.get("artifact_id") == str(release.artifact_id)

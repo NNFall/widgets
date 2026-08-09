@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "widget-open-spring-unfold",
+  "version": 1,
+  "category": "widget_open",
+  "status": "active",
+  "title": "Пружинное раскрытие из launcher",
+  "summary": "Панель вырастает из нижнего угла, разворачивает контур и последовательно проявляет содержимое.",
+  "ai_description": "Выразительное открытие виджета начинается из компактной точки launcher: сначала формируется внешний контур панели, затем оболочка мягко распрямляется с контролируемой пружиной, после чего каскадом появляются header, сообщение и composer. Движение ощущается цельным и объясняет связь между закрытым и открытым состоянием. Модель может менять направление раскрытия, характер пружины, задержки внутренних слоёв и глубину тени, сохраняя понятную геометрию перехода.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "creative",
+  "incompatible_with": [],
+  "implementation_sha256": "df5a9308dd2d0ee8e82e840f8a2a446b4418e703aa64cf069b7e41f9c6d82eb3",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved",
+    "pattern_role": "signature"
+  }
+}

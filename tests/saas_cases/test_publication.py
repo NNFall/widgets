@@ -42,6 +42,7 @@ from app.publication.service import (
     PublicationUpgradeRequired,
     ReleaseCorrupt,
 )
+from app.widgets.loader import render_loader, render_runtime
 from app.saas.models import (
     GenerationArtifact,
     GenerationEvent,
@@ -53,11 +54,27 @@ from app.saas.models import (
     Subscription,
     UserIdentity,
 )
-from builder_lab.models import BuilderRequest, EngineName
+from builder_lab.models import AssistantPersona, BuilderRequest, EngineName
 from tests.builder_lab_cases.test_validation import artifact
 
 
 POSTGRES_URL = os.getenv("KAIGO_TEST_POSTGRES_URL")
+
+
+def _assistant_persona() -> AssistantPersona:
+    return AssistantPersona.from_dict(
+        {
+            "schema_version": "kaigo.assistant-persona.v1",
+            "employee_type": "concierge",
+            "display_name": "Анна",
+            "role_summary": "Помогает посетителю сориентироваться в проверенных услугах.",
+            "voice_style": "friendly",
+            "opening_line": "Добрый день! Чем помочь?",
+            "behavior_rules": ["Отвечай кратко.", "Уточняй задачу посетителя."],
+            "safeguards": ["Не придумывай факты."],
+            "decision_rationale": "Дружелюбный консьерж уместен для публичного чата.",
+        }
+    )
 
 
 class FakePublicChatService:
@@ -473,6 +490,31 @@ async def test_publish_is_artifact_idempotent_stable_and_immutable(publication_d
         assert original.project_version_id is None
         active = await database.get(PublicationRelease, second.release_id)
         assert active.project_version_id is None
+
+
+@pytest.mark.asyncio
+async def test_publish_carries_selected_persona_into_public_runtime(publication_db) -> None:
+    _engine, factory, ids = publication_db
+    async with factory() as database, database.begin():
+        artifact_record = await database.get(GenerationArtifact, ids["first"])
+        assert artifact_record is not None
+        artifact_record.config = {
+            **artifact_record.config,
+            "assistant_persona": _assistant_persona().to_dict(),
+        }
+
+    published = await PublicationService(factory).publish(
+        ids["project"],
+        actor_user_id=10,
+        tenant_id=1,
+        artifact_id=ids["first"],
+    )
+
+    assert published.manifest["assistant_persona"]["display_name"] == "Анна"
+    runtime = render_runtime(published)
+    assert '<iframe id="kaigo-generated-widget" title="Анна"' in runtime
+    assert "AI-консультант" not in runtime
+    assert "AI-консультант" not in render_loader()
 
 
 @pytest.mark.asyncio
@@ -1475,6 +1517,10 @@ async def test_public_chat_is_bound_to_active_release_and_approved_embed_origin(
         async with factory() as database, database.begin():
             published_artifact = await database.get(GenerationArtifact, ids["first"])
             assert published_artifact is not None
+            published_artifact.config = {
+                **published_artifact.config,
+                "assistant_persona": _assistant_persona().to_dict(),
+            }
             database.add(
                 GenerationEvent(
                     id=702,
@@ -1543,6 +1589,35 @@ async def test_public_chat_is_bound_to_active_release_and_approved_embed_origin(
         assert stale.status == 409
         assert len(chat_service.calls) == 1
         assert chat_service.calls[0]["context"].reference_context == ""
+        assert chat_service.calls[0]["context"].assistant_persona == _assistant_persona()
+
+        async with factory() as database, database.begin():
+            malformed_artifact = await database.get(
+                GenerationArtifact,
+                ids["first"],
+            )
+            assert malformed_artifact is not None
+            malformed_artifact.config = {
+                **malformed_artifact.config,
+                "assistant_persona": {"schema_version": "broken"},
+            }
+        malformed = await client.post(
+            f"/runtime/{key}/chat",
+            data=json.dumps(
+                {
+                    **request_body,
+                    "request_id": "public-request-malformed-1",
+                }
+            ),
+            headers={
+                "Content-Type": "text/plain;charset=UTF-8",
+                "Origin": "null",
+                "Referer": str(client.make_url(f"/runtime/{key}")),
+            },
+        )
+        assert malformed.status == 409
+        assert (await malformed.json())["error"]["code"] == "chat_not_ready"
+        assert len(chat_service.calls) == 1
     finally:
         await client.close()
         await engine.dispose()

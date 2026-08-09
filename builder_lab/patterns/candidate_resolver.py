@@ -28,6 +28,7 @@ from .atomic_models import (
     normalize_effective_approved,
 )
 from .atomic_registry import AtomicPatternRegistry, AtomicPatternRegistryError
+from .atomic_quality import compute_atomic_quality_profile, effective_review_state_for
 
 
 # The limit is intentionally generous enough for the shipped technical
@@ -165,6 +166,17 @@ def _resolve_definition(
     if not _effective_approved(definition, effective_approved):
         raise PatternCandidateResolutionError(
             f"candidate {candidate.pattern_id}@{candidate.version} is not effectively approved"
+        )
+    quality = compute_atomic_quality_profile(
+        definition,
+        effective_review_state=effective_review_state_for(
+            definition,
+            effective_approved,
+        ),
+    )
+    if not quality.selector_eligible:
+        raise PatternCandidateResolutionError(
+            f"candidate {candidate.pattern_id}@{candidate.version} is not quality-eligible"
         )
     return definition
 

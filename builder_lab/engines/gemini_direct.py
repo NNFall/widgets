@@ -28,6 +28,7 @@ from app.models.router import ModelRouter
 
 from ..model_config import generation_policy, normalize_thinking_level
 from ..models import (
+    AssistantPersona,
     BuilderRequest,
     ConceptRole,
     ConceptRoleBrief,
@@ -42,11 +43,13 @@ from ..models import (
 from ..visual_models import VisualFinding
 from ..prompts import (
     ARTIFACT_JSON_SCHEMA,
+    ASSISTANT_PERSONA_JSON_SCHEMA,
     COMPOSITION_PLAN_JSON_SCHEMA,
     CONCEPT_ROLE_BRIEF_JSON_SCHEMA,
     DIRECTION_JUDGE_JSON_SCHEMA,
     DIRECTION_PROPOSAL_JSON_SCHEMA,
     PATTERN_CANDIDATE_PLAN_JSON_SCHEMA,
+    build_assistant_persona_prompt,
     build_direction_judge_prompt,
     build_direction_proposal_prompt,
     build_concept_role_prompt,
@@ -55,6 +58,7 @@ from ..prompts import (
     build_stage_prompt,
 )
 from .base import (
+    AssistantPersonaResult,
     BuilderEngineError,
     CompositionPlanResult,
     ConceptRoleResult,
@@ -340,6 +344,60 @@ class GeminiDirectEngine:
             ),
             persona=base.persona if persona is None else persona,
         )
+
+    async def select_assistant_persona(
+        self,
+        *,
+        request: BuilderRequest,
+    ) -> AssistantPersonaResult:
+        prompt = build_assistant_persona_prompt(request)
+        total_usage = TokenUsage()
+        routing_deadline = self._new_routing_deadline()
+        semantic_attempts = 2 if self._model_router is not None else 3
+        for attempt in range(semantic_attempts):
+            attempt_prompt = prompt
+            if attempt:
+                attempt_prompt += (
+                    "\nCORRECTION: The previous JSON violated the exact assistant "
+                    "persona contract or a field budget. Return a fresh complete object "
+                    "with exactly the schema fields and no commentary."
+                )
+            try:
+                response = await self._generate_structured(
+                    prompt=attempt_prompt,
+                    schema=ASSISTANT_PERSONA_JSON_SCHEMA,
+                    temperature=min(request.creativity, 0.6),
+                    routing_deadline=routing_deadline,
+                    context=self._context(
+                        operation="persona_selector",
+                        semantic_attempt=attempt + 1,
+                    ),
+                )
+            except BuilderEngineError as exc:
+                exc.usage = total_usage + exc.usage
+                raise
+            total_usage = _accumulate_usage(total_usage, response)
+            try:
+                persona = AssistantPersona.from_dict(_response_payload(response))
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                if attempt < semantic_attempts - 1:
+                    continue
+                raise BuilderEngineError(
+                    "invalid_artifact",
+                    "Сервис генерации вернул некорректный контракт AI-сотрудника",
+                    diagnostic=f"{type(exc).__name__}: {exc}",
+                    usage=total_usage,
+                ) from exc
+            return AssistantPersonaResult(
+                persona=persona,
+                usage=total_usage,
+                provider_request_id=(
+                    getattr(response, "request_id", None)
+                    or getattr(response, "response_id", None)
+                ),
+                diagnostic=_response_diagnostic(response, fallback_model=self.model),
+            )
+        raise AssertionError("unreachable assistant persona loop")
 
     async def propose_direction(
         self,

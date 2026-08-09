@@ -30,16 +30,66 @@ from app.saas.models import (
 )
 from builder_lab.models import Stage
 from builder_lab.patterns.atomic_models import (
+    AtomicPatternCategory,
     AtomicPatternStatus,
     PatternCandidate,
     PatternCandidateGroup,
     PatternCandidatePlan,
 )
-from builder_lab.patterns.atomic_registry import load_builtin_atomic_registry
+from builder_lab.patterns.atomic_registry import (
+    AtomicPatternRegistry,
+    load_builtin_atomic_registry as _load_builtin_atomic_registry,
+)
+from builder_lab.patterns.atomic_quality import compute_atomic_quality_profile
 from builder_lab.patterns.candidate_resolver import STAGE_PATTERN_CATEGORIES
 
 
 POSTGRES_URL = os.getenv("KAIGO_TEST_POSTGRES_URL")
+
+
+def load_builtin_atomic_registry() -> AtomicPatternRegistry:
+    """Test registry with explicit roles and approved visual fixtures."""
+
+    source = _load_builtin_atomic_registry()
+    signature = {
+        AtomicPatternCategory.WIDGET_OPEN,
+        AtomicPatternCategory.WIDGET_CLOSE,
+        AtomicPatternCategory.LAUNCHER_ATTENTION,
+        AtomicPatternCategory.MESSAGE_SEND,
+        AtomicPatternCategory.ASSISTANT_MESSAGE_ENTER,
+        AtomicPatternCategory.USER_MESSAGE_ENTER,
+    }
+    structural = {
+        AtomicPatternCategory.SHELL_LAYOUT,
+        AtomicPatternCategory.RESPONSIVE_TRANSITION,
+    }
+    definitions = []
+    for definition in source.definitions:
+        role = (
+            "fixture"
+            if definition.pattern_id.endswith("-technical")
+            else "signature"
+            if definition.category in signature
+            else "structural"
+            if definition.category in structural
+            else "support"
+        )
+        state = (
+            definition.provenance.get("review_state")
+            if definition.pattern_id.endswith("-technical")
+            else "approved"
+        )
+        definitions.append(
+            replace(
+                definition,
+                provenance={
+                    **definition.provenance,
+                    "review_state": state,
+                    "pattern_role": role,
+                },
+            )
+        )
+    return AtomicPatternRegistry(tuple(definitions))
 
 
 def complete_candidate_plan() -> PatternCandidatePlan:
@@ -47,6 +97,8 @@ def complete_candidate_plan() -> PatternCandidatePlan:
     grouped = {
         definition.category: definition
         for definition in registry.definitions
+        if definition.provenance["review_state"] == "approved"
+        and compute_atomic_quality_profile(definition).selector_eligible
     }
     groups = tuple(
         PatternCandidateGroup(
@@ -208,6 +260,42 @@ async def test_candidate_plan_round_trips_without_live_registry() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_plan_rejects_technical_fixture_even_when_database_approved() -> None:
+    engine, factory, run_id = await database()
+    registry = load_builtin_atomic_registry()
+    technical = registry.resolve("widget-open-technical", 1)
+    plan = PatternCandidatePlan(
+        schema_version=2,
+        direction_id="candidate-technical",
+        groups=(
+            PatternCandidateGroup(
+                category=technical.category,
+                candidates=(
+                    PatternCandidate(
+                        pattern_id=technical.pattern_id,
+                        version=technical.version,
+                        rank=1,
+                        reason="fixture replay",
+                    ),
+                ),
+            ),
+        ),
+        summary="technical fixture replay",
+    )
+    try:
+        async with factory() as session, session.begin():
+            repository = PatternCandidateRepository(session)
+            with pytest.raises(ValueError, match="quality"):
+                await repository.create_plan(
+                    run_id=run_id,
+                    plan=plan,
+                    registry=registry,
+                )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_candidate_plan_is_idempotent_and_rejects_conflicting_replay() -> None:
     engine, factory, run_id = await database()
     plan = complete_candidate_plan()
@@ -236,6 +324,42 @@ async def test_candidate_plan_is_idempotent_and_rejects_conflicting_replay() -> 
                     run_id=run_id,
                     plan=conflicting,
                     registry=load_builtin_atomic_registry(),
+                )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_idempotent_replay_rechecks_effective_quality_gate() -> None:
+    """A previously persisted plan cannot bypass a later review rejection."""
+
+    engine, factory, run_id = await database()
+    registry = load_builtin_atomic_registry()
+    plan = complete_candidate_plan()
+    first_candidate = plan.groups[0].candidates[0]
+    try:
+        async with factory() as session, session.begin():
+            repository = PatternCandidateRepository(session)
+            await repository.create_plan(run_id=run_id, plan=plan, registry=registry)
+            persisted = await session.scalar(
+                select(WidgetPatternVersion).where(
+                    WidgetPatternVersion.pattern_id == first_candidate.pattern_id,
+                    WidgetPatternVersion.version == first_candidate.version,
+                )
+            )
+            assert persisted is not None
+            await repository.append_review(
+                persisted.id,
+                "reviewer@example.com",
+                "rejected",
+                "Needs a stronger reviewed candidate.",
+            )
+
+            with pytest.raises(ValueError, match="effectively approved"):
+                await repository.create_plan(
+                    run_id=run_id,
+                    plan=plan,
+                    registry=registry,
                 )
     finally:
         await engine.dispose()
@@ -340,7 +464,11 @@ async def test_sync_registry_updates_lifecycle_but_rejects_full_snapshot_or_hash
 async def test_effective_review_uses_latest_override_and_imported_fallback() -> None:
     engine, factory, run_id = await database()
     registry = load_builtin_atomic_registry()
-    definition = registry.definitions[0]
+    definition = next(
+        item
+        for item in registry.definitions
+        if item.provenance["review_state"] == "approved"
+    )
     try:
         async with factory() as session, session.begin():
             repository = PatternCandidateRepository(session)

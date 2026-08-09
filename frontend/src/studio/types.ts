@@ -1,7 +1,10 @@
 export type BuilderEngine = 'direct' | 'antigravity';
 export type BuilderRunStatus = 'created' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type BuilderStage =
+  | 'reference_analysis'
+  | 'persona'
   | 'art_direction'
+  | 'composition'
   | 'foundation'
   | 'identity'
   | 'conversation'

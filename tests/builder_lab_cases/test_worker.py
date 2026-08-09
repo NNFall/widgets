@@ -34,6 +34,7 @@ from app.saas.models import (
     Project,
 )
 from builder_lab.engines.base import (
+    AssistantPersonaResult,
     BuilderEngineError,
     CompositionPlanResult,
     EngineResult,
@@ -42,6 +43,7 @@ from builder_lab.forensics.config import GenerationForensicsConfig
 from builder_lab.forensics.models import ForensicBlob
 from builder_lab.forensics.recorder import GenerationForensicRecorder
 from builder_lab.models import (
+    AssistantPersona,
     BuilderRequest,
     DirectionProposal,
     DirectionRole,
@@ -71,6 +73,25 @@ from tests.builder_lab_cases.test_validation import artifact
 
 
 POSTGRES_URL = os.getenv("KAIGO_TEST_POSTGRES_URL")
+
+
+def _assistant_persona() -> AssistantPersona:
+    return AssistantPersona.from_dict(
+        {
+            "schema_version": "kaigo.assistant-persona.v1",
+            "employee_type": "consultant",
+            "display_name": "Анна",
+            "role_summary": "Спокойно помогает посетителю сориентироваться.",
+            "voice_style": "professional",
+            "opening_line": "Добрый день! Чем помочь?",
+            "behavior_rules": (
+                "Коротко приветствуй и уточняй задачу.",
+                "Отвечай кратко и по делу.",
+            ),
+            "safeguards": ("Не придумывай факты и услуги.",),
+            "decision_rationale": "Нейтральный консультант соответствует брифу.",
+        }
+    )
 
 
 def test_worker_module_exposes_durable_queue_contract() -> None:
@@ -206,7 +227,7 @@ def test_worker_cli_rejects_sync_stage_handler() -> None:
         load_stage_handler("builder_lab.worker:STAGE_PUBLIC_NAMES")
 
 
-def test_runtime_router_has_explicit_repair_and_code_review_policies(
+def test_runtime_router_has_explicit_persona_repair_and_code_review_policies(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION", "100")
@@ -221,6 +242,11 @@ def test_runtime_router_has_explicit_repair_and_code_review_policies(
     )
     router = run_builder_worker.make_runtime_model_router(config, None)
 
+    assert ("persona_selector", "direct") in router._policies
+    assert ("persona_selector", "express") in router._policies
+    assert router._policies[("persona_selector", "direct")].prompt_version == (
+        "assistant-persona-v1"
+    )
     assert ("repair", "direct") in router._policies
     assert ("repair", "express") in router._policies
     assert ("code_review", "direct") in router._policies
@@ -243,6 +269,7 @@ def test_runtime_router_can_use_codex_without_gemini_or_price_env(
         codex_bridge_socket_path="/run/kaigo-codex/bridge.sock",
         codex_bridge_timeout_seconds=900,
         codex_bridge_model="gpt-5.6-luna",
+        codex_bridge_visual_judge_model="gpt-5.6-sol",
         gemini_api_key=None,
         gemini_base_url="https://gemini.example",
         direct_model="gemini-builder",
@@ -254,14 +281,16 @@ def test_runtime_router_can_use_codex_without_gemini_or_price_env(
     router = run_builder_worker.make_runtime_model_router(config, None)
 
     assert set(router._providers) == {"codex_bridge"}
-    for policy in router._policies.values():
+    for (role, _mode), policy in router._policies.items():
         assert policy.targets[0].provider == "codex_bridge"
-        assert policy.targets[0].model == "gpt-5.6-luna"
+        assert policy.targets[0].model == (
+            "gpt-5.6-sol" if role == "visual_judge" else "gpt-5.6-luna"
+        )
         assert policy.targets[0].input_price_microusd_per_million is None
         assert policy.targets[0].output_price_microusd_per_million is None
 
 
-def test_codex_runtime_does_not_split_timeout_with_external_fallbacks(
+def test_codex_runtime_uses_one_bounded_retry_without_external_fallbacks(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION", "100")
@@ -271,6 +300,7 @@ def test_codex_runtime_does_not_split_timeout_with_external_fallbacks(
         codex_bridge_socket_path="/run/kaigo-codex/bridge.sock",
         codex_bridge_timeout_seconds=900,
         codex_bridge_model="gpt-5.6-luna",
+        codex_bridge_visual_judge_model="gpt-5.6-sol",
         gemini_api_key="test-gemini-key",
         gemini_base_url="https://gemini.example",
         direct_model="gemini-builder",
@@ -283,8 +313,17 @@ def test_codex_runtime_does_not_split_timeout_with_external_fallbacks(
 
     assert all(
         [(target.provider, target.model) for target in policy.targets]
-        == [("codex_bridge", "gpt-5.6-luna")]
-        for policy in router._policies.values()
+        == [
+            (
+                "codex_bridge",
+                "gpt-5.6-sol" if role == "visual_judge" else "gpt-5.6-luna",
+            ),
+            (
+                "codex_bridge",
+                "gpt-5.6-sol" if role == "visual_judge" else "gpt-5.6-luna",
+            ),
+        ]
+        for (role, _mode), policy in router._policies.items()
     )
 
 
@@ -296,6 +335,7 @@ def test_codex_runtime_keeps_agentrouter_configured_but_out_of_active_route(
         codex_bridge_socket_path="/run/kaigo-codex/bridge.sock",
         codex_bridge_timeout_seconds=900,
         codex_bridge_model="gpt-5.6-luna",
+        codex_bridge_visual_judge_model="gpt-5.6-sol",
         gemini_api_key=None,
         gemini_base_url="https://gemini.example",
         direct_model="gemini-builder",
@@ -320,11 +360,18 @@ def test_codex_runtime_keeps_agentrouter_configured_but_out_of_active_route(
 
     direction = router._policies[("direction_candidate", "direct")].targets
     builder = router._policies[("widget_generator", "direct")].targets
+    judge = router._policies[("visual_judge", "direct")].targets
     assert [(target.provider, target.model) for target in direction] == [
+        ("codex_bridge", "gpt-5.6-luna"),
         ("codex_bridge", "gpt-5.6-luna"),
     ]
     assert [(target.provider, target.model) for target in builder] == [
         ("codex_bridge", "gpt-5.6-luna"),
+        ("codex_bridge", "gpt-5.6-luna"),
+    ]
+    assert [(target.provider, target.model) for target in judge] == [
+        ("codex_bridge", "gpt-5.6-sol"),
+        ("codex_bridge", "gpt-5.6-sol"),
     ]
     assert "agentrouter" in router._providers
 
@@ -370,6 +417,7 @@ def test_runtime_router_retries_transient_direct_gemini_builder_failure(
 
     for mode in ("direct", "express"):
         for role in (
+            "persona_selector",
             "direction_candidate",
             "direction_judge",
             "composition_planner",
@@ -425,6 +473,7 @@ def test_runtime_router_maps_hybrid_roles_to_gpt_glm_and_gemini(
 
     for mode in ("direct", "express"):
         for role in (
+            "persona_selector",
             "direction_candidate",
             "direction_judge",
             "composition_planner",
@@ -760,6 +809,66 @@ async def test_builtin_handler_executes_only_claimed_engine_stage() -> None:
     assert engine.closed
     assert queue.dispatch_receipts == [(claim, "antigravity")]
     assert dispatch_order == ["receipt_committed", "provider_dispatched"]
+
+
+@pytest.mark.asyncio
+async def test_builtin_handler_selects_persona_as_its_own_routed_stage() -> None:
+    request = BuilderRequest(
+        engine=EngineName.DIRECT,
+        brief="Choose one grounded employee",
+        reference_context='{"business":"architecture studio"}',
+    )
+    routed_roles = []
+
+    class FakeQueue:
+        async def stage_input(self, _claim):
+            return StageInput(request=request)
+
+    class FakeEngine:
+        def __init__(self):
+            self.closed = False
+
+        async def select_assistant_persona(self, **kwargs):
+            assert kwargs == {"request": request}
+            return AssistantPersonaResult(
+                persona=_assistant_persona(),
+                usage=TokenUsage(prompt_tokens=8, output_tokens=4),
+                provider_request_id="persona-call-1",
+            )
+
+        async def close(self):
+            self.closed = True
+
+    engine = FakeEngine()
+
+    def routed_factory(_claim, role):
+        routed_roles.append(role)
+        return engine
+
+    handler = OrchestratorStageHandler(
+        queue=FakeQueue(),
+        engine_factories={},
+        reference_analyzer=lambda _url: None,
+        routed_engine_factory=routed_factory,
+    )
+    claim = RunClaim(
+        run_id=uuid4(),
+        project_id=uuid4(),
+        worker_id="worker",
+        mode="direct",
+        next_stage="persona",
+        last_completed_stage="reference_analysis",
+        lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=60),
+    )
+
+    result = await handler(claim)
+
+    assert routed_roles == ["persona_selector"]
+    assert result.artifact is None
+    assert result.request == replace(request, assistant_persona=_assistant_persona())
+    assert result.output_refs == ("persona-call-1",)
+    assert result.usage.total_tokens == 12
+    assert engine.closed
 
 
 def _composition_payload() -> dict[str, object]:
@@ -1271,7 +1380,7 @@ async def test_worker_materializes_forensics_before_stage_handler(tmp_path) -> N
         heartbeat_interval=1,
     )
     try:
-        assert await worker._run_claim(claim) == "art_direction"
+        assert await worker._run_claim(claim) == "persona"
         assert handler_observed_active
     finally:
         await engine.dispose()
@@ -1490,6 +1599,144 @@ async def test_stage_input_loads_durable_request_under_attempt_fence(tmp_path) -
 
 
 @pytest.mark.asyncio
+async def test_persona_stage_boundary_and_restart_preserve_durable_request(
+    tmp_path,
+) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    request = BuilderRequest(
+        engine=EngineName.DIRECT,
+        brief="Persist the selected employee",
+        reference_context='{"business":"architecture studio"}',
+    )
+    async with factory() as database, database.begin():
+        run = GenerationRun(
+            project_id=project_id,
+            mode="direct",
+            state="queued",
+            progress=0,
+            next_event_sequence=2,
+            idempotency_key="worker-durable-persona",
+        )
+        database.add(run)
+        await database.flush()
+        database.add(
+            GenerationEvent(
+                id=1,
+                run_id=run.id,
+                sequence=1,
+                event_type="run.created",
+                public_message="Запуск создан",
+                payload={"request": request.to_dict()},
+            )
+        )
+        project = await database.get(Project, project_id)
+        assert project is not None
+        project.active_run_id = run.id
+        run_id = run.id
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    try:
+        reference_claim = await queue.claim("reference-worker")
+        assert isinstance(reference_claim, RunClaim)
+        assert reference_claim.next_stage == "reference_analysis"
+        await queue.stage_result(
+            reference_claim,
+            StageResult(public_message="Reference ready", request=request),
+        )
+        assert await queue.finalize_stage(reference_claim) == "persona"
+
+        persona_claim = await queue.continue_claim(
+            run_id,
+            worker_id="reference-worker",
+        )
+        assert persona_claim.next_stage == "persona"
+        with pytest.raises(ValueError, match="assistant persona"):
+            await queue.stage_result(
+                persona_claim,
+                StageResult(public_message="Missing persona", request=request),
+            )
+
+        selected_request = replace(
+            request,
+            assistant_persona=_assistant_persona(),
+        )
+        await queue.stage_result(
+            persona_claim,
+            StageResult(
+                public_message="Persona ready",
+                request=selected_request,
+                usage=TokenUsage(prompt_tokens=8, output_tokens=4),
+            ),
+        )
+        async with factory() as database, database.begin():
+            run = await database.get(GenerationRun, run_id)
+            assert run is not None
+            run.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+
+        replacement = await queue.claim("replacement-worker")
+        assert isinstance(replacement, RunClaim)
+        assert replacement.next_stage == "persona"
+        assert replacement.attempt_id == persona_claim.attempt_id
+        staged = await queue.staged_result(replacement)
+        assert staged is not None
+        assert staged.request == selected_request
+
+        assert await queue.finalize_stage(replacement) == "art_direction"
+        direction_claim = await queue.continue_claim(
+            run_id,
+            worker_id="replacement-worker",
+        )
+        assert direction_claim.next_stage == "art_direction"
+        stage_input = await queue.stage_input(direction_claim)
+        assert stage_input.request == selected_request
+        assert stage_input.request.assistant_persona == _assistant_persona()
+
+        async with factory() as database, database.begin():
+            created = await database.scalar(
+                select(GenerationEvent).where(
+                    GenerationEvent.run_id == run_id,
+                    GenerationEvent.event_type == "run.created",
+                )
+            )
+            assert created is not None
+            created.payload = {"request": request.to_dict()}
+        with pytest.raises(RuntimeError, match="durable assistant persona"):
+            await queue.stage_input(direction_claim)
+        async with factory() as database, database.begin():
+            created = await database.scalar(
+                select(GenerationEvent).where(
+                    GenerationEvent.run_id == run_id,
+                    GenerationEvent.event_type == "run.created",
+                )
+            )
+            assert created is not None
+            created.payload = {"request": selected_request.to_dict()}
+        restored_input = await queue.stage_input(direction_claim)
+        assert restored_input.request == selected_request
+
+        candidate = artifact(revision=1, stage=Stage.ART_DIRECTION)
+        await queue.stage_result(
+            direction_claim,
+            StageResult(public_message="Direction ready", artifact=candidate),
+        )
+        assert await queue.finalize_stage(direction_claim) == "composition"
+
+        async with factory() as database:
+            persisted = await database.scalar(
+                select(GenerationArtifact).where(
+                    GenerationArtifact.run_id == run_id,
+                    GenerationArtifact.revision == 1,
+                )
+            )
+            assert persisted is not None
+            assert persisted.config == {
+                "artifact": candidate.to_dict(),
+                "assistant_persona": _assistant_persona().to_dict(),
+            }
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_only_one_worker_claims_a_run(tmp_path) -> None:
     engine, factory, project_id = await _database(tmp_path)
     queue = PostgresWorkerQueue(factory, lease_seconds=30)
@@ -1538,7 +1785,7 @@ async def test_claim_stages_and_completes_the_same_persisted_attempt(tmp_path) -
             assert attempt.status == "result_staged"
             assert attempt.finished_at is None
 
-        assert await queue.finalize_stage(claim) == "art_direction"
+        assert await queue.finalize_stage(claim) == "persona"
         async with factory() as database:
             attempt = await database.get(GenerationStageAttempt, claim.attempt_id)
             assert attempt is not None
@@ -1562,7 +1809,20 @@ async def test_finalize_artifact_links_only_calls_from_exact_stage_attempt(
             reference_claim,
             StageResult(public_message="analysis ready"),
         )
-        assert await queue.finalize_stage(reference_claim) == "art_direction"
+        assert await queue.finalize_stage(reference_claim) == "persona"
+        persona_claim = await queue.continue_claim(
+            run_id,
+            worker_id="artifact-worker",
+        )
+        assert persona_claim.next_stage == "persona"
+        assert (
+            await queue.complete_stage(
+                run_id,
+                "persona",
+                worker_id="artifact-worker",
+            )
+            == "art_direction"
+        )
 
         stale_attempt_id = uuid4()
         async with factory() as database, database.begin():
@@ -1764,7 +2024,7 @@ async def test_legacy_compatibility_checkpoint_backfills_completed_attempt(
             worker_id="legacy-worker",
         )
 
-        assert next_stage == "art_direction"
+        assert next_stage == "persona"
         async with factory() as database:
             run = await database.get(GenerationRun, run_id)
             attempt = await database.get(
@@ -1953,6 +2213,11 @@ async def test_expired_lease_resumes_from_last_completed_stage(tmp_path) -> None
         await queue.complete_stage(
             run_id, "reference_analysis", worker_id="original"
         )
+        persona_claim = await queue.continue_claim(
+            run_id,
+            worker_id="original",
+        )
+        assert persona_claim.next_stage == "persona"
         async with factory() as database, database.begin():
             run = await database.get(GenerationRun, run_id)
             run.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
@@ -1962,7 +2227,7 @@ async def test_expired_lease_resumes_from_last_completed_stage(tmp_path) -> None
         assert replacement is not None
         assert replacement.run_id == run_id
         assert replacement.last_completed_stage == "reference_analysis"
-        assert replacement.next_stage == "art_direction"
+        assert replacement.next_stage == "persona"
     finally:
         await engine.dispose()
 
@@ -2001,7 +2266,7 @@ async def test_checkpoint_event_and_next_stage_are_committed_together(tmp_path) 
             run_id, "reference_analysis", worker_id="worker"
         )
 
-        assert next_stage == "art_direction"
+        assert next_stage == "persona"
         async with factory() as database:
             run = await database.get(GenerationRun, run_id)
             events = (
@@ -2012,8 +2277,8 @@ async def test_checkpoint_event_and_next_stage_are_committed_together(tmp_path) 
                 )
             ).scalars().all()
             assert run.last_completed_stage == "reference_analysis"
-            assert run.current_stage == "art_direction"
-            assert run.progress == 14
+            assert run.current_stage == "persona"
+            assert run.progress == 12
             assert [event.event_type for event in events] == [
                 "stage.started",
                 "stage.completed",
@@ -2023,7 +2288,7 @@ async def test_checkpoint_event_and_next_stage_are_committed_together(tmp_path) 
                 == "Начата загрузка исходного сайта и подготовка снимков"
             )
             assert events[1].public_message == "Анализ исходного сайта завершён"
-            assert events[-1].payload["next_stage"] == "art_direction"
+            assert events[-1].payload["next_stage"] == "persona"
     finally:
         await engine.dispose()
 
@@ -2039,14 +2304,14 @@ async def test_replayed_checkpoint_is_idempotent(tmp_path) -> None:
             await queue.complete_stage(
                 run_id, "reference_analysis", worker_id="worker"
             )
-            == "art_direction"
+            == "persona"
         )
 
         replayed = await queue.complete_stage(
             run_id, "reference_analysis", worker_id="worker"
         )
 
-        assert replayed == "art_direction"
+        assert replayed == "persona"
         async with factory() as database:
             completed = (
                 await database.execute(
@@ -2127,8 +2392,69 @@ async def test_worker_continues_all_stages_under_its_claim(tmp_path) -> None:
         assert handled == ["reference_analysis", "agent_build"]
         async with factory() as database:
             run = await database.get(GenerationRun, run_id)
+            persisted = await database.scalar(
+                select(GenerationArtifact).where(
+                    GenerationArtifact.run_id == run_id,
+                    GenerationArtifact.revision == 1,
+                )
+            )
             assert run.state == "completed"
             assert run.last_completed_stage == "agent_build"
+            assert persisted is not None
+            assert persisted.config["assistant_persona"] is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_worker_replays_legacy_artifact_config_without_conflict(tmp_path) -> None:
+    engine, factory, project_id = await _database(tmp_path)
+    queue = PostgresWorkerQueue(factory, lease_seconds=30)
+    run_id = await _queued_run(factory, project_id, mode="antigravity")
+    candidate = artifact(revision=1, stage=Stage.AGENT_BUILD)
+    async with factory() as database, database.begin():
+        database.add(
+            GenerationArtifact(
+                run_id=run_id,
+                revision=candidate.revision,
+                stage=candidate.stage.value,
+                html=candidate.body_html,
+                css=candidate.css,
+                javascript=candidate.javascript,
+                config={
+                    "artifact": candidate.to_dict(),
+                    "legacy_metadata": {"source": "pre-persona-runtime"},
+                },
+                quality_status="verified",
+            )
+        )
+
+    try:
+        async with factory() as database, database.begin():
+            run = await database.get(GenerationRun, run_id)
+            assert run is not None
+            run.current_stage = Stage.AGENT_BUILD.value
+            await queue._materialize_result(
+                database,
+                run,
+                StageResult(
+                    public_message="Готов этап agent_build",
+                    artifact=candidate,
+                ),
+                datetime.now(timezone.utc),
+            )
+            persisted = await database.scalar(
+                select(GenerationArtifact).where(
+                    GenerationArtifact.run_id == run_id,
+                    GenerationArtifact.revision == candidate.revision,
+                )
+            )
+            assert persisted is not None
+            assert persisted.config["artifact"] == candidate.to_dict()
+            assert persisted.config["assistant_persona"] is None
+            assert persisted.config["legacy_metadata"] == {
+                "source": "pre-persona-runtime"
+            }
     finally:
         await engine.dispose()
 
@@ -2889,7 +3215,7 @@ async def test_staged_result_recovery_reuses_attempt_and_fences_stale_worker(
         with pytest.raises(LeaseLostError):
             await queue.finalize_stage(stale)
 
-        assert await queue.finalize_stage(replacement) == "art_direction"
+        assert await queue.finalize_stage(replacement) == "persona"
         async with factory() as database:
             attempts = (
                 await database.execute(
@@ -2928,14 +3254,14 @@ async def test_finalize_renews_lease_from_clock_after_slow_materialization(
 
     monkeypatch.setattr(queue, "_materialize_result", slow_materialize)
     try:
-        assert await queue.finalize_stage(claim) == "art_direction"
+        assert await queue.finalize_stage(claim) == "persona"
 
         continued = await queue.continue_claim(
             run_id,
             worker_id="slow-finalizer",
         )
 
-        assert continued.next_stage == "art_direction"
+        assert continued.next_stage == "persona"
         assert continued.lease_expires_at > clock["now"]
     finally:
         await engine.dispose()
@@ -3463,13 +3789,13 @@ async def test_postgres_finalize_renews_short_lease_after_materialization(
 
         monkeypatch.setattr(queue, "_materialize_result", slow_materialize)
 
-        assert await queue.finalize_stage(claim) == "art_direction"
+        assert await queue.finalize_stage(claim) == "persona"
         continued = await queue.continue_claim(
             run_id,
             worker_id="postgres-slow-finalizer",
         )
 
-        assert continued.next_stage == "art_direction"
+        assert continued.next_stage == "persona"
         assert continued.lease_expires_at > datetime.now(timezone.utc)
     finally:
         async with engine.begin() as connection:

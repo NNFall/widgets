@@ -13,6 +13,7 @@
   "implementation_sha256": "2347782e235744934738b72392ed16296dbb300ba54d85e4a60b621a31d408f4",
   "provenance": {
     "origin": "kaigo-owned",
-    "review_state": "approved"
+    "review_state": "approved",
+    "pattern_role": "fixture"
   }
 }

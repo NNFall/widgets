@@ -28,7 +28,7 @@ from app.saas.models import (
     ProjectVersion,
     UsageLedger,
 )
-from builder_lab.models import BuilderRequest, EngineName
+from builder_lab.models import AssistantPersona, BuilderRequest, EngineName
 from builder_lab.patterns.models import (
     CompositionPlan,
     PatternCategory,
@@ -39,6 +39,25 @@ from tests.builder_lab_cases.test_validation import artifact
 
 
 USER_WISH_HEADING = "ПОЖЕЛАНИЕ ПОЛЬЗОВАТЕЛЯ"
+
+
+def _assistant_persona() -> AssistantPersona:
+    return AssistantPersona.from_dict(
+        {
+            "schema_version": "kaigo.assistant-persona.v1",
+            "employee_type": "sales_advisor",
+            "display_name": "Пекарь Печкин",
+            "role_summary": "Тёпло и по делу помогает выбрать выпечку.",
+            "voice_style": "cheerful",
+            "opening_line": "Добрый день! Помочь выбрать выпечку?",
+            "behavior_rules": [
+                "Говори живо, но без рекламного нажима.",
+                "Сначала уточни вкус и повод.",
+            ],
+            "safeguards": ["Не придумывай цены и ассортимент."],
+            "decision_rationale": "Тематическое имя естественно для grounded-пекарни.",
+        }
+    )
 
 
 def _plan() -> CompositionPlan:
@@ -84,6 +103,7 @@ async def _seed(
     source_brief: str = "Build the durable source widget",
     quality_status: str = "verified",
     persist_plan: bool = True,
+    artifact_persona: AssistantPersona | None = None,
 ) -> SeededVersion:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / f'{uuid4()}.db'}")
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -138,6 +158,9 @@ async def _seed(
             )
         )
         candidate = artifact(revision=5)
+        artifact_config = {"artifact": candidate.to_dict()}
+        if artifact_persona is not None:
+            artifact_config["assistant_persona"] = artifact_persona.to_dict()
         source_artifact = GenerationArtifact(
             run_id=source_run.id,
             revision=candidate.revision,
@@ -145,7 +168,7 @@ async def _seed(
             html=candidate.body_html,
             css=candidate.css,
             javascript=candidate.javascript,
-            config={"artifact": candidate.to_dict()},
+            config=artifact_config,
             quality_status=quality_status,
         )
         database.add(source_artifact)
@@ -241,6 +264,38 @@ async def test_enqueue_refinement_uses_durable_request_and_clones_plan_atomicall
         assert cloned.plan == source.plan == seeded.plan
         assert cloned.implementation_hashes == source.implementation_hashes
         assert trial_rows == 0
+    finally:
+        await seeded.engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_refinement_inherits_server_owned_persona_from_source_artifact(
+    tmp_path,
+) -> None:
+    persona = _assistant_persona()
+    seeded = await _seed(tmp_path, artifact_persona=persona)
+    try:
+        assert seeded.request.assistant_persona is None
+        async with seeded.factory() as database, database.begin():
+            run = await ProjectVersionService(database).enqueue_refinement(
+                seeded.project_id,
+                source_version_id=seeded.source_version_id,
+                expected_active_version_id=seeded.source_version_id,
+                change_request="Сделай приветствие короче",
+                idempotency_key="refine-with-artifact-persona",
+                actor_user_id=10,
+                tenant_id=1,
+            )
+            created = await database.scalar(
+                select(GenerationEvent).where(
+                    GenerationEvent.run_id == run.id,
+                    GenerationEvent.event_type == "run.created",
+                )
+            )
+
+        assert created is not None
+        request = BuilderRequest.from_dict(created.payload["request"])
+        assert request.assistant_persona == persona
     finally:
         await seeded.engine.dispose()
 

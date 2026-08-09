@@ -31,7 +31,6 @@ import type {
 import { useBuilderRun } from './useBuilderRun';
 import { createProject, getAuthSession } from './api';
 
-const DEFAULT_BRIEF = 'Создай компактного AI-сотрудника, который консультирует посетителей по подтверждённым данным этого сайта.';
 const numberFormatter = new Intl.NumberFormat('ru-RU');
 const decimalFormatter = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
@@ -160,7 +159,7 @@ export function StudioPage() {
     if (!next || hydratedRun.current === next.run_id) return;
     hydratedRun.current = next.run_id;
     setSourceUrl(next.request.source_url);
-    setBrief(next.request.brief === DEFAULT_BRIEF ? '' : next.request.brief);
+    setBrief(next.request.brief);
     setEngine(next.request.engine);
     setCreativity(next.request.creativity);
   }, [controller.snapshot]);
@@ -190,7 +189,7 @@ export function StudioPage() {
     if (!canonicalUrl) return;
     await controller.createRun({
       source_url: canonicalUrl,
-      brief: brief.trim() || DEFAULT_BRIEF,
+      brief: brief.trim(),
       engine,
       creativity,
       locale: 'ru',

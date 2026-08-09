@@ -61,6 +61,7 @@ from app.saas.models import (
     UserIdentity,
 )
 from builder_lab.models import BuilderRequest, EngineName, WidgetArtifact
+from builder_lab.persona import assistant_persona_from_artifact_config
 from builder_lab.forensics.config import GenerationForensicsConfig
 from builder_lab.forensics.recorder import ensure_pending_forensic_manifest
 from builder_lab.generation_events import REGISTRY_VERSION, prepare_generation_event
@@ -206,6 +207,20 @@ async def _chat_reference_context(database, run_id: UUID) -> str:
     builder_payload = payload.get("request")
     if not isinstance(builder_payload, dict):
         return ""
+    # Only trust reference context from a complete durable BuilderRequest.
+    # Empty briefs are valid, but a partial mapping containing only a
+    # reference_context is not proof that the value came from the builder.
+    required_identity = {
+        "engine": str,
+        "brief": str,
+        "source_url": str,
+    }
+    if any(
+        key not in builder_payload
+        or not isinstance(builder_payload[key], expected_type)
+        for key, expected_type in required_identity.items()
+    ):
+        return ""
     reference_context = builder_payload.get("reference_context", "")
     if (
         not isinstance(reference_context, str)
@@ -217,6 +232,42 @@ async def _chat_reference_context(database, run_id: UUID) -> str:
         return BuilderRequest.from_dict(builder_payload).reference_context
     except (OverflowError, TypeError, ValueError):
         return ""
+
+
+async def _chat_assistant_persona(
+    database,
+    run_id: UUID,
+    revision: int,
+    *,
+    allow_durable_request: bool = False,
+):
+    artifact = await database.scalar(
+        select(GenerationArtifact).where(
+            GenerationArtifact.run_id == run_id,
+            GenerationArtifact.revision == revision,
+            GenerationArtifact.quality_status.in_(("accepted", "verified")),
+        )
+    )
+    if artifact is not None:
+        return assistant_persona_from_artifact_config(artifact.config)
+    if not allow_durable_request:
+        return None
+    created = await database.scalar(
+        select(GenerationEvent).where(
+            GenerationEvent.run_id == run_id,
+            GenerationEvent.event_type == "run.created",
+        )
+    )
+    request_payload = (
+        created.payload.get("request")
+        if created is not None and isinstance(created.payload, dict)
+        else None
+    )
+    return (
+        BuilderRequest.from_dict(request_payload).assistant_persona
+        if isinstance(request_payload, dict)
+        else None
+    )
 
 
 @asynccontextmanager
@@ -351,7 +402,7 @@ async def _enqueue_express_run(
         project.journey_id = journey.id
     builder_request = BuilderRequest(
         engine=EngineName.DIRECT,
-        brief=project.brief or "Create a useful website assistant",
+        brief=project.brief or "",
         source_url=project.source_url,
     )
     run = GenerationRun(
@@ -1233,6 +1284,15 @@ async def get_preview_document(request: web.Request) -> web.Response:
                 text=_error("invalid_channel"), content_type="application/json"
             )
         selected = await _preview_candidate(database, run.id, revision=revision)
+        try:
+            assistant_persona = await _chat_assistant_persona(
+                database,
+                run.id,
+                revision,
+                allow_durable_request=True,
+            )
+        except (TypeError, ValueError):
+            assistant_persona = None
     if selected is None:
         raise web.HTTPConflict(
             text=_error("preview_not_ready"), content_type="application/json"
@@ -1248,7 +1308,15 @@ async def get_preview_document(request: web.Request) -> web.Response:
             text=_error("preview_not_ready"), content_type="application/json"
         )
     return web.Response(
-        text=build_trusted_runtime_document(candidate, channel_id=channel),
+        text=build_trusted_runtime_document(
+            candidate,
+            channel_id=channel,
+            assistant_label=(
+                assistant_persona.display_name
+                if assistant_persona is not None
+                else None
+            ),
+        ),
         content_type="text/html",
         charset="utf-8",
         headers={
@@ -1333,6 +1401,24 @@ async def run_chat(request: web.Request) -> web.Response:
         )
         selected = await _preview_candidate(database, run.id, revision=revision)
         reference_context = await _chat_reference_context(database, run.id)
+        assistant_persona = None
+        if selected is not None:
+            try:
+                assistant_persona = await _chat_assistant_persona(
+                    database,
+                    run.id,
+                    revision,
+                    allow_durable_request=(
+                        selected[1].get("source") == "restorable_draft"
+                    ),
+                )
+            except (OverflowError, TypeError, ValueError):
+                return _chat_error(
+                    "chat_not_ready",
+                    "Эта ревизия содержит некорректную конфигурацию чата",
+                    status=409,
+                    request_id=request_id,
+                )
     if selected is None:
         return _chat_error(
             "chat_not_ready",
@@ -1380,6 +1466,7 @@ async def run_chat(request: web.Request) -> web.Response:
                 brief=project.brief or "",
                 art_direction=candidate.art_direction,
                 reference_context=reference_context,
+                assistant_persona=assistant_persona,
             ),
             run_id=run.id,
         )

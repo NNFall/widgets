@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "assistant-message-cascade",
+  "version": 1,
+  "category": "assistant_message_enter",
+  "status": "active",
+  "title": "Каскадное появление ответа AI",
+  "summary": "Аватар, пузырь и дополнительная подсказка входят последовательно и ощущаются единым ответом.",
+  "ai_description": "Ответ AI появляется не одним резким блоком, а коротким осмысленным каскадом: сначала проявляется аватар сотрудника, затем основной пузырь мягко поднимается и расправляется, после него появляется компактная дополнительная подсказка. Лёгкий световой проход подчёркивает новый контент, но быстро исчезает. Модель может менять направление, число частей, степень задержки и акцентный цвет, сохраняя ясную связь элементов с одним ответом ассистента.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "creative",
+  "incompatible_with": [],
+  "implementation_sha256": "7d521a4f8641851820db5623e24da015390ecad8bcea8be82052ee9529bb9a95",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved",
+    "pattern_role": "signature"
+  }
+}

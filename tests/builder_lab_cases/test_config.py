@@ -21,6 +21,7 @@ class BuilderLabConfigTests(unittest.TestCase):
             "KAIGO_CODEX_BRIDGE_SOCKET_PATH": None,
             "KAIGO_CODEX_BRIDGE_TIMEOUT_SECONDS": None,
             "KAIGO_CODEX_BRIDGE_MODEL": None,
+            "KAIGO_CODEX_BRIDGE_VISUAL_JUDGE_MODEL": None,
             "AGENTROUTER_API_KEY": None,
             "AGENTROUTER_BASE_URL": None,
             "AGENTROUTER_TIMEOUT_SECONDS": None,
@@ -99,6 +100,7 @@ class BuilderLabConfigTests(unittest.TestCase):
         )
         self.assertEqual(config.codex_bridge_timeout_seconds, 900)
         self.assertEqual(config.codex_bridge_model, "gpt-5.6-luna")
+        self.assertEqual(config.codex_bridge_visual_judge_model, "gpt-5.6-sol")
         self.assertIsNone(config.agentrouter_api_key)
         self.assertEqual(config.agentrouter_base_url, "https://co.agentrouter.org/v1")
         self.assertEqual(config.agentrouter_timeout_seconds, 180)
@@ -146,6 +148,7 @@ class BuilderLabConfigTests(unittest.TestCase):
             KAIGO_CODEX_BRIDGE_SOCKET_PATH="/run/custom/codex.sock",
             KAIGO_CODEX_BRIDGE_TIMEOUT_SECONDS="1200",
             KAIGO_CODEX_BRIDGE_MODEL="gpt-5.6-luna-test",
+            KAIGO_CODEX_BRIDGE_VISUAL_JUDGE_MODEL="gpt-5.6-sol-test",
             AGENTROUTER_API_KEY="router-secret",
             AGENTROUTER_BASE_URL="https://router.example/v1/",
             AGENTROUTER_TIMEOUT_SECONDS="321",
@@ -192,6 +195,10 @@ class BuilderLabConfigTests(unittest.TestCase):
         )
         self.assertEqual(config.codex_bridge_timeout_seconds, 1200)
         self.assertEqual(config.codex_bridge_model, "gpt-5.6-luna-test")
+        self.assertEqual(
+            config.codex_bridge_visual_judge_model,
+            "gpt-5.6-sol-test",
+        )
         self.assertEqual(config.agentrouter_api_key, "router-secret")
         self.assertEqual(config.agentrouter_base_url, "https://router.example/v1")
         self.assertEqual(config.agentrouter_timeout_seconds, 321)
@@ -289,6 +296,11 @@ class BuilderLabConfigTests(unittest.TestCase):
             self.load(
                 KAIGO_CODEX_BRIDGE_ENABLED="true",
                 KAIGO_CODEX_BRIDGE_MODEL="   ",
+            )
+        with self.assertRaisesRegex(ValueError, "VISUAL_JUDGE_MODEL"):
+            self.load(
+                KAIGO_CODEX_BRIDGE_ENABLED="true",
+                KAIGO_CODEX_BRIDGE_VISUAL_JUDGE_MODEL="   ",
             )
 
     def test_existing_google_ai_key_alias_is_supported(self):

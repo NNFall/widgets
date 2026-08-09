@@ -19,6 +19,7 @@ from app.saas.models import (
 )
 from builder_lab.generation_events import REGISTRY_VERSION, prepare_generation_event
 from builder_lab.models import BuilderRequest, WidgetArtifact
+from builder_lab.persona import assistant_persona_from_artifact_config
 
 
 TERMINAL_STATES = frozenset({"completed", "failed", "cancelled"})
@@ -154,6 +155,11 @@ class ProjectVersionService:
             return None
         try:
             request = BuilderRequest.from_dict(request_payload)
+            artifact_persona = assistant_persona_from_artifact_config(
+                artifact.config
+            )
+            if artifact_persona is not None:
+                request = replace(request, assistant_persona=artifact_persona)
             composition = await PatternRepository(self._database).load_plan(
                 version.run_id
             )

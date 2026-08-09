@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from html import escape
 
 from app.publication.service import PublishedRelease
 from builder_lab.models import WidgetArtifact
@@ -24,7 +25,7 @@ def render_loader() -> str:
   const iframe = document.createElement('iframe');
   iframe.setAttribute('data-kaigo-widget-key', key);
   iframe.setAttribute('sandbox', 'allow-scripts');
-  iframe.setAttribute('title', 'Kaigo AI-консультант');
+  iframe.setAttribute('title', 'Консультант Kaigo');
   iframe.referrerPolicy = 'strict-origin';
   iframe.src = new URL('/runtime/' + encodeURIComponent(key), source.origin).href;
   iframe.style.cssText = 'position:fixed;right:16px;bottom:16px;width:420px;height:640px;max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);border:0;z-index:2147483000;background:transparent;pointer-events:none;overflow:hidden;';
@@ -56,8 +57,19 @@ def _channel_id(stable_key: str) -> str:
 
 def _inner_document(release: PublishedRelease) -> tuple[str, str]:
     artifact = WidgetArtifact.from_dict(release.manifest["artifact"])
+    persona_payload = release.manifest.get("assistant_persona")
+    assistant_label = (
+        persona_payload.get("display_name")
+        if isinstance(persona_payload, dict)
+        and isinstance(persona_payload.get("display_name"), str)
+        else None
+    )
     channel = _channel_id(release.stable_key)
-    document = build_trusted_runtime_document(artifact, channel_id=channel)
+    document = build_trusted_runtime_document(
+        artifact,
+        channel_id=channel,
+        assistant_label=assistant_label,
+    )
     geometry_bridge = r"""
 <script data-kaigo-public-geometry>
 (() => {
@@ -128,6 +140,14 @@ def render_runtime(
     chat_capability: str | None = None,
 ) -> str:
     inner, channel = _inner_document(release)
+    persona_payload = release.manifest.get("assistant_persona")
+    assistant_label = (
+        persona_payload.get("display_name")
+        if isinstance(persona_payload, dict)
+        and isinstance(persona_payload.get("display_name"), str)
+        else "Консультант Kaigo"
+    )
+    encoded_assistant_title = escape(assistant_label, quote=True)
     encoded_inner = base64.b64encode(inner.encode("utf-8")).decode("ascii")
     encoded_host_origin = json.dumps(host_origin)
     encoded_chat_capability = json.dumps(chat_capability)
@@ -135,7 +155,7 @@ def render_runtime(
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>html,body{{margin:0;width:100%;height:100%;background:transparent;overflow:hidden}}iframe{{display:block;width:100%;height:100%;border:0;background:transparent}}</style></head>
-<body data-kaigo-runtime="kaigo-widget"><iframe id="kaigo-generated-widget" title="Kaigo AI-консультант" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+<body data-kaigo-runtime="kaigo-widget"><iframe id="kaigo-generated-widget" title="{encoded_assistant_title}" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
 <script>(()=>{{
   const key={release.stable_key!r};
   const channelId={channel!r};

@@ -116,4 +116,24 @@ describe('Studio accessibility contracts', () => {
     expect(screen.getByText('Анимация кнопки виджета недостаточно заметна.')).toBeInTheDocument();
     expect(screen.queryByText(/ValueError|evidence=|no-preference/)).not.toBeInTheDocument();
   });
+
+  it('shows the durable persona stage with a Russian user-facing label', () => {
+    render(<StudioTimeline events={[{
+      run_id: 'run-persona',
+      sequence: 3,
+      timestamp: '2026-08-09T15:24:00Z',
+      type: 'stage.completed',
+      stage: 'persona',
+      status: 'completed',
+      message: 'Сотрудник Мария выбран',
+      revision: null,
+      usage: { prompt_tokens: 1, output_tokens: 1, thinking_tokens: 0, total_tokens: 2 },
+      issues: [],
+      changes: [],
+      error_code: null,
+    }]} running={false} />);
+
+    expect(screen.getByText('Выбор сотрудника')).toBeInTheDocument();
+    expect(screen.getByText('Сотрудник Мария выбран')).toBeInTheDocument();
+  });
 });

@@ -56,6 +56,7 @@ from builder_lab.patterns.candidate_resolver import (
 from builder_lab.patterns.planner import CompositionPlanningError, plan_composition
 from builder_lab.patterns.registry import load_builtin_registry
 from builder_lab.patterns.resolver import ResolvedComposition, resolve_composition
+from builder_lab.persona import assistant_persona_config_value
 from builder_lab.visual_models import VisualCritique, VisualSeverity
 from builder_lab.validation import (
     issue_fingerprint,
@@ -71,6 +72,7 @@ logger = logging.getLogger(__name__)
 
 DIRECT_STAGE_SEQUENCE = (
     "reference_analysis",
+    "persona",
     "art_direction",
     "composition",
     "foundation",
@@ -81,6 +83,7 @@ DIRECT_STAGE_SEQUENCE = (
 ANTIGRAVITY_STAGE_SEQUENCE = ("reference_analysis", "agent_build")
 STAGE_PUBLIC_NAMES = {
     "reference_analysis": "анализ исходного сайта",
+    "persona": "выбор сотрудника",
     "art_direction": "выбор визуального направления",
     "composition": "выбор проверенной композиции",
     "foundation": "создание основы виджета",
@@ -580,6 +583,8 @@ class OrchestratorStageHandler:
         request = policy.apply_to_request(stage_input.request)
         if claim.next_stage == "reference_analysis":
             return await self._analyze_reference(request, claim)
+        if claim.next_stage == "persona":
+            return await self._select_persona(request, claim)
         try:
             stage = Stage(claim.next_stage)
         except ValueError as exc:
@@ -662,6 +667,49 @@ class OrchestratorStageHandler:
                     continue
                 closed.add(identity)
                 await routed_engine.close()
+
+    async def _select_persona(
+        self,
+        request: BuilderRequest,
+        claim: RunClaim,
+    ) -> StageResult:
+        if request.engine is not EngineName.DIRECT:
+            raise BuilderEngineError(
+                "internal_error",
+                "Выбор сотрудника поддерживается только в direct-режиме",
+            )
+        factory = self._factories.get(request.engine)
+        if factory is None and self._routed_engine_factory is None:
+            raise BuilderEngineError(
+                "provider_unavailable",
+                "Выбранный режим генерации сейчас недоступен",
+            )
+        engine = (
+            self._routed_engine_factory(claim, "persona_selector")
+            if self._routed_engine_factory is not None
+            else factory()  # type: ignore[misc]
+        )
+        try:
+            result = await cast(
+                DirectBuilderEngine,
+                engine,
+            ).select_assistant_persona(request=request)
+        finally:
+            await engine.close()
+        selected_request = replace(
+            request,
+            assistant_persona=result.persona,
+        )
+        return StageResult(
+            public_message=f"Сотрудник {result.persona.display_name} выбран",
+            output_refs=(
+                (result.provider_request_id,)
+                if result.provider_request_id is not None
+                else ()
+            ),
+            request=selected_request,
+            usage=result.usage,
+        )
 
     async def _analyze_reference(
         self,
@@ -2378,6 +2426,34 @@ class PostgresWorkerQueue:
             if not isinstance(request_payload, dict):
                 raise RuntimeError(f"run {run.id} has no durable builder request")
             request = BuilderRequest.from_dict(request_payload)
+            if claim.next_stage not in {"reference_analysis", "persona"}:
+                persona_attempt_id = await database.scalar(
+                    select(GenerationStageAttempt.id)
+                    .where(
+                        GenerationStageAttempt.run_id == run.id,
+                        GenerationStageAttempt.stage == "persona",
+                        GenerationStageAttempt.status == "completed",
+                    )
+                    .order_by(GenerationStageAttempt.ordinal.desc())
+                    .limit(1)
+                )
+                staged_persona = (
+                    await self._staged_result_record(
+                        database,
+                        run.id,
+                        "persona",
+                        attempt_id=persona_attempt_id,
+                    )
+                    if persona_attempt_id is not None
+                    else None
+                )
+                if (
+                    staged_persona is not None
+                    and request.assistant_persona is None
+                ):
+                    raise RuntimeError(
+                        "post-persona dispatch requires a durable assistant persona"
+                    )
             if run.source_version_id is not None:
                 source_row = (
                     await database.execute(
@@ -2651,6 +2727,34 @@ class PostgresWorkerQueue:
             if result.artifact is not None:
                 raise ValueError("reference analysis cannot stage an artifact")
             return
+        if claim.next_stage == "persona":
+            if result.artifact is not None:
+                raise ValueError("assistant persona cannot stage an artifact")
+            if result.request is None or result.request.assistant_persona is None:
+                raise ValueError(
+                    "assistant persona stage must update the builder request"
+                )
+            created = await database.scalar(
+                select(GenerationEvent).where(
+                    GenerationEvent.run_id == run.id,
+                    GenerationEvent.event_type == "run.created",
+                )
+            )
+            request_payload = (
+                created.payload.get("request") if created is not None else None
+            )
+            if not isinstance(request_payload, dict):
+                raise ValueError("assistant persona stage has no durable request")
+            current_request = BuilderRequest.from_dict(request_payload)
+            expected_request = replace(
+                current_request,
+                assistant_persona=result.request.assistant_persona,
+            )
+            if result.request != expected_request:
+                raise ValueError(
+                    "assistant persona stage may only update assistant_persona"
+                )
+            return
         if claim.next_stage == "composition":
             if result.artifact is not None:
                 raise ValueError("composition cannot stage an artifact")
@@ -2671,7 +2775,9 @@ class PostgresWorkerQueue:
                     ) from exc
             return
         if result.request is not None:
-            raise ValueError("only reference analysis can update the builder request")
+            raise ValueError(
+                "only reference analysis or assistant persona can update the builder request"
+            )
         if result.artifact is None:
             return
         expected_stage = Stage(claim.next_stage)
@@ -2839,6 +2945,24 @@ class PostgresWorkerQueue:
                     )
         artifact = result.artifact
         if artifact is not None:
+            created = (
+                await database.execute(
+                    select(GenerationEvent).where(
+                        GenerationEvent.run_id == run.id,
+                        GenerationEvent.event_type == "run.created",
+                    )
+                )
+            ).scalar_one_or_none()
+            request_payload = (
+                created.payload.get("request")
+                if created is not None and isinstance(created.payload, dict)
+                else None
+            )
+            durable_persona = (
+                BuilderRequest.from_dict(request_payload).assistant_persona
+                if isinstance(request_payload, dict)
+                else None
+            )
             artifact_record = (
                 await database.execute(
                     select(GenerationArtifact).where(
@@ -2848,6 +2972,12 @@ class PostgresWorkerQueue:
                 )
             ).scalar_one_or_none()
             artifact_payload = artifact.to_dict()
+            artifact_config = {
+                "artifact": artifact_payload,
+                "assistant_persona": assistant_persona_config_value(
+                    durable_persona
+                ),
+            }
             if artifact_record is None:
                 artifact_record = GenerationArtifact(
                     run_id=run.id,
@@ -2856,14 +2986,35 @@ class PostgresWorkerQueue:
                     html=artifact.body_html,
                     css=artifact.css,
                     javascript=artifact.javascript,
-                    config={"artifact": artifact_payload},
+                    config=artifact_config,
                     quality_status="verified",
                     provenance={"output_refs": list(result.output_refs)},
                 )
                 database.add(artifact_record)
                 await database.flush()
-            elif artifact_record.config.get("artifact") != artifact_payload:
-                raise RuntimeError("staged artifact revision conflicts with persistence")
+            else:
+                existing_config = (
+                    dict(artifact_record.config)
+                    if isinstance(artifact_record.config, dict)
+                    else {}
+                )
+                if existing_config.get("artifact") != artifact_payload:
+                    raise RuntimeError(
+                        "staged artifact revision conflicts with persistence"
+                    )
+                expected_persona = artifact_config["assistant_persona"]
+                if (
+                    "assistant_persona" in existing_config
+                    and existing_config["assistant_persona"] != expected_persona
+                ):
+                    raise RuntimeError(
+                        "staged artifact revision conflicts with persistence"
+                    )
+                if "assistant_persona" not in existing_config:
+                    artifact_record.config = {
+                        **existing_config,
+                        "assistant_persona": expected_persona,
+                    }
             await record_funnel_event(
                 database,
                 event_type="first_artifact",

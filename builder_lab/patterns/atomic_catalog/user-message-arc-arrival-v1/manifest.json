@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "user-message-arc-arrival",
+  "version": 1,
+  "category": "user_message_enter",
+  "status": "active",
+  "title": "Вход сообщения по короткой дуге",
+  "summary": "Пузырь пользователя поднимается из composer по короткой дуге и точно занимает правую колонку.",
+  "ai_description": "Сообщение выходит из зоны composer и проходит короткую контролируемую дугу к правому краю истории. Траектория связывает ввод и результат, но не пересекает ответы ассистента. В Pattern Lab композиция показывает исходное состояние, основную фазу и устойчивое завершение, поэтому визуальный смысл читается без скриптов и пояснений разработчика. Модель может адаптировать оттенки, масштаб и темп под бренд, сохраняя иерархию, доступный контраст и заявленную идею: пузырь пользователя поднимается из composer по короткой дуге и точно занимает правую колонку.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "0575ba6ed03f9dcd7460efe40562565d233564bd6a4e3576d8fe2827b5a8bf88",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "ready_for_review",
+    "pattern_role": "signature"
+  }
+}

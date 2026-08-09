@@ -18,7 +18,7 @@ from builder_lab.patterns.atomic_models import (
 )
 from builder_lab.patterns.atomic_registry import (
     AtomicPatternRegistry,
-    load_builtin_atomic_registry,
+    load_builtin_atomic_registry as _load_builtin_atomic_registry,
 )
 from builder_lab.patterns.candidate_resolver import (
     MAX_STAGE_PATTERN_PACK_BYTES,
@@ -30,6 +30,70 @@ from builder_lab.patterns.candidate_resolver import (
 )
 from builder_lab.prompts import build_stage_prompt
 from tests.builder_lab_cases.test_validation import artifact
+
+
+_VISUAL_IDS = {
+    AtomicPatternCategory.LAUNCHER_SHAPE: "launcher-faceted-pebble",
+    AtomicPatternCategory.SHELL_LAYOUT: "shell-dialogue-gallery",
+    AtomicPatternCategory.BACKGROUND_EFFECT: "background-chat-constellation",
+    AtomicPatternCategory.LAUNCHER_ATTENTION: "launcher-greeting-arc",
+    AtomicPatternCategory.LAUNCHER_IDLE: "launcher-breathing-halo",
+    AtomicPatternCategory.ASSISTANT_MESSAGE_ENTER: "assistant-message-card-bloom",
+    AtomicPatternCategory.USER_MESSAGE_ENTER: "user-message-arc-arrival",
+    AtomicPatternCategory.TYPING_INDICATOR: "typing-editorial-pulse",
+    AtomicPatternCategory.MESSAGE_SEND: "message-send-luminous-delivery",
+    AtomicPatternCategory.COMPOSER_FOCUS: "composer-command-glow",
+    AtomicPatternCategory.WIDGET_OPEN: "widget-open-spring-unfold",
+    AtomicPatternCategory.WIDGET_CLOSE: "widget-close-fold-home",
+    AtomicPatternCategory.CONTROL_HOVER: "control-hover-ink-fill",
+    AtomicPatternCategory.RESPONSIVE_TRANSITION: "responsive-panel-to-sheet",
+}
+
+
+def load_builtin_atomic_registry() -> AtomicPatternRegistry:
+    """Keep resolver tests explicit-role compatible until catalog backfill lands."""
+
+    base = _load_builtin_atomic_registry()
+    changed = tuple(
+        replace(
+            definition,
+            provenance={
+                **definition.provenance,
+                "review_state": (
+                    "approved"
+                    if not definition.pattern_id.endswith("-technical")
+                    else definition.provenance.get("review_state")
+                ),
+                "pattern_role": (
+                    "fixture"
+                    if definition.pattern_id.endswith("-technical")
+                    else (
+                        "signature"
+                        if definition.category
+                        in {
+                            AtomicPatternCategory.WIDGET_OPEN,
+                            AtomicPatternCategory.WIDGET_CLOSE,
+                            AtomicPatternCategory.LAUNCHER_ATTENTION,
+                            AtomicPatternCategory.MESSAGE_SEND,
+                            AtomicPatternCategory.ASSISTANT_MESSAGE_ENTER,
+                            AtomicPatternCategory.USER_MESSAGE_ENTER,
+                        }
+                        else (
+                            "structural"
+                            if definition.category
+                            in {
+                                AtomicPatternCategory.SHELL_LAYOUT,
+                                AtomicPatternCategory.RESPONSIVE_TRANSITION,
+                            }
+                            else "support"
+                        )
+                    )
+                ),
+            },
+        )
+        for definition in base.definitions
+    )
+    return AtomicPatternRegistry(changed)
 
 
 def _hash_assets(html: str, css: str, javascript: str) -> str:
@@ -50,10 +114,38 @@ def _hash_assets(html: str, css: str, javascript: str) -> str:
 
 def _candidate(category: AtomicPatternCategory, *, version: int = 1) -> PatternCandidate:
     return PatternCandidate(
-        pattern_id=f"{category.value.replace('_', '-')}-technical",
+        pattern_id=_VISUAL_IDS[category],
         version=version,
         rank=1,
         reason="Exact version matches the selected direction and runtime contract.",
+    )
+
+
+def _technical_candidate(
+    category: AtomicPatternCategory,
+    *,
+    version: int = 1,
+) -> PatternCandidate:
+    return PatternCandidate(
+        pattern_id=f"{category.value.replace('_', '-')}-technical",
+        version=version,
+        rank=1,
+        reason="Technical fixture replay attempt.",
+    )
+
+
+def _technical_plan(*categories: AtomicPatternCategory) -> PatternCandidatePlan:
+    return PatternCandidatePlan(
+        schema_version=2,
+        direction_id="candidate-1",
+        groups=tuple(
+            PatternCandidateGroup(
+                category=category,
+                candidates=(_technical_candidate(category),),
+            )
+            for category in categories
+        ),
+        summary="Technical fixture replay.",
     )
 
 
@@ -142,20 +234,20 @@ def test_stage_pack_uses_only_exact_shortlisted_versions_and_deterministic_order
     pack = resolve_pattern_candidate_pack(plan, Stage.MOTION_POLISH, registry)
 
     assert [(item.category, item.pattern_id, item.version) for item in pack.exposed_versions] == [
-        (AtomicPatternCategory.WIDGET_OPEN, "widget-open-technical", 1),
-        (AtomicPatternCategory.WIDGET_CLOSE, "widget-close-technical", 1),
-        (AtomicPatternCategory.CONTROL_HOVER, "control-hover-technical", 1),
-        (AtomicPatternCategory.RESPONSIVE_TRANSITION, "responsive-transition-technical", 1),
-        (AtomicPatternCategory.BACKGROUND_EFFECT, "background-effect-technical", 1),
+        (AtomicPatternCategory.WIDGET_OPEN, "widget-open-spring-unfold", 1),
+        (AtomicPatternCategory.WIDGET_CLOSE, "widget-close-fold-home", 1),
+        (AtomicPatternCategory.CONTROL_HOVER, "control-hover-ink-fill", 1),
+        (AtomicPatternCategory.RESPONSIVE_TRANSITION, "responsive-panel-to-sheet", 1),
+        (AtomicPatternCategory.BACKGROUND_EFFECT, "background-chat-constellation", 1),
     ]
-    assert "launcher-shape-technical" not in pack.prompt_text
+    assert "launcher-faceted-pebble" not in pack.prompt_text
 
 
 def test_unknown_or_drifted_exact_version_is_rejected_without_registry_substitution() -> None:
     registry = load_builtin_atomic_registry()
     drifted = tuple(
         replace(definition, version=2)
-        if definition.pattern_id == "widget-open-technical"
+        if definition.pattern_id == "widget-open-spring-unfold"
         else definition
         for definition in registry.definitions
     )
@@ -173,7 +265,7 @@ def test_inactive_or_rejected_exact_version_is_rejected(status: AtomicPatternSta
     registry = load_builtin_atomic_registry()
     changed = tuple(
         replace(definition, status=status)
-        if definition.pattern_id == "widget-open-technical"
+        if definition.pattern_id == "widget-open-spring-unfold"
         else definition
         for definition in registry.definitions
     )
@@ -218,14 +310,60 @@ def test_effective_approval_and_category_mismatch_are_rechecked() -> None:
         resolve_pattern_candidate_pack(mismatched, Stage.MOTION_POLISH, registry)
 
 
+def test_persisted_technical_fixture_never_replayed_even_when_effectively_approved() -> None:
+    registry = load_builtin_atomic_registry()
+
+    with pytest.raises(PatternCandidateResolutionError, match="quality"):
+        resolve_pattern_candidate_pack(
+            _technical_plan(AtomicPatternCategory.WIDGET_OPEN),
+            Stage.MOTION_POLISH,
+            registry,
+            effective_approved={("widget-open-technical", 1)},
+        )
+
+
+def test_effective_database_approval_overrides_manifest_rejection_for_quality_gate() -> None:
+    registry = load_builtin_atomic_registry()
+    original = registry.resolve("widget-open-spring-unfold", 1)
+    rejected = replace(
+        original,
+        provenance={**original.provenance, "review_state": "rejected"},
+    )
+    changed = tuple(
+        rejected if item.pattern_id == original.pattern_id else item
+        for item in registry.definitions
+    )
+    candidate = PatternCandidate(
+        pattern_id=original.pattern_id,
+        version=original.version,
+        rank=1,
+        reason="review override",
+    )
+    plan = PatternCandidatePlan(
+        schema_version=2,
+        direction_id="candidate-1",
+        groups=(PatternCandidateGroup(category=AtomicPatternCategory.WIDGET_OPEN, candidates=(candidate,)),),
+        summary="effective review state",
+    )
+
+    pack = resolve_pattern_candidate_pack(
+        plan,
+        Stage.MOTION_POLISH,
+        AtomicPatternRegistry(changed),
+        effective_approved={(original.pattern_id, original.version)},
+    )
+
+    assert pack.exposed_versions[0].pattern_id == original.pattern_id
+
+
 def test_symmetric_incompatibility_is_rechecked_before_assets_are_exposed() -> None:
     registry = load_builtin_atomic_registry()
     changed = tuple(
-        replace(definition, incompatible_with=("widget-close-technical",))
-        if definition.pattern_id == "widget-open-technical"
+        replace(definition, incompatible_with=("widget-close-fold-home",))
+        if definition.pattern_id == "widget-open-spring-unfold"
         else (
-            replace(definition, incompatible_with=("widget-open-technical",))
-            if definition.pattern_id == "widget-close-technical"
+            replace(definition, incompatible_with=("widget-open-spring-unfold",))
+            if definition.pattern_id == "widget-close-fold-home"
             else definition
         )
         for definition in registry.definitions

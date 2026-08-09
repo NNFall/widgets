@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "launcher-signal-petal",
+  "version": 1,
+  "category": "launcher_attention",
+  "status": "active",
+  "title": "Лепесток сигнала",
+  "summary": "Цветной лепесток раскрывается рядом с launcher и превращается в короткий знак внимания.",
+  "ai_description": "Сбоку от кнопки раскрывается один мягкий лепесток, внутри которого появляется короткая звезда. Движение имеет ясное начало и завершение, поэтому сигнал выглядит дружелюбно, а не тревожно. В Pattern Lab композиция показывает исходное состояние, основную фазу и устойчивое завершение, поэтому визуальный смысл читается без скриптов и пояснений разработчика. Модель может адаптировать оттенки, масштаб и темп под бренд, сохраняя иерархию, доступный контраст и заявленную идею: цветной лепесток раскрывается рядом с launcher и превращается в короткий знак внимания.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "creative",
+  "incompatible_with": [],
+  "implementation_sha256": "c75345eb4e6cfb591b2d3d308425c83c893e48c5bff3b93a5a5c859d9ea6895c",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "ready_for_review",
+    "pattern_role": "signature"
+  }
+}

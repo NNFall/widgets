@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "shell-concierge-column",
+  "version": 1,
+  "category": "shell_layout",
+  "status": "active",
+  "title": "Колонка консьержа",
+  "summary": "Карточка AI-сотрудника, история и composer собраны в одну спокойную сервисную колонку.",
+  "ai_description": "Верх оболочки занимает компактная карточка сотрудника с ролью и статусом, ниже идёт просторная история, а composer закреплён отдельной мягкой панелью. Иерархия напоминает персональный сервисный кабинет. В Pattern Lab композиция показывает исходное состояние, основную фазу и устойчивое завершение, поэтому визуальный смысл читается без скриптов и пояснений разработчика. Модель может адаптировать оттенки, масштаб и темп под бренд, сохраняя иерархию, доступный контраст и заявленную идею: карточка ai-сотрудника, история и composer собраны в одну спокойную сервисную колонку.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "251d85fa4f67010e294ac8d62f4f095904ab987935594f06fbaa2bc400f1e681",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "ready_for_review",
+    "pattern_role": "structural"
+  }
+}

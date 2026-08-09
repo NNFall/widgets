@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,6 +27,10 @@ from .strict_visual_models import (
 
 
 _DIMENSION_VALUES = [item.value for item in STRICT_VISUAL_DIMENSIONS]
+_INLINE_AUTHORIZATION_CREDENTIAL = re.compile(
+    r"(?i)\b(authorization|proxy-authorization)\s*:\s*"
+    r"(?:bearer|basic)\s+[^\s,;]+"
+)
 _REGION_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -309,6 +314,15 @@ def _sanitized_validation_error(
     diagnostic: str | None = None,
 ) -> str:
     raw = diagnostic or f"{type(error).__name__}: {error}"
+    # Exception messages sometimes flatten several diagnostics onto one line.
+    # The general redactor deliberately treats an Authorization header as
+    # extending to the newline, which would also erase a later safe validation
+    # reason.  Remove only the inline credential first; the shared redactor then
+    # handles every remaining secret and preserves the useful reason.
+    raw = _INLINE_AUTHORIZATION_CREDENTIAL.sub(
+        lambda match: f"{match.group(1)} credential=[REDACTED]",
+        raw,
+    )
     return redact_diagnostic(raw, limit=1000) or "validation failed"
 
 
@@ -492,7 +506,9 @@ class GeminiStrictVisualCritic:
     ) -> StrictVisualCriticResult:
         if not isinstance(audit, BrowserAuditReport):
             raise TypeError("audit must be BrowserAuditReport")
-        if not isinstance(brief, str) or not brief.strip() or len(brief) > 12_000:
+        # The brief is an optional secondary signal.  Keep the type/size guard,
+        # but permit an empty value when art direction is the only contract.
+        if not isinstance(brief, str) or len(brief) > 12_000:
             raise ValueError("brief is invalid")
         if (
             not isinstance(art_direction, str)

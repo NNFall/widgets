@@ -23,6 +23,7 @@ from .atomic_models import (
     PatternCandidatePlan,
     normalize_effective_approved,
 )
+from .atomic_quality import compute_atomic_quality_profile
 from .atomic_registry import AtomicPatternRegistry, AtomicPatternRegistryError
 
 
@@ -73,6 +74,21 @@ def _normalise_effective_approved(
     | None,
 ) -> frozenset[tuple[str, int]] | None:
     return normalize_effective_approved(effective_approved)
+
+
+def _quality_review_state(
+    definition: AtomicPatternDefinition,
+    approved_override: frozenset[tuple[str, int]] | None,
+) -> str | None:
+    """Map the persistence allowlist to the quality profile review state."""
+
+    if approved_override is None:
+        return None
+    return (
+        "approved"
+        if (definition.pattern_id, definition.version) in approved_override
+        else "rejected"
+    )
 
 
 def _catalog_metadata(
@@ -145,11 +161,19 @@ def _eligible_catalog(
         category = item.get("category")
         if category != definition.category.value:
             continue
+        quality = compute_atomic_quality_profile(
+            definition,
+            effective_review_state=_quality_review_state(definition, approved_override),
+        )
+        if not quality.selector_eligible:
+            continue
         # The caller-owned catalog is only an exact-version allowlist plus
         # effective review state.  Never forward its mutable metadata: a
         # stale or compromised caller could otherwise inject assets, secrets,
         # or a forged selector description into the provider prompt.
-        eligible.append(definition.selector_dict())
+        selector_item = definition.selector_dict()
+        selector_item["quality_profile"] = quality.to_dict()
+        eligible.append(selector_item)
     return tuple(
         sorted(
             eligible,
@@ -244,6 +268,11 @@ def validate_pattern_candidate_plan(
                 raise PatternCandidateValidationError("candidate is not effectively approved")
             if approved_override is not None and key not in approved_override:
                 raise PatternCandidateValidationError("candidate is not effectively approved")
+            if not compute_atomic_quality_profile(
+                definition,
+                effective_review_state=_quality_review_state(definition, approved_override),
+            ).selector_eligible:
+                raise PatternCandidateValidationError("candidate is not quality-eligible")
             selected_definitions[key] = definition
 
         available = eligible_by_category.get(group.category, ())
@@ -332,6 +361,10 @@ def _definitions_are_compatible(
 
 def _fallback_options(
     entries: Sequence[AtomicPatternDefinition],
+    *,
+    effective_approved: Mapping[tuple[str, int], object]
+    | Collection[tuple[str, int]]
+    | None = None,
 ) -> tuple[tuple[AtomicPatternDefinition, ...], ...]:
     """Enumerate stable, bounded compatible minimum subsets for one category.
 
@@ -347,8 +380,24 @@ def _fallback_options(
     if len(entries) == 1:
         return ((entries[0],),)
 
+    approved_override = _normalise_effective_approved(effective_approved)
+
+    def quality_score(item: AtomicPatternDefinition) -> int:
+        state = _quality_review_state(item, approved_override)
+        return compute_atomic_quality_profile(
+            item,
+            effective_review_state=state,
+        ).quality_score
+
     ordered = tuple(
-        sorted(entries, key=lambda item: (item.pattern_id, item.version))
+        sorted(
+            entries,
+            key=lambda item: (
+                -quality_score(item),
+                item.pattern_id,
+                item.version,
+            ),
+        )
     )
     minimum = 2
     options: list[tuple[AtomicPatternDefinition, ...]] = []
@@ -369,6 +418,10 @@ def _solve_fallback_assignment(
         AtomicPatternCategory,
         Sequence[AtomicPatternDefinition],
     ],
+    *,
+    effective_approved: Mapping[tuple[str, int], object]
+    | Collection[tuple[str, int]]
+    | None = None,
 ) -> dict[AtomicPatternCategory, tuple[AtomicPatternDefinition, ...]] | None:
     """Find a deterministic compatible assignment across all categories.
 
@@ -379,7 +432,10 @@ def _solve_fallback_assignment(
 
     categories = tuple(sorted(grouped, key=lambda value: value.value))
     options = {
-        category: _fallback_options(grouped[category])
+        category: _fallback_options(
+            grouped[category],
+            effective_approved=effective_approved,
+        )
         for category in categories
     }
     if any(not options[category] for category in categories):
@@ -424,6 +480,10 @@ def _maximize_fallback_assignment(
         AtomicPatternCategory,
         Sequence[AtomicPatternDefinition],
     ],
+    *,
+    effective_approved: Mapping[tuple[str, int], object]
+    | Collection[tuple[str, int]]
+    | None = None,
 ) -> dict[AtomicPatternCategory, tuple[AtomicPatternDefinition, ...]]:
     """Deterministically add compatible candidates after minimum feasibility."""
 
@@ -437,11 +497,24 @@ def _maximize_fallback_assignment(
         category: list(assignment[category])
         for category in categories
     }
+    approved_override = _normalise_effective_approved(effective_approved)
+
+    def quality_score(item: AtomicPatternDefinition) -> int:
+        state = _quality_review_state(item, approved_override)
+        return compute_atomic_quality_profile(
+            item,
+            effective_review_state=state,
+        ).quality_score
+
     for category in categories:
         entries = tuple(
             sorted(
                 grouped[category],
-                key=lambda item: (item.pattern_id, item.version),
+                key=lambda item: (
+                    -quality_score(item),
+                    item.pattern_id,
+                    item.version,
+                ),
             )
         )
         maximum = 1 if len(entries) == 1 else min(5, len(entries))
@@ -485,12 +558,19 @@ def _fallback_plan(
     for category in optional:
         grouped.setdefault(category, [])
 
-    assignment = _solve_fallback_assignment(grouped)
+    assignment = _solve_fallback_assignment(
+        grouped,
+        effective_approved=effective_approved,
+    )
     if assignment is None:
         raise PatternCandidateValidationError(
             "deterministic fallback could not satisfy candidate compatibility constraints"
         )
-    assignment = _maximize_fallback_assignment(grouped, assignment)
+    assignment = _maximize_fallback_assignment(
+        grouped,
+        assignment,
+        effective_approved=effective_approved,
+    )
 
     groups: list[PatternCandidateGroup] = []
     for category in sorted(grouped, key=lambda value: value.value):
@@ -502,7 +582,7 @@ def _fallback_plan(
                     pattern_id=definition.pattern_id,
                     version=definition.version,
                     rank=len(chosen) + 1,
-                    reason="Deterministic server fallback ordered by category and exact version.",
+                    reason="Deterministic server fallback ordered by quality score, category, and exact version.",
                 )
             )
         groups.append(
@@ -515,7 +595,7 @@ def _fallback_plan(
         schema_version=2,
         direction_id=direction_id,
         groups=tuple(groups),
-        summary="Deterministic fallback shortlist ordered by category, pattern_id, and version.",
+        summary="Deterministic fallback shortlist ordered by quality score, category, pattern_id, and version.",
     )
 
 

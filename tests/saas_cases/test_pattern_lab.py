@@ -77,7 +77,18 @@ async def test_pattern_lab_list_syncs_registry_and_escapes_filters_and_descripti
         response = await client.get("/admin/pattern-lab")
         assert response.status == 200
         html = await response.text()
-        assert "AI description" in html
+        assert "Описание для AI" in html
+        assert "Библиотека эффектов" in html
+        assert "14 категорий" in html
+        assert "Нужно проверить" in html
+        assert "review=ready_for_review" in html
+        assert "Появление ответа AI" in html
+        assert "Ждёт проверки" in html
+        assert "Assistant Message Enter technical fixture" not in html
+        assert "assistant-message-cascade@1" not in html
+        assert "Lifecycle" not in html
+        assert "AI description" not in html
+        assert "Описание для AI / hash" not in html
         async with factory() as database:
             rows = (await database.scalars(select(WidgetPatternVersion))).all()
             assert rows
@@ -94,6 +105,48 @@ async def test_pattern_lab_list_syncs_registry_and_escapes_filters_and_descripti
         ):
             duplicate = await client.get(f"/admin/pattern-lab?{query}")
             assert duplicate.status == 400
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pattern_lab_review_queue_and_category_aware_preview_controls(
+    tmp_path, monkeypatch
+):
+    client, factory, engine = await _client(
+        tmp_path, monkeypatch, email="operator@example.com"
+    )
+    try:
+        queue = await client.get("/admin/pattern-lab?review=ready_for_review")
+        assert queue.status == 200
+        queue_html = await queue.text()
+        assert "Быстрый вход сообщения пользователя" in queue_html
+        assert "Проверить →" in queue_html
+        assert "Появление сообщения пользователя" in queue_html
+        assert "Пользовательское сообщение быстро входит справа" in queue_html
+        assert "<details><summary>AI description</summary>" not in queue_html
+
+        detail = await client.get(
+            "/admin/pattern-lab/user-message-slide-settle/1"
+        )
+        assert detail.status == 200
+        detail_html = await detail.text()
+        assert "Появление сообщения пользователя" in detail_html
+        assert "Описание для AI" in detail_html
+        assert ">Повторить анимацию</button>" in detail_html
+        assert ">Запустить</button>" not in detail_html
+        assert ">Сообщение пользователя</button>" not in detail_html
+        assert ">Сообщение AI</button>" not in detail_html
+        assert "Effective review" not in detail_html
+        assert "Lifecycle" not in detail_html
+        assert "Technical" not in detail_html
+        assert "Implementation hash" not in detail_html
+        assert "data-pattern-command='user-message'" in detail_html
+        assert "Перезапускаем…" in detail_html
+        assert "iframe.dataset.viewport = command" in detail_html
+        assert "data-pattern-command='mobile'" in detail_html
+        assert "data-pattern-command='desktop'" in detail_html
     finally:
         await client.close()
         await engine.dispose()
@@ -165,18 +218,9 @@ async def test_pattern_lab_preview_is_opaque_sandbox_and_fixed_bridge(
         assert "frame-ancestors 'self'" in csp
         preview_html = await preview.text()
         assert "event.source !== window.parent" in preview_html
-        for command in (
-            "run",
-            "replay",
-            "open",
-            "close",
-            "assistant-message",
-            "user-message",
-            "typing",
-            "desktop",
-            "mobile",
-        ):
-            assert command in detail_html
+        assert "delete root.dataset.patternCommand" in preview_html
+        assert "void document.documentElement.offsetWidth" in preview_html
+        assert "Анимация воспроизведена" in detail_html
         assert "localStorage" not in preview_html
         assert "fetch(" not in preview_html
     finally:
@@ -212,7 +256,7 @@ async def test_pattern_lab_review_history_is_bounded_with_truncation_indicator(
         detail = await client.get(f"/admin/pattern-lab/{pattern_id}/{version}")
         assert detail.status == 200
         html = await detail.text()
-        assert "Showing latest 100 reviews" in html
+        assert "Показаны последние 100 проверок" in html
         assert "reviewer-0@example.com" not in html
         assert "reviewer-100@example.com" in html
     finally:
@@ -259,7 +303,8 @@ async def test_pattern_lab_escapes_hostile_manifest_metadata(
         detail = await client.get(f"/admin/pattern-lab/{pattern_id}/{version}")
         html = await detail.text()
         assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
-        assert "&lt;img src=x&gt;" in html
+        assert "&lt;img src=x&gt;" not in html
+        assert "<img src=x>" not in html
         assert "<script>alert(1)</script> hostile" not in html
     finally:
         await client.close()

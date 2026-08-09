@@ -377,7 +377,7 @@ describe('durable SaaS Studio flow', () => {
 
     render(<StudioPage />);
 
-    const frame = await screen.findByTitle('Предпросмотр AI-сотрудника Kaigo');
+    const frame = await screen.findByTitle('Предпросмотр консультанта Kaigo');
     const previewUrl = new URL(frame.getAttribute('src')!);
     expect(previewUrl.pathname).toBe(`/api/runs/${RUN_ID}/preview/document`);
     expect(previewUrl.searchParams.get('revision')).toBe('2');
@@ -420,7 +420,7 @@ describe('durable SaaS Studio flow', () => {
     }));
 
     render(<StudioPage />);
-    const frame = await screen.findByTitle('Предпросмотр AI-сотрудника Kaigo') as HTMLIFrameElement;
+    const frame = await screen.findByTitle('Предпросмотр консультанта Kaigo') as HTMLIFrameElement;
     const channel = new URL(frame.getAttribute('src')!).searchParams.get('channel');
     const postMessage = vi.spyOn(frame.contentWindow!, 'postMessage');
 
@@ -1110,7 +1110,7 @@ describe('durable SaaS Studio flow', () => {
 
     render(<StudioPage />);
 
-    const preview = await screen.findByTitle('Предпросмотр AI-сотрудника Kaigo');
+    const preview = await screen.findByTitle('Предпросмотр консультанта Kaigo');
     expect(preview).toHaveAttribute(
       'src',
       expect.stringContaining('/api/runs/run-version-1/preview/document?revision=1'),
@@ -1328,7 +1328,7 @@ describe('durable SaaS Studio flow', () => {
     render(<StudioPage />);
 
     await user.click(await screen.findByRole('button', { name: 'Просмотреть версию 1' }));
-    expect(screen.getByTitle('Предпросмотр AI-сотрудника Kaigo')).toHaveAttribute(
+    expect(screen.getByTitle('Предпросмотр консультанта Kaigo')).toHaveAttribute(
       'src',
       expect.stringContaining('/api/runs/run-version-1/preview/document?revision=1'),
     );

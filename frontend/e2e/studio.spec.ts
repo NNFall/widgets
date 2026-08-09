@@ -12,6 +12,47 @@ async function expectNoHorizontalOverflow(page: import('@playwright/test').Page)
   expect(overflow).toBeLessThanOrEqual(1);
 }
 
+async function expectRuntimeOpensAndCloses(page: import('@playwright/test').Page) {
+  const frame = page.getByTitle('Предпросмотр AI-сотрудника Kaigo');
+  const runtime = page.frameLocator('iframe[title="Предпросмотр AI-сотрудника Kaigo"]');
+  const launcher = runtime.getByRole('button', { name: 'Открыть чат' });
+  const panel = runtime.getByRole('dialog', { name: 'Помощник Kaigo' });
+  const close = runtime.getByRole('button', { name: 'Закрыть чат' });
+
+  await frame.evaluate((element) => element.scrollIntoView({ block: 'center', inline: 'center' }));
+  await expect(launcher).toBeVisible();
+  await expect(panel).toBeHidden();
+  await launcher.click();
+  await expect(panel).toBeVisible();
+  await expect(close).toBeVisible();
+
+  const [frameBox, panelBox, closeBox] = await Promise.all([
+    frame.boundingBox(),
+    panel.boundingBox(),
+    close.boundingBox(),
+  ]);
+  expect(frameBox).not.toBeNull();
+  expect(panelBox).not.toBeNull();
+  expect(closeBox).not.toBeNull();
+  expect(panelBox!.x).toBeGreaterThanOrEqual(frameBox!.x);
+  expect(panelBox!.y).toBeGreaterThanOrEqual(frameBox!.y);
+  expect(panelBox!.x + panelBox!.width).toBeLessThanOrEqual(frameBox!.x + frameBox!.width);
+  expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(frameBox!.y + frameBox!.height);
+  expect(closeBox!.x).toBeGreaterThanOrEqual(frameBox!.x);
+  expect(closeBox!.y).toBeGreaterThanOrEqual(frameBox!.y);
+  expect(closeBox!.x + closeBox!.width).toBeLessThanOrEqual(frameBox!.x + frameBox!.width);
+  expect(closeBox!.y + closeBox!.height).toBeLessThanOrEqual(frameBox!.y + frameBox!.height);
+  const closeCssSize = await close.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { width: Math.round(rect.width), height: Math.round(rect.height) };
+  });
+  expect(closeCssSize).toEqual({ width: 44, height: 44 });
+
+  await close.click();
+  await expect(panel).toBeHidden();
+  await expect(launcher).toBeVisible();
+}
+
 test('Studio creates an owned project and renders the refreshed SaaS run @desktop', async ({ page, builderApi }) => {
   test.setTimeout(60_000);
   await page.goto('/studio?url=https%3A%2F%2Fexample.com');
@@ -62,8 +103,8 @@ test('Studio creates an owned project and renders the refreshed SaaS run @deskto
   await expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
   await expect(frame).toHaveAttribute('referrerpolicy', 'no-referrer');
   await expect(frame).toHaveAttribute('src', /\/api\/runs\/run-created\/preview\/document\?revision=4&channel=/);
-  await expect(page.frameLocator('iframe[title="Предпросмотр AI-сотрудника Kaigo"]').getByRole('heading', {
-    name: 'AI-консультант',
+  await expect(page.frameLocator('iframe[title="Предпросмотр AI-сотрудника Kaigo"]').getByRole('button', {
+    name: 'Открыть чат',
   })).toBeVisible();
   await expect.poll(() => page.evaluate((key) => localStorage.getItem(key), `kaigo.saas.project.${builderApi.projectId}.idempotency-key`))
     .toBe(`studio-${builderApi.projectId}`);
@@ -102,6 +143,40 @@ test('Studio resumes the server-owned project with metrics and preview after rel
   await expect.poll(() => builderApi.requests.filter(({ method, pathname }) =>
     method === 'GET' && pathname === `/api/projects/${builderApi.projectId}`,
   ).length).toBeGreaterThan(projectReadsBeforeReload);
+});
+
+test('Studio gives generated widgets audit-equivalent desktop and mobile viewports @desktop', async ({ page, builderApi }) => {
+  builderApi.seedRun('run-preview-viewport');
+  await page.goto(`/studio?project=${builderApi.projectId}`);
+
+  const frame = page.getByTitle('Предпросмотр AI-сотрудника Kaigo');
+  await expect(frame).toBeVisible();
+  await expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
+
+  const desktopBox = await frame.boundingBox();
+  expect(desktopBox).not.toBeNull();
+  expect(desktopBox!.height).toBeGreaterThanOrEqual(620);
+  await expectRuntimeOpensAndCloses(page);
+
+  await page.getByRole('button', { name: 'Mobile' }).click();
+  await expect(page.locator('.studio-preview__device')).toHaveAttribute('data-viewport', 'mobile');
+  await expect.poll(async () => {
+    return page.frameLocator('iframe[title="Предпросмотр AI-сотрудника Kaigo"]')
+      .locator('body')
+      .evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  }).toEqual({ width: 390, height: 844 });
+  await expect.poll(async () => {
+    const [canvasBox, box] = await Promise.all([
+      page.getByTestId('studio-preview-canvas').boundingBox(),
+      frame.boundingBox(),
+    ]);
+    return Boolean(canvasBox && box
+      && box.x >= canvasBox.x
+      && box.y >= canvasBox.y
+      && box.x + box.width <= canvasBox.x + canvasBox.width + 1
+      && box.y + box.height <= canvasBox.y + canvasBox.height + 1);
+  }).toBe(true);
+  await expectRuntimeOpensAndCloses(page);
 });
 
 test('Studio owner cancels and safely retries a recoverable project run @desktop', async ({ page, builderApi }) => {
@@ -162,6 +237,36 @@ test('active subscription publishes the current verified artifact with a stable 
   await expect(page.getByLabel('Разрешённые домены')).toHaveValue(
     'https://example.com\nhttps://shop.example.com',
   );
+});
+
+test('Studio scales the 390 x 844 mobile reference viewport inside a narrow host @mobile', async ({ page, builderApi }) => {
+  builderApi.seedRun('run-mobile-reference-viewport');
+  await page.goto(`/studio?project=${builderApi.projectId}`);
+  await page.getByRole('button', { name: 'Mobile' }).click();
+
+  const device = page.locator('.studio-preview__device');
+  await expect(device).toHaveAttribute('data-viewport', 'mobile');
+  await expect(device).toHaveAttribute('data-viewport-width', '390');
+  await expect(device).toHaveAttribute('data-viewport-height', '844');
+  await expect.poll(async () => {
+    const [canvasBox, frameBox] = await Promise.all([
+      page.getByTestId('studio-preview-canvas').boundingBox(),
+      page.getByTitle('Предпросмотр AI-сотрудника Kaigo').boundingBox(),
+    ]);
+    return Boolean(canvasBox && frameBox
+      && frameBox.width <= 390
+      && frameBox.width <= canvasBox.width
+      && frameBox.x >= canvasBox.x
+      && frameBox.y >= canvasBox.y
+      && frameBox.x + frameBox.width <= canvasBox.x + canvasBox.width + 1
+      && frameBox.y + frameBox.height <= canvasBox.y + canvasBox.height + 1);
+  }).toBe(true);
+  const internalViewport = await page.frameLocator('iframe[title="Предпросмотр AI-сотрудника Kaigo"]')
+    .locator('body')
+    .evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  expect(internalViewport).toEqual({ width: 390, height: 844 });
+  await expectRuntimeOpensAndCloses(page);
+  await expectNoHorizontalOverflow(page);
 });
 
 test('Studio mobile restores a SaaS project, switches preview and has no overflow @mobile', async ({ page, builderApi }) => {

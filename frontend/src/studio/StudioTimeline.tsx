@@ -38,7 +38,10 @@ const EVENT_LABELS: Record<string, string> = {
 };
 
 const STAGE_LABELS: Record<string, string> = {
+  reference_analysis: 'Анализ сайта',
+  persona: 'Выбор сотрудника',
   art_direction: 'Арт-направление',
+  composition: 'Подбор шаблонов',
   foundation: 'Основа виджета',
   identity: 'Фирменный стиль',
   conversation: 'Диалог',

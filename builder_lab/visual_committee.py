@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from .models import TokenUsage
+from .models import AssistantPersona, TokenUsage
 from .visual_critic import (
     VisualCriticResult,
     VisualCriticRole,
@@ -91,7 +91,12 @@ def _is_transient_route_failure(value: object) -> bool:
 
 class VisualCritic(Protocol):
     async def critique(
-        self, *, audit: Any, brief: str, art_direction: str
+        self,
+        *,
+        audit: Any,
+        brief: str,
+        art_direction: str,
+        assistant_persona: AssistantPersona | None = None,
     ) -> VisualCriticResult: ...
 
     async def aclose(self) -> None: ...
@@ -102,6 +107,10 @@ class VisualJudge(Protocol):
         self,
         *,
         role_results: Mapping[VisualCriticRole, VisualCriticResult],
+        audit: Any,
+        brief: str,
+        art_direction: str,
+        assistant_persona: AssistantPersona | None = None,
     ) -> VisualJudgeResult: ...
 
     async def aclose(self) -> None: ...
@@ -133,6 +142,7 @@ class VisualCommitteeResult:
     role_failures: Mapping[VisualCriticRole, str]
     supporting_roles: Mapping[str, tuple[VisualCriticRole, ...]]
     reused_roles: tuple[VisualCriticRole, ...]
+    finding_issue_types: Mapping[str, str] = field(default_factory=dict)
 
 
 class VisualCriticCommittee:
@@ -165,6 +175,7 @@ class VisualCriticCommittee:
         self._cached_audit: Any | None = None
         self._cached_brief = ""
         self._cached_art_direction = ""
+        self._cached_assistant_persona: AssistantPersona | None = None
         self._cached_role_results: dict[
             VisualCriticRole,
             VisualCriticResult,
@@ -176,6 +187,7 @@ class VisualCriticCommittee:
         audit: Any,
         brief: str,
         art_direction: str,
+        assistant_persona: AssistantPersona | None = None,
     ) -> VisualCommitteeResult:
         if self._closed:
             raise RuntimeError("visual committee is closed")
@@ -184,11 +196,13 @@ class VisualCriticCommittee:
             audit is self._cached_audit
             and brief == self._cached_brief
             and art_direction == self._cached_art_direction
+            and assistant_persona == self._cached_assistant_persona
         )
         if not same_input:
             self._cached_audit = audit
             self._cached_brief = brief
             self._cached_art_direction = art_direction
+            self._cached_assistant_persona = assistant_persona
             self._cached_role_results.clear()
         reused_role_results = dict(self._cached_role_results)
         roles_to_run = tuple(
@@ -200,6 +214,7 @@ class VisualCriticCommittee:
                     audit=audit,
                     brief=brief,
                     art_direction=art_direction,
+                    assistant_persona=assistant_persona,
                 )
                 for role in roles_to_run
             ),
@@ -321,7 +336,13 @@ class VisualCriticCommittee:
             )
 
         try:
-            judgement = await self._judge.judge(role_results=role_results)
+            judgement = await self._judge.judge(
+                role_results=role_results,
+                audit=audit,
+                brief=brief,
+                art_direction=art_direction,
+                assistant_persona=assistant_persona,
+            )
         except asyncio.CancelledError:
             raise
         except VisualJudgeError as exc:
@@ -357,6 +378,7 @@ class VisualCriticCommittee:
             reused_roles=tuple(
                 role for role in roles if role in reused_role_results
             ),
+            finding_issue_types=dict(judgement.finding_issue_types),
         )
 
     async def aclose(self) -> None:
@@ -364,6 +386,7 @@ class VisualCriticCommittee:
             return
         self._closed = True
         self._cached_audit = None
+        self._cached_assistant_persona = None
         self._cached_role_results.clear()
         await asyncio.gather(
             *(critic.aclose() for critic in self._critics.values()),

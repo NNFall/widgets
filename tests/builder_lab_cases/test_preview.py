@@ -2,6 +2,7 @@ import unittest
 
 from builder_lab.preview import (
     PREVIEW_CSP,
+    TOP_LEVEL_VISUAL_ONLY_MESSAGE,
     build_preview_document,
     build_trusted_runtime_document,
     preview_iframe_attributes,
@@ -13,6 +14,13 @@ MOJIBAKE_MARKERS = ("РЎ", "Рµ", "Р°", "СЃ", "С‚", "вЂ", "\ufffd")
 
 
 class PreviewDocumentTests(unittest.TestCase):
+    def test_preview_only_copy_does_not_publish_generic_ai_identity(self):
+        self.assertNotIn("AI", TOP_LEVEL_VISUAL_ONLY_MESSAGE)
+        self.assertNotIn("AI", preview_iframe_attributes()["title"])
+        trusted = build_trusted_runtime_document(artifact(revision=9))
+        self.assertNotIn("Gemini готовит ответ", trusted)
+        self.assertIn("${assistantLabel} готовит ответ", trusted)
+
     def test_document_contains_restrictive_csp_and_validated_artifact(self):
         candidate = artifact(revision=7)
         document = build_preview_document(candidate)
@@ -87,6 +95,34 @@ class PreviewDocumentTests(unittest.TestCase):
         self.assertIn(marker, legacy)
         self.assertIn("data-kaigo-generated", legacy)
 
+    def test_trusted_runtime_enforces_server_selected_assistant_label(self):
+        trusted = build_trusted_runtime_document(
+            artifact(revision=9),
+            channel_id="channel-1234567890abcdef",
+            assistant_label="Пекарь Печкин",
+        )
+
+        self.assertIn('const trustedAssistantLabel = "Пекарь Печкин"', trusted)
+        self.assertIn("root.dataset.assistantLabel = assistantLabel", trusted)
+        self.assertIn("root.setAttribute('aria-label', assistantLabel)", trusted)
+        self.assertIn("assistantLabelNodes.forEach", trusted)
+
+    def test_trusted_runtime_neutralizes_legacy_generic_ai_identity(self):
+        trusted = build_trusted_runtime_document(artifact(revision=9))
+
+        self.assertIn("genericAiLabel.test(generatedAssistantLabel)", trusted)
+        self.assertIn("|| 'КОНСУЛЬТАНТ'", trusted)
+        self.assertIn("panel.setAttribute('aria-label', `Диалог с ${assistantLabel}`)", trusted)
+
+    def test_trusted_assistant_label_cannot_terminate_runtime_script(self):
+        trusted = build_trusted_runtime_document(
+            artifact(revision=9),
+            assistant_label="Пекарь </script><script>owned()</script>",
+        )
+
+        self.assertNotIn("</script><script>owned()", trusted)
+        self.assertIn("<\\/script><script>owned()<\\/script>", trusted)
+
     def test_generated_script_terminator_is_escaped_case_insensitively(self):
         document = build_preview_document(
             artifact(
@@ -116,6 +152,8 @@ class PreviewDocumentTests(unittest.TestCase):
         )
         self.assertIn("root.getAttribute('aria-label')", document)
         self.assertNotIn("RAW AI", document)
+        self.assertNotIn("|| 'AI-КОНСУЛЬТАНТ'", document)
+        self.assertIn("|| 'КОНСУЛЬТАНТ'", document)
         self.assertIn("data-kaigo-runtime-message", document)
         self.assertIn("message.className = `kaigo-widget__message kaigo-widget__message--${role}`", document)
         self.assertIn("label.className = 'kaigo-widget__message-label'", document)
@@ -150,17 +188,25 @@ class PreviewDocumentTests(unittest.TestCase):
         self.assertIn("retryFailedRequest", document)
         self.assertIn("pendingRequest = failedRequest", document)
         self.assertIn("failedRequest = null", document)
-        self.assertIn(
-            "if (input && input.value === pendingRequest.text) input.value = ''",
-            document,
-        )
+        self.assertIn("function clearComposerIfMatching(text)", document)
+        self.assertIn("function restoreComposerIfEmpty(text)", document)
+        self.assertIn("clearComposerIfMatching(pendingRequest.composerValue)", document)
+        self.assertIn("restoreComposerIfEmpty(failedRequest.composerValue)", document)
+        self.assertIn("if (!input || input.value !== text) return", document)
+        self.assertNotIn("input.value.trim() !== text", document)
         self.assertIn("failedRequest = pendingRequest", document)
         self.assertIn("pendingRequest = null", document)
-        error_index = document.index("type === 'chat.error'")
+        send_index = document.index("function sendText(text)")
         clear_index = document.index(
-            "if (input && input.value === pendingRequest.text) input.value = ''"
+            "clearComposerIfMatching(pendingRequest.composerValue)", send_index
         )
-        self.assertLess(clear_index, error_index)
+        post_index = document.index("postPendingRequest()", clear_index)
+        self.assertLess(clear_index, post_index)
+        response_block = document[
+            document.index("data.type === 'chat.response'") :
+            document.index("data.type === 'chat.error'")
+        ]
+        self.assertNotIn("input.value = ''", response_block)
 
     def test_attention_state_is_runtime_owned_one_shot_and_reduced_motion_safe(self):
         document = build_preview_document(
@@ -216,6 +262,28 @@ class PreviewDocumentTests(unittest.TestCase):
         self.assertIn("suggestionsRegion.setAttribute('aria-hidden', 'true')", document)
         self.assertNotIn("input.focus();\n  }});", document)
 
+    def test_empty_suggestions_region_is_runtime_hidden_without_layout_gap(self):
+        document = build_preview_document(
+            artifact(revision=9), channel_id="channel-1234567890abcdef"
+        )
+
+        self.assertIn(
+            "suggestionsRegion.hidden = suggestions.length === 0",
+            document,
+        )
+        self.assertIn(
+            "suggestionsRegion.setAttribute('aria-hidden', suggestions.length === 0 ? 'true' : 'false')",
+            document,
+        )
+        self.assertIn(
+            "suggestionsRegion.querySelectorAll('[data-suggestion], button')",
+            document,
+        )
+        self.assertNotIn(
+            "document.querySelectorAll('[data-suggestion], [data-region=\"suggestions\"] button')",
+            document,
+        )
+
     def test_rejects_invalid_channel_identifier(self):
         for channel in ("", "short", "bad channel", "x" * 97):
             with self.subTest(channel=channel):
@@ -248,7 +316,7 @@ class PreviewDocumentTests(unittest.TestCase):
         self.assertEqual(attributes["sandbox"], "allow-scripts")
         self.assertNotIn("allow-same-origin", attributes["sandbox"])
         self.assertEqual(attributes["referrerpolicy"], "no-referrer")
-        self.assertIn("AI", attributes["title"])
+        self.assertEqual(attributes["title"], "Предпросмотр консультанта Kaigo")
 
 
 if __name__ == "__main__":

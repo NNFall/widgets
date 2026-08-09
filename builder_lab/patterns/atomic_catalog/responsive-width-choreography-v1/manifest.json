@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "responsive-width-choreography",
+  "version": 1,
+  "category": "responsive_transition",
+  "status": "active",
+  "title": "Хореография ширины",
+  "summary": "Три контрольные рамки объясняют, как desktop-панель последовательно становится компактным mobile-sheet.",
+  "ai_description": "Desktop, tablet и mobile расположены как три последовательных кадра с общей нумерацией сообщений. Ширина меняется ступенчато, а нижний composer остаётся визуальным якорем во всех режимах. В Pattern Lab композиция показывает исходное состояние, основную фазу и устойчивое завершение, поэтому визуальный смысл читается без скриптов и пояснений разработчика. Модель может адаптировать оттенки, масштаб и темп под бренд, сохраняя иерархию, доступный контраст и заявленную идею: три контрольные рамки объясняют, как desktop-панель последовательно становится компактным mobile-sheet.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "dfeb206464f96f8f116d0a01114806e9f19e564e822d4c6e732921e0d2c1528c",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "ready_for_review",
+    "pattern_role": "structural"
+  }
+}

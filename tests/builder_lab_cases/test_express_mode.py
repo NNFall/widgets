@@ -35,7 +35,7 @@ def test_express_policy_is_a_complete_reviewable_build() -> None:
     assert set(policy.model_roles) == set(policy.stage_sequence)
 
 
-def test_durable_worker_and_orchestrator_use_same_express_sequence() -> None:
+def test_durable_worker_adds_persona_before_legacy_orchestrator_artifact_stages() -> None:
     expected = (
         Stage.ART_DIRECTION,
         Stage.COMPOSITION,
@@ -47,6 +47,7 @@ def test_durable_worker_and_orchestrator_use_same_express_sequence() -> None:
 
     assert PostgresWorkerQueue.stage_sequence("express") == (
         "reference_analysis",
+        "persona",
         *(stage.value for stage in expected),
     )
     assert stages_for_mode("express") == expected

@@ -48,11 +48,27 @@ from app.saas.models import (
     UserIdentity,
 )
 from builder_lab.forensics.config import GenerationForensicsConfig
-from builder_lab.models import BuilderRequest, EngineName
+from builder_lab.models import AssistantPersona, BuilderRequest, EngineName
 from builder_lab.preview import PREVIEW_CSP
 from tests.builder_lab_cases.test_validation import artifact
 
 POSTGRES_URL = os.getenv("KAIGO_TEST_POSTGRES_URL")
+
+
+def _assistant_persona() -> AssistantPersona:
+    return AssistantPersona.from_dict(
+        {
+            "schema_version": "kaigo.assistant-persona.v1",
+            "employee_type": "sales_advisor",
+            "display_name": "Пекарь Печкин",
+            "role_summary": "Помогает выбрать выпечку по проверенному ассортименту.",
+            "voice_style": "cheerful",
+            "opening_line": "Добрый день! Помочь с выбором?",
+            "behavior_rules": ["Говори живо и кратко.", "Сначала уточни вкус и повод."],
+            "safeguards": ["Не придумывай цены и ассортимент."],
+            "decision_rationale": "Тематическое имя естественно для grounded-пекарни.",
+        }
+    )
 
 
 def test_registry_v1_event_reprojects_stored_public_candidate_fail_closed() -> None:
@@ -1582,7 +1598,10 @@ async def test_preview_document_serves_fixed_runtime_for_exact_durable_artifact(
                     html=candidate.body_html,
                     css=candidate.css,
                     javascript=candidate.javascript,
-                    config={"artifact": candidate.to_dict()},
+                    config={
+                        "artifact": candidate.to_dict(),
+                        "assistant_persona": _assistant_persona().to_dict(),
+                    },
                     quality_status="accepted",
                 )
             )
@@ -1605,6 +1624,7 @@ async def test_preview_document_serves_fixed_runtime_for_exact_durable_artifact(
         assert "kaigo-builder-preview" in document
         assert "window.__owner_preview_payload" not in document
         assert "data-kaigo-generated" not in document
+        assert 'const trustedAssistantLabel = "Пекарь Печкин"' in document
         assert response.headers["Content-Security-Policy"] == PREVIEW_CSP
         assert response.headers["Cache-Control"] == "no-store"
         assert response.headers["X-Content-Type-Options"] == "nosniff"
@@ -1818,9 +1838,21 @@ async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(
                 progress=100,
                 idempotency_key="foreign-chat-route",
             )
-            database.add_all([run, foreign])
+            draft = GenerationRun(
+                project_id=project_id,
+                mode="express",
+                state="running",
+                progress=80,
+                next_event_sequence=3,
+                idempotency_key="draft-chat-route",
+            )
+            database.add_all([run, foreign, draft])
             await database.flush()
             candidate = artifact(revision=2, art_direction="Trusted identity marker")
+            draft_candidate = artifact(
+                revision=3,
+                art_direction="Restorable draft identity marker",
+            )
             database.add_all(
                 [
                     GenerationEvent(
@@ -1848,7 +1880,10 @@ async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(
                         html=candidate.body_html,
                         css=candidate.css,
                         javascript=candidate.javascript,
-                        config={"artifact": candidate.to_dict()},
+                        config={
+                            "artifact": candidate.to_dict(),
+                            "assistant_persona": _assistant_persona().to_dict(),
+                        },
                         quality_status="accepted",
                     ),
                     GenerationArtifact(
@@ -1861,9 +1896,31 @@ async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(
                         config={"artifact": candidate.to_dict()},
                         quality_status="verified",
                     ),
+                    GenerationEvent(
+                        id=602,
+                        run_id=draft.id,
+                        sequence=1,
+                        event_type="run.created",
+                        public_message="Generation queued",
+                        payload={
+                            "request": BuilderRequest(
+                                engine=EngineName.DIRECT,
+                                brief="Build a draft sales assistant",
+                                assistant_persona=_assistant_persona(),
+                            ).to_dict(),
+                        },
+                    ),
+                    GenerationEvent(
+                        id=603,
+                        run_id=draft.id,
+                        sequence=2,
+                        event_type="artifact.draft_staged",
+                        public_message="Draft staged",
+                        payload={"artifact": draft_candidate.to_dict()},
+                    ),
                 ]
             )
-            run_id, foreign_run_id = run.id, foreign.id
+            run_id, foreign_run_id, draft_run_id = run.id, foreign.id, draft.id
 
         payload = {
             "request_id": "request-route-123",
@@ -1915,6 +1972,9 @@ async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(
         assert "Build a sales assistant" in provider.requests[0].prompt
         assert "Trusted identity marker" in provider.requests[0].prompt
         assert public_fact_marker in provider.requests[0].prompt
+        assert _assistant_persona().display_name in provider.requests[0].prompt
+        assert "TRUSTED_ASSISTANT_PERSONA_POLICY=" in provider.requests[0].prompt
+        assert "UNTRUSTED_ASSISTANT_PERSONA_DATA_JSON=" in provider.requests[0].prompt
         async with factory() as database:
             call = (await database.execute(select(ModelCall))).scalar_one()
         assert call.role == "chat_visitor"
@@ -1925,6 +1985,27 @@ async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(
             1,
         )
         assert call.cost_microusd == 21
+
+        async with factory() as database, database.begin():
+            persisted = await database.scalar(
+                select(GenerationArtifact).where(
+                    GenerationArtifact.run_id == run_id,
+                    GenerationArtifact.revision == 2,
+                )
+            )
+            assert persisted is not None
+            persisted.config = {
+                **persisted.config,
+                "assistant_persona": {"schema_version": "broken"},
+            }
+        malformed = await client.post(
+            f"/api/runs/{run_id}/chat",
+            json={**payload, "request_id": "request-route-malformed-1"},
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        assert malformed.status == 409
+        assert (await malformed.json())["error"]["code"] == "chat_not_ready"
+        assert len(provider.requests) == 1
 
         await client.post("/test/login/11")
         foreign_to_owner = await client.post(
@@ -1941,6 +2022,25 @@ async def test_run_chat_is_owner_scoped_csrf_gated_idempotent_and_audited(
         assert owner_to_foreign.status == 200
         assert len(provider.requests) == 2
         assert public_fact_marker not in provider.requests[1].prompt
+        assert "TRUSTED_ASSISTANT_PERSONA_POLICY=" not in provider.requests[1].prompt
+        assert "UNTRUSTED_ASSISTANT_PERSONA_DATA_JSON=" not in provider.requests[1].prompt
+        assert "Ты AI-консультант сайта" in provider.requests[1].prompt
+
+        await client.post("/test/login/10")
+        draft_response = await client.post(
+            f"/api/runs/{draft_run_id}/chat",
+            json={
+                "request_id": "request-route-draft-1",
+                "message": "Что доступно?",
+                "revision": 3,
+            },
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        assert draft_response.status == 200
+        assert len(provider.requests) == 3
+        assert "Restorable draft identity marker" in provider.requests[2].prompt
+        assert _assistant_persona().display_name in provider.requests[2].prompt
+        assert "TRUSTED_ASSISTANT_PERSONA_POLICY=" in provider.requests[2].prompt
     finally:
         await service.close()
         await client.close()

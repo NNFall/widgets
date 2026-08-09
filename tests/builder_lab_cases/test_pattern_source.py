@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+import re
 
 import pytest
 
@@ -35,14 +36,49 @@ def test_compiler_owns_runtime_anatomy(tmp_path: Path) -> None:
     assert source.body_html.count('data-action="open"') == 1
     assert source.body_html.count('data-action="close"') == 1
     assert source.body_html.count('data-action="send"') == 1
-    assert source.body_html.count("data-suggestion=") == 2
+    assert source.body_html.count("data-suggestion=") == 0
     assert source.body_html.count('id="kaigo-message"') == 1
+    assert "AI-консультант" not in source.body_html
+    assert "ИИ-консультант" not in source.body_html
+    assert ">Консультант<" in source.body_html
     assert "<form" not in source.body_html
     assert "<slot" not in source.body_html
     assert source.javascript == ""
-    assert validate_artifact(
-        source.as_seed(revision=1, art_direction="Тестовое направление")
-    ) == ()
+    seed = source.as_seed(revision=1, art_direction="Тестовое направление")
+    assert seed.suggested_actions == ()
+    assert validate_artifact(seed) == ()
+
+
+def test_anatomy_fingerprint_accepts_zero_to_two_suggestions_only(
+    tmp_path: Path,
+) -> None:
+    registry, plan = source_registry_and_plan(tmp_path)
+    source = compile_runtime_source(plan, registry)
+
+    def with_suggestions(count: int) -> str:
+        buttons = "".join(
+            f'<button type="button" data-suggestion="Вопрос {index}">Вопрос {index}</button>'
+            for index in range(count)
+        )
+        return re.sub(
+            r'(<div[^>]+data-region="suggestions"[^>]*>).*?(</div>)',
+            rf"\g<1>{buttons}\g<2>",
+            source.body_html,
+            count=1,
+            flags=re.DOTALL,
+        )
+
+    for count in (0, 1, 2):
+        assert canonical_anatomy_fingerprint(
+            with_suggestions(count),
+            expected_root_classes=source.root_classes,
+        )
+
+    with pytest.raises(PatternCompilationError, match="zero to two"):
+        canonical_anatomy_fingerprint(
+            with_suggestions(3),
+            expected_root_classes=source.root_classes,
+        )
 
 
 def test_compiler_hash_and_bundle_are_canonical(tmp_path: Path) -> None:

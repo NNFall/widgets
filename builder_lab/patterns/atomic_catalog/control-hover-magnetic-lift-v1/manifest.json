@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "control-hover-magnetic-lift",
+  "version": 1,
+  "category": "control_hover",
+  "status": "active",
+  "title": "Магнитный подъём контролов",
+  "summary": "Кнопки слегка тянутся к курсору, поднимаются и проявляют понятную подпись действия.",
+  "ai_description": "Hover и keyboard focus контролов построены как короткое магнитное взаимодействие: круглая кнопка слегка смещается в сторону действия, поднимается над поверхностью, меняет фон и показывает компактную текстовую подпись. Эффект помогает объяснить неочевидные иконки закрытия, справки или отправки, но не меняет расположение соседних элементов. Модель может варьировать направление, подъём, подпись и акцентный цвет, сохраняя доступный focus-visible и спокойную длительность.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "0db5ed730c5d75151edf65fe2a35edbf3564f00fd69c2a507b49acfa4b1de0b9",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved",
+    "pattern_role": "support"
+  }
+}

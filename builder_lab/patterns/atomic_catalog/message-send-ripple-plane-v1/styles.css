@@ -1,0 +1,24 @@
+:root { color-scheme: light; font-family: Inter, Arial, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; overflow: hidden; background: #f4f1ec; color: #182b40; }
+.pattern-stage { min-height: 100vh; display: grid; place-items: center; padding: 26px; background: linear-gradient(145deg, #faf8f5, #ebe8e1); }
+.send-demo { position: relative; width: min(410px, 92vw); height: 250px; display: flex; flex-direction: column; justify-content: flex-end; gap: 18px; padding: 22px; border: 1px solid rgba(24,43,64,.08); border-radius: 28px; background: rgba(255,255,255,.88); box-shadow: 0 24px 54px rgba(24,43,64,.12); overflow: hidden; }
+.sent-message { align-self: flex-end; max-width: 72%; padding: 12px 15px; border-radius: 18px 18px 6px 18px; background: #244d5f; color: white; font-size: 12px; opacity: 0; }
+.send-demo footer { display: grid; grid-template-columns: 1fr 44px; align-items: center; gap: 9px; padding: 8px 8px 8px 14px; border: 1px solid #dfe4e6; border-radius: 18px; background: #fff; color: #596673; font-size: 12px; }
+.send-demo footer button { position: relative; width: 42px; height: 42px; border: 0; border-radius: 14px; background: #ff6948; color: white; }
+.send-demo footer i { position: relative; z-index: 2; display: block; font-style: normal; font-size: 17px; transform: rotate(-10deg); }
+.send-demo footer b { position: absolute; inset: 2px; border: 1px solid rgba(255,105,72,.65); border-radius: 16px; opacity: 0; }
+.sent-message, .send-demo footer i, .send-demo footer b { animation-duration: 3.4s; animation-iteration-count: infinite; }
+.sent-message { animation-name: message-land; }
+.send-demo footer i { animation-name: plane-send; }
+.send-demo footer b { animation-name: send-ripple; }
+html[data-pattern-command='run'] .sent-message, html[data-pattern-command='replay'] .sent-message { animation: message-land-once .62s .25s cubic-bezier(.2,.9,.24,1.08) both; }
+html[data-pattern-command='run'] .send-demo footer i, html[data-pattern-command='replay'] .send-demo footer i { animation: plane-send-once .55s ease both; }
+html[data-pattern-command='run'] .send-demo footer b, html[data-pattern-command='replay'] .send-demo footer b { animation: ripple-once .62s ease both; }
+@keyframes plane-send { 0%,7%,100% { opacity: 1; transform: rotate(-10deg); } 18% { opacity: 0; transform: translate(34px,-38px) rotate(-18deg) scale(.72); } 28% { opacity: 0; transform: translate(-8px,9px) scale(.7); } 38%,86% { opacity: 1; transform: rotate(-10deg); } }
+@keyframes send-ripple { 0%,6%,100% { opacity: 0; transform: scale(.6); } 19% { opacity: .7; transform: scale(1.7); } 28% { opacity: 0; transform: scale(2); } }
+@keyframes message-land { 0%,17% { opacity: 0; transform: translateY(18px) translateX(26px) scale(.9); } 34%,84% { opacity: 1; transform: none; } 96%,100% { opacity: 0; } }
+@keyframes plane-send-once { from { opacity: 1; transform: rotate(-10deg); } to { opacity: 0; transform: translate(34px,-38px) rotate(-18deg) scale(.72); } }
+@keyframes ripple-once { from { opacity: .7; transform: scale(.6); } to { opacity: 0; transform: scale(2); } }
+@keyframes message-land-once { from { opacity: 0; transform: translateY(18px) translateX(26px) scale(.9); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; } }

@@ -1,0 +1,18 @@
+:root { color-scheme: light; font-family: Inter, Arial, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; overflow: hidden; background: #f2f4f1; color: #172a3e; }
+.pattern-stage { min-height: 100vh; display: grid; place-items: center; padding: 26px; background: radial-gradient(circle at center, rgba(74,154,126,.08), transparent 42%), #f2f4f1; }
+.controls-demo { width: min(430px, 92vw); padding: 30px 24px 42px; border: 1px solid rgba(23,42,62,.08); border-radius: 28px; background: rgba(255,255,255,.9); box-shadow: 0 24px 54px rgba(23,42,62,.12); }
+.controls-demo p { margin: 0 0 28px; color: #6e7a83; font-size: 12px; text-align: center; }
+.control-row { display: flex; justify-content: center; gap: 16px; }
+.control-row button { position: relative; width: 50px; height: 50px; border: 1px solid #dce3e2; border-radius: 17px; background: #f7f9f8; color: #4b5963; font-size: 19px; cursor: pointer; transition: transform .28s cubic-bezier(.2,.9,.24,1.16), background .28s ease, color .28s ease, box-shadow .28s ease; }
+.control-row button::after { content: attr(data-label); position: absolute; left: 50%; top: calc(100% + 9px); padding: 5px 8px; border-radius: 8px; background: #203e4d; color: #fff; font-size: 9px; white-space: nowrap; opacity: 0; transform: translate(-50%,-5px); transition: opacity .22s ease, transform .22s ease; pointer-events: none; }
+.control-row button:hover, .control-row button:focus-visible { outline: none; transform: translateY(-7px) scale(1.06); background: #203e4d; color: #fff; box-shadow: 0 13px 24px rgba(32,62,77,.24); }
+.control-row button:hover::after, .control-row button:focus-visible::after { opacity: 1; transform: translate(-50%,0); }
+.control-row .send-control { border-color: transparent; background: #ff6a48; color: white; }
+html[data-pattern-command='run'] .control-row button, html[data-pattern-command='replay'] .control-row button { animation: magnetic-tour 1.8s ease both; }
+html[data-pattern-command='run'] .control-row button:nth-child(2), html[data-pattern-command='replay'] .control-row button:nth-child(2) { animation-delay: .13s; }
+html[data-pattern-command='run'] .control-row button:nth-child(3), html[data-pattern-command='replay'] .control-row button:nth-child(3) { animation-delay: .26s; }
+html[data-pattern-command='run'] .control-row button:nth-child(4), html[data-pattern-command='replay'] .control-row button:nth-child(4) { animation-delay: .39s; }
+@keyframes magnetic-tour { 0%,100% { transform: none; } 35%,65% { transform: translateY(-7px) scale(1.06); box-shadow: 0 13px 24px rgba(32,62,77,.2); } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }

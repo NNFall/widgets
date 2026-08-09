@@ -9,6 +9,7 @@ import pytest
 
 from builder_lab.patterns.atomic_models import (
     AdaptationPolicy,
+    AtomicPatternCategory,
     AtomicPatternStatus,
 )
 from builder_lab.patterns.atomic_registry import (
@@ -162,14 +163,29 @@ def test_v3_implementation_dict_returns_exact_assets() -> None:
     }
 
 
-def test_builtin_registry_contains_one_active_approved_fixture_per_category() -> None:
+def test_builtin_registry_contains_approved_fixture_and_reviewable_visual_per_category() -> None:
     registry = load_builtin_atomic_registry()
 
     assert {item.category.value for item in registry.definitions} == EXPECTED_ATOMIC_CATEGORIES
-    assert len(registry.definitions) == len(EXPECTED_ATOMIC_CATEGORIES)
     assert all(item.status is AtomicPatternStatus.ACTIVE for item in registry.definitions)
-    assert all(item.provenance["review_state"] == "approved" for item in registry.definitions)
     assert all(item.adaptation_policy in set(AdaptationPolicy) for item in registry.definitions)
+    for category in AtomicPatternCategory:
+        definitions = [item for item in registry.definitions if item.category is category]
+        approved = [
+            item for item in definitions if item.provenance["review_state"] == "approved"
+        ]
+        reviewable = [
+            item
+            for item in definitions
+            if item.provenance["review_state"] == "ready_for_review"
+        ]
+        assert len(approved) >= 1
+        assert len(reviewable) >= 1
+        assert all("technical fixture" not in item.title.casefold() for item in reviewable)
+        assert all(len(item.ai_description) >= 160 for item in reviewable)
+        assert all("data-pattern-preview" in item.html for item in reviewable)
+        assert all("data-pattern-command" in item.css for item in reviewable)
+        assert all("prefers-reduced-motion" in item.css for item in reviewable)
 
 
 def test_v3_registry_rejects_hash_drift(tmp_path: Path) -> None:

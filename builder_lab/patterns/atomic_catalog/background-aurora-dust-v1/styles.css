@@ -1,0 +1,24 @@
+:root { color-scheme: light; font-family: Inter, Arial, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; overflow: hidden; background: #eef2ef; color: #15283d; }
+.pattern-stage { position: relative; min-height: 100vh; display: grid; place-items: center; overflow: hidden; background: #edf2ef; }
+.aurora { position: absolute; width: 310px; height: 310px; border-radius: 50%; filter: blur(48px); opacity: .42; mix-blend-mode: multiply; }
+.aurora-one { left: -60px; top: -80px; background: #8ed6bb; animation: aurora-one 9s ease-in-out infinite alternate; }
+.aurora-two { right: -90px; bottom: -80px; background: #ffb49d; animation: aurora-two 11s ease-in-out infinite alternate; }
+.dust { position: absolute; width: 7px; height: 7px; border: 1px solid rgba(40,95,82,.5); border-radius: 50%; background: rgba(255,255,255,.7); box-shadow: 0 0 16px rgba(63,140,120,.34); animation: drift 5.5s ease-in-out infinite alternate; }
+.dust-one { left: 18%; top: 27%; }
+.dust-two { right: 20%; top: 22%; width: 4px; height: 4px; animation-delay: -1.6s; }
+.dust-three { left: 25%; bottom: 18%; width: 5px; height: 5px; animation-delay: -2.8s; }
+.dust-four { right: 16%; bottom: 31%; animation-delay: -3.7s; }
+.aurora-chat { position: relative; z-index: 2; width: min(350px, 88vw); height: 430px; display: grid; grid-template: auto 1fr auto / 1fr; border: 1px solid rgba(255,255,255,.8); border-radius: 28px; background: rgba(255,255,255,.72); backdrop-filter: blur(18px); box-shadow: 0 28px 70px rgba(35,60,67,.16); overflow: hidden; }
+.aurora-chat header { display: flex; align-items: center; gap: 11px; padding: 16px; border-bottom: 1px solid rgba(36,61,65,.08); }
+.aurora-chat header span { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 14px; background: #245764; color: white; font-weight: 800; }
+.aurora-chat header strong { font-size: 14px; }
+.aurora-chat p { align-self: start; max-width: 78%; margin: 22px 16px; padding: 13px 15px; border-radius: 18px 18px 18px 6px; background: rgba(255,255,255,.86); font-size: 13px; line-height: 1.45; box-shadow: 0 8px 20px rgba(36,61,65,.08); }
+.aurora-chat footer { margin: 14px; padding: 14px; border: 1px solid rgba(36,61,65,.12); border-radius: 16px; background: rgba(255,255,255,.78); color: #929da0; font-size: 12px; }
+html[data-pattern-command='run'] .aurora-chat, html[data-pattern-command='replay'] .aurora-chat { animation: aurora-card .7s ease both; }
+@keyframes aurora-one { to { transform: translate(80px,50px) scale(1.12); } }
+@keyframes aurora-two { to { transform: translate(-90px,-48px) scale(.92); } }
+@keyframes drift { from { transform: translate(-5px,8px); opacity: .35; } to { transform: translate(12px,-14px); opacity: .9; } }
+@keyframes aurora-card { from { opacity: 0; transform: translateY(22px) scale(.96); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; } }

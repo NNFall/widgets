@@ -38,6 +38,7 @@ from builder_lab.patterns.atomic_models import (
     PatternCandidatePlan,
 )
 from builder_lab.patterns.atomic_registry import AtomicPatternRegistry
+from builder_lab.patterns.atomic_quality import compute_atomic_quality_profile
 from builder_lab.patterns.candidate_resolver import STAGE_PATTERN_CATEGORIES
 
 
@@ -288,19 +289,14 @@ class PatternCandidateRepository:
             raise ValueError("candidate plan must use schema version 2")
         await self.sync_registry(registry)
         digest = self.registry_digest(registry)
-        existing = await self._session.scalar(select(PatternCandidatePlanRecord).where(PatternCandidatePlanRecord.run_id == run_id))
-        if existing is not None:
-            loaded = await self.load_plan(run_id)
-            if (
-                loaded is None
-                or loaded.plan != plan
-                or loaded.registry_digest != digest
-                or loaded.direction_artifact_id != direction_artifact_id
-                or loaded.selector_model_call_id != selector_model_call_id
-            ):
-                raise ValueError("conflicting candidate plan replay")
-            return existing
-        await self._validate_run_lineage(run_id=run_id, direction_artifact_id=direction_artifact_id, selector_model_call_id=selector_model_call_id)
+        # Validate the exact candidate assets before the idempotent replay
+        # shortcut.  Review/lifecycle changes must invalidate a stale plan even
+        # when its serialized payload and registry digest still match.
+        await self._validate_run_lineage(
+            run_id=run_id,
+            direction_artifact_id=direction_artifact_id,
+            selector_model_call_id=selector_model_call_id,
+        )
         persisted_versions: dict[tuple[str, int], WidgetPatternVersion] = {}
         for group in plan.groups:
             for candidate in group.candidates:
@@ -322,9 +318,28 @@ class PatternCandidateRepository:
                     raise ValueError("candidate version was not synchronized")
                 if version.category != group.category.value:
                     raise ValueError("persisted candidate category mismatch")
-                if await self.effective_review_state(version.id) != "approved":
+                effective_state = await self.effective_review_state(version.id)
+                if effective_state != "approved":
                     raise ValueError("candidate is not effectively approved")
+                quality = compute_atomic_quality_profile(
+                    definition,
+                    effective_review_state=effective_state,
+                )
+                if not quality.selector_eligible:
+                    raise ValueError("candidate is not quality-eligible")
                 persisted_versions[(candidate.pattern_id, candidate.version)] = version
+        existing = await self._session.scalar(select(PatternCandidatePlanRecord).where(PatternCandidatePlanRecord.run_id == run_id))
+        if existing is not None:
+            loaded = await self.load_plan(run_id)
+            if (
+                loaded is None
+                or loaded.plan != plan
+                or loaded.registry_digest != digest
+                or loaded.direction_artifact_id != direction_artifact_id
+                or loaded.selector_model_call_id != selector_model_call_id
+            ):
+                raise ValueError("conflicting candidate plan replay")
+            return existing
         record = PatternCandidatePlanRecord(
             id=uuid4(), run_id=run_id, direction_artifact_id=direction_artifact_id,
             selector_model_call_id=selector_model_call_id, schema_version=2,

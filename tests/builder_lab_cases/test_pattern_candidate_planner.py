@@ -13,6 +13,7 @@ from builder_lab.models import (
     TokenUsage,
 )
 from builder_lab.patterns.atomic_models import AtomicPatternCategory
+from builder_lab.patterns.atomic_quality import compute_atomic_quality_profile
 from builder_lab.patterns.atomic_registry import (
     AtomicPatternRegistry,
     load_builtin_atomic_registry,
@@ -26,6 +27,7 @@ from builder_lab.patterns.candidate_planner import (
     plan_pattern_candidates,
     validate_pattern_candidate_plan,
 )
+from builder_lab.patterns.candidate_planner import _eligible_catalog, _fallback_options
 from builder_lab.prompts import (
     PATTERN_CANDIDATE_PLAN_JSON_SCHEMA,
     build_pattern_candidate_plan_prompt,
@@ -53,7 +55,76 @@ def direction() -> DirectionProposal:
 
 
 def approved_registry() -> AtomicPatternRegistry:
-    return load_builtin_atomic_registry()
+    # Planner contract tests need the original one-per-category baseline so
+    # their synthetic incompatibility fixtures remain deterministic even as
+    # reviewed production patterns are promoted in the built-in catalog.
+    registry = load_builtin_atomic_registry()
+    return AtomicPatternRegistry(
+        tuple(
+            definition
+            for definition in registry.definitions
+            if definition.pattern_id.endswith("-technical")
+        )
+    )
+
+
+_BASELINE_PATTERN_IDS = {
+    AtomicPatternCategory.LAUNCHER_SHAPE: "launcher-faceted-pebble",
+    AtomicPatternCategory.LAUNCHER_IDLE: "launcher-breathing-halo",
+    AtomicPatternCategory.LAUNCHER_ATTENTION: "launcher-greeting-arc",
+    AtomicPatternCategory.SHELL_LAYOUT: "shell-concierge-column",
+    AtomicPatternCategory.WIDGET_OPEN: "widget-open-spring-unfold",
+    AtomicPatternCategory.WIDGET_CLOSE: "widget-close-fold-home",
+    AtomicPatternCategory.BACKGROUND_EFFECT: "background-chat-constellation",
+    AtomicPatternCategory.ASSISTANT_MESSAGE_ENTER: "assistant-message-cascade",
+    AtomicPatternCategory.USER_MESSAGE_ENTER: "user-message-slide-settle",
+    AtomicPatternCategory.TYPING_INDICATOR: "typing-editorial-pulse",
+    AtomicPatternCategory.MESSAGE_SEND: "message-send-ripple-plane",
+    AtomicPatternCategory.COMPOSER_FOCUS: "composer-focus-smart-rail",
+    AtomicPatternCategory.CONTROL_HOVER: "control-hover-ink-fill",
+    AtomicPatternCategory.RESPONSIVE_TRANSITION: "responsive-dock-sheet",
+}
+
+
+def visual_registry() -> AtomicPatternRegistry:
+    """One real, selector-eligible definition per category for contract tests."""
+    source = load_builtin_atomic_registry()
+    definitions = []
+    for category, pattern_id in _BASELINE_PATTERN_IDS.items():
+        definition = source.resolve(pattern_id, 1)
+        role = (
+            "signature"
+            if category
+            in {
+                AtomicPatternCategory.WIDGET_OPEN,
+                AtomicPatternCategory.WIDGET_CLOSE,
+                AtomicPatternCategory.LAUNCHER_ATTENTION,
+                AtomicPatternCategory.MESSAGE_SEND,
+                AtomicPatternCategory.ASSISTANT_MESSAGE_ENTER,
+                AtomicPatternCategory.USER_MESSAGE_ENTER,
+            }
+            else (
+                "structural"
+                if category
+                in {
+                    AtomicPatternCategory.SHELL_LAYOUT,
+                    AtomicPatternCategory.RESPONSIVE_TRANSITION,
+                }
+                else "support"
+            )
+        )
+        definition = replace(
+            definition,
+            provenance={
+                "origin": "test-baseline",
+                "review_state": "approved",
+                "pattern_role": role,
+            },
+        )
+        profile = compute_atomic_quality_profile(definition)
+        assert profile.selector_eligible
+        definitions.append(definition)
+    return AtomicPatternRegistry(tuple(definitions))
 
 
 def catalog(registry: AtomicPatternRegistry | None = None):
@@ -70,7 +141,7 @@ def plan_for(*groups: PatternCandidateGroup) -> PatternCandidatePlan:
 
 
 def candidate(category: AtomicPatternCategory, *, rank: int = 1) -> PatternCandidateGroup:
-    pattern_id = f"{category.value.replace('_', '-')}-technical"
+    pattern_id = _BASELINE_PATTERN_IDS[category]
     return PatternCandidateGroup(
         category=category,
         candidates=(
@@ -100,6 +171,20 @@ def test_selector_prompt_contains_full_ai_description_but_no_assets() -> None:
     assert "styles.css" not in prompt
     assert "behavior.js" not in prompt
     assert "implementation code" in prompt.lower()
+
+
+def test_selector_prompt_requires_site_specific_ranking_and_diverse_shortlists() -> None:
+    registry = approved_registry()
+    prompt = build_pattern_candidate_plan_prompt(
+        request=builder_request(reference_context="Brand is calm, editorial, and B2B."),
+        selected_direction=direction(),
+        selector_catalog=catalog(registry),
+    )
+
+    assert "Rank 1" in prompt
+    assert "observable reference" in prompt
+    assert "meaningfully different" in prompt
+    assert "technical fixture" in prompt
 
 
 def test_selector_prompt_includes_bounded_untrusted_reference_and_optional_categories() -> None:
@@ -180,8 +265,8 @@ def test_validation_rejects_unknown_version_and_category() -> None:
 
 
 def test_validation_rejects_lifecycle_and_review_state() -> None:
-    registry = approved_registry()
-    definition = registry.resolve("widget-open-technical", 1)
+    registry = visual_registry()
+    definition = registry.resolve("widget-open-spring-unfold", 1)
     draft_registry = AtomicPatternRegistry((replace(definition, status=type(definition.status).DRAFT),))
     group = candidate(AtomicPatternCategory.WIDGET_OPEN)
     with pytest.raises(PatternCandidateValidationError, match="active"):
@@ -212,8 +297,8 @@ def test_validation_rejects_duplicates_and_noncanonical_rank() -> None:
 
 
 def test_validation_requires_two_to_five_candidates_when_two_are_eligible() -> None:
-    original = approved_registry()
-    definition = original.resolve("widget-open-technical", 1)
+    original = visual_registry()
+    definition = original.resolve("widget-open-spring-unfold", 1)
     second = replace(definition, version=2)
     registry = AtomicPatternRegistry(tuple(original.definitions) + (second,))
     metadata = tuple(
@@ -234,6 +319,7 @@ def test_validation_requires_two_to_five_candidates_when_two_are_eligible() -> N
         accepted,
         registry=registry,
         selector_catalog=metadata,
+        effective_approved={(definition.pattern_id, 1), (second.pattern_id, 2)},
     ) == accepted
 
     with pytest.raises(PatternCandidateValidationError, match="two to five"):
@@ -246,11 +332,12 @@ def test_validation_requires_two_to_five_candidates_when_two_are_eligible() -> N
             ),
             registry=registry,
             selector_catalog=metadata,
+            effective_approved={(definition.pattern_id, 1), (second.pattern_id, 2)},
         )
 
 
 def test_validation_rejects_direction_mismatch_and_plan_duplicate_categories() -> None:
-    registry = approved_registry()
+    registry = visual_registry()
     plan = plan_for(candidate(AtomicPatternCategory.WIDGET_OPEN))
     with pytest.raises(PatternCandidateValidationError, match="direction_id"):
         validate_pattern_candidate_plan(
@@ -275,9 +362,9 @@ def test_validation_rejects_direction_mismatch_and_plan_duplicate_categories() -
 
 
 def test_validation_rejects_asymmetric_incompatibility() -> None:
-    registry = approved_registry()
-    first = registry.resolve("widget-open-technical", 1)
-    second = registry.resolve("widget-close-technical", 1)
+    registry = visual_registry()
+    first = registry.resolve("widget-open-spring-unfold", 1)
+    second = registry.resolve("widget-close-fold-home", 1)
     incompatible_registry = AtomicPatternRegistry(
         (
             replace(first, incompatible_with=(second.pattern_id,)),
@@ -303,7 +390,7 @@ def test_validation_rejects_asymmetric_incompatibility() -> None:
 
 
 def test_validation_rejects_omitted_eligible_and_declared_optional_categories() -> None:
-    registry = approved_registry()
+    registry = visual_registry()
     subset = tuple(
         item
         for item in catalog(registry)
@@ -342,18 +429,19 @@ class FakeSelectorEngine:
 
 
 def valid_payload(registry: AtomicPatternRegistry | None = None):
-    registry = registry or approved_registry()
+    registry = registry or visual_registry()
     by_category: dict[AtomicPatternCategory, list] = {}
-    for item in registry.definitions:
-        by_category.setdefault(item.category, []).append(item)
+    for item in registry.selector_catalog():
+        category = AtomicPatternCategory(str(item["category"]))
+        by_category.setdefault(category, []).append(item)
     return plan_for(
         *(
             PatternCandidateGroup(
                 category=category,
                 candidates=tuple(
                     PatternCandidate(
-                        pattern_id=item.pattern_id,
-                        version=item.version,
+                        pattern_id=str(item["pattern_id"]),
+                        version=int(item["version"]),
                         rank=rank,
                         reason="Matches the requested direction and runtime contract.",
                     )
@@ -367,7 +455,7 @@ def valid_payload(registry: AtomicPatternRegistry | None = None):
 
 @pytest.mark.asyncio
 async def test_repeated_invalid_selector_output_uses_deterministic_fallback() -> None:
-    registry = approved_registry()
+    registry = visual_registry()
     invalid = plan_for(
         PatternCandidateGroup(
             category=AtomicPatternCategory.WIDGET_OPEN,
@@ -393,17 +481,17 @@ async def test_repeated_invalid_selector_output_uses_deterministic_fallback() ->
 
 @pytest.mark.asyncio
 async def test_fallback_is_sorted_compatible_and_server_validated() -> None:
-    original = approved_registry()
-    first = original.resolve("widget-open-technical", 1)
-    close = original.resolve("widget-close-technical", 1)
+    original = visual_registry()
+    first = original.resolve("widget-open-spring-unfold", 1)
+    close = original.resolve("widget-close-fold-home", 1)
     open_v2 = replace(
         first,
-        pattern_id="widget-open-alt-technical",
+        pattern_id="widget-open-alt",
         incompatible_with=(),
     )
     open_v3 = replace(
         first,
-        pattern_id="widget-open-alt-two-technical",
+        pattern_id="widget-open-alt-two",
         incompatible_with=(),
     )
     fallback_registry = AtomicPatternRegistry(
@@ -445,9 +533,9 @@ async def test_fallback_is_sorted_compatible_and_server_validated() -> None:
 
 @pytest.mark.asyncio
 async def test_fallback_backtracks_earlier_category_to_preserve_later_required_group() -> None:
-    original = approved_registry()
-    open_definition = original.resolve("widget-open-technical", 1)
-    close_definition = original.resolve("widget-close-technical", 1)
+    original = visual_registry()
+    open_definition = original.resolve("widget-open-spring-unfold", 1)
+    close_definition = original.resolve("widget-close-fold-home", 1)
     retained = tuple(
         item
         for item in original.definitions
@@ -503,8 +591,8 @@ async def test_fallback_backtracks_earlier_category_to_preserve_later_required_g
 
 @pytest.mark.asyncio
 async def test_selector_catalog_is_rebuilt_from_registry_before_provider_call() -> None:
-    registry = approved_registry()
-    target = ("widget-open-technical", 1)
+    registry = visual_registry()
+    target = ("widget-open-spring-unfold", 1)
     tampered_catalog = []
     for item in catalog(registry):
         copy = dict(item)
@@ -530,7 +618,11 @@ async def test_selector_catalog_is_rebuilt_from_registry_before_provider_call() 
         for item in engine.calls[0]["selector_catalog"]
         if (item["pattern_id"], item["version"]) == target
     )
-    assert sent == registry.resolve(*target).selector_dict()
+    expected = registry.resolve(*target).selector_dict()
+    expected["quality_profile"] = compute_atomic_quality_profile(
+        registry.resolve(*target)
+    ).to_dict()
+    assert sent == expected
     assert "fragment.html" not in sent
     assert "secret" not in sent
     assert sent["ai_description"] != "INJECTED SECRET HTML <script>alert(1)</script>"
@@ -539,8 +631,8 @@ async def test_selector_catalog_is_rebuilt_from_registry_before_provider_call() 
 
 @pytest.mark.asyncio
 async def test_fallback_finds_minimum_pair_before_combination_budget_is_spent() -> None:
-    original = approved_registry()
-    open_definition = original.resolve("widget-open-technical", 1)
+    original = visual_registry()
+    open_definition = original.resolve("widget-open-spring-unfold", 1)
     retained = tuple(
         item
         for item in original.definitions
@@ -588,8 +680,8 @@ async def test_fallback_finds_minimum_pair_before_combination_budget_is_spent() 
 
 @pytest.mark.asyncio
 async def test_effective_approved_catalog_is_filtered_before_selector_call() -> None:
-    registry = approved_registry()
-    filtered_key = ("widget-open-technical", 1)
+    registry = visual_registry()
+    filtered_key = ("widget-open-spring-unfold", 1)
     engine = FakeSelectorEngine([plan_for(candidate(AtomicPatternCategory.WIDGET_OPEN))])
 
     await plan_pattern_candidates(
@@ -605,9 +697,71 @@ async def test_effective_approved_catalog_is_filtered_before_selector_call() -> 
     assert sent_ids == {filtered_key}
 
 
+def test_technical_fixture_is_excluded_even_with_effective_approval_override() -> None:
+    registry = load_builtin_atomic_registry()
+    definition = registry.resolve("widget-open-technical", 1)
+    key = (definition.pattern_id, definition.version)
+
+    assert _eligible_catalog(
+        registry=registry,
+        selector_catalog=(definition.selector_dict(),),
+        effective_approved={key},
+    ) == ()
+
+    with pytest.raises(PatternCandidateValidationError, match="quality|eligible"):
+        validate_pattern_candidate_plan(
+            plan_for(
+                PatternCandidateGroup(
+                    category=AtomicPatternCategory.WIDGET_OPEN,
+                    candidates=(
+                        PatternCandidate(definition.pattern_id, 1, 1, "fixture"),
+                    ),
+                )
+            ),
+            registry=registry,
+            selector_catalog=(definition.selector_dict(),),
+            effective_approved={key},
+        )
+
+
+def test_fallback_prefers_quality_score_before_pattern_id() -> None:
+    registry = load_builtin_atomic_registry()
+    high = registry.resolve("widget-open-spring-unfold", 1)
+    low = registry.resolve("widget-open-card-deal", 1)
+    high = replace(high, provenance={**high.provenance, "pattern_role": "signature", "review_state": "approved"})
+    low = replace(low, provenance={**low.provenance, "pattern_role": "signature", "review_state": "approved"})
+
+    options = _fallback_options((low, high))
+
+    assert options
+    assert options[0][0] is high
+
+
+def test_fallback_quality_score_honors_effective_database_approval() -> None:
+    registry = visual_registry()
+    high = registry.resolve("widget-open-spring-unfold", 1)
+    low = load_builtin_atomic_registry().resolve("widget-open-card-deal", 1)
+    low = replace(
+        low,
+        provenance={"origin": "test-baseline", "review_state": "approved", "pattern_role": "signature"},
+    )
+    high_rejected = replace(
+        high,
+        provenance={**high.provenance, "review_state": "rejected"},
+    )
+
+    options = _fallback_options(
+        (low, high_rejected),
+        effective_approved={(high.pattern_id, high.version)},
+    )
+
+    assert options
+    assert options[0][0].pattern_id == high.pattern_id
+
+
 def test_effective_approved_mapping_object_fails_closed() -> None:
-    registry = approved_registry()
-    key = ("widget-open-technical", 1)
+    registry = visual_registry()
+    key = ("widget-open-spring-unfold", 1)
     with pytest.raises(PatternCandidateValidationError, match="effectively approved"):
         validate_pattern_candidate_plan(
             plan_for(candidate(AtomicPatternCategory.WIDGET_OPEN)),
@@ -633,7 +787,7 @@ async def test_selector_exception_retries_once_then_uses_fallback() -> None:
         engine,
         request=builder_request(),
         selected_direction=direction(),
-        registry=approved_registry(),
+        registry=visual_registry(),
     )
     assert engine.calls == 2
     assert result.used_fallback is True
@@ -647,7 +801,7 @@ async def test_empty_catalog_fallback_does_not_invent_non_optional_category() ->
         FakeSelectorEngine([invalid, invalid]),
         request=builder_request(),
         selected_direction=direction(),
-        registry=approved_registry(),
+        registry=visual_registry(),
         selector_catalog=(),
         optional_categories=(),
     )
@@ -691,7 +845,7 @@ async def test_invalid_structured_response_preserves_each_provider_request_id() 
 
 @pytest.mark.asyncio
 async def test_retry_aggregates_usage_and_provider_request_ids() -> None:
-    registry = approved_registry()
+    registry = visual_registry()
     invalid = plan_for(
         PatternCandidateGroup(
             category=AtomicPatternCategory.WIDGET_OPEN,
@@ -726,7 +880,7 @@ async def test_retry_aggregates_usage_and_provider_request_ids() -> None:
 
 @pytest.mark.asyncio
 async def test_selector_returns_one_candidate_when_only_one_is_eligible() -> None:
-    registry = approved_registry()
+    registry = visual_registry()
     selector_catalog = tuple(
         item for item in catalog(registry) if item["category"] == "widget_open"
     )

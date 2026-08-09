@@ -37,7 +37,7 @@ AUDIT_CSS = """
 * { box-sizing: border-box; }
 .kaigo { position: fixed; right: 20px; bottom: 20px; color: #111; }
 [data-region="launcher"] { width: 216px; height: 46px; border: 1px solid #111; background: #f5f5f5; }
-[data-region="panel"] { display: none; width: 372px; height: 304px; background: #f5f5f5; border: 1px solid #111; }
+[data-region="panel"] { display: none; width: 372px; height: 304px; background: #f5f5f5; border: 1px solid #111; transform-origin: bottom right; }
 .kaigo-preview-open [data-region="launcher"] { display: none; }
 .kaigo-preview-open [data-region="panel"] { display: grid; grid-template-rows: 52px 1fr 48px 60px; }
 [data-region="header"], [data-region="composer"] { display: flex; align-items: center; justify-content: space-between; }
@@ -468,6 +468,69 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
             await BrowserAudit().audit(audit_artifact(css=overbroad_mobile_css))
 
         self.assertIn("compact desktop bound", str(caught.exception))
+
+    async def test_compact_studio_viewport_rejects_tall_offset_panel(self):
+        studio_overflow = audit_artifact(
+            css=(
+                AUDIT_CSS
+                + "\n@media (min-width:601px){[data-region=panel]{"
+                "position:fixed!important;right:20px!important;bottom:20px!important;"
+                "height:500px!important}}"
+            )
+        )
+
+        with self.assertRaises(BrowserAuditError) as caught:
+            await BrowserAudit().audit(studio_overflow)
+
+        self.assertEqual(caught.exception.error_code, "browser_gate_failed")
+        self.assertIn("fit entirely inside the viewport", caught.exception.diagnostic or "")
+
+    async def test_compact_studio_viewport_preserves_safe_panel_inset(self):
+        edge_pinned = audit_artifact(
+            css=(
+                AUDIT_CSS
+                + "\n@media (min-width:601px) and (max-width:899px){"
+                "[data-region=panel]{position:fixed!important;right:0!important;"
+                "bottom:0!important}}"
+            )
+        )
+
+        with self.assertRaises(BrowserAuditError) as caught:
+            await BrowserAudit().audit(edge_pinned)
+
+        self.assertEqual(caught.exception.error_code, "browser_gate_failed")
+        self.assertIn("safe viewport inset", caught.exception.diagnostic or "")
+
+    async def test_compact_studio_panel_remains_attached_to_launcher_origin(self):
+        detached = audit_artifact(
+            css=(
+                AUDIT_CSS
+                + "\n@media (min-width:601px) and (max-width:899px){"
+                "[data-region=panel]{position:fixed!important;right:20px!important;"
+                "bottom:84px!important}}"
+            )
+        )
+
+        with self.assertRaises(BrowserAuditError) as caught:
+            await BrowserAudit().audit(detached)
+
+        self.assertEqual(caught.exception.error_code, "browser_gate_failed")
+        self.assertIn("detached from the launcher", caught.exception.diagnostic or "")
+
+    async def test_compact_studio_panel_uses_lower_right_transform_origin(self):
+        wrong_origin = audit_artifact(
+            css=(
+                AUDIT_CSS
+                + "\n@media (min-width:601px) and (max-width:899px){"
+                "[data-region=panel]{transform-origin:top left!important}}"
+            )
+        )
+
+        with self.assertRaises(BrowserAuditError) as caught:
+            await BrowserAudit().audit(wrong_origin)
+
+        self.assertEqual(caught.exception.error_code, "browser_gate_failed")
+        self.assertIn("transform origin", caught.exception.diagnostic or "")
 
     async def test_hidden_panel_cannot_intercept_the_closed_launcher(self):
         intercepting_css = AUDIT_CSS + """
@@ -1339,6 +1402,37 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(caught.exception.error_code, "browser_gate_failed")
         self.assertTrue(caught.exception.failures)
         self.assertIn("close control is outside the viewport", caught.exception.failures[0])
+
+    async def test_open_panel_must_remain_spatially_attached_to_closed_launcher(self):
+        detached = audit_artifact(
+            css=(
+                AUDIT_CSS
+                + "\n@media (min-width:601px){[data-region=panel]{position:fixed!important;"
+                "right:20px!important;bottom:84px!important;"
+                "transform-origin:bottom right!important}}"
+            )
+        )
+
+        with self.assertRaises(BrowserAuditError) as caught:
+            await BrowserAudit().audit(detached)
+
+        self.assertEqual(caught.exception.error_code, "browser_gate_failed")
+        self.assertIn("detached from the launcher", caught.exception.diagnostic or "")
+
+    async def test_open_panel_and_launcher_require_safe_viewport_insets(self):
+        edge_pinned = audit_artifact(
+            css=(
+                AUDIT_CSS
+                + "\n[data-region=root]{right:0!important;bottom:0!important}"
+                + "\n[data-region=launcher],[data-region=panel]{right:0!important;bottom:0!important}"
+            )
+        )
+
+        with self.assertRaises(BrowserAuditError) as caught:
+            await BrowserAudit().audit(edge_pinned)
+
+        self.assertEqual(caught.exception.error_code, "browser_gate_failed")
+        self.assertIn("safe viewport inset", caught.exception.diagnostic or "")
 
     async def test_panel_outside_viewport_failure_contains_repair_geometry(self):
         healthy = await BrowserAudit().audit(audit_artifact())

@@ -11,6 +11,10 @@ import {
 import type { PreviewViewport } from './types';
 
 const REQUEST_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{7,95}$/;
+const PREVIEW_VIEWPORTS = {
+  desktop: { width: 1_920, height: 1_080 },
+  mobile: { width: 390, height: 844 },
+} as const;
 
 function createPreviewChannel() {
   const values = new Uint8Array(18);
@@ -40,6 +44,9 @@ export function StudioPreview({
   csrfToken = null,
 }: StudioPreviewProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const deviceSlotRef = useRef<HTMLDivElement>(null);
+  const deviceRef = useRef<HTMLDivElement>(null);
   const requestsRef = useRef(new Set<string>());
   const channel = useMemo(() => createPreviewChannel(), [runId, revision]);
   const previewUrl = runId && revision
@@ -51,6 +58,49 @@ export function StudioPreview({
   useEffect(() => {
     requestsRef.current.clear();
   }, [channel]);
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    const slot = deviceSlotRef.current;
+    const device = deviceRef.current;
+    if (!canvas) return;
+    if (viewport !== 'mobile' || !slot || !device) {
+      canvas.style.removeProperty('min-height');
+      slot?.style.removeProperty('width');
+      slot?.style.removeProperty('height');
+      slot?.removeAttribute('data-preview-scale');
+      device?.style.removeProperty('transform');
+      return;
+    }
+
+    const fitMobileViewport = () => {
+      const computed = getComputedStyle(canvas);
+      const horizontalPadding = Number.parseFloat(computed.paddingLeft)
+        + Number.parseFloat(computed.paddingRight);
+      const verticalPadding = Number.parseFloat(computed.paddingTop)
+        + Number.parseFloat(computed.paddingBottom);
+      const availableWidth = Math.max(0, canvas.clientWidth - horizontalPadding);
+      const scale = availableWidth > 0
+        ? Math.min(1, availableWidth / PREVIEW_VIEWPORTS.mobile.width)
+        : 1;
+      slot.style.width = `${PREVIEW_VIEWPORTS.mobile.width * scale}px`;
+      slot.style.height = `${PREVIEW_VIEWPORTS.mobile.height * scale}px`;
+      canvas.style.minHeight = `${Math.max(620, PREVIEW_VIEWPORTS.mobile.height * scale + verticalPadding)}px`;
+      slot.dataset.previewScale = scale.toFixed(4);
+      device.style.transform = `scale(${scale})`;
+    };
+
+    fitMobileViewport();
+    const observer = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(fitMobileViewport);
+    observer?.observe(canvas);
+    window.addEventListener('resize', fitMobileViewport);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', fitMobileViewport);
+    };
+  }, [previewUrl, viewport]);
 
   useLayoutEffect(() => {
     if (!runId || !revision) return;
@@ -130,6 +180,7 @@ export function StudioPreview({
     : qualityStatus === 'pending'
       ? 'Проверяется'
       : 'Нужна доработка';
+  const previewViewport = PREVIEW_VIEWPORTS[viewport];
 
   return (
     <section className="studio-preview" aria-labelledby="studio-preview-title">
@@ -155,17 +206,27 @@ export function StudioPreview({
         </div>
         <strong data-quality={qualityStatus}>{qualityLabel}</strong>
       </div>
-      <div className="studio-preview__canvas" data-viewport={viewport} data-testid="studio-preview-canvas">
+      <div ref={canvasRef} className="studio-preview__canvas" data-viewport={viewport} data-testid="studio-preview-canvas">
         <div className="studio-preview__grid" aria-hidden />
         {previewUrl ? (
-          <div className="studio-preview__device">
-            <iframe
-              ref={iframeRef}
-              src={previewUrl}
-              sandbox="allow-scripts"
-              referrerPolicy="no-referrer"
-              title="Предпросмотр AI-сотрудника Kaigo"
-            />
+          <div ref={deviceSlotRef} className="studio-preview__device-slot">
+            <div
+              ref={deviceRef}
+              className="studio-preview__device"
+              data-viewport={viewport}
+              data-viewport-width={previewViewport.width}
+              data-viewport-height={previewViewport.height}
+            >
+              <iframe
+                ref={iframeRef}
+                src={previewUrl}
+                width={viewport === 'mobile' ? PREVIEW_VIEWPORTS.mobile.width : undefined}
+                height={viewport === 'mobile' ? PREVIEW_VIEWPORTS.mobile.height : undefined}
+                sandbox="allow-scripts"
+                referrerPolicy="no-referrer"
+                title="Предпросмотр консультанта Kaigo"
+              />
+            </div>
           </div>
         ) : (
           <div className="studio-preview__empty">
