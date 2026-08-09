@@ -1,0 +1,25 @@
+:root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; --accent: #9e4d67; --accent-soft: #f3c4d2; --ink: #4a2431; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 280px; min-height: 100vh; overflow: hidden; background: #ece8e2; color: var(--ink); }
+button, input, textarea { font: inherit; }
+.pattern-stage { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: linear-gradient(145deg, #f9f7f3, #e9e5de); }
+.showcase { width: min(460px, 94vw); position: relative; }
+.preview-label { margin: 0 0 12px; color: #756f69; font-size: 11px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.preview-note { margin: 13px 0 0; color: #706b65; font-size: 12px; line-height: 1.45; }
+.widget-scene{position:relative;height:360px;padding:5px 8px}.origin-launcher{position:absolute;right:0;bottom:0;width:58px;height:58px;min-width:44px;min-height:44px;border:0;border-radius:21px;background:var(--accent);color:white;font-weight:850;box-shadow:0 15px 30px color-mix(in srgb,var(--accent),transparent 70%);z-index:8}.widget-panel.page-turn-panel{position:absolute;right:34px;bottom:34px;width:310px;height:300px}.widget-panel header{display:flex;align-items:baseline;gap:8px;padding:17px 19px;background:color-mix(in srgb,var(--accent-soft),white 70%)}.widget-panel header b{font-size:15px}.widget-panel header span{color:#756f69;font-size:10px}.panel-thread{height:190px;padding:26px 18px;background:#faf9f7}.panel-thread p{max-width:78%;margin:0;padding:12px 14px;border-radius:17px;background:white;box-shadow:0 8px 20px rgba(33,39,49,.08);font-size:11px;line-height:1.45}.panel-thread i{display:block;width:54%;height:8px;margin:13px 0 0;border-radius:8px;background:#e7e3dd}.panel-thread i+i{width:38%;margin-top:7px}.widget-panel footer{margin:10px;padding:10px 10px 10px 13px;border:1px solid #e1ddd7;border-radius:15px;color:#817a73;font-size:10px}.widget-panel footer b{float:right;color:var(--accent)}@media(max-width:410px){.widget-panel.page-turn-panel{right:12px;width:calc(100% - 24px)}.origin-launcher{right:4px}}
+.page-turn-scene{perspective:1100px}
+.page-turn-panel{overflow:visible;border:0;border-radius:28px;background:transparent;box-shadow:none;perspective:1100px;transform-style:preserve-3d;isolation:isolate}
+.page-turn-sheet{position:relative;width:100%;height:100%;transform-origin:100% 50%;transform-style:preserve-3d;backface-visibility:hidden;animation:page_turn-close 6.4s cubic-bezier(.22,.8,.2,1) both}
+.page-turn-face{position:absolute;inset:0;z-index:1;display:grid;grid-template:auto 1fr auto/1fr;overflow:hidden;border:1px solid rgba(30,36,48,.09);border-radius:28px;background:#fff;box-shadow:0 25px 60px rgba(31,38,50,.16);backface-visibility:hidden}
+.page-turn-shadow{position:absolute;inset:0;z-index:2;border-radius:28px;pointer-events:none;transform-origin:100% 50%;background:linear-gradient(105deg,transparent 42%,color-mix(in srgb,var(--accent),transparent 72%) 78%,transparent 100%);opacity:0;animation:page_turn-shadow 6.4s cubic-bezier(.22,.8,.2,1) both}
+.page-turn-panel header{position:relative}.page-turn-panel .panel-thread{position:relative}.page-turn-panel footer{position:relative}
+@keyframes page_turn-close{0%,34%{opacity:1;transform:rotateY(0deg) translate3d(0,0,0) scale(1)}48%{opacity:1;transform:rotateY(-18deg) translate3d(1px,0,0) scale(.995)}68%{opacity:.76;transform:rotateY(-72deg) translate3d(11px,2px,0) scale(.96)}86%,100%{opacity:.06;transform:rotateY(-96deg) translate3d(28px,5px,0) scale(.9)}}
+@keyframes page_turn-shadow{0%,34%{opacity:0;transform:rotateY(0deg)}54%{opacity:.16;transform:rotateY(-34deg)}72%{opacity:.28;transform:rotateY(-70deg)}86%,100%{opacity:0;transform:rotateY(-96deg)}}
+@keyframes page_turn-launcher{0%,45%{opacity:.42;transform:scale(.84)}72%,100%{opacity:1;transform:none}}
+html[data-pattern-command='run'] .page-turn-sheet,html[data-pattern-command='replay'] .page-turn-sheet{animation:page_turn-close 1.8s cubic-bezier(.22,.8,.2,1) both}
+html[data-pattern-command='run'] .page-turn-shadow,html[data-pattern-command='replay'] .page-turn-shadow{animation:page_turn-shadow 1.8s cubic-bezier(.22,.8,.2,1) both}
+html[data-pattern-command='run'] .origin-launcher,html[data-pattern-command='replay'] .origin-launcher{animation:page_turn-launcher 1.8s cubic-bezier(.22,.8,.2,1) both}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+@media (prefers-reduced-motion: reduce){.page-turn-sheet{animation:none!important;opacity:.06!important;transform:rotateY(-96deg) translate3d(28px,5px,0) scale(.9)!important}.page-turn-shadow{animation:none!important;opacity:0!important}.page-turn-scene .origin-launcher{animation:none!important;opacity:1!important;transform:none!important}}

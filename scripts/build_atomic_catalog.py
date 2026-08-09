@@ -185,8 +185,13 @@ def _load_specs(path: Path = SPECS_PATH) -> tuple[PatternVisualSpec, ...]:
         pattern_id = _required_text(raw["pattern_id"], field="pattern_id", maximum=80)
         if not IDENTIFIER_RE.fullmatch(pattern_id):
             raise AtomicCatalogBuildError(f"pattern spec {index} id is invalid")
-        if raw["version"] != 1 or isinstance(raw["version"], bool):
-            raise AtomicCatalogBuildError(f"pattern spec {index} must be version 1")
+        version = raw["version"]
+        if (
+            isinstance(version, bool)
+            or not isinstance(version, int)
+            or not 1 <= version <= 9_999
+        ):
+            raise AtomicCatalogBuildError(f"pattern spec {index} version is invalid")
         category = _required_text(raw["category"], field="category", maximum=80)
         variant = _required_text(raw["variant"], field="variant", maximum=80)
         try:
@@ -207,7 +212,7 @@ def _load_specs(path: Path = SPECS_PATH) -> tuple[PatternVisualSpec, ...]:
         specs.append(
             PatternVisualSpec(
                 pattern_id=pattern_id,
-                version=1,
+                version=version,
                 category=category,
                 variant=variant,
                 title=_required_text(raw["title"], field="title", maximum=200),

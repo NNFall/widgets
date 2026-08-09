@@ -241,7 +241,7 @@
     },
     {
       "pattern_id": "widget-open-curtain-rise",
-      "version": 1,
+      "version": 2,
       "category": "widget_open",
       "variant": "curtain_rise",
       "title": "Подъём сервисной шторы",
@@ -280,7 +280,7 @@
     },
     {
       "pattern_id": "widget-open-portal-draw",
-      "version": 1,
+      "version": 2,
       "category": "widget_open",
       "variant": "portal_draw",
       "title": "Контурное открытие",
@@ -320,7 +320,7 @@
     },
     {
       "pattern_id": "widget-close-page-turn",
-      "version": 1,
+      "version": 2,
       "category": "widget_close",
       "variant": "page_turn",
       "title": "Закрытие перелистыванием",

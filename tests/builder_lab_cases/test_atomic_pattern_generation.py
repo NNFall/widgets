@@ -83,13 +83,17 @@ def _generated_definitions() -> tuple[object, ...]:
 
 
 def _generated_definition(pattern_id: str) -> object:
-    return load_builtin_atomic_registry().resolve(pattern_id, 1)
+    specs = _load_specs()["patterns"]
+    version = next(
+        item["version"] for item in specs if item["pattern_id"] == pattern_id
+    )
+    return load_builtin_atomic_registry().resolve(pattern_id, version)
 
 
 def test_catalog_has_at_least_five_visual_patterns_per_atomic_category() -> None:
     registry = load_builtin_atomic_registry()
 
-    assert len(registry.definitions) == 87
+    assert len(registry.definitions) == 90
     for category in AtomicPatternCategory:
         visual = [
                 definition
@@ -106,7 +110,7 @@ def test_catalog_has_at_least_five_visual_patterns_per_atomic_category() -> None
         assert len(visual) >= 5, category.value
 
 
-def test_specs_declare_exactly_four_unique_v1_patterns_per_category() -> None:
+def test_specs_declare_exactly_four_unique_patterns_per_category() -> None:
     specs = _load_specs()
     patterns = specs["patterns"]
 
@@ -127,10 +131,30 @@ def test_specs_declare_exactly_four_unique_v1_patterns_per_category() -> None:
     }
     exact_keys = [(item["pattern_id"], item["version"]) for item in patterns]
     assert len(set(exact_keys)) == len(exact_keys)
-    assert {version for _, version in exact_keys} == {1}
+    assert {
+        pattern_id for pattern_id, version in exact_keys if version == 2
+    } == {
+        "widget-open-portal-draw",
+        "widget-open-curtain-rise",
+        "widget-close-page-turn",
+    }
+    assert all(version in {1, 2} for _, version in exact_keys)
     assert not {
         f"{pattern_id}-v{version}" for pattern_id, version in exact_keys
     } & BASELINE_DIRECTORIES
+
+
+def test_reworked_signature_motion_keeps_immutable_v1_and_uses_v2() -> None:
+    registry = load_builtin_atomic_registry()
+    for pattern_id in (
+        "widget-open-portal-draw",
+        "widget-open-curtain-rise",
+        "widget-close-page-turn",
+    ):
+        original = registry.resolve(pattern_id, 1)
+        current = registry.resolve(pattern_id, 2)
+        assert original.implementation_sha256 != current.implementation_sha256
+        assert current.provenance["pattern_role"] == "signature"
 
 
 def test_generated_patterns_are_reviewable_css_only_previews() -> None:
