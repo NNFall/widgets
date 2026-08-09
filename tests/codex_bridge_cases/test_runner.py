@@ -184,6 +184,45 @@ async def test_runner_resumes_bound_conversation(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_runner_starts_fresh_threads_for_distinct_repair_attempts(
+    tmp_path,
+) -> None:
+    run_id = str(uuid4())
+    thread_ids = (str(uuid4()), str(uuid4()))
+    commands: list[tuple[str, ...]] = []
+
+    async def spawn(command: tuple[str, ...], cwd: Path):
+        commands.append(command)
+        return FakeProcess(_event_stream(thread_ids[len(commands) - 1], text="fixed"))
+
+    runner = CodexRunner(
+        config=_config(tmp_path),
+        state=BridgeStateStore(tmp_path / "state"),
+        spawn=spawn,
+    )
+
+    logical_invocation_ids = (str(uuid4()), str(uuid4()))
+    for logical_invocation_id in logical_invocation_ids:
+        await runner.run_turn(
+            CodexTurnRequest(
+                run_id=run_id,
+                conversation_key=f"repair:foundation:{logical_invocation_id}",
+                prompt="Исправь только актуальные замечания",
+            )
+        )
+
+    assert len(commands) == 2
+    assert all("resume" not in command for command in commands)
+    assert {
+        record.conversation_key
+        for record in runner.state.list_active_threads(run_id)
+    } == {
+        f"repair:foundation:{logical_invocation_ids[0]}",
+        f"repair:foundation:{logical_invocation_ids[1]}",
+    }
+
+
+@pytest.mark.asyncio
 async def test_runner_rejects_invalid_json_for_structured_turn(tmp_path) -> None:
     process = FakeProcess(_event_stream(str(uuid4()), text="not-json"))
 

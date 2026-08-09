@@ -1109,7 +1109,7 @@ class GeminiDirectEngineTests(unittest.IsolatedAsyncioTestCase):
             ".kaigo-widget__message-status--error",
             'data-kaigo-runtime-message="assistant"',
             'data-kaigo-runtime-message="user"',
-            "ai messages on the left",
+            "assistant messages on the left",
             "user messages on the right",
             "chat bubbles",
             "visible author label",

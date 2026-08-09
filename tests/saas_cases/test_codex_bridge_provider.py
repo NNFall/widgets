@@ -20,12 +20,18 @@ from app.models.providers.codex_bridge import (
 )
 
 
+STAGE_ATTEMPT_ID = "11111111-2222-4333-8444-555555555555"
+LOGICAL_INVOCATION_ID = "66666666-7777-4888-8999-aaaaaaaaaaaa"
+
+
 def _metadata(**changes):
     values = {
         "_kaigo_run_id": str(uuid4()),
         "_kaigo_role": "widget_generator",
         "_kaigo_mode": "express",
         "_kaigo_stage": "foundation",
+        "_kaigo_stage_attempt_id": STAGE_ATTEMPT_ID,
+        "_kaigo_logical_invocation_id": LOGICAL_INVOCATION_ID,
         "_kaigo_operation": "widget_generation",
         "_kaigo_semantic_attempt": 1,
         "_kaigo_candidate_id": None,
@@ -130,15 +136,15 @@ async def test_provider_serializes_schema_images_and_safe_lineage() -> None:
         (_metadata(_kaigo_role="visual_judge"), "visual:judge"),
         (
             _metadata(_kaigo_role="repair", _kaigo_stage="foundation"),
-            "repair:foundation",
+            f"repair:foundation:{LOGICAL_INVOCATION_ID}",
         ),
         (
             _metadata(_kaigo_role="repair", _kaigo_stage="motion_polish"),
-            "repair:motion_polish",
+            f"repair:motion_polish:{LOGICAL_INVOCATION_ID}",
         ),
         (
             _metadata(_kaigo_role="code_review", _kaigo_stage="identity"),
-            "repair:verify:identity",
+            f"repair:verify:identity:{LOGICAL_INVOCATION_ID}",
         ),
         (_metadata(_kaigo_role="reference_analyst"), "reference"),
         (
@@ -164,6 +170,54 @@ async def test_provider_serializes_schema_images_and_safe_lineage() -> None:
 )
 def test_conversation_key_matches_builder_role(metadata, expected) -> None:
     assert conversation_key_for_request(metadata) == expected
+
+
+def test_repair_conversation_key_is_fresh_per_logical_invocation() -> None:
+    first = conversation_key_for_request(
+        _metadata(
+            _kaigo_role="repair",
+            _kaigo_stage="motion_polish",
+        )
+    )
+    second = conversation_key_for_request(
+        _metadata(
+            _kaigo_role="repair",
+            _kaigo_stage="motion_polish",
+            _kaigo_logical_invocation_id="bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+        )
+    )
+    provider_retry = conversation_key_for_request(
+        _metadata(
+            _kaigo_role="repair",
+            _kaigo_stage="motion_polish",
+            _kaigo_semantic_attempt=2,
+        )
+    )
+
+    assert first == f"repair:motion_polish:{LOGICAL_INVOCATION_ID}"
+    assert first != second
+    assert provider_retry == first
+
+
+def test_code_review_conversation_key_is_fresh_per_logical_invocation() -> None:
+    first = conversation_key_for_request(
+        _metadata(
+            _kaigo_role="code_review",
+            _kaigo_stage="motion_polish",
+        )
+    )
+    second = conversation_key_for_request(
+        _metadata(
+            _kaigo_role="code_review",
+            _kaigo_stage="motion_polish",
+            _kaigo_logical_invocation_id="bbbbbbbb-cccc-4ddd-8eee-ffffffffffff",
+        )
+    )
+
+    assert first == (
+        f"repair:verify:motion_polish:{LOGICAL_INVOCATION_ID}"
+    )
+    assert first != second
 
 
 @pytest.mark.asyncio

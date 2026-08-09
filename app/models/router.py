@@ -365,12 +365,14 @@ class ModelRouter:
         except KeyError as error:
             raise ValueError(f"no model policy for {role}:{mode}") from error
 
+        logical_invocation_id = uuid4()
         provider_request = _with_invocation_metadata(
             request,
             run_id=run_id,
             role=role,
             mode=mode,
             context=context,
+            logical_invocation_id=logical_invocation_id,
         )
 
         route_deadline = (
@@ -385,7 +387,6 @@ class ModelRouter:
         )
         route_attempts: list[ModelRouteAttempt] = []
         total_usage = ModelUsage()
-        logical_invocation_id = uuid4()
         for attempt, target in enumerate(policy.targets, start=1):
             if route_deadline is not None and time.monotonic() >= route_deadline:
                 break
@@ -757,6 +758,7 @@ def _with_invocation_metadata(
     role: str,
     mode: str,
     context: ModelInvocationContext,
+    logical_invocation_id: UUID,
 ) -> ModelRequest:
     metadata = dict(request.metadata)
     metadata.update(
@@ -765,6 +767,12 @@ def _with_invocation_metadata(
             "_kaigo_role": role,
             "_kaigo_mode": mode,
             "_kaigo_stage": context.stage,
+            "_kaigo_stage_attempt_id": (
+                str(context.stage_attempt_id)
+                if context.stage_attempt_id is not None
+                else None
+            ),
+            "_kaigo_logical_invocation_id": str(logical_invocation_id),
             "_kaigo_operation": context.operation,
             "_kaigo_semantic_attempt": context.semantic_attempt,
             "_kaigo_candidate_id": context.candidate_id,
