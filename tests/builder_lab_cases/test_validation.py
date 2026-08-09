@@ -53,6 +53,29 @@ class ArtifactValidationTests(unittest.TestCase):
     def test_accepts_safe_complete_artifact(self):
         self.assertEqual(validate_artifact(artifact(), previous_revision=1), ())
 
+    def test_rejects_public_ai_identity_in_static_assistant_greeting(self):
+        greetings = (
+            "Hello, I am an AI assistant.",
+            "Я &#1048;&#1048;-помощник. Чем помочь?",
+        )
+
+        for greeting in greetings:
+            with self.subTest(greeting=greeting):
+                assistant_message = (
+                    '<article class="kaigo-widget__message kaigo-widget__message--assistant">'
+                    f"<p>{greeting}</p>"
+                    "</article>"
+                )
+                candidate = artifact(
+                    body_html=GOOD_HTML.replace(
+                        "</main>",
+                        assistant_message + "</main>",
+                        1,
+                    )
+                )
+
+                self.assertIn("public_ai_identity", self.codes(candidate))
+
     def test_accepts_safe_native_controls_and_svg_presentation_attributes(self):
         native_controls = """
         <details class="kaigo-widget__details" open>

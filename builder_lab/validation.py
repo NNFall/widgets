@@ -134,6 +134,9 @@ COMMON_ATTRIBUTES = frozenset(
 URL_ATTRIBUTES = frozenset({"href", "src", "action", "formaction", "poster", "xlink:href"})
 SVG_PAINT_ATTRIBUTES = frozenset({"fill", "stroke", "stop-color"})
 _HTML_TAG = re.compile(r"<[^>]+>")
+_PUBLIC_AI_IDENTITY = re.compile(
+    r"(?iu)(?<![A-Za-zА-Яа-яЁё])(?:ai|ии)(?![A-Za-zА-Яа-яЁё])"
+)
 _RESERVED_RUNTIME_ATTRIBUTE = re.compile(
     r"""(?ix)
     \s+
@@ -168,6 +171,8 @@ class _ArtifactHTMLParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.stack: list[str] = []
         self.region_stack: list[str | None] = []
+        self.assistant_message_stack: list[bool] = []
+        self.assistant_message_text: list[str] = []
         self.node_count = 0
         self.regions: set[str] = set()
         self.region_parents: dict[str, str | None] = {}
@@ -245,14 +250,36 @@ class _ArtifactHTMLParser(HTMLParser):
                     )
                 )
         if tag not in VOID_ELEMENTS:
+            class_names = frozenset(attributes.get("class", "").split())
+            parent_is_assistant_message = bool(
+                self.assistant_message_stack
+                and self.assistant_message_stack[-1]
+            )
+            is_assistant_message = parent_is_assistant_message or bool(
+                class_names
+                & {
+                    "kaigo-widget__message--assistant",
+                    "kaigo-message--assistant",
+                }
+            )
             self.stack.append(tag)
             self.region_stack.append(region)
+            self.assistant_message_stack.append(is_assistant_message)
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.handle_starttag(tag, attrs)
         if self.stack and self.stack[-1] == tag.lower():
             self.stack.pop()
             self.region_stack.pop()
+            self.assistant_message_stack.pop()
+
+    def handle_data(self, data: str) -> None:
+        if (
+            data.strip()
+            and self.assistant_message_stack
+            and self.assistant_message_stack[-1]
+        ):
+            self.assistant_message_text.append(data)
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
@@ -264,9 +291,11 @@ class _ArtifactHTMLParser(HTMLParser):
                 keep = self.stack.index(tag)
                 self.stack = self.stack[:keep]
                 self.region_stack = self.region_stack[:keep]
+                self.assistant_message_stack = self.assistant_message_stack[:keep]
             return
         self.stack.pop()
         self.region_stack.pop()
+        self.assistant_message_stack.pop()
 
     def close(self) -> None:
         super().close()
@@ -403,6 +432,16 @@ def validate_artifact(
     except Exception:
         parser.issues.append(_issue("malformed_html", "body_html", "HTML could not be parsed"))
     issues.extend(parser.issues)
+    assistant_message_text = " ".join(parser.assistant_message_text)
+    if _PUBLIC_AI_IDENTITY.search(assistant_message_text):
+        issues.append(
+            _issue(
+                "public_ai_identity",
+                "body_html",
+                "Static assistant greetings and labels must use the selected persona "
+                "without public AI or ИИ wording",
+            )
+        )
     if parser.node_count > MAX_DOM_NODES:
         issues.append(_issue("too_many_nodes", "body_html", "HTML contains too many elements"))
     for region in sorted(REQUIRED_REGIONS - parser.regions):
