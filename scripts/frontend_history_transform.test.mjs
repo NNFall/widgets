@@ -78,13 +78,14 @@ test('archive fetch rewrite preserves the complete Request, including a POST bod
     'utf8',
   );
   const calls = [];
+  const historyCalls = [];
   const browserWindow = {
     EventSource: class NativeEventSource {},
     fetch: async (...args) => {
       calls.push(args);
       return { ok: true };
     },
-    history: { replaceState() {} },
+    history: { replaceState: (...args) => historyCalls.push(args) },
     location: { origin: 'https://kaigo.space' },
   };
   const browserDocument = {
@@ -112,6 +113,10 @@ test('archive fetch rewrite preserves the complete Request, including a POST bod
   assert.equal(rewritten.method, 'POST');
   assert.equal(rewritten.headers.get('X-Archive-Test'), 'yes');
   assert.deepEqual(JSON.parse(await rewritten.text()), { name: 'Архив' });
+  assert.equal(
+    historyCalls.at(-1)?.[2],
+    '/studio?project=manual-friendly-studio&archive=v1',
+  );
 });
 
 test('injects the shared archive bootstrap before the application module', () => {

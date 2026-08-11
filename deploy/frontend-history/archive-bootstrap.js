@@ -40,6 +40,9 @@
   }
 
   if (archiveView !== 'landing') {
-    window.history.replaceState(null, '', `/${archiveView}?archive=${encodeURIComponent(archiveVersion)}`);
+    const query = archiveView === 'studio'
+      ? `project=manual-friendly-studio&archive=${encodeURIComponent(archiveVersion)}`
+      : `archive=${encodeURIComponent(archiveVersion)}`;
+    window.history.replaceState(null, '', `/${archiveView}?${query}`);
   }
 })();
