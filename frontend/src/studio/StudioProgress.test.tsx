@@ -6,7 +6,7 @@ import { StudioProgress } from './StudioProgress';
 afterEach(cleanup);
 
 describe('StudioProgress', () => {
-  it('presents backend progress as seven understandable steps', () => {
+  it('presents every backend stage as ten understandable steps', () => {
     render(
       <StudioProgress
         status="running"
@@ -18,7 +18,7 @@ describe('StudioProgress', () => {
       />,
     );
 
-    expect(screen.getByText('Сейчас идёт этап 4 из 7')).toBeInTheDocument();
+    expect(screen.getByText('Сейчас идёт этап 7 из 10')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Диалог' })).toBeInTheDocument();
     expect(screen.getByText('Настраиваем полезный диалог с посетителем')).toBeInTheDocument();
     const stages = screen.getByRole('list', { name: 'Этапы создания виджета' });
@@ -42,7 +42,7 @@ describe('StudioProgress', () => {
       />,
     );
 
-    expect(screen.getAllByRole('listitem')).toHaveLength(7);
+    expect(screen.getAllByRole('listitem')).toHaveLength(10);
     for (const item of screen.getAllByRole('listitem')) {
       expect(item).toHaveAttribute('data-state', 'completed');
       expect(item).not.toHaveAttribute('aria-current');

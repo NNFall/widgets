@@ -1,6 +1,7 @@
 import asyncio
 import json
 import types
+from dataclasses import replace
 
 import pytest
 
@@ -23,6 +24,7 @@ from builder_lab.visual_models import (
     VisualSeverity,
     VisualVerdict,
 )
+from tests.builder_lab_cases.test_assistant_persona import _persona
 
 
 def finding(
@@ -99,8 +101,24 @@ class FakeJudge:
         self.calls = []
         self.closed = False
 
-    async def judge(self, *, role_results):
-        self.calls.append(role_results)
+    async def judge(
+        self,
+        *,
+        role_results,
+        audit=None,
+        brief=None,
+        art_direction=None,
+        assistant_persona=None,
+    ):
+        self.calls.append(
+            {
+                "role_results": role_results,
+                "audit": audit,
+                "brief": brief,
+                "art_direction": art_direction,
+                "assistant_persona": assistant_persona,
+            }
+        )
         return self.response
 
     async def aclose(self):
@@ -125,8 +143,24 @@ class SequencedJudge(FakeJudge):
         super().__init__(None)
         self.responses = list(responses)
 
-    async def judge(self, *, role_results):
-        self.calls.append(role_results)
+    async def judge(
+        self,
+        *,
+        role_results,
+        audit=None,
+        brief=None,
+        art_direction=None,
+        assistant_persona=None,
+    ):
+        self.calls.append(
+            {
+                "role_results": role_results,
+                "audit": audit,
+                "brief": brief,
+                "art_direction": art_direction,
+                "assistant_persona": assistant_persona,
+            }
+        )
         response = self.responses.pop(0)
         if isinstance(response, BaseException):
             raise response
@@ -163,6 +197,53 @@ def committee(critics, judge=None):
         },
         judge_factory=lambda: resolved_judge,
     )
+
+
+@pytest.mark.asyncio
+async def test_committee_propagates_persona_and_separates_cached_roles_by_persona():
+    first = _persona()
+    second = replace(first, display_name="Мария")
+    critics = {
+        role: SequencedCritic(result(), result()) for role in VisualCriticRole
+    }
+    judge = SequencedJudge(judged_result(), judged_result())
+    visual_committee = committee(critics, judge)
+    audit = types.SimpleNamespace()
+
+    await visual_committee.critique(
+        audit=audit,
+        brief="Brief",
+        art_direction="Direction",
+        assistant_persona=first,
+    )
+    await visual_committee.critique(
+        audit=audit,
+        brief="Brief",
+        art_direction="Direction",
+        assistant_persona=second,
+    )
+
+    assert all(
+        [call["assistant_persona"] for call in critic.calls] == [first, second]
+        for critic in critics.values()
+    )
+    assert [call["assistant_persona"] for call in judge.calls] == [first, second]
+
+
+@pytest.mark.asyncio
+async def test_committee_forwards_empty_optional_brief_to_all_roles_and_judge():
+    critics = {role: FakeCritic(result()) for role in VisualCriticRole}
+    judge = FakeJudge(judged_result())
+    visual_committee = committee(critics, judge)
+
+    await visual_committee.critique(
+        audit=types.SimpleNamespace(),
+        brief="",
+        art_direction="Direction",
+    )
+
+    assert all(critic.calls[0]["brief"] == "" for critic in critics.values())
+    assert judge.calls[0]["brief"] == ""
 
 
 @pytest.mark.asyncio
@@ -203,6 +284,9 @@ async def test_two_valid_roles_form_quorum_and_all_roles_run_in_parallel():
     assert all(critic.closed for critic in critics.values())
     assert judge.closed
     assert len(judge.calls) == 1
+    assert judge.calls[0]["audit"] is not None
+    assert judge.calls[0]["brief"] == "Brief"
+    assert judge.calls[0]["art_direction"] == "Direction"
 
 
 @pytest.mark.asyncio
@@ -515,8 +599,24 @@ async def test_mixed_terminal_critic_failures_are_order_independent_and_keep_eac
 @pytest.mark.asyncio
 async def test_terminal_route_exhaustion_crosses_committee_with_usage_and_provenance():
     class TerminalJudge(FakeJudge):
-        async def judge(self, *, role_results):
-            self.calls.append(role_results)
+        async def judge(
+            self,
+            *,
+            role_results,
+            audit=None,
+            brief=None,
+            art_direction=None,
+            assistant_persona=None,
+        ):
+            self.calls.append(
+                {
+                    "role_results": role_results,
+                    "audit": audit,
+                    "brief": brief,
+                    "art_direction": art_direction,
+                    "assistant_persona": assistant_persona,
+                }
+            )
             raise VisualJudgeError(
                 "route_exhausted",
                 "route failed",

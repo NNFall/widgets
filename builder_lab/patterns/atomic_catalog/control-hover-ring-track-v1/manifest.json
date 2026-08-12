@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "control-hover-ring-track",
+  "version": 1,
+  "category": "control_hover",
+  "status": "active",
+  "title": "Кольцевая дорожка",
+  "summary": "Тонкое кольцо проходит вокруг control и создаёт точную обратную связь без изменения его размера.",
+  "ai_description": "Вокруг иконки рисуется неполная цветная дорожка, которая замыкается при наведении. Сам control не прыгает и сохраняет привычную круглую область нажатия. В Pattern Lab композиция показывает исходное состояние, основную фазу и устойчивое завершение, поэтому визуальный смысл читается без скриптов и пояснений разработчика. Модель может адаптировать оттенки, масштаб и темп под бренд, сохраняя иерархию, доступный контраст и заявленную идею: тонкое кольцо проходит вокруг control и создаёт точную обратную связь без изменения его размера.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "creative",
+  "incompatible_with": [],
+  "implementation_sha256": "dab4131d5b6984de3a610de2cd1fedbc6e289850d66ccca8da5dc9e45635618b",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "ready_for_review",
+    "pattern_role": "support"
+  }
+}

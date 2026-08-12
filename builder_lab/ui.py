@@ -332,8 +332,10 @@ def render_builder_page(
         'run.completed':'Запуск завершён',
         'run.failed':'Запуск остановлен с ошибкой',
         'run.cancelled':'Запуск отменён',
-        'reference.started':'Анализ сайта начат',
-        'reference.completed':'Анализ сайта завершён',
+        'reference.started':'Загрузка сайта начата',
+        'reference.capture_completed':'Снимки сайта готовы',
+        'reference.analysis_started':'AI-анализ сайта начат',
+        'reference.completed':'AI-анализ сайта завершён',
         'reference.failed':'Анализ сайта не выполнен',
         'direction.failed':'Выбор направления не выполнен',
         'direction.judged':'Направление выбрано',
@@ -517,7 +519,7 @@ def render_builder_page(
       let parsedUrl;
       try {{ parsedUrl = new URL(sourceUrl); }} catch (_) {{ showError('Ссылка на сайт некорректна.'); return; }}
       if (parsedUrl.protocol !== 'https:' || parsedUrl.username || parsedUrl.password || parsedUrl.port || parsedUrl.search || parsedUrl.hash) {{ showError('Нужна публичная HTTPS-ссылка без параметров и авторизации.'); return; }}
-      const brief = elements.brief.value.trim() || 'Создай компактного AI-сотрудника, который консультирует посетителей по подтверждённым данным этого сайта.';
+      const brief = elements.brief.value.trim();
       setRunning(true);
       elements.retry.disabled = true;
       elements.status.textContent = 'Создаём запуск';

@@ -30,6 +30,7 @@ from app.publication.service import (
 )
 from app.widgets.loader import render_loader, render_runtime
 from app.saas.models import GenerationArtifact, GenerationRun, Project
+from builder_lab.persona import assistant_persona_from_artifact_config
 
 
 PUBLICATION_CHAT_SIGNING_KEY = web.AppKey("publication_chat_signing_key", bytes)
@@ -796,6 +797,16 @@ async def public_runtime_chat(request: web.Request) -> web.Response:
         art_direction = (
             str(configured.get("art_direction", "")) if isinstance(configured, dict) else ""
         )
+        try:
+            assistant_persona = assistant_persona_from_artifact_config(
+                artifact.config
+            )
+        except (TypeError, ValueError) as error:
+            raise ChatServiceError(
+                "chat_not_ready",
+                "Опубликованный виджет содержит некорректную конфигурацию чата",
+                status=409,
+            ) from error
         chat_service = request.app.get(CHAT_SERVICE_KEY)
         if chat_service is None:
             raise ChatServiceError(
@@ -828,6 +839,7 @@ async def public_runtime_chat(request: web.Request) -> web.Response:
                 brief=project.brief or "",
                 art_direction=art_direction,
                 reference_context=reference_context,
+                assistant_persona=assistant_persona,
             ),
             run_id=run.id,
         )

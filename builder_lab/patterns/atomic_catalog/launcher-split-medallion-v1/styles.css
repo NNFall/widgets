@@ -1,0 +1,22 @@
+:root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; --accent: #d7662d; --accent-soft: #ffd08a; --ink: #54270f; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 280px; min-height: 100vh; overflow: hidden; background: #ece8e2; color: var(--ink); }
+button, input, textarea { font: inherit; }
+.pattern-stage { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: linear-gradient(145deg, #f9f7f3, #e9e5de); }
+.showcase { width: min(460px, 94vw); position: relative; }
+.preview-label { margin: 0 0 12px; color: #756f69; font-size: 11px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.preview-note { margin: 13px 0 0; color: #706b65; font-size: 12px; line-height: 1.45; }
+.shape-board { min-height:260px;display:flex;align-items:center;justify-content:center;gap:24px;padding:30px;border:1px solid rgba(28,35,51,.08);border-radius:30px;background:rgba(255,255,255,.86);box-shadow:0 26px 60px rgba(36,42,55,.12); }
+.launcher { width:88px;height:78px;border-radius:48% 52% 45% 55%;background:linear-gradient(115deg,var(--accent) 0 53%,var(--accent-soft) 53%);color:var(--ink); position:relative;display:grid;place-items:center;border:0;background:var(--accent);color:white;box-shadow:0 18px 36px rgba(25,55,74,.2);cursor:pointer; }
+.launcher-symbol { position:relative;z-index:2;font-size:25px;font-weight:800; }
+.launcher::after{content:'';position:absolute;inset:11px 43px 11px 11px;border-radius:40px;background:rgba(255,255,255,.24)}.launcher-symbol{font-size:22px;letter-spacing:2px}
+.shape-copy { display:grid;gap:5px;max-width:145px; }
+.shape-copy strong { font-size:15px; } .shape-copy span { color:#756f69;font-size:12px;line-height:1.4; }
+.launcher { animation:split_medallion-shape 5s ease-in-out infinite; }
+@keyframes split_medallion-shape { 0%,72%,100%{transform:translateY(0) rotate(0)} 80%{transform:translateY(-5px) rotate(-2deg)} 88%{transform:translateY(0) rotate(1deg)} }
+html[data-pattern-command='run'] .launcher,
+html[data-pattern-command='replay'] .launcher { animation: split_medallion-shape 1.35s cubic-bezier(.22,.8,.2,1) both; }
+@media (max-width:380px){.shape-board{gap:16px;padding:22px}.shape-copy{max-width:118px}}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

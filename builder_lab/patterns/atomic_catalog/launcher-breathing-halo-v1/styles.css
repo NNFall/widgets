@@ -1,0 +1,15 @@
+:root { color-scheme: light; font-family: Inter, Arial, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; overflow: hidden; background: #f4f7f4; color: #1d2c3f; }
+.pattern-stage { min-height: 100vh; display: grid; align-content: center; justify-items: center; gap: 28px; background: radial-gradient(circle at center, rgba(81,166,139,.1), transparent 42%); }
+.pattern-stage p { margin: 0; color: #647268; font-size: 14px; letter-spacing: .02em; }
+.halo-launcher { position: relative; width: 108px; height: 108px; display: grid; place-items: center; }
+.halo-core { position: relative; z-index: 2; width: 72px; height: 72px; display: grid; place-items: center; border-radius: 24px; background: linear-gradient(145deg, #1f3a50, #3f8d79); color: white; font-size: 25px; font-weight: 800; box-shadow: 0 18px 38px rgba(31,58,80,.24); animation: core-breathe 3.6s ease-in-out infinite; }
+.halo-core i { position: absolute; right: 7px; bottom: 7px; width: 9px; height: 9px; border: 2px solid #fff; border-radius: 50%; background: #8de3b7; }
+.halo-ring { position: absolute; inset: 13px; border: 1px solid rgba(63,141,121,.52); border-radius: 32px; animation: halo-breathe 3.6s ease-out infinite; }
+.halo-ring-delayed { animation-delay: 1.8s; }
+html[data-pattern-command='run'] .halo-launcher, html[data-pattern-command='replay'] .halo-launcher { animation: settle .7s cubic-bezier(.2,.9,.2,1.2) both; }
+@keyframes core-breathe { 0%,100% { transform: scale(1); filter: saturate(.9); } 50% { transform: scale(1.045); filter: saturate(1.15); } }
+@keyframes halo-breathe { 0% { opacity: 0; transform: scale(.72); } 28% { opacity: .72; } 100% { opacity: 0; transform: scale(1.5); border-radius: 42px; } }
+@keyframes settle { from { opacity: 0; transform: scale(.75); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; } }

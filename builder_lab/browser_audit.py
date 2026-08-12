@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import math
 import re
 from dataclasses import dataclass
 from typing import Any, Iterable
@@ -419,7 +420,7 @@ _VIEWPORTS = (
     ("desktop", 1920, 1080),
     ("mobile", 390, 844),
 )
-_NARROW_DESKTOP_VIEWPORT = (601, 700)
+_NARROW_DESKTOP_VIEWPORT = (748, 510)
 _REQUIRED_REGIONS = (
     "root",
     "launcher",
@@ -993,6 +994,9 @@ class BrowserAudit:
             launcher = frame.locator('[data-region="launcher"]')
             panel = frame.locator('[data-region="panel"]')
             await root.wait_for(state="attached")
+            launcher_box = await launcher.bounding_box()
+            if launcher_box is None:
+                raise ValueError("narrow desktop launcher is not visible")
             await launcher.click()
             await page.wait_for_timeout(50)
             if await root.get_attribute("data-state") != "open":
@@ -1001,6 +1005,13 @@ class BrowserAudit:
             box = await panel.bounding_box()
             if box is None:
                 raise ValueError("narrow desktop panel is not visible")
+            transform_origin = await panel.evaluate(
+                """element => {
+                  const parts = getComputedStyle(element).transformOrigin
+                    .split(/\s+/).map(value => Number.parseFloat(value));
+                  return {x: parts[0], y: parts[1]};
+                }"""
+            )
             geometry_failures = []
             if not (
                 _MIN_PANEL_WIDTH_PX
@@ -1014,11 +1025,53 @@ class BrowserAudit:
                 )
             actual_right = width - (box["x"] + box["width"])
             actual_bottom = height - (box["y"] + box["height"])
+            launcher_right = width - (
+                launcher_box["x"] + launcher_box["width"]
+            )
+            launcher_bottom = height - (
+                launcher_box["y"] + launcher_box["height"]
+            )
+            if (
+                abs(actual_right - launcher_right) > 32
+                or abs(actual_bottom - launcher_bottom) > 32
+            ):
+                geometry_failures.append(
+                    "narrow desktop panel is detached from the launcher; preserve "
+                    "one shared bottom-right origin; anchor delta right "
+                    f"{abs(actual_right - launcher_right):.1f}px, bottom "
+                    f"{abs(actual_bottom - launcher_bottom):.1f}px"
+                )
+            origin_x = transform_origin.get("x")
+            origin_y = transform_origin.get("y")
+            if (
+                not isinstance(origin_x, (int, float))
+                or isinstance(origin_x, bool)
+                or not math.isfinite(origin_x)
+                or not isinstance(origin_y, (int, float))
+                or isinstance(origin_y, bool)
+                or not math.isfinite(origin_y)
+                or origin_x < box["width"] * 0.75
+                or origin_y < box["height"] * 0.75
+            ):
+                geometry_failures.append(
+                    "narrow desktop panel transform origin must remain in the lower-right "
+                    f"quadrant; actual x={origin_x!r}, y={origin_y!r}, panel "
+                    f"{box['width']:.1f}x{box['height']:.1f}px"
+                )
             if min(box["x"], box["y"], actual_right, actual_bottom) < -1:
                 geometry_failures.append(
                     "narrow desktop panel must fit entirely inside the viewport; "
                     f"x {box['x']:.1f}px, y {box['y']:.1f}px, right "
                     f"{actual_right:.1f}px, bottom {actual_bottom:.1f}px"
+                )
+            if min(box["x"], box["y"], actual_right, actual_bottom) < (
+                _MIN_VIEWPORT_INSET_PX - 1
+            ):
+                geometry_failures.append(
+                    "narrow desktop panel must preserve a safe viewport inset of "
+                    f"{_MIN_VIEWPORT_INSET_PX:.0f}px; x {box['x']:.1f}px, "
+                    f"y {box['y']:.1f}px, right {actual_right:.1f}px, "
+                    f"bottom {actual_bottom:.1f}px"
                 )
             if box["height"] > min(
                 _MAX_DESKTOP_PANEL_HEIGHT_PX,
@@ -1040,6 +1093,41 @@ class BrowserAudit:
         finally:
             await self._bounded_cleanup(
                 context.close(), self._cleanup_timeout(deadline)
+            )
+
+    @staticmethod
+    async def _assert_lower_right_transform_origin(
+        panel,
+        *,
+        state: str,
+    ) -> None:
+        payload = await panel.evaluate(
+            """element => {
+              const rect = element.getBoundingClientRect();
+              const parts = getComputedStyle(element).transformOrigin
+                .split(/\s+/).map(value => Number.parseFloat(value));
+              return {width: rect.width, height: rect.height, x: parts[0], y: parts[1]};
+            }"""
+        )
+        values = tuple(payload.get(key) for key in ("width", "height", "x", "y"))
+        if any(
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            for value in values
+        ):
+            raise ValueError(f"{state}: panel transform origin evidence is invalid")
+        panel_width, panel_height, origin_x, origin_y = values
+        if (
+            panel_width <= 0
+            or panel_height <= 0
+            or origin_x < panel_width * 0.75
+            or origin_y < panel_height * 0.75
+        ):
+            raise ValueError(
+                f"{state}: panel transform origin must remain in the lower-right "
+                f"quadrant; actual x={origin_x:.1f}px, y={origin_y:.1f}px, "
+                f"panel {panel_width:.1f}x{panel_height:.1f}px"
             )
 
     @staticmethod
@@ -1265,6 +1353,10 @@ class BrowserAudit:
             await page.wait_for_timeout(50)
             if await root.get_attribute("data-state") != "open":
                 raise ValueError("launcher did not open the widget")
+            await self._assert_lower_right_transform_origin(
+                frame.locator('[data-region="panel"]'),
+                state=f"{prefix}.open_initial",
+            )
             generic_action_keys = tuple(
                 await frame.locator("body").evaluate(
                     "body => globalThis.__kaigoAuditGenericActions().map("
@@ -2779,6 +2871,43 @@ class BrowserAudit:
 
     def _assert_release_gate(self, report: BrowserAuditReport) -> None:
         failures: list[str] = []
+        layouts_by_state = {layout.state: layout for layout in report.layouts}
+        for prefix, closed_state, open_state in (
+            (
+                "desktop",
+                LayoutState.DESKTOP_CLOSED,
+                LayoutState.DESKTOP_OPEN_INITIAL,
+            ),
+            (
+                "mobile",
+                LayoutState.MOBILE_CLOSED,
+                LayoutState.MOBILE_OPEN_INITIAL,
+            ),
+        ):
+            closed_layout = layouts_by_state.get(closed_state)
+            open_layout = layouts_by_state.get(open_state)
+            if closed_layout is None or open_layout is None:
+                continue
+            closed_regions = {
+                region.region: region for region in closed_layout.regions
+            }
+            open_regions = {region.region: region for region in open_layout.regions}
+            launcher = closed_regions.get("launcher")
+            panel = open_regions.get("panel")
+            if launcher is None or panel is None or not launcher.visible or not panel.visible:
+                continue
+            launcher_right = launcher.x + launcher.width
+            launcher_bottom = launcher.y + launcher.height
+            panel_right = panel.x + panel.width
+            panel_bottom = panel.y + panel.height
+            right_delta = abs(launcher_right - panel_right)
+            bottom_delta = abs(launcher_bottom - panel_bottom)
+            if right_delta > 32 or bottom_delta > 32:
+                failures.append(
+                    f"{prefix}.open_initial: open panel is detached from the launcher; "
+                    "preserve one shared bottom-right origin; anchor delta "
+                    f"right={right_delta:.1f}px, bottom={bottom_delta:.1f}px"
+                )
         for layout in report.layouts:
             regions = {region.region: region for region in layout.regions}
             panel = regions.get("panel")
@@ -2860,11 +2989,11 @@ class BrowserAudit:
                             actual_right,
                             actual_bottom,
                         )
-                        < -1
+                        < _MIN_VIEWPORT_INSET_PX - 1
                     ):
                         failures.append(
                             f"{layout.state.value}: launcher must stay compact and "
-                            "inside the viewport; actual "
+                            f"inside the safe viewport inset of {_MIN_VIEWPORT_INSET_PX:.0f}px; actual "
                             f"{launcher.width:.1f}×{launcher.height:.1f}px, x "
                             f"{launcher.x:.1f}px, y {launcher.y:.1f}px, right "
                             f"{actual_right:.1f}px, bottom {actual_bottom:.1f}px"
@@ -2901,16 +3030,31 @@ class BrowserAudit:
                     "viewport offsets from the root, and set explicit right/bottom offsets"
                 )
                 continue
+            panel_right_inset = layout.viewport_width - (panel.x + panel.width)
+            panel_bottom_inset = layout.viewport_height - (panel.y + panel.height)
+            if min(
+                panel.x,
+                panel.y,
+                panel_right_inset,
+                panel_bottom_inset,
+            ) < _MIN_VIEWPORT_INSET_PX - 1:
+                failures.append(
+                    f"{layout.state.value}: open panel must preserve a safe viewport "
+                    f"inset of at least {_MIN_VIEWPORT_INSET_PX:.0f}px; actual left="
+                    f"{panel.x:.1f}px, top={panel.y:.1f}px, right="
+                    f"{panel_right_inset:.1f}px, bottom={panel_bottom_inset:.1f}px"
+                )
             if panel.clipped:
                 failures.append(f"{layout.state.value}: panel is clipped")
             if any(region.overlaps for region in layout.regions if region.region in {"messages", "composer"}):
                 failures.append(f"{layout.state.value}: composer overlaps messages")
             actions = [item for item in layout.regions if item.region.startswith("action.") and item.visible]
-            suggestions = [
+            suggestion_actions = [
                 item
                 for item in layout.regions
-                if item.region.startswith("action.suggestion.") and item.visible
+                if item.region.startswith("action.suggestion.")
             ]
+            suggestions = [item for item in suggestion_actions if item.visible]
             close_action = regions.get("action.close")
             send_action = regions.get("action.send")
             retry_action = regions.get("action.retry")
@@ -3013,7 +3157,10 @@ class BrowserAudit:
                 if region is None or not region.visible:
                     suggestions_may_hide = (
                         required == "suggestions"
-                        and "after_turn" in layout.state.value
+                        and (
+                            "after_turn" in layout.state.value
+                            or not suggestion_actions
+                        )
                     )
                     if required != "launcher" and not suggestions_may_hide:
                         failures.append(f"{layout.state.value}: required region {required} is not visible")

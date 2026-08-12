@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "composer-focus-smart-rail",
+  "version": 1,
+  "category": "composer_focus",
+  "status": "active",
+  "title": "Умная focus-рейка поля ввода",
+  "summary": "Поле получает цветовой контур, контекстную подсказку и ясное активное действие без скачка размеров.",
+  "ai_description": "При фокусе composer не просто меняет рамку: тонкая акцентная рейка плавно проходит по нижнему краю, placeholder становится короче, над полем появляется небольшая контекстная подсказка, а кнопка отправки получает активный цвет. Геометрия остаётся стабильной и не двигает чат. Модель может менять подсказку, цвет, направление рейки и форму действия, сохраняя визуально заметный фокус, корректную читаемость и спокойную высоту поля ввода.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "creative",
+  "incompatible_with": [],
+  "implementation_sha256": "8012b55d40c1a03e6e92f3fe83982da85cbed48164058f59ff984714701d7d57",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved",
+    "pattern_role": "support"
+  }
+}

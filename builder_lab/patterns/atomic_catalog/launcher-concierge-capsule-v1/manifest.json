@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "launcher-concierge-capsule",
+  "version": 1,
+  "category": "launcher_shape",
+  "status": "active",
+  "title": "Капсула-консьерж с живым статусом",
+  "summary": "Компактный launcher объединяет аватар, короткое приглашение и индикатор доступности.",
+  "ai_description": "Закрытый виджет выглядит как аккуратная горизонтальная капсула-консьерж: слева расположен узнаваемый аватар с живым индикатором статуса, справа — короткое приглашение к диалогу и отдельная круглая кнопка действия. Форма хорошо подходит сервисным компаниям и брендам, которым важно сразу объяснить назначение элемента. Модель может менять пропорции, тип аватара, текст и характер акцента, сохраняя ясную кликабельность launcher.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "creative",
+  "incompatible_with": [],
+  "implementation_sha256": "c10544d76bc09f5f13ef3c0f486281aef39c17e6f3df8b5f2a1011599406c19b",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "rejected",
+    "pattern_role": "support"
+  }
+}

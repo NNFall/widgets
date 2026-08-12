@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+import re
 from typing import Any, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
@@ -133,11 +134,209 @@ def _source_url(value: Any) -> str:
     return urlunsplit(("https", host, path, "", ""))
 
 
+ASSISTANT_PERSONA_SCHEMA_VERSION = "kaigo.assistant-persona.v1"
+ASSISTANT_EMPLOYEE_TYPES = frozenset(
+    {
+        "consultant",
+        "sales_advisor",
+        "information_guide",
+        "support_agent",
+        "lead_qualifier",
+        "concierge",
+        "custom",
+    }
+)
+ASSISTANT_VOICE_STYLES = frozenset(
+    {
+        "formal",
+        "professional",
+        "friendly",
+        "informal",
+        "cheerful",
+        "humorous",
+        "playful",
+        "calm",
+    }
+)
+_ASSISTANT_PERSONA_KEYS = frozenset(
+    {
+        "schema_version",
+        "employee_type",
+        "display_name",
+        "role_summary",
+        "voice_style",
+        "opening_line",
+        "behavior_rules",
+        "safeguards",
+        "decision_rationale",
+    }
+)
+_PUBLIC_AI_LABEL = re.compile(
+    r"(?<![A-Za-zА-Яа-яЁё])(?:AI|ИИ)(?![A-Za-zА-Яа-яЁё])",
+    re.IGNORECASE,
+)
+
+
+def _persona_text(value: Any, *, field_name: str, max_length: int) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be text")
+    normalized = value.strip()
+    if not normalized or len(normalized) > max_length or "\x00" in normalized:
+        raise ValueError(f"{field_name} is invalid")
+    return normalized
+
+
+def _persona_rules(
+    value: Any,
+    *,
+    field_name: str,
+    minimum: int,
+    maximum: int,
+) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"{field_name} must be an array")
+    rules = tuple(
+        _persona_text(item, field_name=field_name, max_length=160)
+        for item in value
+    )
+    if not minimum <= len(rules) <= maximum:
+        raise ValueError(f"{field_name} has an invalid item count")
+    return rules
+
+
+@dataclass(frozen=True, slots=True)
+class AssistantPersona:
+    schema_version: str
+    employee_type: str
+    display_name: str
+    role_summary: str
+    voice_style: str
+    opening_line: str
+    behavior_rules: tuple[str, ...]
+    safeguards: tuple[str, ...]
+    decision_rationale: str
+
+    def __post_init__(self) -> None:
+        if self.schema_version != ASSISTANT_PERSONA_SCHEMA_VERSION:
+            raise ValueError("assistant persona schema_version is invalid")
+        employee_type = _persona_text(
+            self.employee_type,
+            field_name="employee_type",
+            max_length=32,
+        )
+        if employee_type not in ASSISTANT_EMPLOYEE_TYPES:
+            raise ValueError("employee_type is unsupported")
+        voice_style = _persona_text(
+            self.voice_style,
+            field_name="voice_style",
+            max_length=32,
+        )
+        if voice_style not in ASSISTANT_VOICE_STYLES:
+            raise ValueError("voice_style is unsupported")
+        object.__setattr__(self, "employee_type", employee_type)
+        object.__setattr__(
+            self,
+            "display_name",
+            _persona_text(
+                self.display_name,
+                field_name="display_name",
+                max_length=48,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "role_summary",
+            _persona_text(
+                self.role_summary,
+                field_name="role_summary",
+                max_length=240,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "voice_style",
+            voice_style,
+        )
+        object.__setattr__(
+            self,
+            "opening_line",
+            _persona_text(
+                self.opening_line,
+                field_name="opening_line",
+                max_length=160,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "behavior_rules",
+            _persona_rules(
+                self.behavior_rules,
+                field_name="behavior_rules",
+                minimum=2,
+                maximum=5,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "safeguards",
+            _persona_rules(
+                self.safeguards,
+                field_name="safeguards",
+                minimum=0,
+                maximum=6,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "decision_rationale",
+            _persona_text(
+                self.decision_rationale,
+                field_name="decision_rationale",
+                max_length=400,
+            ),
+        )
+        for field_name in ("display_name", "role_summary", "opening_line"):
+            if _PUBLIC_AI_LABEL.search(getattr(self, field_name)):
+                raise ValueError(
+                    f"{field_name} must not contain a public AI label"
+                )
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "AssistantPersona":
+        if not isinstance(payload, Mapping) or set(payload) != _ASSISTANT_PERSONA_KEYS:
+            raise ValueError("assistant persona must contain exact keys")
+        return cls(
+            schema_version=payload["schema_version"],
+            employee_type=payload["employee_type"],
+            display_name=payload["display_name"],
+            role_summary=payload["role_summary"],
+            voice_style=payload["voice_style"],
+            opening_line=payload["opening_line"],
+            behavior_rules=payload["behavior_rules"],
+            safeguards=payload["safeguards"],
+            decision_rationale=payload["decision_rationale"],
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "employee_type": self.employee_type,
+            "display_name": self.display_name,
+            "role_summary": self.role_summary,
+            "voice_style": self.voice_style,
+            "opening_line": self.opening_line,
+            "behavior_rules": list(self.behavior_rules),
+            "safeguards": list(self.safeguards),
+            "decision_rationale": self.decision_rationale,
+        }
+
+
 @dataclass(frozen=True)
 class BuilderRequest:
     engine: EngineName
     brief: str
     reference_context: str = ""
+    assistant_persona: AssistantPersona | None = None
     source_url: str = ""
     locale: str = "ru"
     creativity: float = 0.9
@@ -152,12 +351,15 @@ class BuilderRequest:
         reference_context = self.reference_context.strip()
         source_url = _source_url(self.source_url)
         locale = self.locale.strip().lower()
-        if not brief:
-            raise ValueError("brief must not be empty")
         if len(brief) > 12_000:
             raise ValueError("brief is too large")
         if len(reference_context) > 8_000 or "\x00" in reference_context:
             raise ValueError("reference_context is invalid")
+        if self.assistant_persona is not None and not isinstance(
+            self.assistant_persona,
+            AssistantPersona,
+        ):
+            raise ValueError("assistant_persona must be an AssistantPersona")
         if not locale or len(locale) > 16:
             raise ValueError("locale is invalid")
         if not 0 <= self.creativity <= 2:
@@ -200,10 +402,18 @@ class BuilderRequest:
             int,
         ):
             raise ValueError("visual_repair_limit must be an integer")
+        persona_payload = payload.get("assistant_persona")
+        if persona_payload is None:
+            assistant_persona = None
+        elif isinstance(persona_payload, Mapping):
+            assistant_persona = AssistantPersona.from_dict(persona_payload)
+        else:
+            raise ValueError("assistant_persona must be an object or null")
         return cls(
             engine=_enum(EngineName, payload.get("engine", "direct"), "engine"),
             brief=str(payload.get("brief", "")),
             reference_context=reference_context,
+            assistant_persona=assistant_persona,
             source_url=source_url,
             locale=str(payload.get("locale", "ru")),
             creativity=float(payload.get("creativity", 0.9)),
@@ -223,6 +433,11 @@ class BuilderRequest:
             "engine": self.engine.value,
             "brief": self.brief,
             "reference_context": self.reference_context,
+            "assistant_persona": (
+                self.assistant_persona.to_dict()
+                if self.assistant_persona is not None
+                else None
+            ),
             "source_url": self.source_url,
             "locale": self.locale,
             "creativity": self.creativity,

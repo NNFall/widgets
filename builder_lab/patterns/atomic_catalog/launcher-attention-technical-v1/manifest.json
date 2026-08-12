@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "launcher-attention-technical",
+  "version": 1,
+  "category": "launcher_attention",
+  "status": "active",
+  "title": "Launcher Attention technical fixture",
+  "summary": "Neutral technical fixture for the launcher_attention contract.",
+  "ai_description": "A neutral technical reference for launcher_attention. It defines the expected runtime state and keeps the DOM contract small while leaving visual styling open for adaptation to the approved product direction. The fixture is safe for local previews and does not imply a final visual treatment.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "d41c1327c1e533d08ddcfd070abffce62c0f3d81679b95570bb2dab8d5785e6a",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved",
+    "pattern_role": "fixture"
+  }
+}

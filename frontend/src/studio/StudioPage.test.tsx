@@ -177,6 +177,24 @@ describe('StudioPage', () => {
     await waitFor(() => expect(document.querySelector('.studio-header__session strong')).toHaveTextContent('Изучаем структуру и визуальный язык сайта'));
   });
 
+  it('submits an omitted optional brief as an empty string', async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(snapshot(), 202)));
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<StudioPage />);
+    fireEvent.change(screen.getByLabelText('Ссылка на сайт'), {
+      target: { value: 'https://example.com' },
+    });
+    await user.click(screen.getByRole('button', { name: 'Создать AI-виджет' }));
+
+    const [, request] = fetchMock.mock.calls[0];
+    expect(JSON.parse(String(request.body))).toMatchObject({
+      source_url: 'https://example.com/',
+      brief: '',
+    });
+  });
+
   it('resumes the active run, restores fields and shows the latest preview revision', async () => {
     localStorage.setItem(ACTIVE_RUN_STORAGE_KEY, 'run-123');
     vi.stubGlobal('fetch', vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(snapshot({
@@ -192,7 +210,7 @@ describe('StudioPage', () => {
     expect(screen.getByDisplayValue('Спокойный консультант')).toBeVisible();
     expect(screen.getByText('1 820')).toBeVisible();
     expect(screen.getByText('47,6 с')).toBeVisible();
-    const preview = screen.getByTitle('Предпросмотр AI-сотрудника Kaigo');
+    const preview = screen.getByTitle('Предпросмотр консультанта Kaigo');
     expect(preview).toHaveAttribute('sandbox', 'allow-scripts');
     expect(preview.getAttribute('src')).toMatch(
       /^http:\/\/localhost:3000\/builder\/api\/runs\/run-123\/preview\?revision=4&channel=[A-Za-z0-9_-]{22,96}$/,
@@ -599,7 +617,7 @@ describe('StudioPage', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     render(<StudioPage />);
-    const iframe = await screen.findByTitle('Предпросмотр AI-сотрудника Kaigo') as HTMLIFrameElement;
+    const iframe = await screen.findByTitle('Предпросмотр консультанта Kaigo') as HTMLIFrameElement;
     const src = new URL(iframe.getAttribute('src')!);
     const channel = src.searchParams.get('channel');
     const postMessage = vi.spyOn(iframe.contentWindow!, 'postMessage');
@@ -666,7 +684,7 @@ describe('StudioPage', () => {
       viewport="desktop"
       onViewportChange={vi.fn()}
     />);
-    const iframe = screen.getByTitle('Предпросмотр AI-сотрудника Kaigo') as HTMLIFrameElement;
+    const iframe = screen.getByTitle('Предпросмотр консультанта Kaigo') as HTMLIFrameElement;
     const src = new URL(iframe.getAttribute('src')!);
     const channel = src.searchParams.get('channel');
     const postMessage = vi.spyOn(iframe.contentWindow!, 'postMessage');

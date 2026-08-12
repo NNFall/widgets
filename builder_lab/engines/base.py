@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol
+from typing import TYPE_CHECKING, Any, Mapping, Protocol
 
 from ..models import (
+    AssistantPersona,
     BuilderRequest,
     ConceptRole,
     ConceptRoleBrief,
@@ -17,10 +18,22 @@ from ..models import (
 )
 from ..visual_models import VisualFinding
 
+if TYPE_CHECKING:
+    from ..patterns.atomic_models import PatternCandidatePlan
+    from ..patterns.candidate_resolver import ResolvedPatternCandidatePack
+
 
 @dataclass(frozen=True)
 class EngineResult:
     artifact: WidgetArtifact
+    usage: TokenUsage = TokenUsage()
+    provider_request_id: str | None = None
+    diagnostic: str | None = None
+
+
+@dataclass(frozen=True)
+class AssistantPersonaResult:
+    persona: AssistantPersona
     usage: TokenUsage = TokenUsage()
     provider_request_id: str | None = None
     diagnostic: str | None = None
@@ -58,6 +71,22 @@ class CompositionPlanResult:
     diagnostic: str | None = None
 
 
+@dataclass(frozen=True)
+class PatternCandidatePlanResult:
+    plan: "PatternCandidatePlan"
+    usage: TokenUsage = TokenUsage()
+    provider_request_id: str | None = None
+    provider_request_ids: tuple[str, ...] = ()
+    diagnostic: str | None = None
+    used_fallback: bool = False
+
+    @property
+    def payload(self) -> Mapping[str, object]:
+        """Compatibility view matching the legacy composition result shape."""
+
+        return self.plan.to_dict()
+
+
 class BuilderEngineError(RuntimeError):
     def __init__(
         self,
@@ -66,12 +95,14 @@ class BuilderEngineError(RuntimeError):
         *,
         diagnostic: str | None = None,
         usage: TokenUsage | None = None,
+        provider_request_id: str | None = None,
     ) -> None:
         super().__init__(public_message)
         self.error_code = error_code
         self.public_message = public_message
         self.diagnostic = diagnostic
         self.usage = usage or TokenUsage()
+        self.provider_request_id = provider_request_id
 
 
 class BuilderEngine(Protocol):
@@ -85,6 +116,7 @@ class BuilderEngine(Protocol):
         repair_issues: tuple[ValidationIssue, ...] = (),
         visual_findings: tuple[VisualFinding, ...] = (),
         composition: Any | None = None,
+        pattern_candidate_pack: "ResolvedPatternCandidatePack | None" = None,
     ) -> EngineResult: ...
 
     async def cancel(self) -> None: ...
@@ -93,6 +125,12 @@ class BuilderEngine(Protocol):
 
 
 class DirectBuilderEngine(BuilderEngine, Protocol):
+    async def select_assistant_persona(
+        self,
+        *,
+        request: BuilderRequest,
+    ) -> AssistantPersonaResult: ...
+
     async def plan_composition(
         self,
         *,
@@ -101,6 +139,16 @@ class DirectBuilderEngine(BuilderEngine, Protocol):
         public_catalog: tuple[dict[str, Any], ...],
         correction: str | None = None,
     ) -> CompositionPlanResult: ...
+
+    async def plan_pattern_candidates(
+        self,
+        *,
+        request: BuilderRequest,
+        selected_direction: DirectionProposal,
+        selector_catalog: tuple[dict[str, Any], ...],
+        correction: str | None = None,
+        optional_categories: tuple[str, ...] = (),
+    ) -> PatternCandidatePlanResult: ...
 
     async def develop_concept_role(
         self,
@@ -136,4 +184,5 @@ class DirectBuilderEngine(BuilderEngine, Protocol):
         visual_findings: tuple[VisualFinding, ...] = (),
         selected_direction: DirectionProposal | None = None,
         composition: Any | None = None,
+        pattern_candidate_pack: "ResolvedPatternCandidatePack | None" = None,
     ) -> EngineResult: ...

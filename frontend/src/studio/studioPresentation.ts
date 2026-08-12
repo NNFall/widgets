@@ -6,9 +6,24 @@ export const STUDIO_STAGES: ReadonlyArray<{
   activity: string;
 }> = [
   {
+    id: 'reference_analysis',
+    label: 'Анализ сайта',
+    activity: 'Загружаем сайт и изучаем его структуру, содержание и визуальный язык',
+  },
+  {
+    id: 'persona',
+    label: 'Выбор сотрудника',
+    activity: 'Подбираем роль, характер и манеру общения сотрудника',
+  },
+  {
     id: 'art_direction',
     label: 'Образ и характер',
     activity: 'Изучаем структуру и содержание сайта',
+  },
+  {
+    id: 'composition',
+    label: 'Подбор шаблонов',
+    activity: 'Подбираем подходящие элементы и анимации из библиотеки Kaigo',
   },
   {
     id: 'foundation',
@@ -73,6 +88,8 @@ const EVENT_ACTIVITY: Record<string, string> = {
   'run.completed': 'Виджет готов к просмотру',
 };
 
+const SAFE_PERSONA_ACTIVITY = /^Сотрудник\s+[А-ЯЁ][А-Яа-яЁё -]{0,48}\s+выбран[.!]?$/;
+
 export function projectStatusLabel(status: string) {
   return PROJECT_STATUS_LABELS[status] ?? 'Состояние уточняется';
 }
@@ -125,6 +142,9 @@ export function safeActivityForEvent(event: {
   stage: BuilderStage | null;
   message?: string | null;
 }) {
+  if (event.stage === 'persona' && event.message && SAFE_PERSONA_ACTIVITY.test(event.message.trim())) {
+    return event.message.trim();
+  }
   return EVENT_ACTIVITY[event.type]
     ?? STUDIO_STAGES.find(({ id }) => id === event.stage)?.activity
     ?? 'Продолжаем создавать ваш виджет';

@@ -1,0 +1,15 @@
+:root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; --accent: #4b61c4; --accent-soft: #c8d0ff; --ink: #232c52; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 280px; min-height: 100vh; overflow: hidden; background: #ece8e2; color: var(--ink); }
+button, input, textarea { font: inherit; }
+.pattern-stage { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: linear-gradient(145deg, #f9f7f3, #e9e5de); }
+.showcase { width: min(460px, 94vw); position: relative; }
+.preview-label { margin: 0 0 12px; color: #756f69; font-size: 11px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.preview-note { margin: 13px 0 0; color: #706b65; font-size: 12px; line-height: 1.45; }
+.composer-board{min-height:280px;display:flex;flex-direction:column;justify-content:flex-end;gap:48px;padding:25px;border-radius:29px;background:#fff;box-shadow:0 25px 60px rgba(31,38,50,.13)}.thread-hint{display:flex;align-items:flex-start;gap:9px}.thread-hint span{width:32px;height:32px;display:grid;place-items:center;border-radius:11px;background:var(--accent-soft);color:var(--ink);font-size:10px;font-weight:800}.thread-hint p{max-width:220px;margin:0;padding:10px 12px;border-radius:5px 15px 15px;background:#f4f2ee;font-size:10px;line-height:1.45}.composer{position:relative;min-height:68px;display:grid;align-items:center;gap:7px;border-radius:18px;background:white;animation:floating_label-focus 5s ease-in-out infinite}.composer textarea{min-width:0;width:100%;resize:none;border:0;outline:0;background:transparent;color:var(--ink);font-size:11px;line-height:1.4}.composer button{position:absolute;width:40px;height:40px;border:0;border-radius:13px;background:var(--accent);color:white;box-shadow:0 8px 18px color-mix(in srgb,var(--accent),transparent 72%)}.composer{padding:17px 54px 8px 13px;border:1px solid #d9d5cf}.composer label{position:absolute;left:13px;top:19px;padding:0 5px;background:white;color:#817a74;font-size:11px;animation:floating_label-focus-label 5s ease-in-out infinite}.composer textarea{padding-top:6px}.composer button{right:8px;bottom:8px}@keyframes floating_label-focus{0%,18%{border-color:#d9d5cf;box-shadow:none}42%,82%{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent),transparent 84%)}100%{border-color:#d9d5cf}}@keyframes floating_label-focus-label{0%,18%{transform:none;color:#817a74}42%,82%{transform:translateY(-17px) scale(.9);color:var(--accent)}100%{transform:none}}
+html[data-pattern-command='run'] .composer,
+html[data-pattern-command='replay'] .composer { animation: floating_label-focus 1.6s cubic-bezier(.22,.8,.2,1) both; }
+@media(max-width:380px){.composer-board{padding:18px}.context-rail,.composer kbd{display:none}.contextual_rail .composer,.command_glow .composer{grid-template-columns:1fr 42px}}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "responsive-device-morph",
+  "version": 1,
+  "category": "responsive_transition",
+  "status": "active",
+  "title": "Морфинг между устройствами",
+  "summary": "Desktop-панель и mobile-sheet показаны рядом, а общие элементы явно переходят между двумя геометриями.",
+  "ai_description": "Слева показана плавающая desktop-панель, справа — широкий нижний mobile-sheet. Между ними проходит направляющая, а одинаковые header, сообщение и composer сохраняют цветовые метки. В Pattern Lab композиция показывает исходное состояние, основную фазу и устойчивое завершение, поэтому визуальный смысл читается без скриптов и пояснений разработчика. Модель может адаптировать оттенки, масштаб и темп под бренд, сохраняя иерархию, доступный контраст и заявленную идею: desktop-панель и mobile-sheet показаны рядом, а общие элементы явно переходят между двумя геометриями.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "d8342c802677f3307ce8ea517fb6486482fa7bdbc45eada69d18b6efc19d15ec",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "ready_for_review",
+    "pattern_role": "structural"
+  }
+}

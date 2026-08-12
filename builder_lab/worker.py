@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import math
@@ -18,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analytics.service import record_funnel_event
 from app.billing.service import TrialFailureKind
+from app.patterns.candidate_repository import PatternCandidateRepository
 from app.patterns.repository import PatternOutcomeMetrics, PatternRepository
 from app.saas.models import (
     GenerationArtifact,
@@ -27,6 +29,7 @@ from app.saas.models import (
     ModelCall,
     Project,
     ProjectVersion,
+    WidgetPatternVersion,
     WorkerServiceLease,
 )
 from builder_lab.models import BuilderRequest, TokenUsage, WidgetArtifact
@@ -42,9 +45,18 @@ from builder_lab.engines.base import (
 from builder_lab.models import DirectionProposal, DirectionRole, EngineName, Stage
 from builder_lab.modes import get_mode_policy
 from builder_lab.patterns.models import CompositionPlan
+from builder_lab.patterns.atomic_models import PatternCandidatePlan
+from builder_lab.patterns.atomic_registry import load_builtin_atomic_registry
+from builder_lab.patterns.candidate_planner import plan_pattern_candidates
+from builder_lab.patterns.candidate_resolver import (
+    ResolvedPatternCandidatePack,
+    STAGE_PATTERN_CATEGORIES,
+    resolve_pattern_candidate_pack,
+)
 from builder_lab.patterns.planner import CompositionPlanningError, plan_composition
 from builder_lab.patterns.registry import load_builtin_registry
 from builder_lab.patterns.resolver import ResolvedComposition, resolve_composition
+from builder_lab.persona import assistant_persona_config_value
 from builder_lab.visual_models import VisualCritique, VisualSeverity
 from builder_lab.validation import (
     issue_fingerprint,
@@ -60,6 +72,7 @@ logger = logging.getLogger(__name__)
 
 DIRECT_STAGE_SEQUENCE = (
     "reference_analysis",
+    "persona",
     "art_direction",
     "composition",
     "foundation",
@@ -70,6 +83,7 @@ DIRECT_STAGE_SEQUENCE = (
 ANTIGRAVITY_STAGE_SEQUENCE = ("reference_analysis", "agent_build")
 STAGE_PUBLIC_NAMES = {
     "reference_analysis": "анализ исходного сайта",
+    "persona": "выбор сотрудника",
     "art_direction": "выбор визуального направления",
     "composition": "выбор проверенной композиции",
     "foundation": "создание основы виджета",
@@ -85,6 +99,9 @@ MAX_STAGE_RESULT_BYTES = 1_048_576
 MAX_STAGE_CONTEXT_BYTES = 131_072
 MAX_STAGE_OUTPUT_REFS = 32
 MAX_STAGE_EVENTS = 64
+PATTERN_PACK_MODEL_CALL_OPERATIONS = frozenset(
+    {"artifact_generation", "validation_repair", "visual_repair"}
+)
 ALLOWED_STAGE_RESULT_EVENTS = frozenset(
     {"reference.completed", "repair.completed"}
 )
@@ -123,6 +140,95 @@ _VALIDATION_FAILURE_CODES = frozenset({
     "reference_url_unsafe",
     "snapshot_rejected",
 })
+
+
+def _plain_json(value: Any) -> Any:
+    """Normalize frozen JSON containers before comparing persisted metadata."""
+
+    if isinstance(value, Mapping):
+        return {str(key): _plain_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain_json(item) for item in value]
+    return value
+
+
+def _candidate_plan_replay_conflicts(
+    existing: Any,
+    *,
+    plan: PatternCandidatePlan,
+    direction_artifact_id: UUID | None,
+    selector_model_call_id: UUID | None,
+) -> bool:
+    """Compare staged composition with durable lineage when evidence exists.
+
+    A replay may carry no selector output references at all.  In that case
+    ``selector_model_call_id`` is intentionally unknown and the persisted
+    selector lineage remains authoritative instead of being compared to
+    ``None``.
+    """
+
+    return (
+        existing.plan != plan
+        or existing.direction_artifact_id != direction_artifact_id
+        or (
+            selector_model_call_id is not None
+            and existing.selector_model_call_id != selector_model_call_id
+        )
+    )
+
+
+def _validate_persisted_candidate_lineage(persisted, registry) -> None:
+    """Reject exact-version drift before exposing implementation assets.
+
+    The registry digest is intentionally not compared wholesale: adding an
+    unrelated pattern version must not invalidate an existing run.  Every
+    persisted candidate item is instead checked against its exact live
+    implementation hash, selector manifest and stage mapping.
+    """
+
+    for group in persisted.groups:
+        expected_mapping = tuple(
+            stage.value
+            for stage, categories in STAGE_PATTERN_CATEGORIES.items()
+            if group.category in categories
+        )
+        if tuple(group.stage_mapping) != expected_mapping:
+            raise ValueError(
+                f"persisted stage mapping drift for {group.category.value}"
+            )
+        if len(group.items) != len(group.candidates):
+            raise ValueError(
+                f"persisted candidate item count drift for {group.category.value}"
+            )
+        for candidate, item in zip(group.candidates, group.items, strict=True):
+            if (
+                candidate.pattern_id != item.pattern_id
+                or candidate.version != item.version
+                or candidate.rank != item.rank
+            ):
+                raise ValueError("persisted candidate item identity drift")
+            try:
+                definition = registry.resolve(item.pattern_id, item.version)
+            except Exception as exc:
+                raise ValueError(
+                    f"persisted candidate version is unavailable: {item.pattern_id}@{item.version}"
+                ) from exc
+            if definition.category is not group.category:
+                raise ValueError("persisted candidate category drift")
+            if definition.implementation_sha256 != item.implementation_sha256:
+                raise ValueError(
+                    f"persisted implementation hash drift: {item.pattern_id}@{item.version}"
+                )
+            persisted_manifest = _plain_json(item.manifest_snapshot)
+            live_manifest = _plain_json(definition.selector_dict())
+            # Lifecycle status is mutable; all other selector metadata is
+            # immutable provenance and must match byte-for-byte as JSON.
+            persisted_manifest.pop("status", None)
+            live_manifest.pop("status", None)
+            if persisted_manifest != live_manifest:
+                raise ValueError(
+                    f"persisted selector manifest drift: {item.pattern_id}@{item.version}"
+                )
 
 
 def failure_category_for_error(error: BuilderEngineError) -> TrialFailureKind:
@@ -274,9 +380,13 @@ class StageResult:
                 or len(event_message) > 2_000
             ):
                 raise ValueError("stage result events are invalid")
-            if set(event) - {"event_type", "message", "status"}:
+            if set(event) - {"event_type", "message", "status", "capture_metrics"}:
                 raise ValueError("stage result events contain unsupported fields")
             if "status" in event and not isinstance(event["status"], str):
+                raise ValueError("stage result events are invalid")
+            if "capture_metrics" in event and not isinstance(
+                event["capture_metrics"], dict
+            ):
                 raise ValueError("stage result events are invalid")
         context = _strict_json_clone(self.context, field_name="context")
         if not isinstance(context, dict):
@@ -397,9 +507,9 @@ class OrchestratorStageHandler:
         reference_analyzer: Callable[[str], Awaitable[ReferenceAnalysisResult]],
         visual_gate_factory: Callable[[RunClaim], Any] | None = None,
         routed_engine_factory: Callable[[RunClaim, str], BuilderEngine] | None = None,
-        routed_reference_analyzer: Callable[
-            [RunClaim, str], Awaitable[ReferenceAnalysisResult]
-        ] | None = None,
+        routed_reference_analyzer: Callable[..., Awaitable[ReferenceAnalysisResult]]
+        | None = None,
+        pattern_candidate_plan_v2_enabled: bool = False,
     ) -> None:
         self._queue = queue
         self._factories = dict(engine_factories)
@@ -407,6 +517,65 @@ class OrchestratorStageHandler:
         self._visual_gate_factory = visual_gate_factory
         self._routed_engine_factory = routed_engine_factory
         self._routed_reference_analyzer = routed_reference_analyzer
+        self._pattern_candidate_plan_v2_enabled = bool(
+            pattern_candidate_plan_v2_enabled
+        )
+
+    async def _candidate_plan(self, run_id: UUID):
+        """Load a durable candidate plan without consulting the selector."""
+
+        loader = getattr(self._queue, "load_pattern_candidate_plan", None)
+        if not callable(loader):
+            raise BuilderEngineError(
+                "internal_error",
+                "Хранилище плана кандидатов не настроено",
+            )
+        return await loader(run_id)
+
+    async def _resolve_candidate_pack(
+        self,
+        *,
+        claim: RunClaim,
+        stage: Stage,
+    ) -> ResolvedPatternCandidatePack:
+        persisted = await self._candidate_plan(claim.run_id)
+        if persisted is None:
+            raise BuilderEngineError(
+                "internal_error",
+                "Сначала необходимо сохранить план кандидатов",
+                diagnostic=f"missing candidate plan for {claim.run_id}",
+            )
+        review_loader = getattr(
+            self._queue, "load_effective_pattern_candidate_reviews", None
+        )
+        if not callable(review_loader):
+            raise BuilderEngineError(
+                "internal_error",
+                "Хранилище плана кандидатов не настроено",
+            )
+        registry = load_builtin_atomic_registry()
+        try:
+            _validate_persisted_candidate_lineage(persisted, registry)
+        except ValueError as exc:
+            raise BuilderEngineError(
+                "internal_error",
+                "Сохранённый план кандидатов не соответствует библиотеке",
+                diagnostic=str(exc),
+            ) from exc
+        approved = await review_loader(registry)
+        try:
+            return resolve_pattern_candidate_pack(
+                persisted.plan,
+                stage,
+                registry,
+                effective_approved=approved,
+            )
+        except ValueError as exc:
+            raise BuilderEngineError(
+                "internal_error",
+                "Сохранённый план кандидатов повреждён",
+                diagnostic=str(exc),
+            ) from exc
 
     async def __call__(self, claim: RunClaim) -> StageResult:
         stage_input = await self._queue.stage_input(claim)
@@ -414,6 +583,8 @@ class OrchestratorStageHandler:
         request = policy.apply_to_request(stage_input.request)
         if claim.next_stage == "reference_analysis":
             return await self._analyze_reference(request, claim)
+        if claim.next_stage == "persona":
+            return await self._select_persona(request, claim)
         try:
             stage = Stage(claim.next_stage)
         except ValueError as exc:
@@ -438,6 +609,22 @@ class OrchestratorStageHandler:
             self._routed_engine_factory(claim, "repair")
             if self._routed_engine_factory is not None and request.engine is EngineName.DIRECT
             else engine
+        )
+        has_candidate_context = isinstance(
+            stage_input.context.get("pattern_candidate_plan"), dict
+        )
+        has_legacy_context = isinstance(
+            stage_input.context.get("composition_plan"), dict
+        )
+        if has_candidate_context and has_legacy_context:
+            raise BuilderEngineError(
+                "internal_error",
+                "Контекст запуска содержит несовместимые планы композиции",
+            )
+        pattern_candidate_mode = (
+            has_candidate_context
+            if (has_candidate_context or has_legacy_context)
+            else self._pattern_candidate_plan_v2_enabled
         )
         direction_proposal_engine = engine
         direction_judge_engine = engine
@@ -465,6 +652,7 @@ class OrchestratorStageHandler:
                 previous=stage_input.previous_artifact,
                 context=stage_input.context,
                 claim=claim,
+                pattern_candidate_mode=pattern_candidate_mode,
             )
         finally:
             closed: set[int] = set()
@@ -479,6 +667,49 @@ class OrchestratorStageHandler:
                     continue
                 closed.add(identity)
                 await routed_engine.close()
+
+    async def _select_persona(
+        self,
+        request: BuilderRequest,
+        claim: RunClaim,
+    ) -> StageResult:
+        if request.engine is not EngineName.DIRECT:
+            raise BuilderEngineError(
+                "internal_error",
+                "Выбор сотрудника поддерживается только в direct-режиме",
+            )
+        factory = self._factories.get(request.engine)
+        if factory is None and self._routed_engine_factory is None:
+            raise BuilderEngineError(
+                "provider_unavailable",
+                "Выбранный режим генерации сейчас недоступен",
+            )
+        engine = (
+            self._routed_engine_factory(claim, "persona_selector")
+            if self._routed_engine_factory is not None
+            else factory()  # type: ignore[misc]
+        )
+        try:
+            result = await cast(
+                DirectBuilderEngine,
+                engine,
+            ).select_assistant_persona(request=request)
+        finally:
+            await engine.close()
+        selected_request = replace(
+            request,
+            assistant_persona=result.persona,
+        )
+        return StageResult(
+            public_message=f"Сотрудник {result.persona.display_name} выбран",
+            output_refs=(
+                (result.provider_request_id,)
+                if result.provider_request_id is not None
+                else ()
+            ),
+            request=selected_request,
+            usage=result.usage,
+        )
 
     async def _analyze_reference(
         self,
@@ -498,12 +729,52 @@ class OrchestratorStageHandler:
                 public_message="Анализ исходного сайта завершён",
                 request=request,
             )
+        async def report_progress(phase: str, payload: dict[str, Any]) -> None:
+            if phase == "capture_completed":
+                await self._queue.append_attempt_event(
+                    claim,
+                    event_type="reference.capture_completed",
+                    stage=None,
+                    status="completed",
+                    message="Сайт загружен, подготовлено 7 снимков",
+                    capture_metrics=payload.get("capture_metrics"),
+                )
+                return
+            if phase == "analysis_started":
+                await self._queue.append_attempt_event(
+                    claim,
+                    event_type="reference.analysis_started",
+                    stage=None,
+                    status="running",
+                    message="AI анализирует сайт и продумывает направление виджета",
+                )
+                return
+            raise ValueError(f"unknown reference progress phase: {phase}")
+
         try:
-            analysis = (
-                await self._routed_reference_analyzer(claim, request.source_url)
-                if self._routed_reference_analyzer is not None
-                else await self._reference_analyzer(request.source_url)
-            )
+            if self._routed_reference_analyzer is not None:
+                analysis = await self._routed_reference_analyzer(
+                    claim,
+                    request.source_url,
+                    progress_callback=report_progress,
+                )
+            else:
+                analyzer_parameters = inspect.signature(
+                    self._reference_analyzer
+                ).parameters.values()
+                supports_progress = any(
+                    parameter.name == "progress_callback"
+                    or parameter.kind is inspect.Parameter.VAR_KEYWORD
+                    for parameter in analyzer_parameters
+                )
+                analysis = await self._reference_analyzer(
+                    request.source_url,
+                    **(
+                        {"progress_callback": report_progress}
+                        if supports_progress
+                        else {}
+                    ),
+                )
         except ReferencePipelineError as exc:
             raise BuilderEngineError(
                 exc.error_code,
@@ -525,6 +796,7 @@ class OrchestratorStageHandler:
                 {
                     "event_type": "reference.completed",
                     "status": "completed",
+                    "capture_metrics": analysis.capture_metrics,
                     "message": "Анализ исходного сайта завершён",
                 },
             ),
@@ -542,6 +814,7 @@ class OrchestratorStageHandler:
         previous: WidgetArtifact | None,
         context: dict,
         claim: RunClaim,
+        pattern_candidate_mode: bool,
     ) -> StageResult:
         # The orchestrator imports the visual/browser audit stack.  Only a
         # worker executes it; importing PostgresWorkerQueue in the API process
@@ -571,6 +844,65 @@ class OrchestratorStageHandler:
                     )
                 selected_direction = DirectionProposal.from_dict(raw_direction)
             if stage is Stage.COMPOSITION:
+                if pattern_candidate_mode:
+                    persisted = await self._candidate_plan(claim.run_id)
+                    if persisted is not None:
+                        # A staged composition may be replayed after a worker
+                        # restart.  The database plan is canonical; never run
+                        # the selector again or replace its exact versions.
+                        next_context["pattern_candidate_plan"] = (
+                            persisted.plan.to_dict()
+                        )
+                        next_context.pop("composition_plan", None)
+                        return StageResult(
+                            public_message=persisted.plan.summary,
+                            usage=usage,
+                            context=next_context,
+                        )
+                    registry = load_builtin_atomic_registry()
+                    effective_approved: set[tuple[str, int]] | None = None
+                    selector_catalog = registry.selector_catalog()
+                    review_loader = getattr(
+                        self._queue, "load_effective_pattern_candidate_reviews", None
+                    )
+                    if callable(review_loader):
+                        effective_approved = await review_loader(registry)
+                        selector_catalog = registry.selector_catalog(
+                            effective_review_states={
+                                key: "approved" if key in effective_approved else "rejected"
+                                for key in (
+                                    (item.pattern_id, item.version)
+                                    for item in registry.definitions
+                                )
+                            }
+                        )
+                    try:
+                        planned = await plan_pattern_candidates(
+                            cast(DirectBuilderEngine, engine),
+                            request,
+                            selected_direction,
+                            registry,
+                            selector_catalog=selector_catalog,
+                            effective_approved=effective_approved,
+                        )
+                    except Exception as exc:
+                        raise BuilderEngineError(
+                            "invalid_structured_output",
+                            "Не удалось подобрать кандидатов для виджета",
+                            diagnostic=str(exc),
+                            usage=getattr(exc, "usage", TokenUsage()),
+                        ) from exc
+                    next_context["pattern_candidate_plan"] = planned.plan.to_dict()
+                    next_context.pop("composition_plan", None)
+                    next_context["pattern_candidate_selector_request_ids"] = list(
+                        planned.provider_request_ids
+                    )
+                    return StageResult(
+                        public_message=planned.plan.summary,
+                        output_refs=planned.provider_request_ids,
+                        usage=usage + planned.usage,
+                        context=next_context,
+                    )
                 registry = load_builtin_registry()
                 try:
                     planned = await plan_composition(
@@ -593,7 +925,7 @@ class OrchestratorStageHandler:
                     usage=usage + planned.usage,
                     context=next_context,
                 )
-            if stage is not Stage.ART_DIRECTION:
+            if stage is not Stage.ART_DIRECTION and not pattern_candidate_mode:
                 raw_plan = next_context.get("composition_plan")
                 if not isinstance(raw_plan, dict):
                     raise BuilderEngineError(
@@ -611,6 +943,22 @@ class OrchestratorStageHandler:
                         "Сохранённый план композиции повреждён",
                         diagnostic=str(exc),
                     ) from exc
+        pattern_candidate_pack: ResolvedPatternCandidatePack | None = None
+        if (
+            pattern_candidate_mode
+            and request.engine is EngineName.DIRECT
+            and stage
+            in {
+                Stage.FOUNDATION,
+                Stage.IDENTITY,
+                Stage.CONVERSATION,
+                Stage.MOTION_POLISH,
+            }
+        ):
+            pattern_candidate_pack = await self._resolve_candidate_pack(
+                claim=claim,
+                stage=stage,
+            )
         revision = (previous.revision if previous is not None else 0) + 1
         if request.engine is EngineName.ANTIGRAVITY:
             await self._queue.arm_provider_dispatch(
@@ -625,6 +973,7 @@ class OrchestratorStageHandler:
             previous_artifact=previous,
             selected_direction=selected_direction,
             composition=composition,
+            pattern_candidate_pack=pattern_candidate_pack,
         )
         usage = usage + result.usage
         output_refs = [
@@ -647,6 +996,7 @@ class OrchestratorStageHandler:
                 selected_direction=selected_direction,
                 repair_issues=issues,
                 composition=composition,
+                pattern_candidate_pack=pattern_candidate_pack,
             )
             usage = usage + repaired.usage
             if repaired.provider_request_id is not None:
@@ -692,6 +1042,7 @@ class OrchestratorStageHandler:
                 previous=previous,
                 selected_direction=selected_direction,
                 composition=composition,
+                pattern_candidate_pack=pattern_candidate_pack,
             )
         return StageResult(
             public_message=(
@@ -714,6 +1065,7 @@ class PostgresWorkerQueue:
         lease_seconds: float = 60.0,
         retry_backoff_seconds: float = 5.0,
         forensic_recorder: GenerationForensicRecorder | None = None,
+        pattern_candidate_plan_v2_enabled: bool = False,
     ) -> None:
         if lease_seconds <= 0 or retry_backoff_seconds <= 0:
             raise ValueError("worker timing values must be positive")
@@ -721,6 +1073,9 @@ class PostgresWorkerQueue:
         self.lease_seconds = float(lease_seconds)
         self.retry_backoff_seconds = float(retry_backoff_seconds)
         self._forensic_recorder = forensic_recorder
+        self._pattern_candidate_plan_v2_enabled = bool(
+            pattern_candidate_plan_v2_enabled
+        )
         bind = session_factory.kw.get("bind")
         self._dialect_name = bind.dialect.name if bind is not None else ""
         namespace = id(bind)
@@ -737,6 +1092,46 @@ class PostgresWorkerQueue:
     @staticmethod
     def _now() -> datetime:
         return datetime.now(timezone.utc)
+
+    async def load_pattern_candidate_plan(self, run_id: UUID):
+        """Read the run's immutable selector plan through the queue boundary."""
+
+        async with self._sessions() as database:
+            return await PatternCandidateRepository(database).load_plan(run_id)
+
+    async def load_effective_pattern_candidate_reviews(
+        self,
+        registry,
+    ) -> set[tuple[str, int]]:
+        """Return effective approvals for the exact atomic registry versions."""
+
+        approved: set[tuple[str, int]] = set()
+        # The session must remain open while effective review rows are queried;
+        # use a fresh context rather than leaking the session across stages.
+        async with self._sessions() as database:
+            persisted_rows = (
+                await database.execute(
+                    select(
+                        WidgetPatternVersion.id,
+                        WidgetPatternVersion.pattern_id,
+                        WidgetPatternVersion.version,
+                    )
+                )
+            ).all()
+            persisted = {
+                (str(pattern_id), int(version)): pattern_version_id
+                for pattern_version_id, pattern_id, version in persisted_rows
+            }
+            repository = PatternCandidateRepository(database)
+            for definition in registry.definitions:
+                key = (definition.pattern_id, definition.version)
+                if key in persisted:
+                    state = await repository.effective_review_state(persisted[key])
+                else:
+                    state = definition.provenance.get("review_state")
+                if state == "approved":
+                    approved.add(key)
+        return approved
 
     @staticmethod
     def _validate_worker_id(worker_id: str) -> str:
@@ -1463,6 +1858,38 @@ class PostgresWorkerQueue:
                             now,
                         )
                         return _TerminalRun(run_id=run.id)
+                    if staged is None:
+                        expired_attempt_id = await self._latest_attempt_id(
+                            database,
+                            run.id,
+                            next_stage,
+                        )
+                        expired_record = await self._stage_attempt(
+                            database,
+                            run_id=run.id,
+                            stage=next_stage,
+                            attempt_id=expired_attempt_id,
+                        )
+                        if expired_record.ordinal >= MAX_STAGE_EXECUTIONS:
+                            expired_claim = self._claim_from_run(
+                                run,
+                                attempt_id=expired_attempt_id,
+                            )
+                            await self._fail_locked(
+                                database,
+                                run,
+                                expired_claim,
+                                BuilderEngineError(
+                                    "internal_error",
+                                    "Генерация остановлена после нескольких потерь рабочего процесса",
+                                    diagnostic=(
+                                        f"stage {next_stage!r} exhausted "
+                                        f"{MAX_STAGE_EXECUTIONS} expired leases"
+                                    ),
+                                ),
+                                now,
+                            )
+                            return _TerminalRun(run_id=run.id)
                 run.state = "running"
                 run.current_stage = next_stage
                 run.started_at = run.started_at or now
@@ -1495,7 +1922,7 @@ class PostgresWorkerQueue:
                     run,
                     event_type="stage.started",
                     message=(
-                        "Начат анализ исходного сайта"
+                        "Начата загрузка исходного сайта и подготовка снимков"
                         if next_stage == "reference_analysis"
                         else f"Начат этап: {STAGE_PUBLIC_NAMES[next_stage]}"
                     ),
@@ -1999,6 +2426,34 @@ class PostgresWorkerQueue:
             if not isinstance(request_payload, dict):
                 raise RuntimeError(f"run {run.id} has no durable builder request")
             request = BuilderRequest.from_dict(request_payload)
+            if claim.next_stage not in {"reference_analysis", "persona"}:
+                persona_attempt_id = await database.scalar(
+                    select(GenerationStageAttempt.id)
+                    .where(
+                        GenerationStageAttempt.run_id == run.id,
+                        GenerationStageAttempt.stage == "persona",
+                        GenerationStageAttempt.status == "completed",
+                    )
+                    .order_by(GenerationStageAttempt.ordinal.desc())
+                    .limit(1)
+                )
+                staged_persona = (
+                    await self._staged_result_record(
+                        database,
+                        run.id,
+                        "persona",
+                        attempt_id=persona_attempt_id,
+                    )
+                    if persona_attempt_id is not None
+                    else None
+                )
+                if (
+                    staged_persona is not None
+                    and request.assistant_persona is None
+                ):
+                    raise RuntimeError(
+                        "post-persona dispatch requires a durable assistant persona"
+                    )
             if run.source_version_id is not None:
                 source_row = (
                     await database.execute(
@@ -2114,6 +2569,7 @@ class PostgresWorkerQueue:
         error_code: str | None = None,
         diagnostic: str | None = None,
         output_refs: tuple[str, ...] = (),
+        capture_metrics: Mapping[str, object] | None = None,
         forensic_payload: Mapping[str, object] | None = None,
         forensic_blobs: tuple[ForensicBlob, ...] = (),
     ) -> None:
@@ -2147,6 +2603,11 @@ class PostgresWorkerQueue:
                     "diagnostic": diagnostic,
                     "worker_id": claim.worker_id,
                     "attempt_id": str(claim.attempt_id),
+                    **(
+                        {"capture_metrics": dict(capture_metrics)}
+                        if capture_metrics is not None
+                        else {}
+                    ),
                 },
                 forensic_payload=forensic_payload,
                 forensic_blobs=forensic_blobs,
@@ -2266,14 +2727,57 @@ class PostgresWorkerQueue:
             if result.artifact is not None:
                 raise ValueError("reference analysis cannot stage an artifact")
             return
+        if claim.next_stage == "persona":
+            if result.artifact is not None:
+                raise ValueError("assistant persona cannot stage an artifact")
+            if result.request is None or result.request.assistant_persona is None:
+                raise ValueError(
+                    "assistant persona stage must update the builder request"
+                )
+            created = await database.scalar(
+                select(GenerationEvent).where(
+                    GenerationEvent.run_id == run.id,
+                    GenerationEvent.event_type == "run.created",
+                )
+            )
+            request_payload = (
+                created.payload.get("request") if created is not None else None
+            )
+            if not isinstance(request_payload, dict):
+                raise ValueError("assistant persona stage has no durable request")
+            current_request = BuilderRequest.from_dict(request_payload)
+            expected_request = replace(
+                current_request,
+                assistant_persona=result.request.assistant_persona,
+            )
+            if result.request != expected_request:
+                raise ValueError(
+                    "assistant persona stage may only update assistant_persona"
+                )
+            return
         if claim.next_stage == "composition":
             if result.artifact is not None:
                 raise ValueError("composition cannot stage an artifact")
-            if not isinstance(result.context.get("composition_plan"), dict):
-                raise ValueError("composition must stage a durable plan")
+            legacy_plan = result.context.get("composition_plan")
+            candidate_plan = result.context.get("pattern_candidate_plan")
+            has_legacy = isinstance(legacy_plan, dict)
+            has_candidate = isinstance(candidate_plan, dict)
+            if has_legacy == has_candidate:
+                raise ValueError(
+                    "composition must stage exactly one durable plan"
+                )
+            if has_candidate:
+                try:
+                    PatternCandidatePlan.from_dict(candidate_plan)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "composition candidate plan is invalid"
+                    ) from exc
             return
         if result.request is not None:
-            raise ValueError("only reference analysis can update the builder request")
+            raise ValueError(
+                "only reference analysis or assistant persona can update the builder request"
+            )
         if result.artifact is None:
             return
         expected_stage = Stage(claim.next_stage)
@@ -2326,6 +2830,8 @@ class PostgresWorkerQueue:
         run: GenerationRun,
         result: StageResult,
         now: datetime,
+        *,
+        attempt_id: UUID | None = None,
     ) -> GenerationArtifact | None:
         artifact_record: GenerationArtifact | None = None
         if result.request is not None:
@@ -2341,18 +2847,12 @@ class PostgresWorkerQueue:
             payload["request"] = result.request.to_dict()
             created.payload = payload
         if run.current_stage == "composition":
-            raw_plan = result.context.get("composition_plan")
-            if not isinstance(raw_plan, dict):
-                raise ValueError("composition result has no durable plan")
-            plan = CompositionPlan.from_dict(raw_plan)
-            repository = PatternRepository(database)
-            existing = await repository.load_plan(run.id)
-            if existing is not None:
-                if existing.plan != plan:
-                    raise RuntimeError(
-                        "staged composition conflicts with persisted plan"
-                    )
-            else:
+            raw_candidate_plan = result.context.get("pattern_candidate_plan")
+            if isinstance(raw_candidate_plan, dict):
+                plan = PatternCandidatePlan.from_dict(raw_candidate_plan)
+                repository = PatternCandidateRepository(database)
+                existing = await repository.load_plan(run.id)
+                registry = load_builtin_atomic_registry()
                 direction_artifact_id = await database.scalar(
                     select(GenerationArtifact.id)
                     .where(
@@ -2362,30 +2862,107 @@ class PostgresWorkerQueue:
                     .order_by(GenerationArtifact.revision.desc())
                     .limit(1)
                 )
-                planner_query = (
-                    select(ModelCall.id)
-                    .where(
-                        ModelCall.run_id == run.id,
-                        ModelCall.role == "composition_planner",
-                        ModelCall.status == "completed",
-                    )
-                    .order_by(ModelCall.created_at.desc(), ModelCall.id.desc())
-                    .limit(1)
-                )
+                selector_model_call_id = None
                 if result.output_refs:
-                    planner_query = planner_query.where(
-                        ModelCall.request_id.in_(result.output_refs)
+                    selector_query = (
+                        select(ModelCall.id)
+                        .where(
+                            ModelCall.run_id == run.id,
+                            ModelCall.operation == "pattern_candidate_plan",
+                            ModelCall.status == "completed",
+                            ModelCall.request_id.in_(result.output_refs),
+                        )
+                        .order_by(ModelCall.created_at.desc(), ModelCall.id.desc())
+                        .limit(1)
                     )
-                planner_model_call_id = await database.scalar(planner_query)
-                await repository.create_plan(
-                    run_id=run.id,
-                    plan=plan,
-                    registry=load_builtin_registry(),
-                    direction_artifact_id=direction_artifact_id,
-                    planner_model_call_id=planner_model_call_id,
-                )
+                    if attempt_id is not None:
+                        selector_query = selector_query.where(
+                            ModelCall.stage_attempt_id == attempt_id
+                        )
+                    selector_model_call_id = await database.scalar(selector_query)
+                if existing is not None:
+                    _validate_persisted_candidate_lineage(existing, registry)
+                    if _candidate_plan_replay_conflicts(
+                        existing,
+                        plan=plan,
+                        direction_artifact_id=direction_artifact_id,
+                        selector_model_call_id=selector_model_call_id,
+                    ):
+                        raise RuntimeError(
+                            "staged candidate composition conflicts with persisted plan"
+                        )
+                else:
+                    await repository.create_plan(
+                        run_id=run.id,
+                        plan=plan,
+                        registry=registry,
+                        direction_artifact_id=direction_artifact_id,
+                        selector_model_call_id=selector_model_call_id,
+                    )
+            else:
+                raw_plan = result.context.get("composition_plan")
+                if not isinstance(raw_plan, dict):
+                    raise ValueError("composition result has no durable plan")
+                plan = CompositionPlan.from_dict(raw_plan)
+                repository = PatternRepository(database)
+                existing = await repository.load_plan(run.id)
+                if existing is not None:
+                    if existing.plan != plan:
+                        raise RuntimeError(
+                            "staged composition conflicts with persisted plan"
+                        )
+                else:
+                    direction_artifact_id = await database.scalar(
+                        select(GenerationArtifact.id)
+                        .where(
+                            GenerationArtifact.run_id == run.id,
+                            GenerationArtifact.stage == Stage.ART_DIRECTION.value,
+                        )
+                        .order_by(GenerationArtifact.revision.desc())
+                        .limit(1)
+                    )
+                    planner_query = (
+                        select(ModelCall.id)
+                        .where(
+                            ModelCall.run_id == run.id,
+                            ModelCall.role == "composition_planner",
+                            ModelCall.status == "completed",
+                        )
+                        .order_by(ModelCall.created_at.desc(), ModelCall.id.desc())
+                        .limit(1)
+                    )
+                    if result.output_refs:
+                        planner_query = planner_query.where(
+                            ModelCall.request_id.in_(result.output_refs)
+                        )
+                    planner_model_call_id = await database.scalar(planner_query)
+                    await repository.create_plan(
+                        run_id=run.id,
+                        plan=plan,
+                        registry=load_builtin_registry(),
+                        direction_artifact_id=direction_artifact_id,
+                        planner_model_call_id=planner_model_call_id,
+                    )
         artifact = result.artifact
         if artifact is not None:
+            created = (
+                await database.execute(
+                    select(GenerationEvent).where(
+                        GenerationEvent.run_id == run.id,
+                        GenerationEvent.event_type == "run.created",
+                    )
+                )
+            ).scalar_one_or_none()
+            request_payload = (
+                created.payload.get("request")
+                if created is not None and isinstance(created.payload, dict)
+                else None
+            )
+            durable_persona = (
+                BuilderRequest.from_dict(request_payload).assistant_persona
+                if isinstance(request_payload, dict)
+                else None
+            )
             artifact_record = (
                 await database.execute(
                     select(GenerationArtifact).where(
@@ -2395,6 +2972,12 @@ class PostgresWorkerQueue:
                 )
             ).scalar_one_or_none()
             artifact_payload = artifact.to_dict()
+            artifact_config = {
+                "artifact": artifact_payload,
+                "assistant_persona": assistant_persona_config_value(
+                    durable_persona
+                ),
+            }
             if artifact_record is None:
                 artifact_record = GenerationArtifact(
                     run_id=run.id,
@@ -2403,14 +2986,35 @@ class PostgresWorkerQueue:
                     html=artifact.body_html,
                     css=artifact.css,
                     javascript=artifact.javascript,
-                    config={"artifact": artifact_payload},
+                    config=artifact_config,
                     quality_status="verified",
                     provenance={"output_refs": list(result.output_refs)},
                 )
                 database.add(artifact_record)
                 await database.flush()
-            elif artifact_record.config.get("artifact") != artifact_payload:
-                raise RuntimeError("staged artifact revision conflicts with persistence")
+            else:
+                existing_config = (
+                    dict(artifact_record.config)
+                    if isinstance(artifact_record.config, dict)
+                    else {}
+                )
+                if existing_config.get("artifact") != artifact_payload:
+                    raise RuntimeError(
+                        "staged artifact revision conflicts with persistence"
+                    )
+                expected_persona = artifact_config["assistant_persona"]
+                if (
+                    "assistant_persona" in existing_config
+                    and existing_config["assistant_persona"] != expected_persona
+                ):
+                    raise RuntimeError(
+                        "staged artifact revision conflicts with persistence"
+                    )
+                if "assistant_persona" not in existing_config:
+                    artifact_record.config = {
+                        **existing_config,
+                        "assistant_persona": expected_persona,
+                    }
             await record_funnel_event(
                 database,
                 event_type="first_artifact",
@@ -2420,24 +3024,218 @@ class PostgresWorkerQueue:
                 run_id=run.id,
                 artifact_id=artifact_record.id,
             )
+        has_candidate_context = isinstance(
+            result.context.get("pattern_candidate_plan"), dict
+        )
+        has_legacy_context = isinstance(
+            result.context.get("composition_plan"), dict
+        )
+        candidate_mode = has_candidate_context or (
+            self._pattern_candidate_plan_v2_enabled and not has_legacy_context
+        )
+        if candidate_mode:
+            await self._persist_pattern_stage_provenance(
+                database,
+                run_id=run.id,
+                stage=run.current_stage,
+                result=result,
+                attempt_id=attempt_id,
+            )
         for event in result.events:
             event_type = str(event.get("event_type", "")).strip()
             message = str(event.get("message", "")).strip()
             if not event_type or not message:
                 raise ValueError("stage result event is invalid")
+            event_payload = {
+                "stage": run.current_stage,
+                "status": str(event.get("status", "completed")),
+                "output_refs": list(result.output_refs),
+            }
+            if "capture_metrics" in event:
+                event_payload["capture_metrics"] = event["capture_metrics"]
             await self._append_event(
                 database,
                 run,
                 event_type=event_type,
                 message=message,
                 now=now,
-                payload={
-                    "stage": run.current_stage,
-                    "status": str(event.get("status", "completed")),
-                    "output_refs": list(result.output_refs),
-                },
+                payload=event_payload,
             )
         return artifact_record
+
+    async def _persist_pattern_stage_provenance(
+        self,
+        database: AsyncSession,
+        *,
+        run_id: UUID,
+        stage: str | None,
+        result: StageResult,
+        attempt_id: UUID | None,
+    ) -> None:
+        """Persist exact stage exposures/claims when a v3 plan exists.
+
+        The durable plan is the source of truth.  Re-resolving it during the
+        finalize transaction means a worker restart cannot silently expose a
+        different registry version or selector result.
+        """
+
+        if stage not in {
+            Stage.FOUNDATION.value,
+            Stage.IDENTITY.value,
+            Stage.CONVERSATION.value,
+            Stage.MOTION_POLISH.value,
+        }:
+            return
+        repository = PatternCandidateRepository(database)
+        persisted = await repository.load_plan(run_id)
+        if persisted is None:
+            return
+        registry = load_builtin_atomic_registry()
+        _validate_persisted_candidate_lineage(persisted, registry)
+        rows = (
+            await database.execute(
+                select(
+                    WidgetPatternVersion.id,
+                    WidgetPatternVersion.pattern_id,
+                    WidgetPatternVersion.version,
+                )
+            )
+        ).all()
+        persisted_versions = {
+            (str(pattern_id), int(version)): pattern_version_id
+            for pattern_version_id, pattern_id, version in rows
+        }
+        approved: set[tuple[str, int]] = set()
+        for definition in registry.definitions:
+            key = (definition.pattern_id, definition.version)
+            if key in persisted_versions:
+                review_state = await repository.effective_review_state(
+                    persisted_versions[key]
+                )
+            else:
+                review_state = definition.provenance.get("review_state")
+            if review_state == "approved":
+                approved.add(key)
+        pack = resolve_pattern_candidate_pack(
+            persisted.plan,
+            Stage(stage),
+            registry,
+            effective_approved=approved,
+        )
+        item_by_key = {
+            (item.pattern_id, item.version): item for item in persisted.items
+        }
+        exposed_items = []
+        for version in pack.exposed_versions:
+            item = item_by_key.get((version.pattern_id, version.version))
+            if item is None:
+                raise ValueError(
+                    "persisted candidate plan is missing a resolved stage item"
+                )
+            exposed_items.append(item)
+        if not exposed_items:
+            raise ValueError("resolved candidate pack is empty")
+        all_model_calls = (
+            (
+                await database.execute(
+                    select(ModelCall)
+                    .where(
+                        ModelCall.run_id == run_id,
+                        ModelCall.stage_attempt_id == attempt_id,
+                    )
+                    .order_by(ModelCall.created_at, ModelCall.id)
+                )
+            ).scalars().all()
+            if attempt_id is not None
+            else []
+        )
+        model_calls = [
+            call
+            for call in all_model_calls
+            if call.operation in PATTERN_PACK_MODEL_CALL_OPERATIONS
+        ]
+        # A visual critic/judge/verifier can share the stage attempt but never
+        # receives the candidate pack.  Do not fabricate nullable exposures
+        # for such an attempt; nullable provenance is reserved for a truly
+        # call-less generator attempt.
+        if not model_calls and all_model_calls:
+            return
+        exposure_by_key_call: dict[tuple[tuple[str, int], UUID | None], Any] = {}
+        for item in exposed_items:
+            calls = model_calls or [None]
+            for model_call in calls:
+                exposure = await repository.record_exposure(
+                    run_id=run_id,
+                    stage=stage,
+                    candidate_item_id=item.id,
+                    model_call_id=model_call.id if model_call is not None else None,
+                )
+                exposure_by_key_call[
+                    ((item.pattern_id, item.version), model_call.id if model_call else None)
+                ] = exposure
+
+        raw_claims = result.context.get("pattern_usage_claims")
+        if not isinstance(raw_claims, list):
+            return
+        seen_claims: set[tuple[str, int]] = set()
+        calls_by_request: dict[str, list[ModelCall]] = {}
+        for model_call in model_calls:
+            if model_call.request_id:
+                calls_by_request.setdefault(model_call.request_id, []).append(model_call)
+        for raw_claim in raw_claims[:32]:
+            if not isinstance(raw_claim, dict):
+                continue
+            if set(raw_claim) - {
+                "pattern_id",
+                "version",
+                "usage_mode",
+                "model_call_id",
+                "request_id",
+            }:
+                continue
+            pattern_id = raw_claim.get("pattern_id")
+            version = raw_claim.get("version")
+            mode = raw_claim.get("usage_mode")
+            if (
+                not isinstance(pattern_id, str)
+                or isinstance(version, bool)
+                or not isinstance(version, int)
+                or mode not in {"primary", "combined", "inspiration"}
+            ):
+                continue
+            key = (pattern_id, version)
+            if key in seen_claims or key not in item_by_key:
+                continue
+            seen_claims.add(key)
+            model_call_id: UUID | None = None
+            if isinstance(raw_claim.get("model_call_id"), str):
+                try:
+                    model_call_id = UUID(raw_claim["model_call_id"])
+                except (TypeError, ValueError):
+                    continue
+                if model_call_id not in {call.id for call in model_calls}:
+                    continue
+            elif isinstance(raw_claim.get("request_id"), str):
+                matches = calls_by_request.get(raw_claim["request_id"], [])
+                if len(matches) != 1:
+                    continue
+                model_call_id = matches[0].id
+            elif len(model_calls) == 1:
+                model_call_id = model_calls[0].id
+            exposure = exposure_by_key_call.get((key, model_call_id))
+            if exposure is None:
+                continue
+            try:
+                await repository.record_usage_claim(
+                    run_id=run_id,
+                    stage=stage,
+                    usage_mode=mode,
+                    candidate_item_id=item_by_key[key].id,
+                    exposure_id=exposure.id,
+                    model_call_id=model_call_id,
+                )
+            except (TypeError, ValueError):
+                continue
 
     async def _checkpoint_locked(
         self,
@@ -2701,7 +3499,25 @@ class PostgresWorkerQueue:
             if staged is None or not isinstance(staged.payload.get("result"), dict):
                 raise RuntimeError("stage result must be persisted before finalize")
             result = StageResult.from_dict(staged.payload["result"])
-            artifact_record = await self._materialize_result(database, run, result, now)
+            materializer = self._materialize_result
+            if "attempt_id" in inspect.signature(materializer).parameters:
+                artifact_record = await materializer(
+                    database,
+                    run,
+                    result,
+                    now,
+                    attempt_id=claim.attempt_id,
+                )
+            else:
+                # Keep test/custom queue overrides written against the legacy
+                # four-argument hook working while the built-in materializer
+                # receives stage-attempt identity for candidate provenance.
+                artifact_record = await materializer(
+                    database,
+                    run,
+                    result,
+                    now,
+                )
             if artifact_record is not None:
                 await database.execute(
                     update(ModelCall)

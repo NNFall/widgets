@@ -62,6 +62,18 @@ class BuilderModelsTests(unittest.TestCase):
         )
         self.assertEqual(request.max_repairs, 4)
 
+    def test_request_preserves_a_truly_optional_blank_brief(self):
+        request = BuilderRequest.from_dict(
+            {
+                "engine": "direct",
+                "brief": "   ",
+                "source_url": "https://example.com/",
+            }
+        )
+
+        self.assertEqual(request.brief, "")
+        self.assertEqual(BuilderRequest.from_dict(request.to_dict()), request)
+
     def test_request_preserves_bounded_grounded_reference_context(self):
         context = '{"visual_summary":"sharp editorial grid"}'
         request = BuilderRequest.from_dict(
@@ -115,7 +127,6 @@ class BuilderModelsTests(unittest.TestCase):
     def test_request_rejects_invalid_inputs(self):
         invalid = [
             {"engine": "unknown", "brief": "valid brief"},
-            {"engine": "direct", "brief": " "},
             {"engine": "direct", "brief": "x", "creativity": 2.1},
             {"engine": "direct", "brief": "x", "max_repairs": 8},
             {"engine": "direct", "brief": "x", "contract_id": "chat-v2"},

@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "message-send-technical",
+  "version": 1,
+  "category": "message_send",
+  "status": "active",
+  "title": "Message Send technical fixture",
+  "summary": "Neutral technical fixture for the message_send contract.",
+  "ai_description": "A neutral technical reference for message_send. It defines the expected runtime state and keeps the DOM contract small while leaving visual styling open for adaptation to the approved product direction. The fixture is safe for local previews and does not imply a final visual treatment.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "802ec093f5fef5b83bcd6e82b1b510a7c83261f3973fbda2c1ffe6f395f36c0d",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved",
+    "pattern_role": "fixture"
+  }
+}

@@ -167,7 +167,7 @@ class VisualEvidenceModelTests(unittest.TestCase):
         self.assertEqual(first.fingerprint, same_semantics.fingerprint)
         with self.assertRaises(ValueError):
             finding(confidence=1.01)
-        report_only = finding(severity=VisualSeverity.MAJOR, confidence=0.74)
+        report_only = finding(severity=VisualSeverity.MAJOR, confidence=0.64)
         report = VisualCritique(
             verdict=VisualVerdict.PASS,
             summary="Low-confidence major remains report-only.",

@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "launcher-inbox-nudge",
+  "version": 1,
+  "category": "launcher_attention",
+  "status": "active",
+  "title": "Мягкий входящий сигнал",
+  "summary": "Новая подсказка слегка приподнимает launcher и проявляет аккуратный счётчик без резкого прыжка.",
+  "ai_description": "При появлении полезной подсказки кнопка один раз приподнимается, а рядом раскрывается компактный счётчик. Затем launcher устойчиво возвращается на место и не продолжает отвлекать пользователя. В Pattern Lab композиция показывает исходное состояние, основную фазу и устойчивое завершение, поэтому визуальный смысл читается без скриптов и пояснений разработчика. Модель может адаптировать оттенки, масштаб и темп под бренд, сохраняя иерархию, доступный контраст и заявленную идею: новая подсказка слегка приподнимает launcher и проявляет аккуратный счётчик без резкого прыжка.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "fad33ede83cdaa0a06cbf1846cc37f746bda0d9cd9edd566ee377b13c2a88edc",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "ready_for_review",
+    "pattern_role": "signature"
+  }
+}

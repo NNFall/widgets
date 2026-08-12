@@ -43,6 +43,7 @@ from builder_lab.visual_models import (
 )
 from tests.builder_lab_cases.test_validation import artifact
 from tests.builder_lab_cases.test_orchestrator import ScriptedEngine
+from tests.builder_lab_cases.test_assistant_persona import _persona
 
 
 def finding(
@@ -206,6 +207,16 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
             artifact_fingerprint(after),
         )
 
+    def test_artifact_fingerprint_separates_server_owned_persona(self):
+        candidate = artifact(revision=5)
+        first = _persona()
+        second = replace(first, display_name="Мария")
+
+        self.assertNotEqual(
+            artifact_fingerprint(candidate, first),
+            artifact_fingerprint(candidate, second),
+        )
+
     async def asyncSetUp(self):
         self.store = RunStore()
         self.request = BuilderRequest(
@@ -279,6 +290,15 @@ class VisualRepairGateTests(unittest.IsolatedAsyncioTestCase):
             event for event in visual if event.event_type == "visual_audit.completed"
         )
         self.assertIn("minor-ignored-report", completed.diagnostic)
+
+    async def test_gate_passes_trusted_persona_to_visual_critic(self):
+        persona = _persona()
+        self.request = replace(self.request, assistant_persona=persona)
+        critic = FakeCritic([critique()])
+
+        await self.evaluate(FakeAuditor(), critic)
+
+        self.assertEqual(critic.calls[0]["assistant_persona"], persona)
 
     async def test_committee_role_statuses_are_recorded_without_double_counting_usage(self):
         forensic_payloads = []

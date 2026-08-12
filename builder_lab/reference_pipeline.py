@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import math
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlsplit
@@ -24,6 +25,7 @@ from .reference_models import ReferenceCrawlResult, ScreenshotEvidence
 
 REFERENCE_STATES = (
     "desktop.top",
+    "desktop.after_top",
     "desktop.middle",
     "desktop.bottom",
     "mobile.top",
@@ -54,9 +56,36 @@ class ReferenceAnalysisResult:
     context: str
     summary: str
     usage: TokenUsage = TokenUsage()
+    capture_metrics: dict[str, Any] = field(default_factory=dict)
 
 
 ReferenceAnalyzer = Callable[..., Awaitable[dict[str, Any]]]
+ReferenceProgressCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
+
+
+def _reference_capture_metrics(crawl: ReferenceCrawlResult) -> dict[str, Any]:
+    viewports: dict[str, dict[str, int | float]] = {}
+    for page in crawl.pages:
+        viewport = page.screenshots[0].viewport if page.screenshots else ""
+        if viewport not in {"desktop", "mobile"}:
+            continue
+        timings: dict[str, int | float] = {}
+        for raw_key, raw_value in page.timings_ms.items():
+            if (
+                not isinstance(raw_key, str)
+                or isinstance(raw_value, bool)
+                or not isinstance(raw_value, (int, float))
+                or not math.isfinite(raw_value)
+                or raw_value < 0
+            ):
+                continue
+            timings[raw_key] = raw_value
+        viewports[viewport] = timings
+    total_ms = max(
+        0.0,
+        round((crawl.completed_at - crawl.started_at).total_seconds() * 1000, 1),
+    )
+    return {"total_ms": total_ms, "viewports": viewports}
 
 
 def _usage(payload: dict[str, Any]) -> TokenUsage:
@@ -190,7 +219,7 @@ def compile_reference_context(payload: dict[str, Any]) -> ReferenceAnalysisResul
     )
 
 
-def _six_homepage_states(
+def _required_homepage_states(
     result: ReferenceCrawlResult,
 ) -> dict[str, ScreenshotEvidence]:
     states: dict[str, ScreenshotEvidence] = {}
@@ -268,6 +297,7 @@ class GeminiReferencePipeline:
         source_url: str,
         *,
         structured_backend: StructuredGenerationBackend | None = None,
+        progress_callback: ReferenceProgressCallback | None = None,
     ) -> ReferenceAnalysisResult:
         resolved_backend = (
             structured_backend
@@ -296,7 +326,16 @@ class GeminiReferencePipeline:
                 diagnostic=diagnostic[:1_000],
             )
 
-        states = _six_homepage_states(crawl)
+        states = _required_homepage_states(crawl)
+        capture_metrics = _reference_capture_metrics(crawl)
+        if progress_callback is not None:
+            await progress_callback(
+                "capture_completed",
+                {
+                    "screenshot_count": len(REFERENCE_STATES),
+                    "capture_metrics": capture_metrics,
+                },
+            )
         host = (urlsplit(source_url).hostname or "").lower().rstrip(".")
         with tempfile.TemporaryDirectory(prefix="kaigo-reference-") as temporary:
             root = Path(temporary)
@@ -313,6 +352,11 @@ class GeminiReferencePipeline:
                 encoding="utf-8",
             )
             try:
+                if progress_callback is not None:
+                    await progress_callback(
+                        "analysis_started",
+                        {"screenshot_count": len(REFERENCE_STATES)},
+                    )
                 analysis = await self._analyzer(
                     source_url=source_url,
                     allowed_hosts={host},
@@ -379,7 +423,11 @@ class GeminiReferencePipeline:
                     ),
                     diagnostic=f"{type(exc).__name__}: {str(exc)[:1_000]}",
                 ) from exc
-        return compile_reference_context(analysis)
+        compiled = compile_reference_context(analysis)
+        return replace(
+            compiled,
+            capture_metrics=capture_metrics,
+        )
 
 
 __all__ = [
@@ -388,5 +436,6 @@ __all__ = [
     "REFERENCE_STATES",
     "ReferenceAnalysisResult",
     "ReferencePipelineError",
+    "ReferenceProgressCallback",
     "compile_reference_context",
 ]

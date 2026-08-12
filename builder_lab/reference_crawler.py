@@ -5,6 +5,7 @@ import hashlib
 from io import BytesIO
 import ipaddress
 import json
+import os
 import re
 import socket
 import tempfile
@@ -662,6 +663,15 @@ class CaptureTelemetry:
     accounted: bool = False
     _charge_sequence: int = 0
     byte_limit_error: str | None = None
+    native_transport: bool = False
+    native_validated_origins: set[tuple[str, str, int]] = field(
+        default_factory=set,
+        repr=False,
+    )
+    native_validation_locks: dict[tuple[str, str, int], asyncio.Lock] = field(
+        default_factory=dict,
+        repr=False,
+    )
     http_client: Any | None = field(default=None, repr=False)
 
     @staticmethod
@@ -714,6 +724,11 @@ class CaptureTelemetry:
                 size = 0
             if size > self.max_page_bytes:
                 self.declared_oversize.set()
+            if self.native_transport and size > 0:
+                try:
+                    self.record_network_bytes(size)
+                except ReferenceCaptureError:
+                    self.declared_oversize.set()
 
         def on_request_failed(request: Any) -> None:
             label = sanitize_url_for_log(request.url)
@@ -760,6 +775,17 @@ class CaptureTelemetry:
         if client is not None and not client.is_closed:
             await client.aclose()
 
+    async def validate_native_destination(self, guard: UrlGuard, url: str) -> None:
+        origin = _origin_key(url)
+        if origin in self.native_validated_origins:
+            return
+        lock = self.native_validation_locks.setdefault(origin, asyncio.Lock())
+        async with lock:
+            if origin in self.native_validated_origins:
+                return
+            await asyncio.to_thread(guard.validate_redirect, url)
+            self.native_validated_origins.add(origin)
+
 
 @dataclass(frozen=True)
 class _BufferedHttpResponse:
@@ -787,6 +813,45 @@ _HOP_BY_HOP_REQUEST_HEADERS = frozenset(
 _SENSITIVE_CROSS_ORIGIN_HEADERS = frozenset(
     {"authorization", "cookie", "proxy-authorization", "referer"}
 )
+_TRACKING_HOSTS = frozenset(
+    {
+        "analytics.google.com",
+        "connect.facebook.net",
+        "googleads.g.doubleclick.net",
+        "mc.yandex.com",
+        "mc.yandex.ru",
+        "px.ads.linkedin.com",
+        "snap.licdn.com",
+        "stats.g.doubleclick.net",
+        "top-fwz1.mail.ru",
+        "top.mail.ru",
+        "www.google-analytics.com",
+        "www.googletagmanager.com",
+    }
+)
+
+
+def _host_matches(host: str, expected: str) -> bool:
+    return host == expected or host.endswith(f".{expected}")
+
+
+def _is_non_content_tracking_request(url: str, resource_type: str) -> bool:
+    if resource_type == "document":
+        return False
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").casefold().rstrip(".")
+    path = parsed.path.casefold()
+    if any(_host_matches(host, expected) for expected in _TRACKING_HOSTS):
+        return True
+    if _host_matches(host, "googletagmanager.com"):
+        return True
+    if _host_matches(host, "google-analytics.com"):
+        return True
+    if host in {"vk.com", "www.vk.com"} and path.startswith("/rtrg"):
+        return True
+    if host in {"www.facebook.com", "facebook.com"} and path.startswith("/tr"):
+        return True
+    return False
 
 
 def _new_streaming_client() -> Any:
@@ -920,6 +985,108 @@ def _redirect_chain(request: Any) -> tuple[str, ...]:
     return tuple(chain)
 
 
+def _native_browser_transport_enabled() -> bool:
+    return os.getenv("KAIGO_REFERENCE_NATIVE_TRANSPORT", "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _viewport_capture_concurrency() -> int:
+    configured = os.getenv("KAIGO_REFERENCE_VIEWPORT_CONCURRENCY", "2").strip()
+    return 1 if configured == "1" else 2
+
+
+async def _guarded_native_context_route(
+    route: Any,
+    request: Any,
+    *,
+    guard: UrlGuard | None,
+    robots: GuardedRobotsPolicy | None,
+    allowed_document_origin: tuple[str, str, int],
+    primary_page: dict[str, Any],
+    telemetry: CaptureTelemetry,
+) -> None:
+    """Validate browser traffic while leaving transfer/CORS to Chromium.
+
+    This mode is opt-in because production must pair it with the immutable
+    builder-network egress guard. It avoids copying every page resource through
+    Python while retaining per-request URL, method, document-origin, popup,
+    robots, redirect-loop, and analytics policy checks.
+    """
+
+    async def block(reason: str, url: str | None = None) -> None:
+        telemetry.record_policy_block(reason, url or request.url)
+        await route.abort("blockedbyclient")
+
+    parsed = urlsplit(request.url)
+    if parsed.scheme not in {"http", "https"}:
+        await block("non-http scheme blocked")
+        return
+    if parsed.username is not None or parsed.password is not None:
+        await block("URL credentials blocked")
+        return
+    if request.method.upper() not in {"GET", "HEAD"}:
+        await block("non-read request blocked")
+        return
+    if _is_non_content_tracking_request(request.url, request.resource_type):
+        await block("analytics blocked")
+        return
+    if request.resource_type in {"media", "eventsource"}:
+        await block(f"{request.resource_type} blocked")
+        return
+
+    is_document = request.resource_type == "document"
+    if is_document:
+        try:
+            request_origin = _origin_key(request.url)
+        except ValueError:
+            await block("malformed document URL blocked")
+            return
+        try:
+            request_frame = request.frame
+            request_page = request_frame.page
+            is_main_frame = request_frame == request_page.main_frame
+        except Exception:
+            request_page = None
+            is_main_frame = True
+        expected_page = primary_page.get("page")
+        if expected_page is not None and request_page is not expected_page:
+            await block("popup document blocked")
+            return
+        if request_origin != allowed_document_origin:
+            await block(
+                "cross-origin document blocked"
+                if is_main_frame
+                else "cross-origin subframe document blocked"
+            )
+            return
+        if robots is not None:
+            try:
+                await robots.require_allowed(request.url)
+            except (RobotsDenied, UnsafeReferenceUrl):
+                await block("robots policy blocked document")
+                return
+
+    current = _without_fragment(request.url)
+    chain = _redirect_chain(request)
+    if len(chain) >= 8:
+        await block("resource redirect hop limit blocked", current)
+        return
+    if current in chain:
+        await block("resource redirect loop blocked", current)
+        return
+    if guard is not None:
+        try:
+            await telemetry.validate_native_destination(guard, current)
+        except UnsafeReferenceUrl:
+            await block("unsafe destination blocked", current)
+            return
+    await route.continue_()
+
+
 async def _guarded_context_route(
     route: Any,
     request: Any,
@@ -940,6 +1107,9 @@ async def _guarded_context_route(
         return
     if request.method.upper() not in {"GET", "HEAD"}:
         await block("non-read request blocked")
+        return
+    if _is_non_content_tracking_request(request.url, request.resource_type):
+        await block("analytics blocked")
         return
     if request.resource_type in {"media", "eventsource"}:
         await block(f"{request.resource_type} blocked")
@@ -1102,8 +1272,10 @@ async def _install_context_policy(
     allowed_document_origin: tuple[str, str, int],
     telemetry: CaptureTelemetry,
 ) -> None:
+    native_transport = _native_browser_transport_enabled()
+    telemetry.native_transport = native_transport
     telemetry.attach_context(context)
-    telemetry.http_client = _new_streaming_client()
+    telemetry.http_client = None if native_transport else _new_streaming_client()
 
     def close_transport(*_args: Any) -> None:
         try:
@@ -1112,9 +1284,14 @@ async def _install_context_policy(
             pass
 
     context.on("close", close_transport)
+    route_handler = (
+        _guarded_native_context_route
+        if native_transport
+        else _guarded_context_route
+    )
     await context.route(
         "**/*",
-        lambda route, request: _guarded_context_route(
+        lambda route, request: route_handler(
             route,
             request,
             guard=guard,
@@ -1239,21 +1416,33 @@ async def _settle_viewport_assets_nonfatal(
     skipped_reasons: list[str],
     image_timeout_reason: str | None,
 ) -> None:
+    def resolved_image_timeout_reason(error: BaseException) -> str | None:
+        if image_timeout_reason is not None:
+            return image_timeout_reason
+        if isinstance(error, TimeoutError) or (
+            type(error).__name__ == "TimeoutError"
+            and type(error).__module__.startswith("playwright.")
+        ):
+            return "initial_viewport_image_settle_timeout"
+        return None
+
     try:
         await _wait_for_fonts_and_viewport_images(page, timeout_ms)
     except FontReadyTimeout as exc:
         if "font_ready_timeout" not in skipped_reasons:
             skipped_reasons.append("font_ready_timeout")
         if exc.image_error is not None:
-            if image_timeout_reason is None:
+            timeout_reason = resolved_image_timeout_reason(exc.image_error)
+            if timeout_reason is None:
                 raise exc.image_error
-            if image_timeout_reason not in skipped_reasons:
-                skipped_reasons.append(image_timeout_reason)
-    except Exception:
-        if image_timeout_reason is None:
+            if timeout_reason not in skipped_reasons:
+                skipped_reasons.append(timeout_reason)
+    except Exception as exc:
+        timeout_reason = resolved_image_timeout_reason(exc)
+        if timeout_reason is None:
             raise
-        if image_timeout_reason not in skipped_reasons:
-            skipped_reasons.append(image_timeout_reason)
+        if timeout_reason not in skipped_reasons:
+            skipped_reasons.append(timeout_reason)
 
 
 async def _wait_for_visual_quiet(
@@ -1349,20 +1538,36 @@ async def _wait_for_visual_quiet(
 
 _SCROLL_STATE_SCRIPT = r"""() => {
   const root = document.scrollingElement || document.documentElement;
-  const nodes = [...document.querySelectorAll('body *')].slice(0, 5000);
-  const candidates = nodes.filter((el) => {
-    const s = getComputedStyle(el);
-    return /(auto|scroll|overlay)/.test(s.overflowY) && el.scrollHeight > el.clientHeight + 80;
-  }).map((el) => ({
-    el,
-    score: Math.max(0, el.clientWidth * el.clientHeight) * (el.scrollHeight - el.clientHeight)
-  })).sort((a,b) => b.score-a.score);
-  const scroller = candidates[0]?.el || root;
+  const cached = globalThis.__kaigoScrollProbe;
+  let scroller;
+  let transformNodes;
+  let potentialVirtual;
+  if (cached && cached.scroller && cached.scroller.isConnected) {
+    scroller = cached.scroller;
+    transformNodes = (cached.transformNodes || []).filter((el) => el.isConnected);
+    potentialVirtual = Boolean(cached.potentialVirtual);
+  } else {
+    const nodes = [...document.querySelectorAll('body *')].slice(0, 5000);
+    const candidates = nodes.filter((el) => {
+      const s = getComputedStyle(el);
+      return /(auto|scroll|overlay)/.test(s.overflowY) && el.scrollHeight > el.clientHeight + 80;
+    }).map((el) => ({
+      el,
+      score: Math.max(0, el.clientWidth * el.clientHeight) * (el.scrollHeight - el.clientHeight)
+    })).sort((a,b) => b.score-a.score);
+    scroller = candidates[0]?.el || root;
+    transformNodes = nodes.filter((el) => {
+      const t = getComputedStyle(el).transform;
+      return t && t !== 'none';
+    }).slice(0, 40);
+    const rootOverflow = `${getComputedStyle(document.documentElement).overflowY}|${getComputedStyle(document.body).overflowY}`;
+    potentialVirtual = /(hidden|clip)/.test(rootOverflow) && nodes.some((el) => {
+      const s = getComputedStyle(el);
+      return (s.willChange || '').includes('transform') || (s.transform && s.transform !== 'none');
+    });
+    globalThis.__kaigoScrollProbe = {scroller, transformNodes, potentialVirtual};
+  }
   if (!scroller.dataset.kaigoScrollId) scroller.dataset.kaigoScrollId = 'active';
-  const transformNodes = nodes.filter((el) => {
-    const t = getComputedStyle(el).transform;
-    return t && t !== 'none';
-  }).slice(0, 40);
   const rawRect = scroller === root
     ? {left: 0, top: 0, right: innerWidth, bottom: innerHeight}
     : scroller.getBoundingClientRect();
@@ -1373,26 +1578,37 @@ _SCROLL_STATE_SCRIPT = r"""() => {
     height: Math.max(1, Math.min(innerHeight, rawRect.bottom) - Math.max(0, rawRect.top))
   };
   const visible = [];
+  const visibleSignatures = [];
   for (let y = 40; y < innerHeight; y += Math.max(80, Math.floor(innerHeight / 8))) {
-    for (const el of document.elementsFromPoint(innerWidth / 2, y)) {
-      const text = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ');
-      if (text && text.length < 180 && !visible.includes(text)) visible.push(text);
-      if (visible.length >= 20) break;
+    const stack = document.elementsFromPoint(innerWidth / 2, y).slice(0, 4);
+    const el = stack.find((item) => !['HTML', 'BODY'].includes(item.tagName)) || stack[0];
+    if (!el) continue;
+    const itemRect = el.getBoundingClientRect();
+    const className = typeof el.className === 'string' ? el.className.slice(0, 80) : '';
+    visibleSignatures.push([
+      el.tagName, el.id || '', className,
+      Math.round(itemRect.top), Math.round(itemRect.height)
+    ].join(':'));
+    let text = el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('alt') || '';
+    if (!text && el.childElementCount <= 3) {
+      text = [...el.childNodes]
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.nodeValue || '')
+        .join(' ');
     }
+    text = text.trim().replace(/\s+/g, ' ');
+    if (text && text.length < 180 && !visible.includes(text)) visible.push(text);
   }
-  const rootOverflow = `${getComputedStyle(document.documentElement).overflowY}|${getComputedStyle(document.body).overflowY}`;
-  const potentialVirtual = /(hidden|clip)/.test(rootOverflow) && nodes.some((el) => {
-    const s = getComputedStyle(el);
-    return (s.willChange || '').includes('transform') || (s.transform && s.transform !== 'none');
-  });
   return {
     kind: scroller === root ? 'document' : 'element',
     top: scroller === root ? (scrollY || root.scrollTop || 0) : scroller.scrollTop,
     height: scroller.scrollHeight,
     client: scroller === root ? innerHeight : scroller.clientHeight,
     rect,
-    transformSignature: transformNodes.map((el) => `${el.tagName}:${getComputedStyle(el).transform}`).join('|'),
-    visibleSignature: visible.join('|'),
+    transformSignature: potentialVirtual
+      ? transformNodes.map((el) => `${el.tagName}:${getComputedStyle(el).transform}`).join('|')
+      : '',
+    visibleSignature: visibleSignatures.join('|'),
     potentialVirtual,
     endProven: document.documentElement.dataset.kaigoScrollEnd === 'true' || document.body.dataset.kaigoScrollEnd === 'true',
     visible
@@ -1401,6 +1617,21 @@ _SCROLL_STATE_SCRIPT = r"""() => {
 
 
 async def _scroll_once(page: Any, state: Mapping[str, Any], step: int) -> str:
+    if not bool(state.get("potentialVirtual")):
+        await page.evaluate(
+            """(dy) => {
+              const marked = document.querySelector('[data-kaigo-scroll-id="active"]');
+              if (!marked || marked === document.documentElement || marked === document.body) {
+                window.scrollBy({top: dy, left: 0, behavior: 'instant'});
+              } else {
+                marked.scrollBy({top: dy, left: 0, behavior: 'instant'});
+              }
+            }""",
+            step,
+        )
+        await page.wait_for_timeout(50)
+        return "script"
+
     rect = state["rect"]
     target_x = float(rect["x"]) + float(rect["width"]) / 2
     target_y = float(rect["y"]) + float(rect["height"]) / 2
@@ -1483,6 +1714,40 @@ async def _settle_scrolled_viewport(
         raise
 
 
+async def _settle_initial_viewport(
+    page: Any,
+    *,
+    settings: CaptureSettings,
+    skipped_reasons: list[str],
+) -> None:
+    timeout_ms = min(5000, settings.page_timeout_seconds * 1000)
+    visual_task = asyncio.create_task(
+        _wait_for_visual_quiet(
+            page,
+            minimum_ms=settings.scroll_delay_ms,
+            quiet_ms=450,
+            maximum_ms=timeout_ms,
+        )
+    )
+    asset_task = asyncio.create_task(
+        _settle_viewport_assets_nonfatal(
+            page,
+            timeout_ms=timeout_ms,
+            skipped_reasons=skipped_reasons,
+            image_timeout_reason=None,
+        )
+    )
+    tasks = (visual_task, asset_task)
+    try:
+        await asyncio.gather(*tasks)
+    except BaseException:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
 async def _warm_reference_page(
     page: Any,
     *,
@@ -1499,6 +1764,7 @@ async def _warm_reference_page(
     virtual = bool(state.get("potentialVirtual"))
     exhausted = True
     steps = 0
+    sweep_pause_ms = min(250, max(100, settings.scroll_delay_ms // 4))
 
     for _step_index in range(settings.max_scroll_steps):
         if int(state["height"]) > settings.max_scroll_height:
@@ -1508,12 +1774,7 @@ async def _warm_reference_page(
         previous = state
         await _scroll_once(page, previous, step_px)
         steps += 1
-        await _settle_scrolled_viewport(
-            page,
-            settings=settings,
-            skipped_reasons=skipped_reasons,
-            image_timeout_reason="warmup_lazy_image_settle_timeout",
-        )
+        await page.wait_for_timeout(sweep_pause_ms)
         state = await page.evaluate(_SCROLL_STATE_SCRIPT)
         meaningful_change = _scroll_state_changed(previous, state)
         if meaningful_change:
@@ -1568,6 +1829,13 @@ async def _warm_reference_page(
 
     if exhausted:
         skipped_reasons.append("warmup_scroll_step_cap_reached")
+    if steps:
+        await _settle_scrolled_viewport(
+            page,
+            settings=settings,
+            skipped_reasons=skipped_reasons,
+            image_timeout_reason="warmup_lazy_image_settle_timeout",
+        )
     return initial_state, tuple(skipped_reasons), steps
 
 
@@ -1635,7 +1903,7 @@ async def _take_screenshot(
     height: int,
     telemetry: CaptureTelemetry | None = None,
 ) -> ScreenshotEvidence:
-    data = await page.screenshot(type="jpeg", quality=82, full_page=False, animations="disabled")
+    data = await page.screenshot(type="jpeg", quality=82, full_page=False, animations="allow")
     try:
         with Image.open(BytesIO(data)) as image:
             actual_width, actual_height = image.size
@@ -1828,17 +2096,20 @@ async def _capture_loaded_page(
     settings: CaptureSettings,
     guard: UrlGuard | None,
     telemetry: CaptureTelemetry,
+    initial_skipped_reasons: Sequence[str] = (),
+    initial_timings_ms: Mapping[str, int | float] | None = None,
 ) -> ReferencePageEvidence:
     started = time.monotonic()
     phase_started = started
-    timings_ms: dict[str, int | float] = {}
+    timings_ms: dict[str, int | float] = dict(initial_timings_ms or {})
     observed_texts: list[str] = []
-    skipped_reasons: list[str] = []
+    skipped_reasons = list(initial_skipped_reasons)
     samples: list[Mapping[str, Any]] = []
 
     timeout_ms = settings.page_timeout_seconds * 1000
-    await page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
-    await page.wait_for_load_state("load", timeout=timeout_ms)
+    skipped_reasons.extend(
+        await _wait_for_reference_load(page, timeout_ms=min(timeout_ms, 5_000))
+    )
     if any(
         item.startswith("cross-origin document blocked:")
         for item in telemetry.policy_blocks
@@ -1847,14 +2118,11 @@ async def _capture_loaded_page(
     telemetry.raise_if_oversize()
     if guard is not None:
         await asyncio.to_thread(guard.validate_redirect, page.url)
-    await _settle_viewport_assets_nonfatal(
+    await _settle_initial_viewport(
         page,
-        timeout_ms=min(timeout_ms, 5000),
+        settings=settings,
         skipped_reasons=skipped_reasons,
-        image_timeout_reason=None,
     )
-    await page.wait_for_timeout(settings.warmup_ms)
-    await _wait_for_visual_quiet(page)
     telemetry.raise_if_oversize()
     initial_hidden = await page.evaluate(
         """() => [...document.querySelectorAll('body *')].slice(0, 5000).filter((el) => {
@@ -1868,28 +2136,10 @@ async def _capture_loaded_page(
     )
 
     phase_started = time.monotonic()
-    initial_state, warmup_reasons, warm_steps = await _warm_reference_page(
-        page,
-        settings=settings,
-    )
-    timings_ms["warm_pass"] = round((time.monotonic() - phase_started) * 1000, 1)
-    timings_ms["warm_steps"] = warm_steps
-    skipped_reasons.extend(warmup_reasons)
-
-    phase_started = time.monotonic()
-    reset_reasons, reset_steps = await _restore_reference_start(
-        page,
-        initial_state=initial_state,
-        settings=settings,
-    )
-    timings_ms["reset_pass"] = round((time.monotonic() - phase_started) * 1000, 1)
-    timings_ms["reset_steps"] = reset_steps
-    skipped_reasons.extend(reset_reasons)
-    telemetry.raise_if_oversize()
-
-    phase_started = time.monotonic()
     screenshots: dict[str, ScreenshotEvidence] = {}
     state = await page.evaluate(_SCROLL_STATE_SCRIPT)
+    initial_scroll_top = int(state["top"])
+    initial_client_height = max(1, int(state["client"]))
     observed_texts.extend(state.get("visible", ()))
     samples.append(
         await page.evaluate(
@@ -1918,6 +2168,7 @@ async def _capture_loaded_page(
     exhausted = True
     coverage_complete = False
     evidence_steps = 0
+    sweep_pause_ms = min(250, max(100, settings.scroll_delay_ms // 4))
     for step_index in range(settings.max_scroll_steps):
         if int(state["height"]) > settings.max_scroll_height:
             skipped_reasons.append("scroll_height_cap_reached")
@@ -1927,13 +2178,7 @@ async def _capture_loaded_page(
         scroll_result = await _scroll_once(page, previous, step_px)
         evidence_steps += 1
         fallback_used = fallback_used or scroll_result == "script_fallback"
-        await _settle_scrolled_viewport(
-            page,
-            settings=settings,
-            skipped_reasons=skipped_reasons,
-            image_timeout_reason="lazy_image_settle_timeout",
-        )
-        telemetry.raise_if_oversize()
+        await page.wait_for_timeout(sweep_pause_ms)
         state = await page.evaluate(_SCROLL_STATE_SCRIPT)
         top_changed = int(state["top"]) != int(previous["top"])
         transform_changed = (
@@ -1962,34 +2207,54 @@ async def _capture_loaded_page(
         elif virtual:
             modes.add("virtual")
         observed_texts.extend(state.get("visible", ()))
-        samples.append(
-            await page.evaluate(
-                _SAMPLE_SCRIPT,
-                {
-                    "initialHidden": int(initial_hidden),
-                    "observedTexts": observed_texts[:160],
-                },
-            )
-        )
         max_native_scroll = max(0, int(state["height"]) - int(state["client"]))
         native_progress = (
             min(1.0, int(state["top"]) / max(1, max_native_scroll))
             if max_native_scroll
             else 0.0
         )
+        anchors: list[str] = []
+        if viewport == "desktop" and "after_top" not in screenshots and (
+            (virtual and meaningful_change)
+            or (
+                not virtual
+                and int(state["top"])
+                >= initial_scroll_top + initial_client_height - 2
+            )
+        ):
+            anchors.append("after_top")
         if "middle" not in screenshots and (
             (virtual and meaningful_change)
             or (not virtual and native_progress >= 0.45)
         ):
-            screenshots["middle"] = await _take_screenshot(
+            anchors.append("middle")
+        if anchors:
+            await _settle_scrolled_viewport(
                 page,
-                page_id=page_id,
-                viewport=viewport,
-                position="middle",
-                width=settings.width,
-                height=settings.height,
-                telemetry=telemetry,
+                settings=settings,
+                skipped_reasons=skipped_reasons,
+                image_timeout_reason="lazy_image_settle_timeout",
             )
+            telemetry.raise_if_oversize()
+            samples.append(
+                await page.evaluate(
+                    _SAMPLE_SCRIPT,
+                    {
+                        "initialHidden": int(initial_hidden),
+                        "observedTexts": observed_texts[:160],
+                    },
+                )
+            )
+            for anchor in anchors:
+                screenshots[anchor] = await _take_screenshot(
+                    page,
+                    page_id=page_id,
+                    viewport=viewport,
+                    position=anchor,
+                    width=settings.width,
+                    height=settings.height,
+                    telemetry=telemetry,
+                )
         if virtual:
             if state.get("endProven"):
                 exhausted = False
@@ -2022,11 +2287,39 @@ async def _capture_loaded_page(
     timings_ms["evidence_steps"] = evidence_steps
 
     phase_started = time.monotonic()
-    await page.wait_for_timeout(settings.final_settle_ms)
-    await _wait_for_visual_quiet(page)
+    await _settle_scrolled_viewport(
+        page,
+        settings=settings,
+        skipped_reasons=skipped_reasons,
+        image_timeout_reason="final_lazy_image_settle_timeout",
+    )
+    telemetry.raise_if_oversize()
     observed_texts.extend(state.get("visible", ()))
+    samples.append(
+        await page.evaluate(
+            _SAMPLE_SCRIPT,
+            {
+                "initialHidden": int(initial_hidden),
+                "observedTexts": observed_texts[:160],
+            },
+        )
+    )
     coverage_status = "complete" if coverage_complete else "partial"
     final_position = "bottom" if coverage_status == "complete" else "last_observed"
+    if (
+        viewport == "desktop"
+        and "after_top" not in screenshots
+        and coverage_status == "complete"
+    ):
+        screenshots["after_top"] = await _take_screenshot(
+            page,
+            page_id=page_id,
+            viewport=viewport,
+            position="after_top",
+            width=settings.width,
+            height=settings.height,
+            telemetry=telemetry,
+        )
     screenshots[final_position] = await _take_screenshot(
         page,
         page_id=page_id,
@@ -2074,7 +2367,11 @@ async def _capture_loaded_page(
         depth=0 if category == "home" else 1,
         screenshots=tuple(
             screenshots[position]
-            for position in ("top", "middle", final_position)
+            for position in (
+                ("top", "after_top", "middle", final_position)
+                if viewport == "desktop"
+                else ("top", "middle", final_position)
+            )
             if position in screenshots
         ),
         semantic_sample=sample["semantic"],
@@ -2086,10 +2383,129 @@ async def _capture_loaded_page(
         timings_ms=timings_ms,
         transferred_bytes=transferred_bytes,
         scroll_strategy=scroll_strategy,
-        reset_strategy="wheel-prewarm-return-top",
+        reset_strategy="single-pass",
         skipped_reasons=tuple(skipped_reasons),
         coverage_status=coverage_status,
     )
+
+
+async def _has_meaningfully_rendered_document(page: Any) -> bool:
+    try:
+        probe = await page.evaluate(
+            """() => {
+              const body = document.body;
+              const root = document.scrollingElement || document.documentElement;
+              return {
+                href: location.href,
+                bodyExists: Boolean(body),
+                textLength: (body?.innerText || '').trim().length,
+                elementCount: body?.querySelectorAll('*').length || 0,
+                scrollHeight: root?.scrollHeight || 0,
+              };
+            }"""
+        )
+    except Exception:
+        return False
+    if not isinstance(probe, Mapping) or not probe.get("bodyExists"):
+        return False
+    try:
+        href = str(probe.get("href", ""))
+        text_length = int(probe.get("textLength", 0))
+        element_count = int(probe.get("elementCount", 0))
+        scroll_height = int(probe.get("scrollHeight", 0))
+    except (TypeError, ValueError):
+        return False
+    if urlsplit(href).scheme not in {"http", "https"}:
+        return False
+    return scroll_height >= 200 and (
+        text_length >= 40 or element_count >= 8
+    )
+
+
+async def _goto_reference_document(
+    page: Any,
+    url: str,
+    *,
+    timeout_ms: int,
+) -> tuple[str, ...]:
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+    try:
+        await page.goto(
+            url,
+            wait_until="commit",
+            timeout=min(timeout_ms, 15_000),
+        )
+    except PlaywrightTimeoutError:
+        if not await _has_meaningfully_rendered_document(page):
+            raise
+        return ("navigation_commit_timeout_rendered",)
+    return ("domcontentloaded_deferred_after_commit",)
+
+
+async def _wait_for_reference_load(
+    page: Any,
+    *,
+    timeout_ms: int,
+) -> tuple[str, ...]:
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+    try:
+        ready_state = await page.evaluate("() => document.readyState")
+    except Exception:
+        ready_state = None
+    if ready_state == "complete":
+        return ()
+    if ready_state == "interactive":
+        # Navigation already waited for DOMContentLoaded. A separate `load`
+        # gate can be held indefinitely by analytics, fonts, or other
+        # background resources, while the document is ready for bounded asset
+        # settling and the lazy-load sweep below.
+        return ("load_deferred_after_domcontentloaded",)
+    if await _has_meaningfully_rendered_document(page):
+        return ("load_deferred_after_rendered_document",)
+
+    try:
+        await page.wait_for_function(
+            """() => {
+              const body = document.body;
+              const root = document.scrollingElement || document.documentElement;
+              if (!body || !root || root.scrollHeight < 200) return false;
+              const textLength = (body.innerText || '').trim().length;
+              const elementCount = body.querySelectorAll('*').length;
+              return textLength >= 40 || elementCount >= 8;
+            }""",
+            timeout=timeout_ms,
+        )
+    except PlaywrightTimeoutError:
+        if not await _has_meaningfully_rendered_document(page):
+            raise
+    return ("load_deferred_after_rendered_document",)
+
+
+_FATAL_DOCUMENT_POLICY_PREFIXES = (
+    "cross-origin document blocked:",
+    "cross-origin document redirect blocked:",
+    "malformed document URL blocked:",
+    "popup document blocked:",
+    "robots policy blocked document:",
+    "unexpected document redirect blocked:",
+)
+
+
+def _capture_failure_message(
+    exc: BaseException,
+    policy_blocks: Sequence[str],
+) -> str:
+    policy_reason = next(
+        (
+            item.split(":", 1)[0]
+            for item in policy_blocks
+            if item.startswith(_FATAL_DOCUMENT_POLICY_PREFIXES)
+        ),
+        None,
+    )
+    return policy_reason or _exception_text(exc)
 
 
 async def _trace_failure(context: Any, ttl_seconds: int) -> TraceEvidence | None:
@@ -2110,6 +2526,96 @@ async def _trace_failure(context: Any, ttl_seconds: int) -> TraceEvidence | None
         expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
         data=data,
     )
+
+
+def _single_page_browser_pool() -> Any:
+    from crawlee.browsers import BrowserPool, PlaywrightBrowserPlugin
+
+    plugin = PlaywrightBrowserPlugin(
+        browser_type="chromium",
+        use_incognito_pages=True,
+        max_open_pages_per_browser=2,
+        fingerprint_generator=None,
+        browser_launch_options={"headless": True},
+        browser_new_context_options={
+            "viewport": {"width": 1920, "height": 1080},
+            "device_scale_factor": 1,
+            "user_agent": KAIGO_RESEARCH_USER_AGENT,
+            "locale": "ru-RU",
+            "permissions": [],
+            "accept_downloads": False,
+            "service_workers": "block",
+        },
+    )
+    return BrowserPool(plugins=[plugin])
+
+
+async def _capture_reference_page_on_page(
+    page: Any,
+    url: str,
+    *,
+    requested_url: str | None = None,
+    page_id: str,
+    category: str,
+    viewport: str,
+    settings: CaptureSettings,
+    guard: UrlGuard | None = None,
+    robots_policy: GuardedRobotsPolicy | None = None,
+    byte_budget: CrawlByteBudget | None = None,
+    trace_ttl_seconds: int = 3600,
+) -> ReferencePageEvidence:
+    """Capture a canonical URL with an already-open isolated Playwright page."""
+    requested_url = requested_url or url
+    context = page.context
+    await page.set_viewport_size({"width": settings.width, "height": settings.height})
+    await context.clear_cookies()
+    telemetry = CaptureTelemetry(
+        max_page_bytes=settings.max_page_bytes,
+        total_budget=byte_budget,
+    )
+    primary_page: dict[str, Any] = {"page": page}
+    await _install_context_policy(
+        context,
+        primary_page=primary_page,
+        guard=guard,
+        robots=robots_policy,
+        allowed_document_origin=_origin_key(url),
+        telemetry=telemetry,
+    )
+    telemetry.attach_page(page)
+    await context.tracing.start(screenshots=True, snapshots=True, sources=False)
+    try:
+        navigation_started = time.monotonic()
+        navigation_warnings = await _goto_reference_document(
+            page,
+            url,
+            timeout_ms=settings.page_timeout_seconds * 1000,
+        )
+        navigation_ms = round((time.monotonic() - navigation_started) * 1000, 1)
+        evidence = await _capture_loaded_page(
+            page,
+            requested_url=requested_url,
+            page_id=page_id,
+            category=category,
+            viewport=viewport,
+            settings=settings,
+            guard=guard,
+            telemetry=telemetry,
+            initial_skipped_reasons=navigation_warnings,
+            initial_timings_ms={"navigation": navigation_ms},
+        )
+    except Exception as exc:
+        trace = await _trace_failure(context, trace_ttl_seconds)
+        message = (
+            telemetry.byte_limit_error
+            or _capture_failure_message(exc, telemetry.policy_blocks)
+        )
+        raise ReferenceCaptureError(message, trace=trace) from exc
+    else:
+        await context.tracing.stop()
+        return evidence
+    finally:
+        await telemetry.close_http_client()
 
 
 async def capture_reference_page(
@@ -2140,7 +2646,6 @@ async def capture_reference_page(
             robots=robots_policy,
             timeout_seconds=min(15, settings.page_timeout_seconds),
         )
-    document_origin = _origin_key(url)
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
         context = await browser.new_context(
@@ -2152,61 +2657,22 @@ async def capture_reference_page(
             accept_downloads=False,
             service_workers="block",
         )
-        await context.clear_cookies()
-        telemetry = CaptureTelemetry(
-            max_page_bytes=settings.max_page_bytes,
-            total_budget=byte_budget,
-        )
-        primary_page: dict[str, Any] = {"page": None}
-        await _install_context_policy(
-            context,
-            primary_page=primary_page,
-            guard=guard,
-            robots=robots_policy,
-            allowed_document_origin=document_origin,
-            telemetry=telemetry,
-        )
         page = await context.new_page()
-        primary_page["page"] = page
-        telemetry.attach_page(page)
-        await context.tracing.start(screenshots=True, snapshots=True, sources=False)
         try:
-            await page.goto(
-                url,
-                wait_until="domcontentloaded",
-                timeout=settings.page_timeout_seconds * 1000,
-            )
-            evidence = await _capture_loaded_page(
+            return await _capture_reference_page_on_page(
                 page,
+                url,
                 requested_url=requested_url,
                 page_id=page_id,
                 category=category,
                 viewport=viewport,
                 settings=settings,
                 guard=guard,
-                telemetry=telemetry,
+                robots_policy=robots_policy,
+                byte_budget=byte_budget,
+                trace_ttl_seconds=trace_ttl_seconds,
             )
-        except Exception as exc:
-            trace = await _trace_failure(context, trace_ttl_seconds)
-            policy_reason = next(
-                (
-                    item.split(":", 1)[0]
-                    for item in telemetry.policy_blocks
-                    if "document" in item and "blocked" in item
-                ),
-                None,
-            )
-            message = (
-                telemetry.byte_limit_error
-                or policy_reason
-                or _sanitize_text(str(exc))
-            )
-            raise ReferenceCaptureError(message, trace=trace) from exc
-        else:
-            await context.tracing.stop()
-            return evidence
         finally:
-            await telemetry.close_http_client()
             await context.close()
             await browser.close()
 
@@ -2344,16 +2810,24 @@ class VisualReferenceCrawler:
         ReferencePageEvidence | Exception,
         ReferencePageEvidence | Exception,
     ]:
-        async def capture(
-            *,
-            page_id: str,
-            viewport: str,
-        ) -> ReferencePageEvidence | Exception:
-            last_error: Exception | None = None
-            for _attempt in range(self.limits.max_retries + 1):
-                try:
-                    return await asyncio.wait_for(
-                        capture_reference_page(
+        async with _single_page_browser_pool() as browser_pool:
+            async def capture(
+                *,
+                page_id: str,
+                viewport: str,
+            ) -> ReferencePageEvidence | Exception:
+                last_error: Exception | None = None
+
+                async def attempt() -> ReferencePageEvidence:
+                    pool_page_id = (
+                        page_id
+                        if page_id.endswith(f"-{viewport}")
+                        else f"{page_id}-{viewport}"
+                    )
+                    crawlee_page = await browser_pool.new_page(page_id=pool_page_id)
+                    try:
+                        return await _capture_reference_page_on_page(
+                            crawlee_page.page,
                             home_url,
                             page_id=page_id,
                             category="home",
@@ -2363,21 +2837,32 @@ class VisualReferenceCrawler:
                             robots_policy=robots_policy,
                             byte_budget=byte_budget,
                             trace_ttl_seconds=self.limits.trace_ttl_seconds,
-                        ),
-                        timeout=remaining_timeout(),
-                    )
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    last_error = exc
-            assert last_error is not None
-            return last_error
+                        )
+                    finally:
+                        await crawlee_page.page.close()
 
-        desktop, mobile = await asyncio.gather(
-            capture(page_id="home", viewport="desktop"),
-            capture(page_id="home-mobile", viewport="mobile"),
-        )
-        return desktop, mobile
+                for _attempt in range(self.limits.max_retries + 1):
+                    try:
+                        return await asyncio.wait_for(
+                            attempt(),
+                            timeout=remaining_timeout(),
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        last_error = exc
+                assert last_error is not None
+                return last_error
+
+            if _viewport_capture_concurrency() == 1:
+                desktop = await capture(page_id="home", viewport="desktop")
+                mobile = await capture(page_id="home-mobile", viewport="mobile")
+            else:
+                desktop, mobile = await asyncio.gather(
+                    capture(page_id="home", viewport="desktop"),
+                    capture(page_id="home-mobile", viewport="mobile"),
+                )
+            return desktop, mobile
 
     async def crawl(self, source_url: str) -> ReferenceCrawlResult:
         from crawlee import ConcurrencySettings, Request

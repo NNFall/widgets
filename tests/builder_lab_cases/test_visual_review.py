@@ -1,5 +1,7 @@
 import asyncio
 from datetime import UTC, datetime
+from dataclasses import replace
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -40,6 +42,8 @@ from builder_lab.visual_review import (
     REPAIR_VERIFICATION_SCHEMA,
     validate_repair_verification,
 )
+from tests.builder_lab_cases.test_assistant_persona import _persona
+from tests.builder_lab_cases.test_visual_critic import report as browser_report
 from tests.builder_lab_cases.test_validation import artifact
 from tests.saas_cases.test_trial_service import _database
 
@@ -127,6 +131,7 @@ def judgement_payload(sources):
                 "artifact_fields": ["css"],
                 "repair_instruction": "Keep the composer fully inside the mobile panel.",
                 "confidence": 0.94,
+                "issue_type": "responsive_integrity",
                 "sources": sources,
             }
         ],
@@ -162,6 +167,211 @@ def test_judge_rejects_even_a_blocker_when_only_one_role_supports_it():
     assert caught.value.diagnostic == "two distinct critic roles are required"
 
 
+def test_deterministic_violation_is_accepted_from_one_critic_with_server_fact():
+    item = finding("close-visibility", "The close control is not visible.")
+    source = replace(
+        result(item),
+        finding_issue_types={"close-visibility": "close_control_visibility"},
+    )
+    roles = {
+        VisualCriticRole.CONVERSATION_UX: source,
+        VisualCriticRole.BRAND_MOTION: VisualCriticResult(
+            critique=VisualCritique(
+                verdict=VisualVerdict.PASS,
+                summary="No additional blocking issue.",
+            ),
+            observations=(),
+            pixel_proof=None,
+            usage=TokenUsage(),
+        ),
+        VisualCriticRole.ADVERSARIAL_CUSTOMER: VisualCriticResult(
+            critique=VisualCritique(
+                verdict=VisualVerdict.PASS,
+                summary="No additional blocking issue.",
+            ),
+            observations=(),
+            pixel_proof=None,
+            usage=TokenUsage(),
+        ),
+    }
+    payload = judgement_payload(
+        [{"role": "conversation_ux", "finding_id": "close-visibility"}]
+    )
+    payload["findings"][0]["issue_type"] = "close_control_visibility"
+    judged = validate_visual_judgement(
+        payload,
+        roles,
+        deterministic_facts={"close_control_visibility": True},
+    )
+    assert judged.supporting_roles["judge-1"] == (VisualCriticRole.CONVERSATION_UX,)
+
+
+def test_deterministic_violation_still_requires_one_critic_source():
+    payload = judgement_payload([])
+    payload["findings"][0]["issue_type"] = "close_control_visibility"
+
+    with pytest.raises(VisualJudgeError) as caught:
+        validate_visual_judgement(
+            payload,
+            role_results(),
+            deterministic_facts={"close_control_visibility": True},
+        )
+
+    assert caught.value.diagnostic == "at least one critic source is required"
+
+
+def test_judge_rejects_final_finding_from_unsupplied_screenshot():
+    payload = judgement_payload(
+        [
+            {"role": "conversation_ux", "finding_id": "ux-edge"},
+            {"role": "brand_motion", "finding_id": "brand-overflow"},
+        ]
+    )
+    payload["findings"][0]["screenshot_id"] = "studio.fake"
+
+    with pytest.raises(VisualJudgeError) as caught:
+        validate_visual_judgement(
+            payload,
+            role_results(),
+            expected_screenshot_ids={"mobile.after_turn_2"},
+        )
+
+    assert caught.value.diagnostic == "unknown judge screenshot: 'studio.fake'"
+
+
+def test_judge_enforces_finding_and_source_bounds_like_provider_schema():
+    too_many_findings = judgement_payload(
+        [
+            {"role": "conversation_ux", "finding_id": "ux-edge"},
+            {"role": "brand_motion", "finding_id": "brand-overflow"},
+        ]
+    )
+    too_many_findings["findings"] = [
+        dict(too_many_findings["findings"][0]) for _ in range(7)
+    ]
+    with pytest.raises(VisualJudgeError) as caught:
+        validate_visual_judgement(too_many_findings, role_results())
+    assert caught.value.diagnostic == "findings exceed maxItems 6"
+
+    too_many_sources = judgement_payload(
+        [
+            {"role": "conversation_ux", "finding_id": "ux-edge"},
+            {"role": "brand_motion", "finding_id": "brand-overflow"},
+            {"role": "adversarial_customer", "finding_id": "customer-minor"},
+            {"role": "conversation_ux", "finding_id": "ux-edge"},
+        ]
+    )
+    with pytest.raises(VisualJudgeError) as caught:
+        validate_visual_judgement(too_many_sources, role_results())
+    assert caught.value.diagnostic == "sources exceed maxItems 3"
+
+
+def test_static_judge_rejects_javascript_repair_without_runtime_fact():
+    payload = judgement_payload(
+        [
+            {"role": "conversation_ux", "finding_id": "ux-edge"},
+            {"role": "brand_motion", "finding_id": "brand-overflow"},
+        ]
+    )
+    payload["findings"][0]["artifact_fields"] = ["javascript"]
+
+    with pytest.raises(VisualJudgeError) as caught:
+        validate_visual_judgement(payload, role_results())
+
+    assert caught.value.diagnostic == (
+        "javascript artifact field requires server-owned pattern_runtime_fidelity fact"
+    )
+
+
+def test_runtime_direct_judge_rejects_studio_reference_and_motion_claims():
+    payload = judgement_payload(
+        [
+            {"role": "conversation_ux", "finding_id": "ux-edge"},
+            {"role": "brand_motion", "finding_id": "brand-overflow"},
+        ]
+    )
+    payload["findings"][0]["evidence"] = (
+        "Studio reference animation timing is incorrect."
+    )
+
+    with pytest.raises(VisualJudgeError) as caught:
+        validate_visual_judgement(
+            payload,
+            role_results(),
+            expected_screenshot_ids={"mobile.after_turn_2"},
+        )
+
+    assert caught.value.diagnostic == (
+        "unsupported runtime_direct evidence scope: studio,reference,motion"
+    )
+
+
+def test_runtime_direct_judge_rejects_unsupported_scope_in_summary():
+    payload = judgement_payload(
+        [
+            {"role": "conversation_ux", "finding_id": "ux-edge"},
+            {"role": "brand_motion", "finding_id": "brand-overflow"},
+        ]
+    )
+    payload["summary"] = "Studio reference animation review is required."
+
+    with pytest.raises(VisualJudgeError) as caught:
+        validate_visual_judgement(
+            payload,
+            role_results(),
+            expected_screenshot_ids={"mobile.after_turn_2"},
+        )
+
+    assert caught.value.diagnostic == (
+        "unsupported runtime_direct evidence scope: studio,reference,motion"
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_visual_judge_rejects_runtime_scope_claims() -> None:
+    payload = judgement_payload(
+        [
+            {"role": "conversation_ux", "finding_id": "ux-edge"},
+            {"role": "brand_motion", "finding_id": "brand-overflow"},
+        ]
+    )
+    payload["findings"][0]["repair_instruction"] = (
+        "Fix the Studio reference animation timing."
+    )
+
+    class Models:
+        async def generate_content(self, **kwargs):
+            return SimpleNamespace(
+                parsed=payload,
+                text="{}",
+                usage_metadata=SimpleNamespace(
+                    prompt_token_count=5,
+                    candidates_token_count=2,
+                    thoughts_token_count=0,
+                ),
+            )
+
+    client = SimpleNamespace(aio=SimpleNamespace(models=Models()))
+    with pytest.raises(VisualJudgeError) as caught:
+        await GeminiVisualJudge(client=client).judge(
+            role_results=role_results(),
+            audit=browser_report(),
+            brief="",
+            art_direction="Direction",
+        )
+
+    assert "unsupported runtime_direct evidence scope" in (caught.value.diagnostic or "")
+
+
+def test_subjective_one_critic_finding_is_still_rejected():
+    payload = judgement_payload(
+        [{"role": "conversation_ux", "finding_id": "ux-edge"}]
+    )
+    with pytest.raises(VisualJudgeError) as caught:
+        validate_visual_judgement(payload, role_results())
+    assert caught.value.diagnostic == "two distinct critic roles are required"
+
+
 def test_judge_rejects_fabricated_source_ids():
     with pytest.raises(VisualJudgeError) as caught:
         validate_visual_judgement(
@@ -177,7 +387,7 @@ def test_judge_rejects_fabricated_source_ids():
 
 
 @pytest.mark.asyncio
-async def test_visual_judge_only_receives_findings_eligible_for_quorum() -> None:
+async def test_visual_judge_receives_full_reports_and_five_visual_frames() -> None:
     mixed_results = {
         VisualCriticRole.CONVERSATION_UX: VisualCriticResult(
             critique=VisualCritique(
@@ -205,7 +415,7 @@ async def test_visual_judge_only_receives_findings_eligible_for_quorum() -> None
                     finding(
                         "brand-low-confidence",
                         "The launcher may be too quiet.",
-                        confidence=0.74,
+                        confidence=0.64,
                     ),
                 ),
             ),
@@ -256,24 +466,95 @@ async def test_visual_judge_only_receives_findings_eligible_for_quorum() -> None
         routing_timeout_seconds=0.2,
     )
 
-    result = await judge.judge(role_results=mixed_results)
+    audit_report = browser_report()
+    persona = _persona()
+    result = await judge.judge(
+        role_results=mixed_results,
+        audit=audit_report,
+        assistant_persona=persona,
+        brief="Короткое пожелание клиента",
+        art_direction="Финально выбранное визуальное направление",
+    )
 
     assert result.critique.verdict is VisualVerdict.REPAIR
     prompt = router.request.prompt
     role_payload = prompt.split("UNTRUSTED CRITIC RESULTS JSON:\n", 1)[1]
     payload = __import__("json").loads(role_payload)
     assert {
-        role: [item["finding_id"] for item in result["eligible_findings"]]
-        for role, result in payload.items()
+        role: [item["finding_id"] for item in role_result["eligible_findings"]]
+        for role, role_result in payload.items()
     } == {
         "conversation_ux": ["ux-major"],
         "brand_motion": ["brand-major"],
         "adversarial_customer": [],
     }
-    assert "confidence >= 0.75" in prompt
-    assert "ux-minor" not in prompt
-    assert "brand-low-confidence" not in prompt
-    assert "customer-minor" not in prompt
+    assert {
+        role: [item["finding_id"] for item in role_result["all_findings"]]
+        for role, role_result in payload.items()
+    } == {
+        "conversation_ux": ["ux-major", "ux-minor"],
+        "brand_motion": ["brand-major", "brand-low-confidence"],
+        "adversarial_customer": ["customer-minor"],
+    }
+    assert "confidence >= 0.65" in prompt
+    assert "primary visual contract" in prompt.lower()
+    assert "secondary" in prompt.lower()
+    assert "score those three criteria from 0 to 10" in prompt.lower()
+    assert "Финально выбранное визуальное направление" in prompt
+    assert "Короткое пожелание клиента" in prompt
+    assert len(router.request.images) == 5
+    system_prompt = prompt.split("PRIMARY VISUAL CONTRACT", 1)[0]
+    untrusted_prompt = prompt.split("PRIMARY VISUAL CONTRACT", 1)[1]
+    assert "TRUSTED_ASSISTANT_PERSONA_POLICY" in system_prompt
+    assert "Never change opening_line or behavior_rules" in system_prompt
+    assert persona.display_name not in system_prompt
+    assert persona.opening_line not in system_prompt
+    assert persona.behavior_rules[0] not in system_prompt
+    assert persona.decision_rationale not in prompt
+    assert "UNTRUSTED_ASSISTANT_PERSONA_DATA_JSON" in untrusted_prompt
+    assert persona.display_name in untrusted_prompt
+    assert persona.opening_line in untrusted_prompt
+    assert persona.behavior_rules[0] in untrusted_prompt
+    assert router.request.images == tuple(
+        audit_report.screenshot(state).data
+        for state in (
+            "desktop.closed",
+            "desktop.open_initial",
+            "desktop.after_turn_2",
+            "mobile.open_initial",
+            "mobile.after_turn_2",
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_visual_judge_accepts_empty_optional_customer_brief() -> None:
+    class Models:
+        async def generate_content(self, **kwargs):
+            return SimpleNamespace(
+                parsed=judgement_payload(
+                    [
+                        {"role": "conversation_ux", "finding_id": "ux-edge"},
+                        {"role": "brand_motion", "finding_id": "brand-overflow"},
+                    ]
+                ),
+                text="{}",
+                usage_metadata=SimpleNamespace(
+                    prompt_token_count=5,
+                    candidates_token_count=2,
+                    thoughts_token_count=0,
+                ),
+            )
+
+    client = SimpleNamespace(aio=SimpleNamespace(models=Models()))
+    judged = await GeminiVisualJudge(client=client).judge(
+        role_results=role_results(),
+        audit=browser_report(),
+        brief="",
+        art_direction="Direction",
+    )
+
+    assert judged.critique.verdict is VisualVerdict.REPAIR
 
 
 def test_judge_rejects_source_that_is_not_eligible_for_quorum():
@@ -281,7 +562,7 @@ def test_judge_rejects_source_that_is_not_eligible_for_quorum():
     weak = finding(
         "weak-source",
         "The launcher may be too quiet.",
-        confidence=0.74,
+        confidence=0.64,
     )
     results[VisualCriticRole.ADVERSARIAL_CUSTOMER] = VisualCriticResult(
         critique=VisualCritique(
@@ -316,14 +597,14 @@ def test_judge_rejects_source_that_is_not_eligible_for_quorum():
 @pytest.mark.asyncio
 async def test_routed_visual_judge_reserves_time_for_fallback() -> None:
     class HangingPrimary:
-        capabilities = ProviderCapabilities(structured_output=True)
+        capabilities = ProviderCapabilities(images=True, structured_output=True)
 
         async def generate(self, request: ModelRequest, *, model: str) -> ModelResponse:
             await asyncio.Event().wait()
             raise AssertionError("unreachable")
 
     class SuccessfulFallback:
-        capabilities = ProviderCapabilities(structured_output=True)
+        capabilities = ProviderCapabilities(images=True, structured_output=True)
 
         def __init__(self) -> None:
             self.calls = 0
@@ -364,7 +645,15 @@ async def test_routed_visual_judge_reserves_time_for_fallback() -> None:
         routing_timeout_seconds=0.1,
     )
 
-    result = await asyncio.wait_for(judge.judge(role_results=role_results()), timeout=0.5)
+    result = await asyncio.wait_for(
+        judge.judge(
+            role_results=role_results(),
+            audit=browser_report(),
+            brief="Brief",
+            art_direction="Direction",
+        ),
+        timeout=0.5,
+    )
 
     assert result.critique.verdict is VisualVerdict.REPAIR
     assert fallback.calls == 1
@@ -412,7 +701,12 @@ async def test_routed_visual_judge_semantic_correction_shares_one_deadline() -> 
         ),
     )
 
-    result = await judge.judge(role_results=role_results())
+    result = await judge.judge(
+        role_results=role_results(),
+        audit=browser_report(),
+        brief="Brief",
+        art_direction="Direction",
+    )
 
     assert result.critique.verdict is VisualVerdict.REPAIR
     assert len(router.timeouts) == 2
@@ -472,7 +766,12 @@ async def test_routed_visual_judge_preserves_terminal_route_usage_and_provenance
     )
 
     with pytest.raises(VisualJudgeError) as caught:
-        await judge.judge(role_results=role_results())
+        await judge.judge(
+            role_results=role_results(),
+            audit=browser_report(),
+            brief="Brief",
+            art_direction="Direction",
+        )
 
     assert caught.value.error_code == "route_exhausted"
     assert caught.value.diagnostic == route_error.diagnostic

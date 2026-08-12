@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import gzip
+import hashlib
 from io import BytesIO
 import json
 import os
@@ -32,7 +33,7 @@ from builder_lab.reference_crawler import (
     capture_reference_page,
     select_reference_pages,
 )
-from builder_lab.reference_models import ReferencePageEvidence
+from builder_lab.reference_models import ReferencePageEvidence, ScreenshotEvidence
 
 
 PUBLIC_V4 = "93.184.216.34"
@@ -756,6 +757,142 @@ class SelectiveLocalGuard(PermissiveLocalGuard):
 
 
 class BrowserLifecycleTests(unittest.TestCase):
+    def test_subframe_policy_block_does_not_mask_the_capture_failure(self):
+        failure = reference_crawler_module._capture_failure_message(
+            reference_crawler_module.ReferenceCaptureError(
+                "reference scroll position could not be restored"
+            ),
+            (
+                "cross-origin subframe document blocked: https://example.org/frame",
+            ),
+        )
+
+        self.assertEqual(failure, "reference scroll position could not be restored")
+
+    def test_main_document_policy_block_remains_the_capture_failure(self):
+        failure = reference_crawler_module._capture_failure_message(
+            RuntimeError("navigation aborted"),
+            ("cross-origin document blocked: https://example.org/",),
+        )
+
+        self.assertEqual(failure, "cross-origin document blocked")
+
+    def test_navigation_waits_only_for_response_commit(self):
+        class CommittedPage:
+            def __init__(self):
+                self.goto_kwargs = None
+
+            async def goto(self, *_args, **kwargs):
+                self.goto_kwargs = kwargs
+
+        page = CommittedPage()
+        warnings = asyncio.run(
+            reference_crawler_module._goto_reference_document(
+                page,
+                "https://mindbox.ru/",
+                timeout_ms=45_000,
+            )
+        )
+
+        self.assertEqual(page.goto_kwargs["wait_until"], "commit")
+        self.assertEqual(page.goto_kwargs["timeout"], 15_000)
+        self.assertEqual(warnings, ("domcontentloaded_deferred_after_commit",))
+
+    def test_commit_timeout_keeps_a_meaningfully_rendered_document(self):
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+        class RenderedPage:
+            url = "https://mindbox.ru/"
+
+            async def goto(self, *_args, **_kwargs):
+                raise PlaywrightTimeoutError("navigation commit timed out")
+
+            async def evaluate(self, _script):
+                return {
+                    "href": self.url,
+                    "bodyExists": True,
+                    "textLength": 9_488,
+                    "elementCount": 1_561,
+                    "scrollHeight": 9_117,
+                }
+
+        warnings = asyncio.run(
+            reference_crawler_module._goto_reference_document(
+                RenderedPage(),
+                "https://mindbox.ru/",
+                timeout_ms=45_000,
+            )
+        )
+
+        self.assertEqual(warnings, ("navigation_commit_timeout_rendered",))
+
+    def test_commit_timeout_still_rejects_a_blank_document(self):
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+        class BlankPage:
+            url = "about:blank"
+
+            async def goto(self, *_args, **_kwargs):
+                raise PlaywrightTimeoutError("navigation commit timed out")
+
+            async def evaluate(self, _script):
+                return {
+                    "href": self.url,
+                    "bodyExists": True,
+                    "textLength": 0,
+                    "elementCount": 0,
+                    "scrollHeight": 0,
+                }
+
+        with self.assertRaisesRegex(PlaywrightTimeoutError, "navigation commit"):
+            asyncio.run(
+                reference_crawler_module._goto_reference_document(
+                    BlankPage(),
+                    "https://example.com/",
+                    timeout_ms=45_000,
+                )
+            )
+
+    def test_loading_state_is_nonfatal_for_rendered_document(self):
+        class RenderedPage:
+            url = "https://mindbox.ru/"
+
+            async def wait_for_load_state(self, *_args, **_kwargs):
+                raise AssertionError("load event must not gate rendered content")
+
+            async def evaluate(self, _script):
+                return {
+                    "href": self.url,
+                    "bodyExists": True,
+                    "textLength": 9_488,
+                    "elementCount": 1_561,
+                    "scrollHeight": 9_117,
+                }
+
+        warnings = asyncio.run(
+            reference_crawler_module._wait_for_reference_load(
+                RenderedPage(), timeout_ms=5_000
+            )
+        )
+
+        self.assertEqual(warnings, ("load_deferred_after_rendered_document",))
+
+    def test_interactive_document_does_not_wait_for_background_load_event(self):
+        class InteractivePage:
+            async def evaluate(self, _script):
+                return "interactive"
+
+            async def wait_for_load_state(self, *_args, **_kwargs):
+                raise AssertionError("load event must not gate an interactive document")
+
+        warnings = asyncio.run(
+            reference_crawler_module._wait_for_reference_load(
+                InteractivePage(), timeout_ms=5_000
+            )
+        )
+
+        self.assertEqual(warnings, ("load_deferred_after_domcontentloaded",))
+
     def test_default_desktop_capture_uses_wide_full_context_viewport(self):
         settings = VisualReferenceCrawler()._settings("desktop")
         self.assertEqual((settings.width, settings.height), (1920, 1080))
@@ -782,6 +919,201 @@ class BrowserLifecycleTests(unittest.TestCase):
                     height=1080,
                 )
             )
+
+    def test_screenshot_preserves_page_animations(self):
+        output = BytesIO()
+        Image.new("RGB", (11, 7), "white").save(output, format="JPEG")
+        screenshot_kwargs = {}
+
+        class FakePage:
+            async def screenshot(self, **kwargs):
+                screenshot_kwargs.update(kwargs)
+                return output.getvalue()
+
+        asyncio.run(
+            reference_crawler_module._take_screenshot(
+                FakePage(),
+                page_id="home",
+                viewport="desktop",
+                position="top",
+                width=11,
+                height=7,
+            )
+        )
+
+        self.assertEqual(screenshot_kwargs["animations"], "allow")
+
+    def test_non_content_tracking_classifier_is_conservative(self):
+        blocked = (
+            ("https://mc.yandex.ru/metrika/tag.js", "script"),
+            ("https://www.google-analytics.com/g/collect?v=2", "fetch"),
+            ("https://www.googletagmanager.com/gtm.js?id=GTM-X", "script"),
+            ("https://top-fwz1.mail.ru/js/code.js", "script"),
+            ("https://vk.com/rtrg?p=VK-RTRG", "image"),
+            ("https://snap.licdn.com/li.lms-analytics/insight.min.js", "script"),
+            ("https://connect.facebook.net/en_US/fbevents.js", "script"),
+            ("https://stats.g.doubleclick.net/j/collect", "fetch"),
+        )
+        allowed = (
+            ("https://example.com/assets/app.js", "script"),
+            ("https://cdn.jsdelivr.net/npm/app.css", "stylesheet"),
+            ("https://images.unsplash.com/photo.jpg", "image"),
+            ("https://storage.yandexcloud.net/site/hero.webp", "image"),
+            ("https://vk.com/images/logo.svg", "image"),
+        )
+
+        for url, resource_type in blocked:
+            with self.subTest(url=url):
+                self.assertTrue(
+                    reference_crawler_module._is_non_content_tracking_request(
+                        url,
+                        resource_type,
+                    )
+                )
+        for url, resource_type in allowed:
+            with self.subTest(url=url):
+                self.assertFalse(
+                    reference_crawler_module._is_non_content_tracking_request(
+                        url,
+                        resource_type,
+                    )
+                )
+
+    def test_non_content_tracking_route_aborts_before_proxy_fetch(self):
+        class FakeRoute:
+            aborted = False
+
+            async def abort(self, _reason):
+                self.aborted = True
+
+            async def fulfill(self, **_kwargs):
+                raise AssertionError("tracking request must not be fulfilled")
+
+        class FakeRequest:
+            url = "https://mc.yandex.ru/metrika/tag.js"
+            method = "GET"
+            resource_type = "script"
+
+        async def unexpected_fetch(*_args, **_kwargs):
+            raise AssertionError("tracking request must not reach Python fetch")
+
+        route = FakeRoute()
+        telemetry = reference_crawler_module.CaptureTelemetry(
+            max_page_bytes=256 * 1024
+        )
+        with patch.object(
+            reference_crawler_module,
+            "_bounded_stream_fetch",
+            unexpected_fetch,
+        ):
+            asyncio.run(
+                reference_crawler_module._guarded_context_route(
+                    route,
+                    FakeRequest(),
+                    guard=None,
+                    robots=None,
+                    allowed_document_origin=("https", "example.com", 443),
+                    primary_page={"page": None},
+                    telemetry=telemetry,
+                )
+            )
+
+        self.assertTrue(route.aborted)
+        self.assertTrue(
+            any(item.startswith("analytics blocked:") for item in telemetry.policy_blocks)
+        )
+
+    def test_native_route_validates_then_uses_browser_transport(self):
+        class FakeRoute:
+            continued = False
+            aborted = False
+
+            async def continue_(self):
+                self.continued = True
+
+            async def abort(self, _reason):
+                self.aborted = True
+
+        class FakeRequest:
+            url = "https://example.com/assets/app.js"
+            method = "GET"
+            resource_type = "script"
+            redirected_from = None
+
+        class RecordingGuard:
+            def __init__(self):
+                self.urls = []
+
+            def validate_redirect(self, url):
+                self.urls.append(url)
+
+        route = FakeRoute()
+        guard = RecordingGuard()
+        telemetry = reference_crawler_module.CaptureTelemetry(
+            max_page_bytes=256 * 1024
+        )
+        asyncio.run(
+            reference_crawler_module._guarded_native_context_route(
+                route,
+                FakeRequest(),
+                guard=guard,
+                robots=None,
+                allowed_document_origin=("https", "example.com", 443),
+                primary_page={"page": None},
+                telemetry=telemetry,
+            )
+        )
+
+        self.assertEqual(guard.urls, [FakeRequest.url])
+        self.assertTrue(route.continued)
+        self.assertFalse(route.aborted)
+
+    def test_native_route_coalesces_concurrent_origin_validation(self):
+        class FakeRoute:
+            async def continue_(self):
+                return None
+
+            async def abort(self, _reason):
+                raise AssertionError("public requests must not be aborted")
+
+        class FakeRequest:
+            method = "GET"
+            resource_type = "script"
+            redirected_from = None
+
+            def __init__(self, path):
+                self.url = f"https://example.com/{path}"
+
+        class SlowGuard:
+            def __init__(self):
+                self.calls = 0
+
+            def validate_redirect(self, _url):
+                self.calls += 1
+                time.sleep(0.02)
+
+        async def exercise():
+            guard = SlowGuard()
+            telemetry = reference_crawler_module.CaptureTelemetry(
+                max_page_bytes=256 * 1024
+            )
+            await asyncio.gather(
+                *(
+                    reference_crawler_module._guarded_native_context_route(
+                        FakeRoute(),
+                        FakeRequest(f"asset-{index}.js"),
+                        guard=guard,
+                        robots=None,
+                        allowed_document_origin=("https", "example.com", 443),
+                        primary_page={"page": None},
+                        telemetry=telemetry,
+                    )
+                    for index in range(12)
+                )
+            )
+            return guard.calls
+
+        self.assertEqual(asyncio.run(exercise()), 1)
 
     def test_reverse_reset_settles_once_only_after_top_is_restored(self):
         initial_state = {
@@ -894,6 +1226,299 @@ class BrowserLifecycleTests(unittest.TestCase):
         self.assertEqual(fixed_delays, [])
         self.assertTrue(image_saw_visual)
         self.assertEqual(visual_kwargs["minimum_ms"], settings.scroll_delay_ms)
+
+    def test_fast_warm_sweep_settles_once_after_reaching_bottom(self):
+        initial = {
+            "top": 0,
+            "height": 3000,
+            "client": 900,
+            "rect": {"x": 0, "y": 0, "width": 1440, "height": 900},
+            "transformSignature": "",
+            "visibleSignature": "top",
+            "potentialVirtual": False,
+            "endProven": False,
+            "visible": ["top"],
+            "kind": "document",
+        }
+        bottom = {
+            **initial,
+            "top": 2100,
+            "visibleSignature": "bottom",
+            "visible": ["bottom"],
+        }
+        states = [
+            initial,
+            {**initial, "top": 630, "visibleSignature": "middle-a"},
+            bottom,
+            bottom,
+            bottom,
+        ]
+        events = []
+
+        class FakePage:
+            async def evaluate(self, _script):
+                return states.pop(0)
+
+            async def wait_for_timeout(self, delay_ms):
+                events.append(("pause", delay_ms))
+
+        async def record_scroll(_page, _state, step):
+            events.append(("wheel", step))
+            return "wheel"
+
+        async def record_settle(_page, **_kwargs):
+            events.append(("settle", None))
+
+        settings = CaptureSettings(
+            width=1440,
+            height=900,
+            warmup_ms=1000,
+            scroll_delay_ms=700,
+            final_settle_ms=500,
+            max_scroll_steps=6,
+        )
+        with (
+            patch.object(reference_crawler_module, "_scroll_once", record_scroll),
+            patch.object(
+                reference_crawler_module,
+                "_settle_scrolled_viewport",
+                record_settle,
+            ),
+        ):
+            _state, _reasons, steps = asyncio.run(
+                reference_crawler_module._warm_reference_page(
+                    FakePage(),
+                    settings=settings,
+                )
+            )
+
+        self.assertEqual(steps, 4)
+        self.assertEqual(events.count(("settle", None)), 1)
+        self.assertEqual(events[-1], ("settle", None))
+        self.assertEqual(
+            len([event for event in events if event[0] == "pause"]),
+            4,
+        )
+        self.assertTrue(
+            all(
+                100 <= delay <= 250
+                for kind, delay in events
+                if kind == "pause"
+            )
+        )
+
+    def test_single_evidence_pass_captures_desktop_after_top_middle_and_bottom(self):
+        initial = {
+            "top": 0,
+            "height": 3000,
+            "client": 900,
+            "rect": {"x": 0, "y": 0, "width": 1440, "height": 900},
+            "transformSignature": "",
+            "visibleSignature": "top",
+            "potentialVirtual": False,
+            "endProven": False,
+            "visible": ["top"],
+            "kind": "document",
+        }
+        after_top = {
+            **initial,
+            "top": 900,
+            "visibleSignature": "after-top",
+            "visible": ["after-top"],
+        }
+        middle = {
+            **initial,
+            "top": 1500,
+            "visibleSignature": "middle",
+            "visible": ["middle"],
+        }
+        bottom = {
+            **initial,
+            "top": 2100,
+            "visibleSignature": "bottom",
+            "visible": ["bottom"],
+        }
+        states = [initial, after_top, middle, bottom, bottom, bottom]
+        settle_positions = []
+        delays = []
+
+        class FakePage:
+            url = "https://example.com/"
+
+            async def wait_for_load_state(self, *_args, **_kwargs):
+                return None
+
+            async def wait_for_timeout(self, delay_ms):
+                delays.append(delay_ms)
+
+            async def evaluate(self, script, *_args):
+                if script == reference_crawler_module._SCROLL_STATE_SCRIPT:
+                    return states.pop(0)
+                if script == reference_crawler_module._SAMPLE_SCRIPT:
+                    return {
+                        "semantic": {
+                            "title": "Example",
+                            "lang": "en",
+                            "headings": [],
+                            "body": [],
+                            "navigation": [],
+                            "controls": [],
+                            "observed_viewport_texts": [],
+                            "initial_hidden_reveal_count": 0,
+                            "reveal_observed": False,
+                        },
+                        "style": {
+                            "body": {},
+                            "fonts": [],
+                            "dominantColors": [],
+                            "cssVariables": {},
+                            "elements": [],
+                            "imageAspectRatios": [],
+                            "fixedSticky": [],
+                            "motionInventory": [],
+                        },
+                    }
+                return 0
+
+        async def no_load(_page, **_kwargs):
+            return ()
+
+        async def no_assets(_page, **_kwargs):
+            return None
+
+        async def forbidden_legacy_pass(*_args, **_kwargs):
+            raise AssertionError("single-pass capture must not warm-scroll or reset")
+
+        async def fake_scroll(_page, _state, _step):
+            return "wheel"
+
+        async def record_settle(page, **_kwargs):
+            settle_positions.append(states[0]["visibleSignature"] if states else "bottom")
+
+        async def screenshot(_page, *, page_id, viewport, position, width, height, **_kwargs):
+            return ScreenshotEvidence(
+                screenshot_id=f"{page_id}-{viewport}-{position}",
+                page_id=page_id,
+                viewport=viewport,
+                position=position,
+                mime_type="image/jpeg",
+                width=width,
+                height=height,
+                sha256=hashlib.sha256(b"x").hexdigest(),
+                size_bytes=1,
+                data=b"x",
+            )
+
+        telemetry = reference_crawler_module.CaptureTelemetry(
+            max_page_bytes=256 * 1024
+        )
+        settings = CaptureSettings(
+            width=1440,
+            height=900,
+            warmup_ms=1000,
+            scroll_delay_ms=700,
+            final_settle_ms=500,
+            max_scroll_steps=6,
+            max_page_bytes=256 * 1024,
+        )
+        with (
+            patch.object(reference_crawler_module, "_wait_for_reference_load", no_load),
+            patch.object(
+                reference_crawler_module,
+                "_settle_viewport_assets_nonfatal",
+                no_assets,
+            ),
+            patch.object(
+                reference_crawler_module,
+                "_warm_reference_page",
+                forbidden_legacy_pass,
+            ),
+            patch.object(
+                reference_crawler_module,
+                "_restore_reference_start",
+                forbidden_legacy_pass,
+            ),
+            patch.object(reference_crawler_module, "_scroll_once", fake_scroll),
+            patch.object(
+                reference_crawler_module,
+                "_settle_scrolled_viewport",
+                record_settle,
+            ),
+            patch.object(reference_crawler_module, "_take_screenshot", screenshot),
+        ):
+            evidence = asyncio.run(
+                reference_crawler_module._capture_loaded_page(
+                    FakePage(),
+                    requested_url="https://example.com/",
+                    page_id="home",
+                    category="home",
+                    viewport="desktop",
+                    settings=settings,
+                    guard=None,
+                    telemetry=telemetry,
+                )
+            )
+
+        self.assertEqual(evidence.coverage_status, "complete")
+        self.assertEqual(
+            [shot.position for shot in evidence.screenshots],
+            ["top", "after_top", "middle", "bottom"],
+        )
+        self.assertEqual(settle_positions, ["middle", "bottom", "bottom"])
+        short_delays = [delay for delay in delays if 100 <= delay <= 250]
+        self.assertEqual(len(short_delays), 5)
+        self.assertNotIn(settings.warmup_ms, delays)
+        self.assertNotIn(settings.final_settle_ms, delays)
+        self.assertNotIn("warm_pass", evidence.timings_ms)
+        self.assertNotIn("reset_pass", evidence.timings_ms)
+        self.assertEqual(evidence.reset_strategy, "single-pass")
+
+    def test_scroll_state_probe_is_discovered_once_and_reused(self):
+        script = reference_crawler_module._SCROLL_STATE_SCRIPT
+
+        self.assertIn("globalThis.__kaigoScrollProbe", script)
+        self.assertIn("cached.scroller.isConnected", script)
+        self.assertIn("transformSignature: potentialVirtual", script)
+
+    def test_native_scroll_uses_one_script_without_mouse_wheel(self):
+        wheel_calls = []
+        evaluate_calls = []
+
+        class FakeMouse:
+            async def move(self, *_args):
+                return None
+
+            async def wheel(self, *_args):
+                wheel_calls.append(_args)
+
+        class FakePage:
+            mouse = FakeMouse()
+
+            async def evaluate(self, script, *args):
+                evaluate_calls.append((script, args))
+                return None
+
+            async def wait_for_timeout(self, _delay_ms):
+                return None
+
+        state = {
+            "top": 0,
+            "height": 3000,
+            "client": 900,
+            "rect": {"x": 0, "y": 0, "width": 1440, "height": 900},
+            "transformSignature": "",
+            "visibleSignature": "top",
+            "potentialVirtual": False,
+            "kind": "document",
+        }
+
+        result = asyncio.run(
+            reference_crawler_module._scroll_once(FakePage(), state, 630)
+        )
+
+        self.assertEqual(result, "script")
+        self.assertEqual(wheel_calls, [])
+        self.assertEqual(len(evaluate_calls), 1)
 
     def test_visual_settle_failure_cancels_and_awaits_asset_sibling(self):
         asset_started = asyncio.Event()
@@ -1033,27 +1658,26 @@ class BrowserLifecycleTests(unittest.TestCase):
 
         self.assertEqual(reasons, ["font_ready_timeout"])
 
-    def test_initial_font_timeout_does_not_mask_concurrent_image_failure(self):
+    def test_initial_image_timeout_is_nonfatal_and_recorded(self):
         reasons = []
 
         class FakePage:
             async def evaluate(self, _script, *_args):
-                return "timeout"
+                return "ready"
 
             async def wait_for_function(self, _script, *, timeout):
                 raise TimeoutError(f"image wait timed out after {timeout}ms")
 
-        with self.assertRaisesRegex(TimeoutError, "image wait timed out"):
-            asyncio.run(
-                reference_crawler_module._settle_viewport_assets_nonfatal(
-                    FakePage(),
-                    timeout_ms=1234,
-                    skipped_reasons=reasons,
-                    image_timeout_reason=None,
-                )
+        asyncio.run(
+            reference_crawler_module._settle_viewport_assets_nonfatal(
+                FakePage(),
+                timeout_ms=1234,
+                skipped_reasons=reasons,
+                image_timeout_reason=None,
             )
+        )
 
-        self.assertEqual(reasons, ["font_ready_timeout"])
+        self.assertEqual(reasons, ["initial_viewport_image_settle_timeout"])
 
     def test_scrolled_font_and_image_timeouts_record_both_reasons(self):
         reasons = []
@@ -1161,7 +1785,24 @@ class BrowserLifecycleTests(unittest.TestCase):
         both_started = asyncio.Event()
         release = asyncio.Event()
 
-        async def capture(_url, *, page_id, category, viewport, **_kwargs):
+        class FakePage:
+            async def close(self):
+                return None
+
+        class FakeCrawleePage:
+            page = FakePage()
+
+        class FakePool:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def new_page(self, *, page_id):
+                return FakeCrawleePage()
+
+        async def capture(_page, _url, *, page_id, category, viewport, **_kwargs):
             started.add(viewport)
             if started == {"desktop", "mobile"}:
                 both_started.set()
@@ -1175,10 +1816,17 @@ class BrowserLifecycleTests(unittest.TestCase):
             )
 
         async def run():
-            with patch.object(
-                reference_crawler_module,
-                "capture_reference_page",
-                capture,
+            with (
+                patch.object(
+                    reference_crawler_module,
+                    "_single_page_browser_pool",
+                    return_value=FakePool(),
+                ),
+                patch.object(
+                    reference_crawler_module,
+                    "_capture_reference_page_on_page",
+                    capture,
+                ),
             ):
                 task = asyncio.create_task(
                     crawler._capture_single_page_viewports(
@@ -1198,6 +1846,180 @@ class BrowserLifecycleTests(unittest.TestCase):
         self.assertEqual(started, {"desktop", "mobile"})
         self.assertEqual(desktop.page_id, "home")
         self.assertEqual(mobile.page_id, "home-mobile")
+
+    def test_single_page_viewports_can_run_sequentially_on_small_workers(self):
+        crawler = VisualReferenceCrawler(
+            guard=PermissiveLocalGuard(),
+            limits=ReferenceCrawlLimits(max_pages=1, max_retries=0),
+        )
+        order = []
+        active = 0
+        peak_active = 0
+
+        class FakePage:
+            async def close(self):
+                return None
+
+        class FakeCrawleePage:
+            page = FakePage()
+
+        class FakePool:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def new_page(self, *, page_id):
+                return FakeCrawleePage()
+
+        async def capture(_page, _url, *, page_id, category, viewport, **_kwargs):
+            nonlocal active, peak_active
+            active += 1
+            peak_active = max(peak_active, active)
+            order.append(viewport)
+            await asyncio.sleep(0)
+            active -= 1
+            return ReferencePageEvidence(
+                page_id=page_id,
+                category=category,
+                requested_url="https://example.com/",
+                final_url="https://example.com/",
+                depth=0,
+            )
+
+        async def run():
+            with (
+                patch.dict(
+                    os.environ,
+                    {"KAIGO_REFERENCE_VIEWPORT_CONCURRENCY": "1"},
+                ),
+                patch.object(
+                    reference_crawler_module,
+                    "_single_page_browser_pool",
+                    return_value=FakePool(),
+                ),
+                patch.object(
+                    reference_crawler_module,
+                    "_capture_reference_page_on_page",
+                    capture,
+                ),
+            ):
+                return await crawler._capture_single_page_viewports(
+                    "https://example.com/",
+                    robots_policy=object(),
+                    byte_budget=CrawlByteBudget(1024),
+                    remaining_timeout=lambda: 5.0,
+                )
+
+        desktop, mobile = asyncio.run(run())
+
+        self.assertEqual(order, ["desktop", "mobile"])
+        self.assertEqual(peak_active, 1)
+        self.assertEqual(desktop.page_id, "home")
+        self.assertEqual(mobile.page_id, "home-mobile")
+
+    def test_single_browser_pool_serves_both_viewports_and_closes_pages(self):
+        crawler = VisualReferenceCrawler(
+            guard=PermissiveLocalGuard(),
+            limits=ReferenceCrawlLimits(max_pages=1, max_retries=0),
+        )
+        opened = []
+        closed = []
+        captures = []
+        pool_events = []
+        started = set()
+        both_started = asyncio.Event()
+        release = asyncio.Event()
+
+        class FakePage:
+            def __init__(self, page_id):
+                self.page_id = page_id
+
+            async def close(self):
+                closed.append(self.page_id)
+
+        class FakeCrawleePage:
+            def __init__(self, page_id):
+                self.page = FakePage(page_id)
+
+        class FakePool:
+            async def __aenter__(self):
+                pool_events.append("enter")
+                return self
+
+            async def __aexit__(self, *_args):
+                pool_events.append("exit")
+
+            async def new_page(self, *, page_id):
+                opened.append(page_id)
+                return FakeCrawleePage(page_id)
+
+        fake_pool = FakePool()
+
+        async def capture_on_page(page, _url, *, page_id, viewport, settings, **_kwargs):
+            captures.append((page.page_id, page_id, viewport, settings.width, settings.height))
+            started.add(viewport)
+            if started == {"desktop", "mobile"}:
+                both_started.set()
+            await release.wait()
+            return ReferencePageEvidence(
+                page_id=page_id,
+                category="home",
+                requested_url="https://example.com/",
+                final_url="https://example.com/",
+                depth=0,
+            )
+
+        async def standalone_capture(*_args, **_kwargs):
+            raise AssertionError("standalone browser path must not be used")
+
+        async def run():
+            with (
+                patch.object(
+                    reference_crawler_module,
+                    "_single_page_browser_pool",
+                    return_value=fake_pool,
+                    create=True,
+                ),
+                patch.object(
+                    reference_crawler_module,
+                    "_capture_reference_page_on_page",
+                    capture_on_page,
+                    create=True,
+                ),
+                patch.object(
+                    reference_crawler_module,
+                    "capture_reference_page",
+                    standalone_capture,
+                ),
+            ):
+                task = asyncio.create_task(
+                    crawler._capture_single_page_viewports(
+                        "https://example.com/",
+                        robots_policy=object(),
+                        byte_budget=CrawlByteBudget(1024),
+                        remaining_timeout=lambda: 5.0,
+                    )
+                )
+                await asyncio.wait_for(both_started.wait(), timeout=1)
+                release.set()
+                return await task
+
+        desktop, mobile = asyncio.run(run())
+
+        self.assertIsInstance(desktop, ReferencePageEvidence)
+        self.assertIsInstance(mobile, ReferencePageEvidence)
+        self.assertEqual(pool_events, ["enter", "exit"])
+        self.assertEqual(set(opened), {"home-desktop", "home-mobile"})
+        self.assertEqual(set(closed), {"home-desktop", "home-mobile"})
+        self.assertEqual(
+            set(captures),
+            {
+                ("home-desktop", "home", "desktop", 1920, 1080),
+                ("home-mobile", "home-mobile", "mobile", 390, 844),
+            },
+        )
 
     def test_chunked_response_is_aborted_near_byte_cap_without_full_buffering(self):
         reason = browser_unavailable_reason()
@@ -1796,6 +2618,7 @@ class BrowserLifecycleTests(unittest.TestCase):
         self.assertEqual(
             set(evidence.timings_ms),
             {
+                "navigation",
                 "load_and_initial_settle",
                 "warm_pass",
                 "reset_pass",

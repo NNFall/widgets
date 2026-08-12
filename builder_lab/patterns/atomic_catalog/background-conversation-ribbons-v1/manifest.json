@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "background-conversation-ribbons",
+  "version": 1,
+  "category": "background_effect",
+  "status": "active",
+  "title": "Ленты разговора",
+  "summary": "Две полупрозрачные ленты связывают реплики внутри истории, не выходя за пределы chat surface.",
+  "ai_description": "Под пузырями проходят две широкие полупрозрачные ленты, визуально связывающие вопрос и ответ. Их движение медленное и локальное, а края полностью скрыты внутренней маской истории. В Pattern Lab композиция показывает исходное состояние, основную фазу и устойчивое завершение, поэтому визуальный смысл читается без скриптов и пояснений разработчика. Модель может адаптировать оттенки, масштаб и темп под бренд, сохраняя иерархию, доступный контраст и заявленную идею: две полупрозрачные ленты связывают реплики внутри истории, не выходя за пределы chat surface.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "creative",
+  "incompatible_with": [],
+  "implementation_sha256": "fa8146553d854d97ed2b0d48fae9a55abd12b4fc303c989e5c6c4eeec261bc7b",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "ready_for_review",
+    "pattern_role": "support"
+  }
+}

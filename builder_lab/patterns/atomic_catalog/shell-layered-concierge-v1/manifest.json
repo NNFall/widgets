@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "shell-layered-concierge",
+  "version": 1,
+  "category": "shell_layout",
+  "status": "active",
+  "title": "Многослойная оболочка чата-консьержа",
+  "summary": "Открытый виджет читается как полноценный чат с ясным header, лентой сообщений и composer.",
+  "ai_description": "Структурированный shell открытого виджета построен как компактный сервисный чат: в верхней части расположен узнаваемый сотрудник и статус, в центре — спокойная лента с явным разделением сообщений AI и пользователя, снизу — отдельная зона ввода с главным действием. Мягко смещённый декоративный слой за панелью добавляет глубину без перегрузки. Модель может менять радиусы, плотность, высоту блоков и декоративный фон, сохраняя понятную чат-иерархию и удобный composer.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "creative",
+  "incompatible_with": [],
+  "implementation_sha256": "14a41c04df577b246f794a89007e1bece5ab8474ab31b7e7e83188b46eac2bcb",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "rejected",
+    "pattern_role": "structural"
+  }
+}

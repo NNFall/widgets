@@ -831,6 +831,287 @@ class PatternOutcome(Base):
     )
 
 
+class PatternCandidatePlanRecord(Base):
+    """Durable schema-v2 shortlist captured for one generation run."""
+
+    __tablename__ = "pattern_candidate_plans"
+    __table_args__ = (
+        UniqueConstraint("run_id", name="uq_pattern_candidate_plan_run"),
+        CheckConstraint(
+            "schema_version = 2",
+            name="ck_pattern_candidate_plan_schema_version",
+        ),
+        CheckConstraint(
+            "length(registry_digest) = 64",
+            name="ck_pattern_candidate_plan_registry_digest_sha256",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    run_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "generation_runs.id",
+            name="fk_pattern_candidate_plans_run_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+    direction_artifact_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "generation_artifacts.id",
+            name="fk_pattern_candidate_plans_direction_artifact_id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+        index=True,
+    )
+    selector_model_call_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "model_calls.id",
+            name="fk_pattern_candidate_plans_selector_model_call_id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+        index=True,
+    )
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    direction_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    registry_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class PatternCandidateGroupRecord(Base):
+    """One category in a persisted shortlist and its stage routing snapshot."""
+
+    __tablename__ = "pattern_candidate_groups"
+    __table_args__ = (
+        UniqueConstraint(
+            "plan_id",
+            "category",
+            name="uq_pattern_candidate_group_plan_category",
+        ),
+        UniqueConstraint(
+            "plan_id",
+            "ordinal",
+            name="uq_pattern_candidate_group_plan_ordinal",
+        ),
+        CheckConstraint(
+            "ordinal BETWEEN 1 AND 14",
+            name="ck_pattern_candidate_group_ordinal",
+        ),
+        Index("ix_pattern_candidate_groups_category", "category"),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    plan_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "pattern_candidate_plans.id",
+            name="fk_pattern_candidate_groups_plan_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    stage_mapping: Mapped[list[str]] = mapped_column(
+        "stage_mapping",
+        _json_document(),
+        nullable=False,
+        default=list,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class PatternCandidateItemRecord(Base):
+    """Exact immutable pattern version selected within a candidate group."""
+
+    __tablename__ = "pattern_candidate_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "group_id",
+            "rank",
+            name="uq_pattern_candidate_item_group_rank",
+        ),
+        UniqueConstraint(
+            "group_id",
+            "pattern_version_id",
+            name="uq_pattern_candidate_item_group_pattern_version",
+        ),
+        CheckConstraint(
+            "rank BETWEEN 1 AND 5",
+            name="ck_pattern_candidate_item_rank",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    group_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "pattern_candidate_groups.id",
+            name="fk_pattern_candidate_items_group_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+    pattern_version_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "widget_pattern_versions.id",
+            name="fk_pattern_candidate_items_pattern_version_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+        index=True,
+    )
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class PatternStageExposure(Base):
+    """A shortlist item exposed to one generation stage/model invocation.
+
+    The idempotency key is the tuple ``(run_id, stage, candidate_item_id,
+    idempotency_model_call_id)``.  ``model_call_id`` remains nullable so a
+    deleted model call is represented accurately; the stable identity column
+    keeps idempotency deterministic even after that foreign key is set NULL.
+    """
+
+    __tablename__ = "pattern_stage_exposures"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "stage",
+            "candidate_item_id",
+            "idempotency_model_call_id",
+            name="uq_pattern_stage_exposure_idempotency",
+        ),
+        CheckConstraint(
+            "stage IN ('foundation', 'identity', 'conversation', 'motion_polish')",
+            name="ck_pattern_stage_exposure_stage",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    run_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "generation_runs.id",
+            name="fk_pattern_stage_exposures_run_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+    stage: Mapped[str] = mapped_column(String(64), nullable=False)
+    candidate_item_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "pattern_candidate_items.id",
+            name="fk_pattern_stage_exposures_candidate_item_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+    model_call_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "model_calls.id",
+            name="fk_pattern_stage_exposures_model_call_id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+        index=True,
+    )
+    idempotency_model_call_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class PatternStageUsageClaim(Base):
+    """One mutually-exclusive generator usage claim for an exposure."""
+
+    __tablename__ = "pattern_stage_usage_claims"
+    __table_args__ = (
+        UniqueConstraint(
+            "exposure_id",
+            name="uq_pattern_stage_usage_claim_exposure",
+        ),
+        CheckConstraint(
+            "usage_mode IN ('primary', 'combined', 'inspiration')",
+            name="ck_pattern_stage_usage_mode",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    exposure_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "pattern_stage_exposures.id",
+            name="fk_pattern_stage_usage_claims_exposure_id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        index=True,
+    )
+    usage_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    model_call_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "model_calls.id",
+            name="fk_pattern_stage_usage_claims_model_call_id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class PatternReview(Base):
+    """Append-only human review provenance for an immutable pattern version."""
+
+    __tablename__ = "pattern_reviews"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('approved', 'rejected')",
+            name="ck_pattern_review_status",
+        ),
+        Index(
+            "ix_pattern_reviews_pattern_version_created_at",
+            "pattern_version_id",
+            "created_at",
+        ),
+        Index("ix_pattern_reviews_status", "status"),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    pattern_version_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "widget_pattern_versions.id",
+            name="fk_pattern_reviews_pattern_version_id",
+            ondelete="RESTRICT",
+        ),
+        nullable=False,
+        index=True,
+    )
+    reviewer_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    comment: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class UsageLedger(Base):
     __tablename__ = "usage_ledger"
     __table_args__ = (

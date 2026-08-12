@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import replace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import select
@@ -434,12 +434,16 @@ async def test_router_injects_safe_lineage_metadata_without_mutating_request() -
         "_kaigo_role": "spoofed",
     }
     assert provider.requests[0] is not request
-    assert provider.requests[0].metadata == {
+    provider_metadata = dict(provider.requests[0].metadata)
+    logical_invocation_id = provider_metadata.pop("_kaigo_logical_invocation_id")
+    assert str(UUID(str(logical_invocation_id))) == logical_invocation_id
+    assert provider_metadata == {
         "thinking_level": "high",
         "_kaigo_run_id": str(run_id),
         "_kaigo_role": "direction_candidate",
         "_kaigo_mode": "express",
         "_kaigo_stage": "art_direction",
+        "_kaigo_stage_attempt_id": str(context.stage_attempt_id),
         "_kaigo_operation": "direction_proposal",
         "_kaigo_semantic_attempt": 2,
         "_kaigo_candidate_id": "candidate-b",

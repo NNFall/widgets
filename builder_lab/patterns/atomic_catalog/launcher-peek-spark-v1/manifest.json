@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "launcher-peek-spark",
+  "version": 1,
+  "category": "launcher_attention",
+  "status": "active",
+  "title": "Peek-анимация с бейджем и искрой",
+  "summary": "Launcher выразительно выглядывает из края, показывает новое сообщение и спокойно возвращается.",
+  "ai_description": "Заметная, но короткая анимация привлечения внимания: launcher слегка выглядывает из условного края страницы, поворачивается к пользователю, показывает бейдж нового сообщения и выпускает небольшую декоративную искру. После акцента элемент мягко возвращается в устойчивое положение. Модель может сделать жест веселее или премиальнее, изменить траекторию, амплитуду и декоративный знак, не превращая эффект в постоянное раздражающее движение.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "creative",
+  "incompatible_with": [],
+  "implementation_sha256": "451893b0fc84b60da66f861cee012e699d89524584df4d8dc20248b34329fe9e",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved",
+    "pattern_role": "signature"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "background-aurora-dust",
+  "version": 1,
+  "category": "background_effect",
+  "status": "active",
+  "title": "Тихая аурора с декоративной пылью",
+  "summary": "Полупрозрачные цветовые поля и редкие частицы добавляют глубину, не мешая сообщениям.",
+  "ai_description": "Фоновый эффект создаёт ощущение живой премиальной среды без визуального шума: два мягких цветовых поля очень медленно смещаются за контентом, а несколько маленьких частиц движутся по коротким независимым траекториям. Центр ленты сообщений остаётся спокойным и контрастным. Модель может менять палитру, количество частиц, направление и степень размытия под бренд сайта, сохраняя низкую плотность и хорошую читаемость текста.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "creative",
+  "incompatible_with": [],
+  "implementation_sha256": "b23bb1d24c43d9a4e4e9dec80c9e7aea270125b01c5229be61a4dffbafff4344",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "rejected",
+    "pattern_role": "support"
+  }
+}

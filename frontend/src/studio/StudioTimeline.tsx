@@ -1,6 +1,19 @@
 import { safeActivityForEvent } from './studioPresentation';
 import type { BuilderEvent } from './types';
 
+const STAGE_LABELS: Record<string, string> = {
+  reference_analysis: 'Анализ сайта',
+  persona: 'Выбор сотрудника',
+  art_direction: 'Арт-направление',
+  composition: 'Подбор шаблонов',
+  foundation: 'Основа виджета',
+  identity: 'Фирменный стиль',
+  conversation: 'Диалог',
+  motion_polish: 'Анимации и отделка',
+  validation: 'Техническая проверка',
+  agent_build: 'Агентская сборка',
+};
+
 function eventTime(timestamp: string) {
   const value = new Date(timestamp);
   if (Number.isNaN(value.getTime())) return 'время не указано';
@@ -40,6 +53,7 @@ export function StudioTimeline({ events, running }: { events: BuilderEvent[]; ru
                 <span>
                   шаг {event.sequence} · <time dateTime={event.timestamp}>{eventTime(event.timestamp)}</time>
                 </span>
+                {event.stage && <small>{STAGE_LABELS[event.stage]}</small>}
               </li>
             ))}
           </ol>

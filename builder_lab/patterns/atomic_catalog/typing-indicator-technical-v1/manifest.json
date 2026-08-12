@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "typing-indicator-technical",
+  "version": 1,
+  "category": "typing_indicator",
+  "status": "active",
+  "title": "Typing Indicator technical fixture",
+  "summary": "Neutral technical fixture for the typing_indicator contract.",
+  "ai_description": "A neutral technical reference for typing_indicator. It defines the expected runtime state and keeps the DOM contract small while leaving visual styling open for adaptation to the approved product direction. The fixture is safe for local previews and does not imply a final visual treatment.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "2e98df0841b4bd32f908e354a0d1ed0d46e325a4f3254ba83cfd6a119f6b3824",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved",
+    "pattern_role": "fixture"
+  }
+}

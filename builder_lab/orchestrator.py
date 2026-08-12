@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import time
 from collections.abc import Callable
@@ -52,10 +53,13 @@ DIRECT_STAGES = (
 
 
 def stages_for_mode(mode: str) -> tuple[Stage, ...]:
+    # The in-memory orchestrator is the legacy fallback and has no durable
+    # request-update boundary for reference analysis or persona selection.
+    # The Postgres worker owns both non-artifact stages for normal builds.
     return tuple(
         Stage(stage)
         for stage in get_mode_policy(mode).stage_sequence
-        if stage != "reference_analysis"
+        if stage not in {"reference_analysis", "persona"}
     )
 
 
@@ -256,8 +260,11 @@ class BuilderOrchestrator:
         selected_direction: DirectionProposal | None = None,
         repair_issues: tuple[ValidationIssue, ...] = (),
         composition: Any | None = None,
+        pattern_candidate_pack: Any | None = None,
     ) -> EngineResult:
         """Execute one requested generation stage without advancing a run."""
+        if pattern_candidate_pack is not None and pattern_candidate_pack.stage != stage:
+            raise ValueError("pattern candidate pack stage does not match requested stage")
         if request.engine is EngineName.DIRECT:
             return await cast(DirectBuilderEngine, engine).generate(
                 request=request,
@@ -267,15 +274,19 @@ class BuilderOrchestrator:
                 selected_direction=selected_direction,
                 repair_issues=repair_issues,
                 composition=composition,
+                pattern_candidate_pack=pattern_candidate_pack,
             )
-        return await engine.generate(
-            request=request,
-            stage=stage,
-            revision=revision,
-            previous_artifact=previous_artifact,
-            repair_issues=repair_issues,
-            composition=composition,
-        )
+        kwargs: dict[str, Any] = {
+            "request": request,
+            "stage": stage,
+            "revision": revision,
+            "previous_artifact": previous_artifact,
+            "repair_issues": repair_issues,
+            "composition": composition,
+        }
+        if pattern_candidate_pack is not None:
+            kwargs["pattern_candidate_pack"] = pattern_candidate_pack
+        return await engine.generate(**kwargs)
 
     async def _run(
         self,
@@ -352,10 +363,47 @@ class BuilderOrchestrator:
             event_type="reference.started",
             stage=None,
             status="running",
-            message="Открываем сайт и делаем desktop/mobile снимки",
+            message="Открываем и прокручиваем сайт для снимков",
         )
+        async def report_progress(phase: str, payload: dict[str, Any]) -> None:
+            if phase == "capture_completed":
+                await self.store.append_event(
+                    run_id,
+                    event_type="reference.capture_completed",
+                    stage=None,
+                    status="completed",
+                    message="Сайт загружен, подготовлено 7 снимков",
+                    capture_metrics=payload.get("capture_metrics"),
+                )
+                return
+            if phase == "analysis_started":
+                await self.store.append_event(
+                    run_id,
+                    event_type="reference.analysis_started",
+                    stage=None,
+                    status="running",
+                    message="AI анализирует сайт и продумывает направление виджета",
+                )
+                return
+            raise ValueError(f"unknown reference progress phase: {phase}")
+
         try:
-            analysis = await self._reference_analyzer(request.source_url)
+            analyzer_parameters = inspect.signature(
+                self._reference_analyzer
+            ).parameters.values()
+            supports_progress = any(
+                parameter.name == "progress_callback"
+                or parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in analyzer_parameters
+            )
+            analysis = await self._reference_analyzer(
+                request.source_url,
+                **(
+                    {"progress_callback": report_progress}
+                    if supports_progress
+                    else {}
+                ),
+            )
         except asyncio.CancelledError:
             raise
         except ReferencePipelineError as exc:
@@ -726,6 +774,7 @@ class BuilderOrchestrator:
         previous: WidgetArtifact | None,
         selected_direction: DirectionProposal,
         composition: Any | None = None,
+        pattern_candidate_pack: Any | None = None,
     ) -> WidgetArtifact:
         previous_revision = previous.revision if previous else 0
         candidate = strip_reserved_runtime_attributes(candidate)
@@ -754,6 +803,7 @@ class BuilderOrchestrator:
                 repair_issues=issues,
                 selected_direction=selected_direction,
                 composition=composition,
+                pattern_candidate_pack=pattern_candidate_pack,
             )
             candidate = strip_reserved_runtime_attributes(result.artifact)
             await self.store.append_event(

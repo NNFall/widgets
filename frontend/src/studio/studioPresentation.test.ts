@@ -10,7 +10,10 @@ import {
 describe('Studio presentation', () => {
   it('maps every primary stage in backend order', () => {
     expect(STUDIO_STAGES.map(({ id }) => id)).toEqual([
+      'reference_analysis',
+      'persona',
       'art_direction',
+      'composition',
       'foundation',
       'identity',
       'conversation',
@@ -19,7 +22,10 @@ describe('Studio presentation', () => {
       'agent_build',
     ]);
     expect(STUDIO_STAGES.map(({ label }) => label)).toEqual([
+      'Анализ сайта',
+      'Выбор сотрудника',
       'Образ и характер',
+      'Подбор шаблонов',
       'Основа виджета',
       'Стиль и бренд',
       'Диалог',

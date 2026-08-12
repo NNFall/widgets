@@ -23,6 +23,8 @@ EXPECTED_GENERATION_EVENT_TYPES = {
     "project.version_activation_conflict",
     "project.version_created",
     "reference.completed",
+    "reference.capture_completed",
+    "reference.analysis_started",
     "reference.failed",
     "reference.started",
     "refinement.started",
@@ -184,6 +186,53 @@ def test_public_projection_bounds_and_redacts_issue_and_change_arrays() -> None:
             "token=[REDACTED]",
         ],
         "changes": ["Исправлен token=[REDACTED]"],
+    }
+
+
+def test_reference_capture_metrics_are_numeric_bounded_and_fail_closed() -> None:
+    projected = project_public_generation_event(
+        event_type="reference.completed",
+        public_message="capture completed",
+        payload={
+            "status": "completed",
+            "capture_metrics": {
+                "total_ms": 12_345.67,
+                "private_host": "internal.example",
+                "viewports": {
+                    "desktop": {
+                        "navigation": 450.2,
+                        "warm_pass": 1_234,
+                        "warm_steps": 4,
+                        "private_trace": "secret",
+                        "negative": -1,
+                    },
+                    "mobile": {
+                        "navigation": 510.0,
+                        "evidence_pass": 2_100.5,
+                        "invalid": float("nan"),
+                    },
+                    "tablet": {"navigation": 999},
+                },
+            },
+        },
+    )
+
+    assert projected.payload == {
+        "status": "completed",
+        "capture_metrics": {
+            "total_ms": 12_345.7,
+            "viewports": {
+                "desktop": {
+                    "navigation": 450.2,
+                    "warm_pass": 1_234,
+                    "warm_steps": 4,
+                },
+                "mobile": {
+                    "navigation": 510.0,
+                    "evidence_pass": 2_100.5,
+                },
+            },
+        },
     }
 
 

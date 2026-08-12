@@ -263,21 +263,65 @@ function previewHtml() {
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <style>
       * { box-sizing: border-box; }
-      body { min-height: 100vh; margin: 0; padding: 28px; display: grid; place-items: end; color: #071b2f; background: linear-gradient(145deg, #f8f3ed, #e7efe9); font: 16px/1.45 Arial, sans-serif; }
-      main { width: min(360px, 100%); padding: 22px; border: 1px solid #b8c8bf; border-radius: 22px; background: #fff; box-shadow: 0 22px 55px #1738251a; }
-      span { display: inline-grid; width: 36px; height: 36px; place-items: center; border-radius: 50%; color: #fff; background: #61967f; }
-      h1 { margin: 14px 0 8px; font-size: 22px; }
-      p { margin: 0; color: #415468; }
-      button { min-width: 44px; min-height: 44px; margin-top: 18px; padding: 0 18px; border: 0; border-radius: 12px; color: #fff; background: #a93615; font-weight: 700; }
+      [hidden] { display: none !important; }
+      body { min-height: 100vh; margin: 0; color: #071b2f; background: linear-gradient(145deg, #f8f3ed, #e7efe9); font: 16px/1.45 Arial, sans-serif; }
+      .reference-page { width: min(760px, calc(100% - 48px)); margin: 48px auto; padding: 34px; border: 1px solid #c6d2cb; border-radius: 28px; background: #ffffffa8; }
+      .reference-page span { display: inline-grid; width: 36px; height: 36px; place-items: center; border-radius: 50%; color: #fff; background: #61967f; }
+      .reference-page h1 { margin: 14px 0 8px; font-size: 22px; }
+      .reference-page p { margin: 0; color: #415468; }
+      .widget-root { position: fixed; right: 24px; bottom: 24px; z-index: 10; width: min(360px, calc(100vw - 48px)); display: grid; justify-items: end; transform-origin: bottom right; }
+      .widget-panel { width: 100%; max-height: calc(100dvh - 72px); overflow: hidden; border: 1px solid #b8c8bf; border-radius: 22px; background: #fff; box-shadow: 0 22px 55px #1738252b; transform-origin: bottom right; }
+      .widget-header { min-height: 64px; padding: 10px 10px 10px 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid #dbe3de; }
+      .widget-header strong { font-size: 16px; }
+      .widget-close { flex: 0 0 44px; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; color: #29443a; background: #edf3ef; cursor: pointer; font-size: 22px; }
+      .widget-body { min-height: 250px; padding: 22px 18px; display: grid; align-content: start; gap: 12px; color: #415468; }
+      .widget-message { width: fit-content; max-width: 88%; margin: 0; padding: 11px 13px; border-radius: 16px 16px 16px 4px; background: #edf3ef; }
+      .widget-composer { padding: 12px; display: grid; grid-template-columns: minmax(0, 1fr) 44px; gap: 8px; border-top: 1px solid #dbe3de; }
+      .widget-composer input { min-width: 0; height: 44px; padding: 0 13px; border: 1px solid #bdcbc3; border-radius: 12px; font: inherit; }
+      .widget-send { width: 44px; height: 44px; padding: 0; border: 0; border-radius: 12px; color: #fff; background: #61967f; cursor: pointer; font-size: 18px; }
+      .widget-launcher { width: 64px; height: 64px; padding: 0; border: 0; border-radius: 50%; color: #fff; background: #a93615; box-shadow: 0 18px 42px #78240f3d; cursor: pointer; font-size: 22px; transform-origin: bottom right; }
     </style>
   </head>
   <body>
-    <main>
+    <main class="reference-page">
       <span aria-hidden="true">K</span>
-      <h1>AI-консультант</h1>
-      <p>Готов помочь разобраться в услугах и выбрать следующий шаг.</p>
-      <button type="button">Начать диалог</button>
+      <h1>Предпросмотр сайта</h1>
+      <p>Виджет закреплён в правом нижнем углу и использует общий anchor в закрытом и открытом состоянии.</p>
     </main>
+    <section class="widget-root" data-state="closed">
+      <aside class="widget-panel" role="dialog" aria-label="Помощник Kaigo" hidden>
+        <header class="widget-header">
+          <strong>Помощник Kaigo</strong>
+          <button class="widget-close" type="button" aria-label="Закрыть чат">×</button>
+        </header>
+        <div class="widget-body">
+          <p class="widget-message">Здравствуйте! Помогу разобраться в услугах и выбрать следующий шаг.</p>
+        </div>
+        <form class="widget-composer">
+          <input aria-label="Сообщение" placeholder="Напишите вопрос" />
+          <button class="widget-send" type="submit" aria-label="Отправить сообщение">→</button>
+        </form>
+      </aside>
+      <button class="widget-launcher" type="button" aria-label="Открыть чат" aria-expanded="false">K</button>
+    </section>
+    <script>
+      const root = document.querySelector('.widget-root');
+      const panel = document.querySelector('.widget-panel');
+      const launcher = document.querySelector('.widget-launcher');
+      const close = document.querySelector('.widget-close');
+      const composer = document.querySelector('.widget-composer');
+      function setOpen(open) {
+        root.dataset.state = open ? 'open' : 'closed';
+        panel.hidden = !open;
+        launcher.hidden = open;
+        launcher.setAttribute('aria-expanded', String(open));
+        if (open) close.focus();
+        else launcher.focus();
+      }
+      launcher.addEventListener('click', () => setOpen(true));
+      close.addEventListener('click', () => setOpen(false));
+      composer.addEventListener('submit', (event) => event.preventDefault());
+    </script>
   </body>
 </html>`;
 }

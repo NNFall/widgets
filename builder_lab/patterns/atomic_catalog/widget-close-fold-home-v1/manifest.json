@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "widget-close-fold-home",
+  "version": 1,
+  "category": "widget_close",
+  "status": "active",
+  "title": "Складывание панели обратно в launcher",
+  "summary": "Содержимое гаснет слоями, а оболочка компактно складывается в нижнюю кнопку.",
+  "ai_description": "Закрытие виджета воспринимается как обратимый физический переход: внутренние сообщения и composer быстро затихают, верхняя часть панели слегка наклоняется, затем вся оболочка складывается по диагонали и возвращается в форму launcher. Пользователь ясно понимает, куда исчез чат и как открыть его снова. Модель может менять направление, глубину перспективы, скорость и остаточное свечение, сохраняя непрерывную связь между открытым и закрытым состояниями.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "creative",
+  "incompatible_with": [],
+  "implementation_sha256": "da67937b52116716e19a0a2379ad1ea2056bde13d6f3ba686aba38922ae94359",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved",
+    "pattern_role": "signature"
+  }
+}

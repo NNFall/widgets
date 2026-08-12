@@ -53,6 +53,12 @@ class VisualVerdict(str, Enum):
     REPAIR = "repair"
 
 
+# A finding at or above this confidence is actionable.  Keep the same
+# threshold in critic/judge validation and in the repair gate so a 0.65-0.74
+# finding cannot be silently reported but then ignored during repair.
+MIN_REPAIR_CONFIDENCE = 0.65
+
+
 def _enum(enum_type: type[Enum], value: Any, field_name: str):
     try:
         return enum_type(value)
@@ -516,13 +522,13 @@ class VisualCritique:
             raise ValueError("visual finding ids must be unique")
         if self.verdict is VisualVerdict.PASS and any(
             finding.severity in {VisualSeverity.BLOCKER, VisualSeverity.MAJOR}
-            and finding.confidence >= 0.75
+            and finding.confidence >= MIN_REPAIR_CONFIDENCE
             for finding in findings
         ):
             raise ValueError("pass verdict cannot contain repair-triggering findings")
         if self.verdict is VisualVerdict.REPAIR and not any(
             finding.severity in {VisualSeverity.BLOCKER, VisualSeverity.MAJOR}
-            and finding.confidence >= 0.75
+            and finding.confidence >= MIN_REPAIR_CONFIDENCE
             for finding in findings
         ):
             raise ValueError("repair verdict requires a confident blocker or major finding")
@@ -532,7 +538,7 @@ class VisualCritique:
     def requires_repair(self) -> bool:
         return any(
             finding.severity in {VisualSeverity.BLOCKER, VisualSeverity.MAJOR}
-            and finding.confidence >= 0.75
+            and finding.confidence >= MIN_REPAIR_CONFIDENCE
             for finding in self.findings
         )
 

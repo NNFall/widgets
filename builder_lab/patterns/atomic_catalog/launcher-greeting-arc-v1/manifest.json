@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "launcher-greeting-arc",
+  "version": 1,
+  "category": "launcher_attention",
+  "status": "active",
+  "title": "Дуга приветствия",
+  "summary": "Тонкая дуга ведёт взгляд от launcher к короткому приветствию и затем спокойно растворяется.",
+  "ai_description": "Над кнопкой рисуется тонкая дуга, по которой появляется компактное приветствие сотрудника. Сначала читается источник, затем текст, а после показа остаётся только обычный launcher. В Pattern Lab композиция показывает исходное состояние, основную фазу и устойчивое завершение, поэтому визуальный смысл читается без скриптов и пояснений разработчика. Модель может адаптировать оттенки, масштаб и темп под бренд, сохраняя иерархию, доступный контраст и заявленную идею: тонкая дуга ведёт взгляд от launcher к короткому приветствию и затем спокойно растворяется.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "e0b5fb82c7a4beb46ac41d8ce8ff8eb8f98d92c74981177b6d6eeb361171388c",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "ready_for_review",
+    "pattern_role": "signature"
+  }
+}

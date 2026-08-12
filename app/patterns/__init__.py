@@ -5,9 +5,25 @@ from .repository import (
     PatternRepository,
     PersistedComposition,
 )
+from .candidate_repository import (
+    PatternCandidateRepository,
+    PersistedPatternCandidateGroup,
+    PersistedPatternCandidateItem,
+    PersistedPatternCandidatePlan,
+    PersistedCandidateGroup,
+    PersistedCandidateItem,
+    PersistedCandidatePlan,
+)
 
 __all__ = [
     "PatternOutcomeMetrics",
     "PatternRepository",
     "PersistedComposition",
+    "PatternCandidateRepository",
+    "PersistedPatternCandidateGroup",
+    "PersistedPatternCandidateItem",
+    "PersistedPatternCandidatePlan",
+    "PersistedCandidateGroup",
+    "PersistedCandidateItem",
+    "PersistedCandidatePlan",
 ]

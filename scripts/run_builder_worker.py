@@ -115,9 +115,15 @@ def make_routed_reference_analyzer(
     model_router: ModelRouter,
     config: BuilderLabConfig,
 ):
-    async def analyze(claim: RunClaim, source_url: str):
+    async def analyze(
+        claim: RunClaim,
+        source_url: str,
+        *,
+        progress_callback=None,
+    ):
         return await reference_pipeline.analyze(
             source_url,
+            progress_callback=progress_callback,
             structured_backend=RoutedStructuredGenerationBackend(
                 router=model_router,
                 role="reference_analyst",
@@ -307,18 +313,24 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
     def gemini_single_target(model: str) -> tuple[ProviderTarget, ...]:
         return (gemini_target(model),) if "gemini" in providers else ()
 
-    def codex_target() -> ProviderTarget:
+    def codex_target(model: str | None = None) -> ProviderTarget:
         return ProviderTarget(
             "codex_bridge",
-            config.codex_bridge_model,
+            model or config.codex_bridge_model,
             None,
             None,
         )
 
     def with_codex(
         targets: tuple[ProviderTarget, ...],
+        *,
+        codex_model: str | None = None,
     ) -> tuple[ProviderTarget, ...]:
-        routed = (codex_target(),) if codex_enabled else targets
+        routed = (
+            (codex_target(codex_model), codex_target(codex_model))
+            if codex_enabled
+            else targets
+        )
         if not routed:
             raise RuntimeError("no model provider is configured for builder stages")
         return routed
@@ -357,6 +369,7 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
         return (*primary, *text_fallbacks())
 
     gpt_roles = {
+        "persona_selector",
         "direction_candidate",
         "direction_judge",
         "composition_planner",
@@ -389,6 +402,8 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
             prompt_version = (
                 "reference-v1"
                 if role == "reference_analyst"
+                else "assistant-persona-v1"
+                if role == "persona_selector"
                 else "builder-v1"
             )
             policies[(role, policy.name)] = ModelPolicy(
@@ -410,7 +425,14 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
             )
             policies[(policy.judge_role, policy.name)] = ModelPolicy(
                 prompt_version="visual-judge-v1",
-                targets=with_codex(judge_targets),
+                targets=with_codex(
+                    judge_targets,
+                    codex_model=getattr(
+                        config,
+                        "codex_bridge_visual_judge_model",
+                        "gpt-5.6-sol",
+                    ),
+                ),
             )
         direction_targets = (
             gpt_targets()
@@ -529,6 +551,11 @@ async def run() -> None:
             factory,
             lease_seconds=lease_seconds,
             forensic_recorder=forensic_recorder,
+            pattern_candidate_plan_v2_enabled=getattr(
+                config,
+                "pattern_candidate_plan_v2_enabled",
+                False,
+            ),
         )
         trial_settlements = TrialSettlementReconciler(factory)
         if configured_handler == BUILTIN_STAGE_HANDLER:
@@ -591,6 +618,11 @@ async def run() -> None:
                         ),
                     ),
                     fail_open_on_inconclusive=True,
+                ),
+                pattern_candidate_plan_v2_enabled=getattr(
+                    config,
+                    "pattern_candidate_plan_v2_enabled",
+                    False,
                 ),
             )
         handler = load_stage_handler(

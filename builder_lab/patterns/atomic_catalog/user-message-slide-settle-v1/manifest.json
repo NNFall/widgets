@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "user-message-slide-settle",
+  "version": 1,
+  "category": "user_message_enter",
+  "status": "active",
+  "title": "Быстрый вход сообщения пользователя",
+  "summary": "Сообщение скользит справа, мягко оседает в ленте и подтверждает отправку небольшим статусом.",
+  "ai_description": "Пользовательское сообщение быстро входит справа по короткой горизонтальной траектории, слегка превышает конечную позицию и мягко оседает в ленте. После стабилизации рядом проявляется ненавязчивый статус доставки. Движение ощущается отзывчивым и заметно отличается от более спокойного появления ответа AI. Модель может менять направление, амплитуду, цвет пузыря и форму статуса, сохраняя мгновенную обратную связь на действие пользователя.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "creative",
+  "incompatible_with": [],
+  "implementation_sha256": "ef9fadf6dc5846c1a9088fd1e1a06b9d0d49e166c38f7bfc92139f787bf2b85c",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "approved",
+    "pattern_role": "signature"
+  }
+}

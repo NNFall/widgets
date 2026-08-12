@@ -1,0 +1,28 @@
+:root { color-scheme: light; font-family: Inter, Arial, sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; overflow: hidden; background: #eff3f0; color: #172a3e; }
+.pattern-stage { min-height: 100vh; display: grid; place-items: center; padding: 26px; background: linear-gradient(145deg, #f8faf8, #e7ede9); }
+.composer-demo { width: min(420px, 92vw); padding: 26px 22px 22px; border: 1px solid rgba(23,42,62,.08); border-radius: 28px; background: rgba(255,255,255,.9); box-shadow: 0 24px 54px rgba(23,42,62,.12); }
+.composer-demo > p { max-width: 78%; margin: 0 0 48px; padding: 13px 15px; border-radius: 18px 18px 18px 6px; background: #eef3f0; font-size: 12px; line-height: 1.45; }
+.composer-hint { display: inline-flex; margin: 0 0 8px 8px; padding: 6px 9px; border-radius: 9px; background: #e7f2ec; color: #3b715d; font-size: 10px; opacity: 0; transform: translateY(7px); }
+.smart-composer { position: relative; display: grid; grid-template-columns: 1fr 42px; align-items: center; gap: 10px; padding: 8px 8px 8px 15px; border: 1px solid #dbe2e2; border-radius: 18px; background: #fff; color: #91999f; font-size: 12px; overflow: hidden; transition: border-color .28s ease, box-shadow .28s ease; }
+.smart-composer button { width: 40px; height: 40px; border: 0; border-radius: 13px; background: #dfe5e4; color: #87918f; font-size: 18px; transition: background .28s ease, color .28s ease, transform .28s ease; }
+.smart-composer i { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: linear-gradient(90deg, #49a37f, #ff704f); transform: scaleX(0); transform-origin: left; }
+.composer-hint, .smart-composer, .smart-composer button, .smart-composer i { animation-duration: 3.6s; animation-iteration-count: infinite; }
+.composer-hint { animation-name: hint-focus; }
+.smart-composer { animation-name: composer-focus; }
+.smart-composer button { animation-name: button-focus; }
+.smart-composer i { animation-name: rail-focus; }
+html[data-pattern-command='run'] .composer-hint, html[data-pattern-command='replay'] .composer-hint { animation: hint-once .38s ease both; }
+html[data-pattern-command='run'] .smart-composer, html[data-pattern-command='replay'] .smart-composer { animation: composer-once .5s ease both; }
+html[data-pattern-command='run'] .smart-composer button, html[data-pattern-command='replay'] .smart-composer button { animation: button-once .5s ease both; }
+html[data-pattern-command='run'] .smart-composer i, html[data-pattern-command='replay'] .smart-composer i { animation: rail-once .55s ease both; }
+@keyframes hint-focus { 0%,12%,88%,100% { opacity: 0; transform: translateY(7px); } 26%,76% { opacity: 1; transform: none; } }
+@keyframes composer-focus { 0%,12%,88%,100% { border-color: #dbe2e2; box-shadow: none; } 26%,76% { border-color: rgba(73,163,127,.55); box-shadow: 0 0 0 4px rgba(73,163,127,.09); } }
+@keyframes button-focus { 0%,12%,88%,100% { background: #dfe5e4; color: #87918f; } 26%,76% { background: #ff6a48; color: white; transform: rotate(-3deg); } }
+@keyframes rail-focus { 0%,12%,88%,100% { transform: scaleX(0); } 32%,76% { transform: scaleX(1); } }
+@keyframes hint-once { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+@keyframes composer-once { from { border-color: #dbe2e2; box-shadow: none; } to { border-color: rgba(73,163,127,.55); box-shadow: 0 0 0 4px rgba(73,163,127,.09); } }
+@keyframes button-once { to { background: #ff6a48; color: white; transform: rotate(-3deg); } }
+@keyframes rail-once { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }

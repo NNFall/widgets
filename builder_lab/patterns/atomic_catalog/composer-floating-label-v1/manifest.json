@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "composer-floating-label",
+  "version": 1,
+  "category": "composer_focus",
+  "status": "active",
+  "title": "Плавающая подпись composer",
+  "summary": "Подпись поля поднимается в рамку и освобождает место для запроса без изменения общей высоты composer.",
+  "ai_description": "При фокусе постоянная подпись «Ваш вопрос» поднимается из поля в небольшой разрыв рамки. Текст и кнопка остаются на месте, поэтому переход не меняет высоту нижней панели. В Pattern Lab композиция показывает исходное состояние, основную фазу и устойчивое завершение, поэтому визуальный смысл читается без скриптов и пояснений разработчика. Модель может адаптировать оттенки, масштаб и темп под бренд, сохраняя иерархию, доступный контраст и заявленную идею: подпись поля поднимается в рамку и освобождает место для запроса без изменения общей высоты composer.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "adaptive",
+  "incompatible_with": [],
+  "implementation_sha256": "47b3e029805ffbcd103ac703f8e1f41f55c929b11f1d3d48d3d706e8b6cce1fa",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "ready_for_review",
+    "pattern_role": "support"
+  }
+}

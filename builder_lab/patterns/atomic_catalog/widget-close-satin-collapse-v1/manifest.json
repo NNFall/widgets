@@ -1,0 +1,19 @@
+{
+  "schema_version": 3,
+  "pattern_id": "widget-close-satin-collapse",
+  "version": 1,
+  "category": "widget_close",
+  "status": "active",
+  "title": "Сатиновое сворачивание",
+  "summary": "Содержимое приглушается слоями, а оболочка мягко сворачивается в устойчивый launcher.",
+  "ai_description": "Сначала исчезают сообщения, затем сатиновый блик проходит по пустеющей поверхности и собирает её к нижнему углу. В конце остаётся полностью читаемый launcher без скачка позиции. В Pattern Lab композиция показывает исходное состояние, основную фазу и устойчивое завершение, поэтому визуальный смысл читается без скриптов и пояснений разработчика. Модель может адаптировать оттенки, масштаб и темп под бренд, сохраняя иерархию, доступный контраст и заявленную идею: содержимое приглушается слоями, а оболочка мягко сворачивается в устойчивый launcher.",
+  "technical_contract": "chat-runtime-atomic-v1",
+  "adaptation_policy": "creative",
+  "incompatible_with": [],
+  "implementation_sha256": "ac044d1fde5d79f528bef4926400287a331043b694cae201f75650b7e4dc6295",
+  "provenance": {
+    "origin": "kaigo-owned",
+    "review_state": "ready_for_review",
+    "pattern_role": "signature"
+  }
+}

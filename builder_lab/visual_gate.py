@@ -12,6 +12,7 @@ from typing import Any, Protocol
 from .engines.base import BuilderEngineError, DirectBuilderEngine
 from .forensics.models import ForensicBlob
 from .models import (
+    AssistantPersona,
     BuilderRequest,
     DirectionProposal,
     Stage,
@@ -22,7 +23,7 @@ from .models import (
 from .store import RunStore
 from .validation import strip_reserved_runtime_attributes, validate_artifact
 from .browser_audit import BrowserAuditError
-from .visual_models import VisualFinding, VisualSeverity
+from .visual_models import MIN_REPAIR_CONFIDENCE, VisualFinding, VisualSeverity
 
 
 MAX_BROWSER_CAPTURE_ATTEMPTS = 6
@@ -33,7 +34,6 @@ MAX_BROWSER_REPAIRS = 4
 MAX_VALIDATION_REPAIRS = 4
 MAX_VISUAL_REPAIRS = 10
 MAX_REPEATED_VISUAL_ISSUE_ROUNDS = 3
-MIN_REPAIR_CONFIDENCE = 0.75
 _TRANSIENT_VISUAL_RETRY_DELAYS_SECONDS = (5, 15)
 LOGGER = logging.getLogger(__name__)
 
@@ -144,7 +144,12 @@ class BrowserAuditor(Protocol):
 
 class VisualCritic(Protocol):
     async def critique(
-        self, *, audit: Any, brief: str, art_direction: str
+        self,
+        *,
+        audit: Any,
+        brief: str,
+        art_direction: str,
+        assistant_persona: AssistantPersona | None = None,
     ) -> Any: ...
 
     async def aclose(self) -> None: ...
@@ -216,13 +221,23 @@ def visual_fingerprint(findings: tuple[VisualFinding, ...]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def artifact_fingerprint(candidate: WidgetArtifact) -> str:
+def artifact_fingerprint(
+    candidate: WidgetArtifact,
+    assistant_persona: AssistantPersona | None = None,
+) -> str:
     fingerprint_payload = candidate.to_dict()
     # A prose-only progress note is not an implementation change. Ignoring it
     # makes a no-op visual repair fail fast instead of consuming more AI rounds.
     fingerprint_payload.pop("change_summary", None)
     payload = json.dumps(
-        fingerprint_payload,
+        {
+            "artifact": fingerprint_payload,
+            "assistant_persona": (
+                assistant_persona.to_dict()
+                if assistant_persona is not None
+                else None
+            ),
+        },
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -565,6 +580,7 @@ class VisualRepairGate:
         previous: WidgetArtifact,
         selected_direction: DirectionProposal,
         composition: Any | None = None,
+        pattern_candidate_pack: Any | None = None,
     ) -> WidgetArtifact:
         if candidate.stage is not Stage.MOTION_POLISH:
             raise ValueError("visual gate accepts only motion_polish artifacts")
@@ -658,13 +674,13 @@ class VisualRepairGate:
                     fingerprint = (
                         browser_repair_fingerprint(repair_issues)
                         + ":"
-                        + artifact_fingerprint(candidate)
+                        + artifact_fingerprint(candidate, request.assistant_persona)
                     )
                     if fingerprint in seen:
                         LOGGER.warning(
                             "visual browser candidate exhausted run_id=%s fingerprint=%s",
                             run_id,
-                            artifact_fingerprint(candidate),
+                            artifact_fingerprint(candidate, request.assistant_persona),
                         )
                         raise self._quality_error(
                             "repeated_browser_gate_fingerprint"
@@ -674,7 +690,7 @@ class VisualRepairGate:
                         LOGGER.warning(
                             "visual browser candidate exhausted run_id=%s fingerprint=%s",
                             run_id,
-                            artifact_fingerprint(candidate),
+                            artifact_fingerprint(candidate, request.assistant_persona),
                         )
                         raise self._quality_error(
                             "browser_gate_repair_exhausted"
@@ -704,6 +720,7 @@ class VisualRepairGate:
                             visual_findings=(),
                             selected_direction=selected_direction,
                             composition=composition,
+                            pattern_candidate_pack=pattern_candidate_pack,
                         )
                     except asyncio.CancelledError:
                         raise
@@ -777,7 +794,7 @@ class VisualRepairGate:
                         fingerprint = (
                             validation_repair_fingerprint(issues)
                             + ":"
-                            + artifact_fingerprint(candidate)
+                            + artifact_fingerprint(candidate, request.assistant_persona)
                         )
                         if fingerprint in seen:
                             raise self._quality_error(
@@ -815,6 +832,7 @@ class VisualRepairGate:
                                 visual_findings=(),
                                 selected_direction=selected_direction,
                                 composition=composition,
+                                pattern_candidate_pack=pattern_candidate_pack,
                             )
                         except asyncio.CancelledError:
                             raise
@@ -941,6 +959,7 @@ class VisualRepairGate:
                         audit=audit,
                         brief=request.brief,
                         art_direction=selected_direction.art_direction,
+                        assistant_persona=request.assistant_persona,
                     )
                 except asyncio.CancelledError:
                     raise
@@ -1212,7 +1231,7 @@ class VisualRepairGate:
                 fingerprint = (
                     semantic_fingerprint
                     + ":"
-                    + artifact_fingerprint(candidate)
+                    + artifact_fingerprint(candidate, request.assistant_persona)
                 )
                 if fingerprint in seen:
                     raise self._quality_error("repeated_visual_fingerprint")
@@ -1267,6 +1286,7 @@ class VisualRepairGate:
                         visual_findings=findings,
                         selected_direction=selected_direction,
                         composition=composition,
+                        pattern_candidate_pack=pattern_candidate_pack,
                     )
                 except asyncio.CancelledError:
                     raise
@@ -1346,7 +1366,7 @@ class VisualRepairGate:
                     fingerprint = (
                         validation_repair_fingerprint(issues)
                         + ":"
-                        + artifact_fingerprint(candidate)
+                        + artifact_fingerprint(candidate, request.assistant_persona)
                     )
                     if fingerprint in seen:
                         raise self._quality_error(
@@ -1384,6 +1404,7 @@ class VisualRepairGate:
                             visual_findings=(),
                             selected_direction=selected_direction,
                             composition=composition,
+                            pattern_candidate_pack=pattern_candidate_pack,
                         )
                     except asyncio.CancelledError:
                         raise

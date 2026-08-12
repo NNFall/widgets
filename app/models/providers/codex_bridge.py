@@ -143,12 +143,23 @@ def conversation_key_for_request(metadata: Mapping[str, Any]) -> str:
     if role == "visual_judge":
         return "visual:judge"
     if role == "repair":
-        return "repair:" + stage
+        return _fresh_repair_key("repair", stage, metadata)
     if role == "code_review":
-        return "repair:verify:" + stage
+        return _fresh_repair_key("repair:verify", stage, metadata)
     if role == "reference_analyst":
         return "reference"
     return "build:" + stage
+
+
+def _fresh_repair_key(
+    prefix: str,
+    stage: str,
+    metadata: Mapping[str, Any],
+) -> str:
+    logical_invocation = _safe_segment(
+        metadata.get("_kaigo_logical_invocation_id") or "unknown"
+    )
+    return f"{prefix}:{stage}:{logical_invocation}"
 
 
 def _run_id(metadata: Mapping[str, Any]) -> str:
