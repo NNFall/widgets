@@ -3,6 +3,11 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    // Production CSP permits fonts from this origin only. Keep even the small
+    // Cyrillic-ext subsets as hashed assets instead of data: URLs in CSS.
+    assetsInlineLimit: 0,
+  },
   server: {
     proxy: {
       '/api': {

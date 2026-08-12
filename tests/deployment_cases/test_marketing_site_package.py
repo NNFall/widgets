@@ -81,6 +81,10 @@ class MarketingSitePackageTests(unittest.TestCase):
     def test_frontend_build_is_a_self_contained_hashed_static_package(self):
         index = (DIST / "index.html").read_text(encoding="utf-8")
         favicon = DIST / "favicon.svg"
+        built_css = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (DIST / "assets").glob("*.css")
+        )
         references = re.findall(
             r"""(?:src|href)=["'](/assets/[^"']+\.(?:js|css))["']""",
             index,
@@ -101,6 +105,11 @@ class MarketingSitePackageTests(unittest.TestCase):
             )
             self.assertTrue((DIST / reference.removeprefix("/")).is_file())
         self.assertNotRegex(index, r"https?://")
+        self.assertNotIn(
+            "data:font/",
+            built_css,
+            "fonts must remain same-origin files allowed by the production CSP",
+        )
 
     def test_docker_port_lookup_retries_until_mapping_is_registered(self):
         results = iter(
