@@ -74,7 +74,7 @@ class MarketingSitePackageTests(unittest.TestCase):
 
         self.assertIn("10–20 минут", index)
         self.assertIn(
-            "<title>Kaigo — AI для вашего бизнеса за 10 минут</title>",
+            "<title>Kaigo — AI-консультант для вашего сайта</title>",
             index,
         )
 
@@ -128,9 +128,11 @@ class MarketingSitePackageTests(unittest.TestCase):
         self.assertEqual(config.count("location = / {"), 1)
         self.assertEqual(config.count("location = /studio {"), 1)
         self.assertEqual(config.count("location = /studio/ {"), 1)
+        self.assertEqual(config.count("location = /tour {"), 1)
+        self.assertEqual(config.count("location = /tour/ {"), 1)
         self.assertNotRegex(config, r"location\s+(?:\^~\s+)?/studio/")
         self.assertIn("root /var/www/kaigo-marketing/current;", config)
-        self.assertGreaterEqual(config.count("try_files /index.html =404;"), 3)
+        self.assertGreaterEqual(config.count("try_files /index.html =404;"), 5)
 
         self.assertIn(
             'location ~* "^/assets/[^/]+-[A-Za-z0-9_-]{8}\\.',
@@ -197,10 +199,10 @@ class MarketingSitePackageTests(unittest.TestCase):
             if line.strip().startswith("add_header Content-Security-Policy")
         ]
 
-        self.assertEqual(len(csp_lines), 5)
+        self.assertEqual(len(csp_lines), 7)
         html_csp = [line for line in csp_lines if "frame-src 'self'" in line]
         asset_csp = [line for line in csp_lines if "default-src 'none'" in line]
-        self.assertEqual(len(html_csp), 3)
+        self.assertEqual(len(html_csp), 5)
         self.assertEqual(len(asset_csp), 2)
         for line in html_csp:
             self.assertIn("default-src 'self'", line)
