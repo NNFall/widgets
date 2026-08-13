@@ -5,7 +5,7 @@
 Источник: локальная production-сборка ветки `codex/product-ui`; после
 публикации versioned preview — `https://kaigo.space/frontend/v8/`.
 
-Run ID: `pending-v8-publication`.
+Run ID: `20260813-forma-v8`.
 
 ## Визуальные источники
 
