@@ -57,12 +57,12 @@ export function CaseStudySection() {
         <Reveal className="case-heading">
           <div className="case-heading__copy">
             <p className="section-kicker section-kicker--pill">Кейс: строительная компания</p>
-            <h2>Один сайт. Два опыта.</h2>
+            <h2>Что меняется для посетителя сайта</h2>
           </div>
           <div className="case-heading__outcome">
-            <span>После Kaigo</span>
-            <strong>Теперь ваш сайт отвечает посетителю через AI</strong>
-            <p>Человек получает помощь в момент выбора, не разыскивая нужную страницу сам.</p>
+            <span>Результат после Kaigo</span>
+            <strong>Не нужно искать ответ по разделам — можно просто спросить</strong>
+            <p>AI-консультант остаётся внутри сайта, отвечает по найденной информации и помогает перейти к подходящему проекту или заявке.</p>
           </div>
         </Reveal>
 
@@ -78,7 +78,7 @@ export function CaseStudySection() {
               aria-hidden={beforeInactive || undefined}
               inert={beforeInactive || undefined}
             >
-              <div className="case-panel__label"><span>До</span><p>Информация есть, но посетитель сам ищет проекты, условия и способ оставить заявку.</p></div>
+              <div className="case-panel__label"><span>Без AI-консультанта</span><p>Посетитель сам открывает проекты, цены и условия, а затем ищет способ связаться.</p></div>
               <div className="case-browser"><BrowserMockup widgetVisible={false} motionComplete={false} motionActive={false} reducedMotion testIds={false} /></div>
             </div>
           </Reveal>
@@ -88,7 +88,7 @@ export function CaseStudySection() {
               aria-hidden={afterInactive || undefined}
               inert={afterInactive || undefined}
             >
-              <div className="case-panel__label"><span>После</span><p>AI-консультант встроен в сайт, отвечает по услугам и помогает сделать следующий шаг.</p></div>
+              <div className="case-panel__label"><span>С AI-консультантом</span><p>Посетитель задаёт вопрос на той же странице и сразу получает понятный следующий шаг.</p></div>
               <div className="case-browser" data-case-widget="enhanced" data-widget-placement="embedded">
                 <motion.div
                   className="case-browser__after-reveal"

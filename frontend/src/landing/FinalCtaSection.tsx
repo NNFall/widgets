@@ -77,8 +77,8 @@ export function FinalCtaSection() {
       >
         <motion.div className="final-cta-copy" variants={finalCopyVariants}>
           <p className="section-kicker">Можно начать прямо сейчас</p>
-          <h2>Сначала получите<br />бесплатную экспресс-версию</h2>
-          <p>Обычно это занимает 10–20 минут; сложные сайты требуют больше времени. Затем проверьте предпросмотр и чат.</p>
+          <h2>Получите бесплатную экспресс-версию и проверьте её сами</h2>
+          <p>Обычно первая версия готова примерно за 10–20 минут. Откройте её в Studio, задайте несколько вопросов и только потом решайте, нужна ли публикация.</p>
         </motion.div>
         <motion.div className="final-cta-visual" variants={finalCopyVariants}>
           <motion.div
@@ -101,7 +101,7 @@ export function FinalCtaSection() {
             ariaLabel="Ссылка на сайт — финальная форма"
             submitAriaLabel="Получить бесплатную версию"
           />
-          <small className="final-composer__note">Ссылка нужна только для анализа. Карту не попросим.</small>
+          <small className="final-composer__note">Нужна только публичная ссылка на сайт. Карту не попросим.</small>
         </motion.div>
         <motion.div className="guarantee-row" variants={guaranteeRowVariants}>
           {guarantees.map(({ label, Icon }) => (
@@ -113,7 +113,7 @@ export function FinalCtaSection() {
         <div className="landing-shell site-footer__inner">
           <div><KaigoLogo tone="coral" /><p>Персональные AI-виджеты<br />для бизнеса.</p></div>
           <nav aria-label="Навигация в подвале">
-            <a href="#product">Продукт</a><a href="#how-it-works">Как это работает</a><a href="#case-study">Кейсы</a><a href="#faq">Помощь</a><a href={campaignStudioHref}>Студия</a>
+            <a href="#product">Продукт</a><a href="#product-tour">Как это работает</a><a href="#case-study">Кейсы</a><a href="#faq">Помощь</a><a href={campaignStudioHref}>Студия</a>
           </nav>
           <div className="site-footer__legal"><span>Политика конфиденциальности</span><span>Условия использования</span></div>
         </div>

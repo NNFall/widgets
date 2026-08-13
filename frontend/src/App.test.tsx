@@ -24,13 +24,14 @@ describe('App', () => {
   it('renders the selected Kaigo hero and full navigation', () => {
     render(<App />);
 
-    expect(screen.getByRole('heading', { name: /Покажите сайт.*получите первую версию.*AI-консультанта/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Через 10 минут.*наш бизнес.*использует AI/i })).toBeInTheDocument();
     expect(
       Array.from(document.querySelectorAll('.hero-title-line'), (line) => line.textContent),
     ).toEqual([
-      'Покажите сайт.',
-      'Получите первую версию',
-      'AI-консультанта',
+      'Через 10 минут',
+      'вы сможете сказать:',
+      'наш бизнес',
+      'использует AI',
     ]);
     expect(screen.getByText(/Kaigo бесплатно создаст первую версию AI-виджета/i)).toBeVisible();
     const navigation = within(screen.getByRole('navigation', { name: 'Основная навигация' }));
@@ -46,7 +47,12 @@ describe('App', () => {
       'href',
       '/studio',
     );
-    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(10);
+    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(9);
+    expect(document.querySelector('#how-it-works')).toBeNull();
+    expect(document.querySelector('.product-tour__autoplay')).toBeNull();
+    expect(screen.getByText('Реальный кейс · FORMA')).toBeVisible();
+    expect(screen.getByText(/Kaigo выдаст одну строку кода/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Tilda/i).length).toBeGreaterThan(0);
   });
 
   it('preserves only allowlisted campaign parameters on every Studio navigation link', () => {
@@ -203,10 +209,10 @@ describe('App', () => {
 
     expect(document.querySelector('main.product-tour-page')).not.toBeNull();
     expect(document.title).toBe('Как работает Kaigo — от ссылки до AI-сотрудника');
-    expect(screen.getByRole('heading', { name: 'Вставьте ссылку на ваш сайт' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Дайте Kaigo ссылку на ваш сайт' })).toBeVisible();
     expect(document.querySelectorAll('[data-tour-step]')).toHaveLength(3);
-    expect(screen.getByRole('link', { name: 'Вернуться на лендинг' })).toHaveAttribute('href', '/');
-    expect(screen.queryByRole('heading', { name: /Покажите сайт.*получите первую версию/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'На главный экран' })).toHaveAttribute('href', '/');
+    expect(screen.queryByRole('heading', { name: /Через 10 минут.*наш бизнес.*использует AI/i })).not.toBeInTheDocument();
   });
 
   it('renders the landing page for paths that only start with /studio', () => {
@@ -214,7 +220,7 @@ describe('App', () => {
 
     render(<App />);
 
-    expect(screen.getByRole('heading', { name: /Покажите сайт.*получите первую версию.*AI-консультанта/i })).toBeInTheDocument();
-    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(10);
+    expect(screen.getByRole('heading', { name: /Через 10 минут.*наш бизнес.*использует AI/i })).toBeInTheDocument();
+    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(9);
   });
 });
