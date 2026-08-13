@@ -5,6 +5,8 @@ import type {
   BillingPayment,
   PendingBillingCheckout,
   BillingSubscription,
+  BillingOffer,
+  FounderClaim,
   BuilderRunInput,
   BuilderRunSnapshot,
   SaasEvent,
@@ -194,6 +196,44 @@ export function getBillingSubscription(signal?: AbortSignal) {
     '/api/billing/subscription',
     { signal },
   );
+}
+
+export function getBillingOffer(projectId: string, signal?: AbortSignal) {
+  return saasRequestJson<BillingOffer>(
+    `/api/billing/offer?project_id=${encodeURIComponent(projectId)}`,
+    { signal },
+  );
+}
+
+export function claimFounderAccess(projectId: string, csrfToken: string) {
+  return saasRequestJson<FounderClaim>('/api/billing/founder/claim', {
+    method: 'POST',
+    headers: { 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify({ project_id: projectId }),
+  });
+}
+
+export function createCustomerContact(
+  projectId: string,
+  message: string,
+  csrfToken: string,
+  options: {
+    kind?: 'support' | 'founder_feedback';
+    rating?: number;
+    testimonialAllowed?: boolean;
+  } = {},
+) {
+  return saasRequestJson<{ request_id: string; accepted: true }>('/api/billing/contact', {
+    method: 'POST',
+    headers: { 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify({
+      project_id: projectId,
+      kind: options.kind ?? 'support',
+      message,
+      ...(options.rating ? { rating: options.rating } : {}),
+      testimonial_allowed: options.testimonialAllowed ?? false,
+    }),
+  });
 }
 
 export function disableBillingAutoRenew(

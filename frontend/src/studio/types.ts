@@ -135,6 +135,48 @@ export interface BillingSubscription {
   auto_renew: boolean;
   next_renewal_at: string | null;
   generation_tokens_remaining?: number | null;
+  access_kind?: 'paid' | 'founder';
+  plan_title?: string;
+  next_charge?: null | {
+    plan_code: string;
+    amount_minor: number;
+    currency: string;
+    period_days: number;
+    at: string;
+  };
+}
+
+export interface BillingPlanOffer {
+  code: string;
+  title: string;
+  amount_minor: number;
+  currency: string;
+  period_days: number;
+  generation_tokens: number;
+  renewal: null | {
+    plan_code: string;
+    amount_minor: number;
+    currency: string;
+    period_days: number;
+  };
+}
+
+export interface BillingOffer {
+  founder: {
+    eligible: boolean;
+    reason: string | null;
+    remaining: number;
+    capacity: number;
+    period_days: number;
+    generation_tokens: number;
+  };
+  plans: BillingPlanOffer[];
+}
+
+export interface FounderClaim {
+  created: boolean;
+  founder: { position: number; ends_at: string };
+  subscription: BillingSubscription;
 }
 
 export interface SaasProject {
