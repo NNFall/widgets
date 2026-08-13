@@ -62,5 +62,13 @@
     "title": "Реальный кейс FORMA",
     "description": "Старое обещание вернулось на первый экран, а три этапа теперь показывают реальный сайт FORMA, проверку в Studio и установку одной строкой кода.",
     "views": ["landing", "tour"]
+  },
+  {
+    "id": "v9",
+    "commit": "f4ff70b6550447032cee01d323a87e7822c2bc8c",
+    "date": "13 августа",
+    "title": "Выбран Living Fold",
+    "description": "Графитово-оранжевый Living Fold становится единым знаком Kaigo в лендинге, Studio, product tour, компактных состояниях и favicon.",
+    "views": ["landing", "studio", "tour"]
   }
 ]
