@@ -2,8 +2,8 @@
 
 Дата: 2026-08-13
 
-Статус: выбран, внедрён, проверен и подготовлен как изолированная версия `v9`
-в ветке `codex/product-ui`.
+Статус: выбран, внедрён, проверен и активно опубликован как изолированная
+версия `v9` в ветке `codex/product-ui`.
 
 ## Что выбрали
 
@@ -31,8 +31,11 @@
 - Вместе прошли 25 frontend-тестов, TypeScript, ESLint и production-сборка.
 - 17 browser-сценариев прошли на compact desktop, 1920 × 1080, mobile,
   reduced motion и axe accessibility; сценарии Studio также остались зелёными.
-- Исходный выбранный PNG не перезаписывался. Основной production-сайт в рамках
-  этой работы не менялся.
+- Активен release `20260813-living-fold-v9`. Публичные smoke-проверки вернули
+  HTTP 200 для `/frontend/v9/`, `/frontend/v9/studio/`,
+  `/frontend/v9/tour/` и `/frontend/v9/logo-concepts.html` на `kaigo.space`.
+- Исходный выбранный PNG не перезаписывался. Production deployment не
+  выполнялся: основной production-сайт в рамках этой работы не менялся.
 
 Кадры и исходники:
 [`2026-08-13-living-fold-brand`](../assets/2026-08-13-living-fold-brand/README.md).

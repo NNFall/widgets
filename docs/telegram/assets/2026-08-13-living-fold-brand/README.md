@@ -2,10 +2,19 @@
 
 Дата проверки: 2026-08-13.
 
-Источник: локальная production-сборка ветки `codex/product-ui`; после
-публикации versioned preview — `https://kaigo.space/frontend/v9/`.
+Источник: локальная production-сборка ветки `codex/product-ui`; активный
+versioned preview — `https://kaigo.space/frontend/v9/`.
 
-Run ID: `pending-v9-publication`.
+Run ID: `20260813-living-fold-v9`.
+
+Публичные smoke-проверки: HTTP 200 для
+`https://kaigo.space/frontend/v9/`,
+`https://kaigo.space/frontend/v9/studio/`,
+`https://kaigo.space/frontend/v9/tour/` и
+`https://kaigo.space/frontend/v9/logo-concepts.html`.
+
+Production deployment не выполнялся; опубликован только изолированный
+versioned preview.
 
 ## Файлы
 
