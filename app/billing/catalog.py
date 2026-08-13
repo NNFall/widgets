@@ -112,6 +112,15 @@ PLAN_CATALOG = {
         amount=Money(50_000, "RUB"),
         period_days=15,
         generation_tokens=500_000,
+        renewal_plan_code="starter_intro_balance_15d",
+    ),
+    "starter_intro_balance_15d": BillingPlan(
+        code="starter_intro_balance_15d",
+        title="Kaigo Starter, вторая половина первого месяца",
+        amount=Money(150_000, "RUB"),
+        period_days=15,
+        generation_tokens=500_000,
+        public=False,
         renewal_plan_code="starter_monthly",
     ),
     "starter_monthly": BillingPlan(

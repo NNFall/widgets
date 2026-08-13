@@ -158,6 +158,12 @@ export interface BillingPlanOffer {
     amount_minor: number;
     currency: string;
     period_days: number;
+    following: null | {
+      plan_code: string;
+      amount_minor: number;
+      currency: string;
+      period_days: number;
+    };
   };
 }
 

@@ -1,9 +1,12 @@
 import { afterEach, expect, it, vi } from 'vitest';
 
 import {
+  claimFounderAccess,
   createBillingCheckout,
+  createCustomerContact,
   disableBillingAutoRenew,
   getBillingPayment,
+  getBillingOffer,
   getPendingBillingPayment,
   getBillingSubscription,
   getProjects,
@@ -16,6 +19,55 @@ import {
   resumeBillingPayment,
   sendPreviewChat,
 } from './api';
+
+it('loads the publication offer and sends founder and support commands with CSRF', async () => {
+  const offer = {
+    founder: { eligible: true, remaining: 20 },
+    plans: [{ code: 'starter_intro_15d', amount_minor: 50_000 }],
+  };
+  const claim = { created: true, founder: { position: 1 } };
+  const contact = { request_id: 'contact-1', accepted: true };
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify(offer), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    .mockResolvedValueOnce(new Response(JSON.stringify(claim), {
+      status: 201,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    .mockResolvedValueOnce(new Response(JSON.stringify(contact), {
+      status: 201,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+  vi.stubGlobal('fetch', fetchMock);
+
+  await expect(getBillingOffer('project/123')).resolves.toEqual(offer);
+  await expect(claimFounderAccess('project/123', 'csrf-founder')).resolves.toEqual(claim);
+  await expect(createCustomerContact(
+    'project/123',
+    'Полезный пилот, нужна помощь с установкой.',
+    'csrf-founder',
+    { kind: 'founder_feedback', rating: 5, testimonialAllowed: true },
+  )).resolves.toEqual(contact);
+
+  expect(fetchMock.mock.calls[0][0]).toBe('/api/billing/offer?project_id=project%2F123');
+  const [claimUrl, claimInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+  expect(claimUrl).toBe('/api/billing/founder/claim');
+  expect(new Headers(claimInit.headers).get('X-CSRF-Token')).toBe('csrf-founder');
+  expect(JSON.parse(String(claimInit.body))).toEqual({ project_id: 'project/123' });
+
+  const [contactUrl, contactInit] = fetchMock.mock.calls[2] as [string, RequestInit];
+  expect(contactUrl).toBe('/api/billing/contact');
+  expect(new Headers(contactInit.headers).get('X-CSRF-Token')).toBe('csrf-founder');
+  expect(JSON.parse(String(contactInit.body))).toEqual({
+    project_id: 'project/123',
+    kind: 'founder_feedback',
+    message: 'Полезный пилот, нужна помощь с установкой.',
+    rating: 5,
+    testimonial_allowed: true,
+  });
+});
 
 it('lists the authenticated owner projects', async () => {
   const payload = {

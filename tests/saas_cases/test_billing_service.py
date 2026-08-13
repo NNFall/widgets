@@ -24,6 +24,7 @@ from app.billing.payments import (
     BillingError,
     BillingService,
     CheckoutIdempotencyConflict,
+    UnknownPlan,
 )
 from app.billing.reconciliation import PaymentReconciler
 from app.billing.service import UsageBalanceService
@@ -157,6 +158,22 @@ async def test_checkout_is_server_priced_and_idempotent_per_user(billing_db) -> 
         assert attempt.plan_code == "starter_monthly"
         assert attempt.plan_snapshot["amount_minor"] == 200_000
         assert len(attempt.plan_fingerprint) == 64
+
+
+@pytest.mark.asyncio
+async def test_hidden_renewal_plan_cannot_be_started_as_public_checkout(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+    service = BillingService(factory, FakeProvider())
+
+    with pytest.raises(UnknownPlan):
+        await service.create_checkout(
+            10,
+            "starter_intro_balance_15d",
+            "hidden-renewal-plan",
+            auto_renew=True,
+        )
 
 
 @pytest.mark.asyncio
@@ -488,7 +505,7 @@ async def test_checkout_same_key_different_plan_conflicts(billing_db) -> None:
     await service.create_checkout(10, "starter_monthly", "same-key")
 
     with pytest.raises(CheckoutIdempotencyConflict):
-        await service.create_checkout(10, "pro_monthly", "same-key")
+        await service.create_checkout(10, "starter_quarterly", "same-key")
 
 
 @pytest.mark.asyncio

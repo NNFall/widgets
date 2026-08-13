@@ -24,7 +24,18 @@ const offer: BillingOffer = {
       currency: 'RUB',
       period_days: 15,
       generation_tokens: 500_000,
-      renewal: { plan_code: 'starter_monthly', amount_minor: 200_000, currency: 'RUB', period_days: 30 },
+      renewal: {
+        plan_code: 'starter_intro_balance_15d',
+        amount_minor: 150_000,
+        currency: 'RUB',
+        period_days: 15,
+        following: {
+          plan_code: 'starter_monthly',
+          amount_minor: 200_000,
+          currency: 'RUB',
+          period_days: 30,
+        },
+      },
     },
     {
       code: 'starter_monthly', title: 'Kaigo Starter, 1 месяц', amount_minor: 200_000,
@@ -58,6 +69,8 @@ describe('PublicationOfferDialog', () => {
     expect(screen.getByText('500 ₽')).toBeVisible();
     expect(screen.getByText('2 000 ₽')).toBeVisible();
     expect(screen.getByText('5 000 ₽')).toBeVisible();
+    expect(screen.getByText(/на 15-й день — 1 500 ₽/i)).toBeVisible();
+    expect(screen.getByText(/затем 2 000 ₽ каждые 30 дней/i)).toBeVisible();
   });
 
   it('requires explicit monthly-renewal consent before starting the 500-ruble offer', () => {
@@ -76,8 +89,8 @@ describe('PublicationOfferDialog', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /выбрать 15 дней/i }));
     expect(onCheckout).not.toHaveBeenCalled();
-    expect(screen.getByRole('alert')).toHaveTextContent(/подтвердите переход/i);
-    fireEvent.click(screen.getByRole('checkbox', { name: /после 15 дней/i }));
+    expect(screen.getByRole('alert')).toHaveTextContent(/подтвердите списание/i);
+    fireEvent.click(screen.getByRole('checkbox', { name: /на 15-й день/i }));
     fireEvent.click(screen.getByRole('button', { name: /выбрать 15 дней/i }));
     expect(onCheckout).toHaveBeenCalledWith('starter_intro_15d', true);
   });

@@ -193,10 +193,10 @@ async def test_due_renewal_extends_exact_period_and_credits_once(recurring_db) -
 
 
 @pytest.mark.asyncio
-async def test_intro_period_renews_once_into_monthly_starter(recurring_db) -> None:
+async def test_intro_period_charges_only_first_month_balance(recurring_db) -> None:
     factory, clock, subscription_id = recurring_db
     intro = PLAN_CATALOG["starter_intro_15d"]
-    monthly = PLAN_CATALOG["starter_monthly"]
+    balance = PLAN_CATALOG["starter_intro_balance_15d"]
     async with factory() as database, database.begin():
         subscription = await database.get(Subscription, subscription_id)
         subscription.plan_code = intro.code
@@ -211,17 +211,43 @@ async def test_intro_period_renews_once_into_monthly_starter(recurring_db) -> No
 
     assert len(provider.recurring_calls) == 1
     command = provider.recurring_calls[0]
-    assert command.amount.amount_minor == 200_000
-    assert command.metadata["plan_code"] == monthly.code
+    assert command.amount.amount_minor == 150_000
+    assert command.metadata["plan_code"] == balance.code
     async with factory() as database:
         subscription = await database.get(Subscription, subscription_id)
         attempt = await database.scalar(select(PaymentAttempt))
         credit = await database.scalar(select(UsageLedger))
-    assert attempt.plan_code == monthly.code
-    assert attempt.plan_snapshot == monthly.snapshot()
+    assert attempt.plan_code == balance.code
+    assert attempt.plan_snapshot == balance.snapshot()
+    assert subscription.plan_code == balance.code
+    assert aware(subscription.current_period_end) == clock.now + timedelta(days=15)
+    assert credit.amount == 500_000
+
+
+@pytest.mark.asyncio
+async def test_intro_balance_then_renews_into_regular_monthly_starter(recurring_db) -> None:
+    factory, clock, subscription_id = recurring_db
+    balance = PLAN_CATALOG["starter_intro_balance_15d"]
+    monthly = PLAN_CATALOG["starter_monthly"]
+    async with factory() as database, database.begin():
+        subscription = await database.get(Subscription, subscription_id)
+        subscription.plan_code = balance.code
+        subscription.plan_snapshot = balance.snapshot()
+        subscription.plan_fingerprint = balance.fingerprint()
+        subscription.current_period_start = clock.now - timedelta(days=15)
+        subscription.current_period_end = clock.now
+        subscription.next_renewal_at = clock.now
+
+    provider = FakeRecurringProvider()
+    await scheduler(factory, clock, provider).run_once()
+
+    assert len(provider.recurring_calls) == 1
+    assert provider.recurring_calls[0].amount.amount_minor == 200_000
+    assert provider.recurring_calls[0].metadata["plan_code"] == monthly.code
+    async with factory() as database:
+        subscription = await database.get(Subscription, subscription_id)
     assert subscription.plan_code == monthly.code
     assert aware(subscription.current_period_end) == clock.now + timedelta(days=30)
-    assert credit.amount == 1_000_000
 
 
 @pytest.mark.asyncio

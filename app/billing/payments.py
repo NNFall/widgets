@@ -206,9 +206,12 @@ class BillingService:
     @staticmethod
     def _plan(code: str) -> BillingPlan:
         try:
-            return PLAN_CATALOG[code]
+            plan = PLAN_CATALOG[code]
         except KeyError as error:
             raise UnknownPlan("unknown billing plan") from error
+        if not plan.public:
+            raise UnknownPlan("unknown billing plan")
+        return plan
 
     @staticmethod
     def _metadata(attempt: PaymentAttempt) -> dict[str, str]:

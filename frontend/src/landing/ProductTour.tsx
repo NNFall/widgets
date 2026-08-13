@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight } from '@phosphor-icons/react';
+import { ArrowLeft, ArrowRight, Pause, Play } from '@phosphor-icons/react';
 import { useEffect, useState } from 'react';
 
 import { studioHref } from '../shared/campaign';
@@ -61,9 +61,11 @@ export function ProductTour({ standalone = false }: ProductTourProps) {
   const [activeStep, setActiveStep] = useState(0);
   const [focusWithin, setFocusWithin] = useState(false);
   const [pointerInside, setPointerInside] = useState(false);
+  const [manualPause, setManualPause] = useState(false);
   const campaignStudioHref = studioHref();
   const { active: motionActive, reducedMotion, ref } = useMotionActivity<HTMLElement>();
-  const autoPlay = motionActive && !reducedMotion && !focusWithin && !pointerInside;
+  const motionAllowed = motionActive && !reducedMotion;
+  const autoPlay = motionAllowed && !manualPause && !focusWithin && !pointerInside;
 
   useEffect(() => {
     if (!autoPlay) return undefined;
@@ -101,6 +103,20 @@ export function ProductTour({ standalone = false }: ProductTourProps) {
           <span>Реальный кейс · FORMA</span>
           <strong>От одной ссылки до AI-консультанта на сайте</strong>
         </div>
+        <button
+          aria-label={motionAllowed
+            ? manualPause ? 'Продолжить автолистание' : 'Остановить автолистание'
+            : 'Автолистание отключено настройками системы'}
+          className="product-tour__autoplay"
+          disabled={!motionAllowed}
+          onClick={() => setManualPause((paused) => !paused)}
+          type="button"
+        >
+          {autoPlay ? <Pause aria-hidden size={17} /> : <Play aria-hidden size={17} />}
+          <span>{motionAllowed
+            ? manualPause ? 'Продолжить' : 'Остановить'
+            : 'Автолистание отключено'}</span>
+        </button>
       </div>
 
       <div className="product-tour__viewport" aria-live={autoPlay ? 'off' : 'polite'}>

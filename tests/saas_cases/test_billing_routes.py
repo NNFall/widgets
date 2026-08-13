@@ -124,10 +124,16 @@ async def test_publication_offer_and_founder_claim_are_server_priced(tmp_path) -
             "starter_quarterly",
         ]
         assert payload["plans"][0]["renewal"] == {
-            "plan_code": "starter_monthly",
-            "amount_minor": 200_000,
+            "plan_code": "starter_intro_balance_15d",
+            "amount_minor": 150_000,
             "currency": "RUB",
-            "period_days": 30,
+            "period_days": 15,
+            "following": {
+                "plan_code": "starter_monthly",
+                "amount_minor": 200_000,
+                "currency": "RUB",
+                "period_days": 30,
+            },
         }
 
         no_csrf = await client.post(
@@ -166,7 +172,7 @@ async def test_publication_offer_and_founder_claim_are_server_priced(tmp_path) -
         await engine.dispose()
 
 
-def test_subscription_exposes_exact_intro_to_monthly_renewal_terms() -> None:
+def test_subscription_exposes_exact_intro_balance_renewal_terms() -> None:
     now = datetime(2026, 8, 13, 12, tzinfo=UTC)
     renewal_at = now + timedelta(days=15)
     intro = PLAN_CATALOG["starter_intro_15d"]
@@ -188,10 +194,10 @@ def test_subscription_exposes_exact_intro_to_monthly_renewal_terms() -> None:
     assert payload["access_kind"] == "paid"
     assert payload["plan_title"] == "Kaigo Starter, первые 15 дней"
     assert payload["next_charge"] == {
-        "plan_code": "starter_monthly",
-        "amount_minor": 200_000,
+        "plan_code": "starter_intro_balance_15d",
+        "amount_minor": 150_000,
         "currency": "RUB",
-        "period_days": 30,
+        "period_days": 15,
         "at": "2026-08-28T12:00:00Z",
     }
 

@@ -750,7 +750,7 @@ describe('durable SaaS Studio flow', () => {
     render(<StudioPage />);
 
     await user.click(await screen.findByRole('button', { name: 'Открыть публикацию' }));
-    expect(await screen.findByRole('button', { name: 'Опубликовать и подключить' })).toBeVisible();
+    expect(await screen.findByRole('button', { name: 'Выбрать условия публикации' })).toBeVisible();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
@@ -1004,10 +1004,10 @@ describe('durable SaaS Studio flow', () => {
     const publicationDialog = screen.getByRole('dialog', { name: 'Публикация виджета' });
     expect(within(publicationDialog).getByText('Подключите виджет к сайту')).toBeVisible();
     expect(within(publicationDialog).getByRole('list', { name: 'Путь до запуска виджета' })).toBeVisible();
-    expect(within(publicationDialog).getByText('Тариф')).toBeVisible();
+    expect(within(publicationDialog).getByText('Доступ')).toBeVisible();
     expect(within(publicationDialog).getByText('Публикация')).toBeVisible();
     expect(within(publicationDialog).getByText('Установка')).toBeVisible();
-    expect(within(publicationDialog).getByRole('button', { name: 'Опубликовать и подключить' })).toBeEnabled();
+    expect(within(publicationDialog).getByRole('button', { name: 'Выбрать условия публикации' })).toBeEnabled();
   });
 
   it('lets the owner correct a claimed URL and brief before the first run', async () => {
@@ -1307,7 +1307,7 @@ describe('durable SaaS Studio flow', () => {
       expect.stringContaining('/api/runs/run-version-1/preview/document?revision=1'),
     );
     await user.click(screen.getByRole('button', { name: 'Открыть публикацию' }));
-    expect(await screen.findByRole('button', { name: 'Опубликовать и подключить' })).toBeVisible();
+    expect(await screen.findByRole('button', { name: 'Выбрать условия публикации' })).toBeVisible();
   });
 
   it('publishes the selected historical version without restoring it first', async () => {

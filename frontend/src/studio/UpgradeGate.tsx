@@ -3,8 +3,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   BuilderApiError,
+  claimFounderAccess,
   createBillingCheckout,
+  createCustomerContact,
   disableBillingAutoRenew,
+  getBillingOffer,
   getBillingPayment,
   getPendingBillingPayment,
   getBillingSubscription,
@@ -16,11 +19,23 @@ import {
   type PublicationRelease,
   type ProjectPublicationState,
 } from './api';
-import type { BillingSubscription, SaasProjectVersion } from './types';
+import { PublicationOfferDialog } from './PublicationOfferDialog';
+import { SupportDialog } from './SupportDialog';
+import type { BillingOffer, BillingSubscription, SaasProjectVersion } from './types';
 
-const DEFAULT_PLAN_CODE = 'starter_monthly';
 const DEFAULT_POLL_INTERVAL_MS = 3_000;
 const DEFAULT_MAX_POLL_ATTEMPTS = 400;
+const EMPTY_OFFER: BillingOffer = {
+  founder: {
+    eligible: false,
+    reason: null,
+    remaining: 0,
+    capacity: 20,
+    period_days: 14,
+    generation_tokens: 1_500_000,
+  },
+  plans: [],
+};
 
 type UpgradeState =
   | 'checking'
@@ -77,6 +92,10 @@ function subscriptionEndLabel(value: string | undefined) {
   }).format(date).replace(/\.$/, '');
 }
 
+function rubles(amountMinor: number) {
+  return `${new Intl.NumberFormat('ru-RU').format(amountMinor / 100)} ₽`;
+}
+
 export function UpgradeGate({
   csrfToken,
   projectId = '',
@@ -93,7 +112,6 @@ export function UpgradeGate({
   const [paymentId, setPaymentId] = useState<string | null>(null);
   const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
   const [subscription, setSubscription] = useState<BillingSubscription | null>(null);
-  const [autoRenewConsent, setAutoRenewConsent] = useState(false);
   const [autoRenewPending, setAutoRenewPending] = useState(false);
   const [autoRenewError, setAutoRenewError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -104,8 +122,19 @@ export function UpgradeGate({
   const [publicationPending, setPublicationPending] = useState(false);
   const [publicationError, setPublicationError] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<CopyState>('idle');
+  const [offerOpen, setOfferOpen] = useState(false);
+  const [offer, setOffer] = useState<BillingOffer | null>(null);
+  const [offerLoading, setOfferLoading] = useState(false);
+  const [offerError, setOfferError] = useState<string | null>(null);
+  const [supportOpen, setSupportOpen] = useState(false);
+  const [supportPending, setSupportPending] = useState(false);
+  const [supportError, setSupportError] = useState<string | null>(null);
+  const [supportSent, setSupportSent] = useState(false);
+  const [publishAfterActivation, setPublishAfterActivation] = useState(false);
+  const [publicationRestored, setPublicationRestored] = useState(false);
   const idempotencyKeyRef = useRef<string | null>(null);
   const autoRenewIntentRef = useRef<boolean | null>(null);
+  const planCodeIntentRef = useRef<string | null>(null);
 
   const applyPublicationState = useCallback((restored: ProjectPublicationState | null) => {
     if (restored === null) {
@@ -238,6 +267,7 @@ export function UpgradeGate({
         if (payment.status === 'cancelled' || payment.status === 'failed') {
           idempotencyKeyRef.current = null;
           autoRenewIntentRef.current = null;
+          planCodeIntentRef.current = null;
           setState('checkout_error');
           setError('Оплата не завершена. Можно открыть платёжную страницу и попробовать ещё раз.');
           return;
@@ -278,6 +308,7 @@ export function UpgradeGate({
     if (state !== 'active' || !projectId) return undefined;
     const abort = new AbortController();
     setPublicationPending(true);
+    setPublicationRestored(false);
     setPublicationError(null);
     void getProjectPublication(projectId, abort.signal)
       .then(({ publication: restored }) => {
@@ -290,12 +321,15 @@ export function UpgradeGate({
         }
       })
       .finally(() => {
-        if (!abort.signal.aborted) setPublicationPending(false);
+        if (!abort.signal.aborted) {
+          setPublicationPending(false);
+          setPublicationRestored(true);
+        }
       });
     return () => abort.abort();
   }, [applyPublicationState, projectId, state]);
 
-  const startCheckout = async () => {
+  const startCheckout = async (planCode: string, autoRenew: boolean) => {
     if (!csrfToken || state === 'creating' || state === 'pending' || state === 'active') return;
     const paymentWindow = window.open('about:blank', '_blank');
     if (paymentWindow) paymentWindow.opener = null;
@@ -303,13 +337,15 @@ export function UpgradeGate({
     setError(null);
     setCheckoutUrl(null);
     const idempotencyKey = idempotencyKeyRef.current ?? checkoutKey();
-    const autoRenewIntent = autoRenewIntentRef.current ?? autoRenewConsent;
+    const requestedPlanCode = planCodeIntentRef.current ?? planCode;
+    const autoRenewIntent = autoRenewIntentRef.current ?? autoRenew;
     idempotencyKeyRef.current = idempotencyKey;
     autoRenewIntentRef.current = autoRenewIntent;
+    planCodeIntentRef.current = requestedPlanCode;
 
     try {
       const checkout = await createBillingCheckout(
-        DEFAULT_PLAN_CODE,
+        requestedPlanCode,
         csrfToken,
         idempotencyKey,
         projectId,
@@ -324,6 +360,7 @@ export function UpgradeGate({
       }
       setPaymentId(checkout.payment.id);
       setState('pending');
+      setOfferOpen(false);
     } catch {
       paymentWindow?.close();
       setState('checkout_error');
@@ -340,6 +377,70 @@ export function UpgradeGate({
     setRecoveryAttempt((attempt) => attempt + 1);
   };
 
+  const openOffer = async () => {
+    if (!csrfToken || !projectId || working) return;
+    if (
+      state === 'checkout_error'
+      && idempotencyKeyRef.current
+      && planCodeIntentRef.current
+    ) {
+      await startCheckout(
+        planCodeIntentRef.current,
+        autoRenewIntentRef.current ?? false,
+      );
+      return;
+    }
+    setOfferOpen(true);
+    setOfferError(null);
+    if (offer) return;
+    setOfferLoading(true);
+    try {
+      setOffer(await getBillingOffer(projectId));
+    } catch {
+      setOfferError('Не удалось загрузить условия публикации. Попробуйте ещё раз.');
+    } finally {
+      setOfferLoading(false);
+    }
+  };
+
+  const claimFounder = async () => {
+    if (!csrfToken || !projectId || working) return;
+    setState('creating');
+    setOfferError(null);
+    try {
+      const result = await claimFounderAccess(projectId, csrfToken);
+      setSubscription(result.subscription);
+      setState('active');
+      setOfferOpen(false);
+      setPublishAfterActivation(true);
+    } catch {
+      setState('idle');
+      setOfferError('Founder-доступ уже занят или сейчас недоступен. Выберите тариф или повторите позже.');
+    }
+  };
+
+  const sendSupport = async (input: {
+    message: string;
+    rating?: number;
+    testimonialAllowed: boolean;
+  }) => {
+    if (!csrfToken || !projectId || supportPending) return;
+    setSupportPending(true);
+    setSupportError(null);
+    try {
+      await createCustomerContact(projectId, input.message, csrfToken, {
+        kind: subscription?.access_kind === 'founder' ? 'founder_feedback' : 'support',
+        rating: input.rating,
+        testimonialAllowed: input.testimonialAllowed,
+      });
+      setSupportSent(true);
+    } catch {
+      setSupportError('Не удалось отправить сообщение. Текст сохранён в форме — попробуйте ещё раз.');
+    } finally {
+      setSupportPending(false);
+    }
+  };
+
   const disableAutoRenew = async () => {
     if (!csrfToken || !subscription?.auto_renew || autoRenewPending) return;
     setAutoRenewPending(true);
@@ -354,7 +455,7 @@ export function UpgradeGate({
     }
   };
 
-  const publish = async () => {
+  const publish = useCallback(async () => {
     const targetAvailable = versionsEnabled
       ? Boolean(projectVersionId)
       : Boolean(artifactId) && revision >= 1;
@@ -407,7 +508,35 @@ export function UpgradeGate({
     } finally {
       setPublicationPending(false);
     }
-  };
+  }, [
+    allowedDomains,
+    artifactId,
+    csrfToken,
+    projectId,
+    projectVersionId,
+    publication,
+    publicationPending,
+    reloadPublicationAfterConflict,
+    revision,
+    versionsEnabled,
+  ]);
+
+  useEffect(() => {
+    if (
+      !publishAfterActivation
+      || state !== 'active'
+      || !publicationRestored
+      || publicationPending
+    ) return;
+    setPublishAfterActivation(false);
+    void publish();
+  }, [
+    publicationPending,
+    publicationRestored,
+    publish,
+    publishAfterActivation,
+    state,
+  ]);
 
   const rollbackTarget = priorReleases.at(-1) ?? null;
   const versionOrdinal = (versionId: string | null | undefined) => {
@@ -469,11 +598,11 @@ export function UpgradeGate({
     ? publication
       ? 'Виджет уже доступен на разрешённых сайтах. Новую версию можно опубликовать здесь же.'
       : 'Укажите сайты, проверьте виджет и опубликуйте его. Код подключения появится после публикации.'
-    : 'Первая версия сохранена. Тариф открывает публикацию, доработки и подключение виджета к сайту.';
+    : 'Первая версия сохранена. Выберите бесплатный founder-пилот или подходящий тариф — условия будут показаны до перехода к оплате.';
   const launchSteps = [
     {
-      title: 'Тариф',
-      copy: active ? 'Подключён и готов к работе' : 'Открывает доработки и запуск',
+      title: 'Доступ',
+      copy: active ? 'Подключён и готов к работе' : 'Founder-пилот или подходящий тариф',
       state: active ? 'completed' : 'current',
     },
     {
@@ -502,6 +631,7 @@ export function UpgradeGate({
   };
 
   return (
+    <>
     <aside id="studio-publication" className="studio-upgrade" aria-labelledby="studio-upgrade-title">
       {active
         ? <CheckCircle aria-hidden size={22} weight="fill" />
@@ -521,23 +651,9 @@ export function UpgradeGate({
           ))}
         </ol>
         {!active && (
-          <>
-            <p className="studio-upgrade__safety-note">
-              Оплата откроется в защищённом окне ЮKassa. Виджет не появится на сайте, пока вы сами не нажмёте «Опубликовать».
-            </p>
-            <label className="studio-upgrade__renewal-consent">
-              <input
-                type="checkbox"
-                checked={autoRenewConsent}
-                onChange={(event) => setAutoRenewConsent(event.target.checked)}
-                disabled={working || idempotencyKeyRef.current !== null}
-              />
-              <span>
-                <strong>Продлевать тариф автоматически</strong>
-                <small>ЮKassa сохранит способ оплаты только после успешного платежа. Автопродление можно отключить в любой момент.</small>
-              </span>
-            </label>
-          </>
+          <p className="studio-upgrade__safety-note">
+            Founder-пилот не требует карты. Для платного варианта ЮKassa откроется в защищённом окне, а автопродление включится только после отдельного согласия.
+          </p>
         )}
         {working && (
           <p className="studio-upgrade__status" role="status">
@@ -565,8 +681,10 @@ export function UpgradeGate({
         {active && (
           <div className="studio-upgrade__publication">
             <p className="studio-upgrade__renewal-status">
-              {subscription?.auto_renew
-                ? `Следующее продление — ${subscriptionEndLabel(subscription.next_renewal_at ?? subscription.current_period_end)}. Автопродление включено.`
+              {subscription?.next_charge
+                ? `Следующее списание — ${rubles(subscription.next_charge.amount_minor)} ${subscriptionEndLabel(subscription.next_charge.at)}. Автопродление включено.`
+                : subscription?.auto_renew
+                  ? `Следующее продление — ${subscriptionEndLabel(subscription.next_renewal_at ?? subscription.current_period_end)}. Автопродление включено.`
                 : `Тариф действует до ${subscriptionEndLabel(subscription?.current_period_end)}. Автопродление выключено.`}
             </p>
             {typeof subscription?.generation_tokens_remaining === 'number' && (
@@ -656,6 +774,13 @@ export function UpgradeGate({
               Отключить автопродление
             </button>
           )}
+          <button type="button" onClick={() => {
+            setSupportError(null);
+            setSupportSent(false);
+            setSupportOpen(true);
+          }}>
+            Связаться с Kaigo
+          </button>
         </div>
       ) : recoveryFailed ? (
         <button type="button" onClick={retryRecovery}>
@@ -664,14 +789,34 @@ export function UpgradeGate({
       ) : (
         <button
           type="button"
-          onClick={() => void startCheckout()}
+          onClick={() => void openOffer()}
           disabled={!csrfToken || working}
           aria-describedby="studio-upgrade-title"
         >
           {working ? <Clock aria-hidden size={18} /> : <ArrowRight aria-hidden size={18} />}
-          {state === 'checking' ? 'Проверяем тариф' : working ? 'Проверяем оплату' : 'Опубликовать и подключить'}
+          {state === 'checking' ? 'Проверяем доступ' : working ? 'Проверяем оплату' : 'Выбрать условия публикации'}
         </button>
       )}
     </aside>
+    <PublicationOfferDialog
+      open={offerOpen}
+      offer={offer ?? EMPTY_OFFER}
+      loading={offerLoading}
+      busy={working}
+      error={offerError}
+      onClose={() => setOfferOpen(false)}
+      onFounder={() => void claimFounder()}
+      onCheckout={(planCode, autoRenew) => void startCheckout(planCode, autoRenew)}
+    />
+    <SupportDialog
+      open={supportOpen}
+      founder={subscription?.access_kind === 'founder'}
+      busy={supportPending}
+      error={supportError}
+      sent={supportSent}
+      onClose={() => setSupportOpen(false)}
+      onSubmit={(input) => void sendSupport(input)}
+    />
+    </>
   );
 }

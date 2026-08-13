@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as api from './api';
@@ -8,8 +8,11 @@ vi.mock('./api', async (importOriginal) => {
   const original = await importOriginal<typeof import('./api')>();
   return {
     ...original,
+    claimFounderAccess: vi.fn(),
     createBillingCheckout: vi.fn(),
+    createCustomerContact: vi.fn(),
     disableBillingAutoRenew: vi.fn(),
+    getBillingOffer: vi.fn(),
     getBillingPayment: vi.fn(),
     getPendingBillingPayment: vi.fn(),
     getBillingSubscription: vi.fn(),
@@ -24,9 +27,60 @@ const payment = {
   id: 'payment-123',
   plan_code: 'starter_monthly',
   status: 'pending' as const,
-  amount_minor: 199_000,
+  amount_minor: 200_000,
   currency: 'RUB',
   created_at: '2026-07-28T12:00:00Z',
+};
+
+const billingOffer = {
+  founder: {
+    eligible: true,
+    reason: null,
+    remaining: 20,
+    capacity: 20,
+    period_days: 14,
+    generation_tokens: 1_500_000,
+  },
+  plans: [
+    {
+      code: 'starter_intro_15d',
+      title: 'Kaigo Starter, первые 15 дней',
+      amount_minor: 50_000,
+      currency: 'RUB',
+      period_days: 15,
+      generation_tokens: 500_000,
+      renewal: {
+        plan_code: 'starter_intro_balance_15d',
+        amount_minor: 150_000,
+        currency: 'RUB',
+        period_days: 15,
+        following: {
+          plan_code: 'starter_monthly',
+          amount_minor: 200_000,
+          currency: 'RUB',
+          period_days: 30,
+        },
+      },
+    },
+    {
+      code: 'starter_monthly',
+      title: 'Kaigo Starter, 1 месяц',
+      amount_minor: 200_000,
+      currency: 'RUB',
+      period_days: 30,
+      generation_tokens: 1_000_000,
+      renewal: null,
+    },
+    {
+      code: 'starter_quarterly',
+      title: 'Kaigo Starter, 3 месяца',
+      amount_minor: 500_000,
+      currency: 'RUB',
+      period_days: 90,
+      generation_tokens: 3_000_000,
+      renewal: null,
+    },
+  ],
 };
 
 const gateProps = {
@@ -50,12 +104,31 @@ const activeSubscription = {
   generation_tokens_remaining: 750_000,
 };
 
+async function chooseMonthlyPlan() {
+  fireEvent.click(screen.getByRole('button', { name: /выбрать условия публикации/i }));
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  fireEvent.click(screen.getByRole('button', { name: /выбрать месяц/i }));
+  await act(async () => Promise.resolve());
+}
+
+async function openPublicationOffer() {
+  fireEvent.click(screen.getByRole('button', { name: /выбрать условия публикации/i }));
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 describe('UpgradeGate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     vi.stubGlobal('crypto', { randomUUID: vi.fn(() => 'checkout-request-123') });
     vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: null });
+    vi.mocked(api.getBillingOffer).mockResolvedValue(billingOffer);
     vi.mocked(api.getPendingBillingPayment).mockResolvedValue({
       payment: null,
       checkout_url: null,
@@ -90,11 +163,7 @@ describe('UpgradeGate', () => {
     await act(async () => {
       await Promise.resolve();
     });
-    fireEvent.click(screen.getByRole('button', { name: /опубликовать и подключить/i }));
-
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await chooseMonthlyPlan();
     expect(api.createBillingCheckout).toHaveBeenCalledWith(
       'starter_monthly',
       'csrf-billing',
@@ -109,7 +178,7 @@ describe('UpgradeGate', () => {
     expect(screen.getByRole('status')).toHaveTextContent(/ожидаем подтверждение оплаты/i);
   });
 
-  it('sends auto-renew only after the user explicitly selects the consent checkbox', async () => {
+  it('starts the 500-ruble offer only after consent to the 1,500 balance and 2,000 renewal', async () => {
     vi.spyOn(window, 'open').mockReturnValue(null);
     vi.mocked(api.createBillingCheckout).mockResolvedValue({
       payment,
@@ -122,16 +191,17 @@ describe('UpgradeGate', () => {
       await Promise.resolve();
     });
 
-    const consent = screen.getByRole('checkbox', {
-      name: /продлевать тариф автоматически/i,
-    });
+    await openPublicationOffer();
+    const consent = screen.getByRole('checkbox', { name: /на 15-й день/i });
     expect(consent).not.toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: /выбрать 15 дней/i }));
+    expect(api.createBillingCheckout).not.toHaveBeenCalled();
     fireEvent.click(consent);
-    fireEvent.click(screen.getByRole('button', { name: /опубликовать и подключить/i }));
+    fireEvent.click(screen.getByRole('button', { name: /выбрать 15 дней/i }));
     await act(async () => Promise.resolve());
 
     expect(api.createBillingCheckout).toHaveBeenCalledWith(
-      'starter_monthly',
+      'starter_intro_15d',
       'csrf-billing',
       'checkout-request-123',
       'project-123',
@@ -153,15 +223,9 @@ describe('UpgradeGate', () => {
     await act(async () => {
       await Promise.resolve();
     });
-    const consent = screen.getByRole('checkbox', {
-      name: /продлевать тариф автоматически/i,
-    });
-    fireEvent.click(screen.getByRole('button', { name: /опубликовать и подключить/i }));
-    await act(async () => Promise.resolve());
-
-    expect(consent).toBeDisabled();
-    expect(consent).not.toBeChecked();
-    fireEvent.click(screen.getByRole('button', { name: /опубликовать и подключить/i }));
+    await chooseMonthlyPlan();
+    expect(screen.getByRole('dialog', { name: /опубликовать виджет/i })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /выбрать месяц/i }));
     await act(async () => Promise.resolve());
 
     expect(api.createBillingCheckout).toHaveBeenNthCalledWith(
@@ -209,8 +273,7 @@ describe('UpgradeGate', () => {
     await act(async () => {
       await Promise.resolve();
     });
-    fireEvent.click(screen.getByRole('button', { name: /опубликовать и подключить/i }));
-    await act(async () => Promise.resolve());
+    await chooseMonthlyPlan();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100);
@@ -291,12 +354,11 @@ describe('UpgradeGate', () => {
       return new Promise(() => undefined);
     });
 
-    const view = render(<UpgradeGate csrfToken="csrf-billing" pollIntervalMs={100} />);
+    const view = render(<UpgradeGate csrfToken="csrf-billing" projectId="project-123" pollIntervalMs={100} />);
     await act(async () => {
       await Promise.resolve();
     });
-    fireEvent.click(screen.getByRole('button', { name: /опубликовать и подключить/i }));
-    await act(async () => Promise.resolve());
+    await chooseMonthlyPlan();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100);
     });
@@ -335,15 +397,13 @@ describe('UpgradeGate', () => {
     await act(async () => {
       await Promise.resolve();
     });
-    fireEvent.click(screen.getByRole('button', { name: /опубликовать и подключить/i }));
-    await act(async () => Promise.resolve());
+    await chooseMonthlyPlan();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100);
     });
     expect(screen.getByRole('alert')).toHaveTextContent(/оплата не завершена/i);
 
-    fireEvent.click(screen.getByRole('button', { name: /опубликовать и подключить/i }));
-    await act(async () => Promise.resolve());
+    await chooseMonthlyPlan();
 
     expect(api.createBillingCheckout).toHaveBeenNthCalledWith(
       1,
@@ -374,8 +434,131 @@ describe('UpgradeGate', () => {
     });
 
     expect(screen.getByText('Всё готово к публикации')).toBeVisible();
-    expect(screen.queryByRole('button', { name: /опубликовать и подключить/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /выбрать условия публикации/i })).not.toBeInTheDocument();
     expect(api.createBillingCheckout).not.toHaveBeenCalled();
+  });
+
+  it('claims founder access and publishes the selected version without a card', async () => {
+    vi.useRealTimers();
+    const founderSubscription = {
+      ...activeSubscription,
+      id: 'founder-subscription-1',
+      plan_code: 'founder_14d',
+      plan_title: 'Kaigo Founder, 14 дней',
+      access_kind: 'founder' as const,
+      auto_renew: false,
+      next_renewal_at: null,
+      next_charge: null,
+      current_period_end: '2026-08-27T12:00:00Z',
+      generation_tokens_remaining: 1_500_000,
+    };
+    vi.mocked(api.claimFounderAccess).mockResolvedValue({
+      created: true,
+      founder: { position: 1, ends_at: '2026-08-27T12:00:00Z' },
+      subscription: founderSubscription,
+    });
+    vi.mocked(api.publishProject).mockResolvedValue({
+      publication_id: 'publication-founder',
+      release_id: 'release-founder',
+      artifact_id: 'artifact-123',
+      project_version_id: 'version-4',
+      stable_key: 'founder-widget',
+      revision: 4,
+      allowed_domains: ['https://example.com'],
+      checksum: 'founder-checksum',
+      embed_url: 'https://widgets.kaigo.space/embed/founder-widget.js',
+      runtime_url: 'https://widgets.kaigo.space/runtime/founder-widget',
+    });
+
+    render(<UpgradeGate {...gateProps} />);
+    await waitFor(() => expect(screen.getByRole('button', {
+      name: /выбрать условия публикации/i,
+    })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /выбрать условия публикации/i }));
+    await waitFor(() => expect(screen.getByRole('button', {
+      name: /активировать 14 дней и опубликовать/i,
+    })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', {
+      name: /активировать 14 дней и опубликовать/i,
+    }));
+
+    await waitFor(() => expect(api.claimFounderAccess).toHaveBeenCalledWith(
+      'project-123',
+      'csrf-billing',
+    ));
+    await waitFor(() => expect(api.publishProject).toHaveBeenCalledWith(
+      'project-123',
+      {
+        project_version_id: 'version-4',
+        expected_active_release_id: null,
+      },
+      'csrf-billing',
+    ));
+    expect(screen.getByText(/версия 4 опубликована и доступна/i)).toBeVisible();
+    expect(screen.getByText(/автопродление выключено/i)).toBeVisible();
+  });
+
+  it('sends founder feedback with rating and testimonial consent from Studio', async () => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({
+      subscription: {
+        ...activeSubscription,
+        plan_code: 'founder_14d',
+        access_kind: 'founder',
+        auto_renew: false,
+        next_renewal_at: null,
+      },
+    });
+    vi.mocked(api.createCustomerContact).mockResolvedValue({
+      request_id: 'contact-1',
+      accepted: true,
+    });
+
+    render(<UpgradeGate {...gateProps} />);
+    await waitFor(() => expect(screen.getByRole('button', {
+      name: 'Связаться с Kaigo',
+    })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Связаться с Kaigo' }));
+    const dialog = screen.getByRole('dialog', { name: 'Расскажите, как прошёл пилот' });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Сообщение' }), {
+      target: { value: 'Виджет понравился, но нужна помощь с установкой.' },
+    });
+    fireEvent.click(screen.getByRole('radio', { name: '5' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /можно использовать мой отзыв/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+
+    await waitFor(() => expect(api.createCustomerContact).toHaveBeenCalledWith(
+      'project-123',
+      'Виджет понравился, но нужна помощь с установкой.',
+      'csrf-billing',
+      {
+        kind: 'founder_feedback',
+        rating: 5,
+        testimonialAllowed: true,
+      },
+    ));
+    expect(within(dialog).getByRole('status')).toHaveTextContent(/сообщение сохранено/i);
+  });
+
+  it('shows the exact next server-priced charge and date', async () => {
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({
+      subscription: {
+        ...activeSubscription,
+        plan_code: 'starter_intro_15d',
+        next_charge: {
+          plan_code: 'starter_intro_balance_15d',
+          amount_minor: 150_000,
+          currency: 'RUB',
+          period_days: 15,
+          at: '2026-08-28T12:00:00Z',
+        },
+      },
+    });
+
+    render(<UpgradeGate {...gateProps} />);
+    await act(async () => Promise.resolve());
+
+    expect(screen.getByText(/следующее списание — 1 500 ₽ 28 августа 2026/i)).toBeVisible();
   });
 
   it('disables auto-renew without hiding the active entitlement', async () => {
@@ -785,7 +968,7 @@ describe('UpgradeGate', () => {
       await Promise.resolve();
     });
 
-    expect(screen.queryByRole('button', { name: /опубликовать и подключить/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /выбрать условия публикации/i })).not.toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent(/не удалось проверить тариф/i);
     fireEvent.click(screen.getByRole('button', { name: /повторить проверку/i }));
     await act(async () => {
@@ -794,7 +977,7 @@ describe('UpgradeGate', () => {
     });
 
     expect(api.getBillingSubscription).toHaveBeenCalledTimes(2);
-    expect(screen.getByRole('button', { name: /опубликовать и подключить/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /выбрать условия публикации/i })).toBeEnabled();
     expect(api.createBillingCheckout).not.toHaveBeenCalled();
   });
 
@@ -835,7 +1018,7 @@ describe('UpgradeGate', () => {
     });
 
     expect(screen.getByRole('alert')).toHaveTextContent(/не удалось проверить тариф/i);
-    expect(screen.queryByRole('button', { name: /опубликовать и подключить/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /выбрать условия публикации/i })).not.toBeInTheDocument();
     expect(api.createBillingCheckout).not.toHaveBeenCalled();
   });
 
@@ -854,15 +1037,12 @@ describe('UpgradeGate', () => {
       created: true,
     });
 
-    render(<UpgradeGate csrfToken="csrf-billing" />);
+    render(<UpgradeGate csrfToken="csrf-billing" projectId="project-123" />);
     await act(async () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    fireEvent.click(screen.getByRole('button', { name: /опубликовать и подключить/i }));
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await chooseMonthlyPlan();
 
     expect(replace).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledOnce();

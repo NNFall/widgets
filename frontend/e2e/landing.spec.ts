@@ -329,7 +329,7 @@ test('landing desktop completes the hero story without overflow @desktop', async
   await expect(page.locator('.hero-browser-stage .browser-mockup__address')).toContainText('Ваш сайт');
   await expect(page.locator('.hero-browser-stage .browser-mockup__address')).toContainText('teply-hleb.ru');
   await expect(page.locator('#how-it-works')).toHaveCount(0);
-  await expect(page.locator('.product-tour__autoplay')).toHaveCount(0);
+  await expect(page.locator('.product-tour__autoplay')).toBeDisabled();
   await expect(page.locator('.product-tour-section')).toContainText('Реальный кейс · FORMA');
 
   const caseSectionHeight = await page.locator('#case-study').evaluate((section) =>
@@ -356,7 +356,7 @@ test('standalone product tour explains the complete result in one screen @deskto
 
   const tour = page.locator('.product-tour-section');
   await expect(tour).toHaveAttribute('data-active-step', '1');
-  await expect(tour.locator('.product-tour__autoplay')).toHaveCount(0);
+  await expect(tour.locator('.product-tour__autoplay')).toBeDisabled();
   await expect(tour).toContainText('Реальный кейс · FORMA');
   await expect(tour.locator('img[alt*="FORMA"]').first()).toBeVisible();
   await expectProductTourInsideViewport(page);

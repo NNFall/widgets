@@ -101,7 +101,7 @@ export function PublicationOfferDialog({
                   <h3>{rubles(plan.amount_minor)}</h3>
                   <p>за {plan.period_days} дней · {new Intl.NumberFormat('ru-RU').format(plan.generation_tokens)} токенов</p>
                 </div>
-                {isIntro && plan.renewal && (
+                {isIntro && plan.renewal && plan.renewal.following && (
                   <label className="publication-offer__consent">
                     <input
                       type="checkbox"
@@ -112,7 +112,9 @@ export function PublicationOfferDialog({
                       }}
                       disabled={busy}
                     />
-                    <span>После 15 дней — {rubles(plan.renewal.amount_minor)} каждые {plan.renewal.period_days} дней. Можно отключить в любой момент.</span>
+                    <span>
+                      На 15-й день — {rubles(plan.renewal.amount_minor)} за оставшиеся {plan.renewal.period_days} дней первого месяца. Затем {rubles(plan.renewal.following.amount_minor)} каждые {plan.renewal.following.period_days} дней. Можно отключить до следующего списания.
+                    </span>
                   </label>
                 )}
                 <button type="button" onClick={() => choose(plan.code)} disabled={busy}>
@@ -122,7 +124,7 @@ export function PublicationOfferDialog({
             );
           })}
         </div>}
-        {consentError && <p className="publication-offer__error" role="alert">Подтвердите переход на 2 000 ₽ каждые 30 дней или выберите другой вариант.</p>}
+        {consentError && <p className="publication-offer__error" role="alert">Подтвердите списание 1 500 ₽ на 15-й день и последующие 2 000 ₽ каждые 30 дней — либо выберите другой вариант.</p>}
         {error && <p className="publication-offer__error" role="alert">{error}</p>}
         <p className="publication-offer__footnote">Все цены и даты подтверждает сервер. Автопродление не включается без вашего отдельного согласия.</p>
       </section>

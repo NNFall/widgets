@@ -91,7 +91,13 @@ def test_schema_auto_creation_is_explicit_and_disabled_by_default() -> None:
 def test_alembic_has_one_production_head() -> None:
     config = Config(str(ROOT / "alembic.ini"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["0017_funnel_journeys"]
+    assert script.get_heads() == ["0019_founder_publication_funnel"]
+    assert script.get_revision("0019_founder_publication_funnel").down_revision == (
+        "0018_stage_aware_pattern_library"
+    )
+    assert script.get_revision("0018_stage_aware_pattern_library").down_revision == (
+        "0017_funnel_journeys"
+    )
     assert script.get_revision("0017_funnel_journeys").down_revision == (
         "0016_project_versions"
     )
@@ -525,12 +531,12 @@ def test_disposable_postgres_preflight_legacy_and_additive_round_trip(
         assert preflight.inspect_schema(rendered).alembic_revisions == ()
 
         assert preflight.run_preflight(rendered, apply=True) == 0
-        assert asyncio.run(revision()) == "0017_funnel_journeys"
+        assert asyncio.run(revision()) == "0019_founder_publication_funnel"
 
         head_snapshot = preflight.inspect_schema(rendered)
         assert preflight._schema_fingerprint(head_snapshot) == (
             preflight.EXPECTED_VERSIONED_SCHEMA_FINGERPRINTS[
-                "0017_funnel_journeys"
+                "0019_founder_publication_funnel"
             ]
         )
         assert preflight.classify_schema(head_snapshot) == preflight.MigrationPlan(
@@ -671,7 +677,7 @@ def test_disposable_postgres_preflight_legacy_and_additive_round_trip(
 
         asyncio.run(execute("ALTER TABLE funnel_events ADD COLUMN unexpected TEXT"))
         assert preflight.run_preflight(rendered, apply=False) == 2
-        assert asyncio.run(revision()) == "0017_funnel_journeys"
+        assert asyncio.run(revision()) == "0019_founder_publication_funnel"
         asyncio.run(execute("ALTER TABLE funnel_events DROP COLUMN unexpected"))
 
         asyncio.run(
@@ -726,7 +732,7 @@ def test_disposable_postgres_preflight_legacy_and_additive_round_trip(
             upgrade_revision="head",
         )
         command.upgrade(config, "head")
-        assert asyncio.run(revision()) == "0017_funnel_journeys"
+        assert asyncio.run(revision()) == "0019_founder_publication_funnel"
 
         command.downgrade(config, "0009_billing_foundation")
         assert asyncio.run(revision()) == "0009_billing_foundation"
@@ -752,7 +758,7 @@ def test_disposable_postgres_preflight_legacy_and_additive_round_trip(
             )
         )
         command.upgrade(config, "head")
-        assert asyncio.run(revision()) == "0017_funnel_journeys"
+        assert asyncio.run(revision()) == "0019_founder_publication_funnel"
     finally:
         asyncio.run(drop_database())
 

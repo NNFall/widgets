@@ -117,11 +117,21 @@ def _public_plan(plan) -> dict[str, object]:
     renewal = None
     if plan.renewal_plan_code is not None:
         next_plan = PLAN_CATALOG[plan.renewal_plan_code]
+        following = None
+        if next_plan.renewal_plan_code is not None:
+            following_plan = PLAN_CATALOG[next_plan.renewal_plan_code]
+            following = {
+                "plan_code": following_plan.code,
+                "amount_minor": following_plan.amount.amount_minor,
+                "currency": following_plan.amount.currency,
+                "period_days": following_plan.period_days,
+            }
         renewal = {
             "plan_code": next_plan.code,
             "amount_minor": next_plan.amount.amount_minor,
             "currency": next_plan.amount.currency,
             "period_days": next_plan.period_days,
+            "following": following,
         }
     return {
         "code": plan.code,

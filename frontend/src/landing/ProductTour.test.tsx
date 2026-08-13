@@ -36,39 +36,31 @@ describe('ProductTour', () => {
     expect(scenes[0]).toHaveAttribute('data-active', 'true');
     expect(scenes[1]).toHaveAttribute('aria-hidden', 'true');
 
-    expect(within(scenes[0]).getByRole('heading', { name: 'Вставьте ссылку на ваш сайт' })).toBeVisible();
-    expect(within(scenes[0]).getByText('Вставьте ссылку на действующий сайт.')).toBeInTheDocument();
-    expect(within(scenes[0]).getByText('Если есть пожелания, опишите их обычным текстом.')).toBeInTheDocument();
-    expect(within(scenes[0]).getByText('https://novaflow.ru')).toBeInTheDocument();
-    expect(within(scenes[0]).getByRole('img', { name: 'Металлическое цифровое ядро NovaFlow' }))
-      .toHaveAttribute('src', '/assets/product-tour-digital-core.webp');
-    expect(within(scenes[0]).getByRole('img', { name: 'Металлическое цифровое ядро NovaFlow' }))
+    expect(within(scenes[0]).getByRole('heading', { name: 'Дайте Kaigo ссылку на ваш сайт' })).toBeVisible();
+    expect(within(scenes[0]).getByText(/Вставьте адрес действующего сайта/i)).toBeInTheDocument();
+    expect(within(scenes[0]).getByText(/Коротко напишите, что важно учесть/i)).toBeInTheDocument();
+    expect(within(scenes[0]).getByText('https://forma-demo.ru')).toBeInTheDocument();
+    expect(within(scenes[0]).getByRole('img', { name: /FORMA до подключения/i }))
+      .toHaveAttribute('src', '/assets/forma-site-before.webp');
+    expect(within(scenes[0]).getByRole('img', { name: /FORMA до подключения/i }))
       .toHaveAttribute('loading', 'lazy');
 
     expect(within(scenes[1]).getByRole('heading', {
       hidden: true,
-      name: 'Через 10–20 минут проверьте результат в Studio',
+      name: 'Примерно через 10 минут проверьте результат',
     })).toBeInTheDocument();
-    expect(within(scenes[1]).getByText('Откройте готовый виджет прямо в Studio.')).toBeInTheDocument();
-    expect(within(scenes[1]).getByText('Задайте ему несколько вопросов как клиент.')).toBeInTheDocument();
-    expect(within(scenes[1]).getByText('Первая версия готова')).toBeInTheDocument();
-    expect(within(scenes[1]).getByText('Проверка результата бесплатна')).toBeInTheDocument();
-    expect(within(scenes[1]).getByText('Сохраните пожелание. Доработки доступны после выбора тарифа.')).toBeInTheDocument();
-    expect(within(scenes[1]).queryByText('Телефон')).not.toBeInTheDocument();
-    expect(within(scenes[1]).queryByRole('img', { name: /сайт/i })).not.toBeInTheDocument();
+    expect(within(scenes[1]).getByText(/Откройте виджет на компьютере/i)).toBeInTheDocument();
+    expect(within(scenes[1]).getByText(/Задайте вопросы об услугах/i)).toBeInTheDocument();
+    expect(within(scenes[1]).getByRole('img', { hidden: true, name: /ответ готового виджета FORMA/i })).toBeInTheDocument();
 
     expect(within(scenes[2]).getByRole('heading', {
       hidden: true,
-      name: 'Добавьте AI-сотрудника на сайт',
+      name: 'Добавьте AI-консультанта на сайт',
     })).toBeInTheDocument();
-    expect(within(scenes[2]).getByText('Скопируйте одну строку кода или передайте её разработчику.')).toBeInTheDocument();
-    expect(within(scenes[2]).getByText('Пример строки для установки')).toBeInTheDocument();
+    expect(within(scenes[2]).getByText(/вставьте её один раз в настройки сайта/i)).toBeInTheDocument();
     expect(within(scenes[2]).getByText(/widget\.js/)).toBeInTheDocument();
-    expect(within(scenes[2]).getByText('Можно подключить отчёты для руководителя?')).toBeInTheDocument();
-    expect(tour.querySelectorAll('[data-widget-shape="vertical"]')).toHaveLength(2);
-    expect(tour.querySelectorAll('img[src="/assets/product-tour-digital-core-avatar.webp"]')).toHaveLength(2);
-
-    expect(tour).not.toHaveTextContent(/пекар|выпеч|торт/i);
+    expect(within(scenes[2]).getByRole('img', { hidden: true, name: /FORMA с подключённым/i })).toBeInTheDocument();
+    expect(tour).not.toHaveTextContent(/пекар|выпеч|торт|NovaFlow/i);
     expect(screen.queryByRole('link', { name: 'Открыть демонстрацию отдельно' })).not.toBeInTheDocument();
   });
 

@@ -12,7 +12,11 @@ def test_public_catalog_exposes_the_agreed_publication_offers() -> None:
         "starter_quarterly",
     }
     assert (plans["starter_intro_15d"].amount.amount_minor, plans["starter_intro_15d"].period_days) == (50_000, 15)
-    assert plans["starter_intro_15d"].renewal_plan_code == "starter_monthly"
+    assert plans["starter_intro_15d"].renewal_plan_code == "starter_intro_balance_15d"
+    balance = PLAN_CATALOG["starter_intro_balance_15d"]
+    assert balance.public is False
+    assert (balance.amount.amount_minor, balance.period_days) == (150_000, 15)
+    assert balance.renewal_plan_code == "starter_monthly"
     assert (plans["starter_monthly"].amount.amount_minor, plans["starter_monthly"].period_days) == (200_000, 30)
     assert (plans["starter_quarterly"].amount.amount_minor, plans["starter_quarterly"].period_days) == (500_000, 90)
     assert PLAN_CATALOG["pro_monthly"].public is False

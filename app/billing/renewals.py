@@ -129,8 +129,9 @@ class RenewalScheduler:
             next_plan = PLAN_CATALOG[current.renewal_plan_code]
         except KeyError as error:
             raise BillingError("stored subscription renewal plan is unknown") from error
-        if next_plan.renewal_plan_code is not None:
-            raise BillingError("chained introductory renewal plan is invalid")
+        # Introductory billing may have one transparent balance step
+        # (500 ₽ for 15 days -> 1 500 ₽ for the remaining 15 days) before the
+        # regular 2 000 ₽ monthly cycle. Every step is an immutable snapshot.
         return next_plan
 
     def _binding_valid(

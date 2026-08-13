@@ -49,7 +49,9 @@ describe('App', () => {
     );
     expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(9);
     expect(document.querySelector('#how-it-works')).toBeNull();
-    expect(document.querySelector('.product-tour__autoplay')).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'Автолистание отключено настройками системы' }),
+    ).toBeDisabled();
     expect(screen.getByText('Реальный кейс · FORMA')).toBeVisible();
     expect(screen.getByText(/Kaigo выдаст одну строку кода/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Tilda/i).length).toBeGreaterThan(0);
