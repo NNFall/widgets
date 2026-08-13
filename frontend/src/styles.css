@@ -140,18 +140,15 @@ a {
 
 .kaigo-logo__mark {
   width: 40px;
-  height: 40px;
-  filter: drop-shadow(0 8px 12px rgba(38, 135, 112, 0.12));
+  height: 48px;
+  object-fit: contain;
+  filter: drop-shadow(0 8px 12px rgba(201, 82, 30, 0.13));
   transition: filter 180ms ease, transform 180ms cubic-bezier(.16, 1, .3, 1);
-}
-
-.kaigo-logo[data-tone='coral'] .kaigo-logo__mark {
-  filter: drop-shadow(0 8px 12px rgba(254, 77, 29, 0.16));
 }
 
 .site-header__logo:hover .kaigo-logo__mark,
 .studio-header__logo:hover .kaigo-logo__mark {
-  filter: drop-shadow(0 10px 14px rgba(38, 135, 112, .18));
+  filter: drop-shadow(0 10px 14px rgba(201, 82, 30, .2));
   transform: translateY(-1px) rotate(-2deg);
 }
 
@@ -1781,7 +1778,7 @@ a {
 .chat-showcase__chrome { height: 31px; padding-left: 19px; display: flex; align-items: center; gap: 7px; background: #f0f1f1; }
 .chat-showcase__chrome span { width: 9px; height: 9px; border-radius: 50%; background: #b9bec1; }
 .chat-showcase__head { height: 67px; padding: 0 24px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid rgba(7,27,47,.1); }
-.kaigo-logo--compact .kaigo-logo__mark { width: 38px; height: 38px; }
+.kaigo-logo--compact .kaigo-logo__mark { width: 38px; height: 46px; }
 .kaigo-logo--compact .kaigo-logo__wordmark { display: none; }
 .chat-showcase__head > span { display: grid; }
 .chat-showcase__head small { color: #53616d; }
@@ -1924,7 +1921,7 @@ a {
 .guarantee-row span { display: flex; align-items: center; gap: 11px; font-size: 17px; white-space: nowrap; }
 .site-footer { border-top: 1px solid rgba(7,27,47,.1); text-align: left; }
 .site-footer__inner { min-height: 200px; padding-block: 35px; display: grid; grid-template-columns: 1fr 1.7fr 1fr; gap: 50px; align-items: center; }
-.site-footer .kaigo-logo__mark { width: 34px; height: 34px; }
+.site-footer .kaigo-logo__mark { width: 34px; height: 41px; }
 .site-footer .kaigo-logo__wordmark { font-size: 29px; }
 .site-footer p { margin: 12px 0 0; color: #66798a; font-size: 14px; line-height: 1.45; }
 .site-footer nav { display: flex; justify-content: center; gap: clamp(22px, 3.4vw, 56px); font-size: 15px; }
@@ -1942,7 +1939,7 @@ a {
 
   .kaigo-logo__mark {
     width: 36px;
-    height: 36px;
+    height: 43px;
   }
 
   .site-header__logo {
@@ -2231,7 +2228,7 @@ a {
 
   .kaigo-logo__mark {
     width: 31px;
-    height: 31px;
+    height: 37px;
   }
 
   .kaigo-logo__wordmark {
@@ -2821,7 +2818,7 @@ a {
 
 .studio-header .kaigo-logo__mark {
   width: 35px;
-  height: 35px;
+  height: 42px;
 }
 
 .studio-header .kaigo-logo__wordmark {
@@ -4426,7 +4423,7 @@ a {
 
   .studio-header .kaigo-logo__mark {
     width: 30px;
-    height: 30px;
+    height: 36px;
   }
 
   .studio-header__actions .studio-header__publish {
@@ -7674,7 +7671,7 @@ a {
 
   .studio-app--workbench .studio-header .kaigo-logo__mark {
     width: 30px;
-    height: 30px;
+    height: 36px;
   }
 
   .studio-app--workbench .studio-header .kaigo-logo__wordmark {
@@ -7867,7 +7864,7 @@ a {
 
 .product-tour-page__header .kaigo-logo__mark {
   width: 34px;
-  height: 34px;
+  height: 41px;
 }
 
 .product-tour-page__header .kaigo-logo__wordmark {

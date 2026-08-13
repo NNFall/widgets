@@ -1,75 +1,59 @@
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import indexHtmlSource from '../../index.html?raw';
 import stylesSource from '../styles.css?raw';
 import { KaigoLogo } from '../shared/KaigoLogo';
 
 afterEach(cleanup);
 
 describe('landing accessibility contracts', () => {
-  it('exposes the Kaigo lockup as one valid image semantic', () => {
+  it('exposes the Kaigo lockup as one accessible image with the shared Living Fold mark', () => {
     render(<KaigoLogo />);
 
     const logo = screen.getByRole('img', { name: 'Kaigo' });
     expect(within(logo).getByText('Kaigo')).toBeInTheDocument();
-    const mark = logo.querySelector('[data-kaigo-mark="K"]');
-    expect.soft(mark).toBeInTheDocument();
-
-    const strokeGeometry = Array.from(mark?.querySelectorAll('[data-kaigo-stroke]') ?? []).map((path) => ({
-      stroke: path.getAttribute('data-kaigo-stroke'),
-      d: path.getAttribute('d'),
-    }));
-    expect.soft(strokeGeometry).toEqual([
-      { stroke: 'stem', d: 'M4 4h9v34H4z' },
-      { stroke: 'upper-diagonal', d: 'M13 21 29 4h11L22 22z' },
-      { stroke: 'lower-diagonal', d: 'M13 21h9l18 17H29z' },
-    ]);
-
-    const renderedPaths = Array.from(logo.querySelectorAll('path')).map((path) => path.getAttribute('d'));
-    const legacyRPaths = [
-      'M4 4h13v34H4z',
-      'M21 4h4c8.3 0 13 4.2 13 10.1S33.3 24 25 24h-4V4Z',
-      'M21 26h4c7 0 11 3 13 12H21V26Z',
-    ];
-    for (const legacyPath of legacyRPaths) {
-      expect.soft(renderedPaths).not.toContain(legacyPath);
-    }
+    const mark = logo.querySelector('[data-kaigo-mark="living-fold"]');
+    expect(mark).toBeInTheDocument();
+    expect(mark?.tagName).toBe('IMG');
+    expect(mark).toHaveAttribute('src', '/assets/brand/kaigo-living-fold-mark.png');
+    expect(mark).toHaveAttribute('alt', '');
+    expect(mark).toHaveAttribute('aria-hidden', 'true');
+    expect(logo.querySelector('svg')).not.toBeInTheDocument();
+    expect(logo.querySelector('path')).not.toBeInTheDocument();
+    expect(logo.querySelector('linearGradient')).not.toBeInTheDocument();
     expect(screen.getAllByLabelText('Kaigo')).toHaveLength(1);
   });
 
-  it('isolates gradient references between Kaigo logo instances', () => {
+  it('keeps the Living Fold mark independent from the legacy tone prop', () => {
     render(
       <>
         <KaigoLogo />
-        <KaigoLogo />
+        <KaigoLogo tone="coral" />
       </>,
     );
 
     const marks = screen.getAllByLabelText('Kaigo').map((logo) =>
-      logo.querySelector('[data-kaigo-mark="K"]'),
+      logo.querySelector('[data-kaigo-mark="living-fold"]'),
     );
-    const gradientIds = marks.map((mark) => mark?.querySelector('linearGradient')?.id);
 
-    expect(gradientIds).toHaveLength(2);
-    expect(new Set(gradientIds).size).toBe(2);
-    for (const [index, mark] of marks.entries()) {
-      const gradientId = gradientIds[index];
-      expect(gradientId).toMatch(/^[A-Za-z0-9_-]+-kaigo-mark-gradient$/);
-      expect(Array.from(mark?.querySelectorAll('path') ?? []).map((path) => path.getAttribute('fill')))
-        .toEqual(Array(3).fill(`url(#${gradientId})`));
+    expect(marks).toHaveLength(2);
+    expect(marks.map((mark) => mark?.getAttribute('src'))).toEqual([
+      '/assets/brand/kaigo-living-fold-mark.png',
+      '/assets/brand/kaigo-living-fold-mark.png',
+    ]);
+    for (const mark of marks) {
+      expect(mark?.querySelector('svg, path, linearGradient, stop')).not.toBeInTheDocument();
     }
   });
 
-  it('offers the warm landing logo without changing the default product mark', () => {
-    const { rerender } = render(<KaigoLogo tone="coral" />);
+  it('declares the PNG favicon in the HTML shell', () => {
+    const htmlDocument = new DOMParser().parseFromString(indexHtmlSource, 'text/html');
+    const favicon = htmlDocument.querySelector('link[rel="icon"]');
 
-    const warmLogo = screen.getByRole('img', { name: 'Kaigo' });
-    expect(warmLogo).toHaveAttribute('data-tone', 'coral');
-    expect(Array.from(warmLogo.querySelectorAll('stop')).map((stop) => stop.getAttribute('stop-color')))
-      .toEqual(['#ff8a55', '#fe4d1d']);
-
-    rerender(<KaigoLogo />);
-    expect(screen.getByRole('img', { name: 'Kaigo' })).toHaveAttribute('data-tone', 'mint');
+    expect(favicon).toBeTruthy();
+    expect(favicon?.getAttribute('href')).toBe('/favicon.png');
+    expect(favicon?.getAttribute('type')).toBe('image/png');
   });
 
   it('uses dark ink on sage and coral interactive-state surfaces', () => {

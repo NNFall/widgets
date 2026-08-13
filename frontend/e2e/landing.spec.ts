@@ -300,7 +300,8 @@ test('landing compact desktop fits the first screen and exposes the brand @compa
 
   await expect.soft(page).toHaveTitle('Kaigo — AI-консультант для вашего сайта');
   await expect.soft(page.locator('meta[name="description"]')).toHaveAttribute('content', EXACT_DESCRIPTION);
-  await expect.soft(page.locator('link[rel="icon"]')).toHaveAttribute('href', '/favicon.svg');
+  await expect.soft(page.locator('link[rel="icon"]')).toHaveAttribute('href', '/favicon.png');
+  await expect.soft(page.locator('link[rel="icon"]')).toHaveAttribute('type', 'image/png');
 });
 
 test('landing desktop completes the hero story without overflow @desktop', async ({ page }, testInfo) => {
