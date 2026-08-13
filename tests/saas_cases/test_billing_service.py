@@ -150,12 +150,12 @@ async def test_checkout_is_server_priced_and_idempotent_per_user(billing_db) -> 
     assert replay.payment_id == first.payment_id
     assert replay.checkout_url == first.checkout_url
     assert len(provider.checkout_calls) == 1
-    assert provider.checkout_calls[0].amount == Money(199_000, "RUB")
+    assert provider.checkout_calls[0].amount == Money(200_000, "RUB")
     assert provider.checkout_calls[0].metadata["user_id"] == "10"
     async with factory() as database:
         attempt = (await database.execute(select(PaymentAttempt))).scalar_one()
         assert attempt.plan_code == "starter_monthly"
-        assert attempt.plan_snapshot["amount_minor"] == 199_000
+        assert attempt.plan_snapshot["amount_minor"] == 200_000
         assert len(attempt.plan_fingerprint) == 64
 
 
@@ -1240,7 +1240,7 @@ async def test_paid_checkout_uses_immutable_snapshot_after_catalog_change(
     async with factory() as database:
         subscription = (await database.execute(select(Subscription))).scalar_one()
         ledger = (await database.execute(select(UsageLedger))).scalar_one()
-        assert subscription.plan_snapshot["amount_minor"] == 199_000
+        assert subscription.plan_snapshot["amount_minor"] == 200_000
         assert ledger.amount == 1_000_000
 
 

@@ -7,6 +7,14 @@ from uuid import UUID
 from aiohttp import web
 from sqlalchemy import select
 
+from app.analytics.service import record_funnel_event
+from app.billing.catalog import BillingPlan, PLAN_CATALOG, public_billing_plans
+from app.billing.offers import (
+    FOUNDER_GENERATION_TOKENS,
+    FOUNDER_PERIOD_DAYS,
+    FounderAccessService,
+    FounderOfferUnavailable,
+)
 from app.billing.payments import (
     BillingError,
     BillingService,
@@ -19,7 +27,13 @@ from app.billing.service import GenerationCreditService
 from app.billing.yookassa import YooKassaError, YooKassaVerificationError
 from app.db.session import get_session_factory
 from app.projects.routes import _require_csrf, _scope
-from app.saas.models import PaymentAttempt, Subscription
+from app.saas.models import (
+    CustomerContactRequest,
+    FounderAccessGrant,
+    PaymentAttempt,
+    Project,
+    Subscription,
+)
 
 BILLING_SERVICE_KEY = "billing_service"
 _MERCHANT_CUTOVER_MESSAGE = (
@@ -56,6 +70,34 @@ def _subscription(
     *,
     generation_tokens_remaining: int | None = None,
 ) -> dict[str, object]:
+    plan_title = row.plan_code
+    next_charge = None
+    access_kind = "founder" if row.provider == "founder" else "paid"
+    if access_kind == "founder":
+        title = row.plan_snapshot.get("title") if isinstance(row.plan_snapshot, dict) else None
+        if isinstance(title, str) and title:
+            plan_title = title
+    else:
+        try:
+            current_plan = BillingPlan.from_snapshot(row.plan_snapshot)
+        except ValueError:
+            current_plan = PLAN_CATALOG.get(row.plan_code)
+        if current_plan is not None:
+            plan_title = current_plan.title
+            if row.auto_renew and row.next_renewal_at is not None:
+                renewal_plan = (
+                    PLAN_CATALOG.get(current_plan.renewal_plan_code)
+                    if current_plan.renewal_plan_code is not None
+                    else current_plan
+                )
+                if renewal_plan is not None:
+                    next_charge = {
+                        "plan_code": renewal_plan.code,
+                        "amount_minor": renewal_plan.amount.amount_minor,
+                        "currency": renewal_plan.amount.currency,
+                        "period_days": renewal_plan.period_days,
+                        "at": _time(row.next_renewal_at),
+                    }
     return {
         "id": str(row.id),
         "plan_code": row.plan_code,
@@ -65,7 +107,172 @@ def _subscription(
         "auto_renew": row.auto_renew,
         "next_renewal_at": _time(row.next_renewal_at),
         "generation_tokens_remaining": generation_tokens_remaining,
+        "access_kind": access_kind,
+        "plan_title": plan_title,
+        "next_charge": next_charge,
     }
+
+
+def _public_plan(plan) -> dict[str, object]:
+    renewal = None
+    if plan.renewal_plan_code is not None:
+        next_plan = PLAN_CATALOG[plan.renewal_plan_code]
+        renewal = {
+            "plan_code": next_plan.code,
+            "amount_minor": next_plan.amount.amount_minor,
+            "currency": next_plan.amount.currency,
+            "period_days": next_plan.period_days,
+        }
+    return {
+        "code": plan.code,
+        "title": plan.title,
+        "amount_minor": plan.amount.amount_minor,
+        "currency": plan.amount.currency,
+        "period_days": plan.period_days,
+        "generation_tokens": plan.generation_tokens,
+        "renewal": renewal,
+    }
+
+
+def _project_id(value: object) -> UUID:
+    if not isinstance(value, str):
+        raise ValueError("project id is invalid")
+    return UUID(value)
+
+
+async def publication_offer(request: web.Request) -> web.Response:
+    user_id, _tenant_id = await _scope(request, verified=True)
+    try:
+        project_id = _project_id(request.query.get("project_id"))
+        founder = await FounderAccessService(
+            get_session_factory(request.app)
+        ).offer(user_id, project_id)
+    except (ValueError, FounderOfferUnavailable) as error:
+        return web.json_response(
+            _error("offer_unavailable", str(error)), status=409
+        )
+    return web.json_response(
+        {
+            "founder": {
+                "eligible": founder.eligible,
+                "reason": founder.reason,
+                "remaining": founder.remaining,
+                "capacity": founder.capacity,
+                "period_days": FOUNDER_PERIOD_DAYS,
+                "generation_tokens": FOUNDER_GENERATION_TOKENS,
+            },
+            "plans": [_public_plan(plan) for plan in public_billing_plans()],
+        }
+    )
+
+
+async def claim_founder_access(request: web.Request) -> web.Response:
+    user_id, _tenant_id = await _scope(request, verified=True)
+    await _require_csrf(request)
+    try:
+        payload = await request.json()
+        if not isinstance(payload, dict) or set(payload) != {"project_id"}:
+            raise ValueError("invalid request")
+        project_id = _project_id(payload["project_id"])
+        result = await FounderAccessService(
+            get_session_factory(request.app)
+        ).claim(user_id, project_id)
+    except ValueError:
+        return web.json_response(_error("invalid_request", "Некорректный проект"), status=400)
+    except FounderOfferUnavailable as error:
+        return web.json_response(_error("founder_unavailable", str(error)), status=409)
+    factory = get_session_factory(request.app)
+    async with factory() as database:
+        subscription = await database.get(Subscription, result.grant.subscription_id)
+        remaining = await GenerationCreditService.available_for_subscription_in_session(
+            database, subscription
+        )
+    return web.json_response(
+        {
+            "created": result.created,
+            "founder": {
+                "position": result.grant.position,
+                "ends_at": _time(result.grant.ends_at),
+            },
+            "subscription": _subscription(
+                subscription, generation_tokens_remaining=remaining
+            ),
+        },
+        status=201 if result.created else 200,
+    )
+
+
+async def create_contact_request(request: web.Request) -> web.Response:
+    user_id, _tenant_id = await _scope(request, verified=False)
+    await _require_csrf(request)
+    try:
+        payload = await request.json()
+    except Exception as error:  # noqa: BLE001
+        raise web.HTTPBadRequest() from error
+    allowed = {"project_id", "kind", "message", "rating", "testimonial_allowed"}
+    if not isinstance(payload, dict) or not set(payload).issubset(allowed):
+        return web.json_response(_error("invalid_request", "Некорректное обращение"), status=400)
+    kind = payload.get("kind")
+    message = payload.get("message")
+    rating = payload.get("rating")
+    testimonial_allowed = payload.get("testimonial_allowed", False)
+    try:
+        project_id = _project_id(payload.get("project_id"))
+    except ValueError:
+        return web.json_response(_error("invalid_request", "Некорректный проект"), status=400)
+    if (
+        kind not in {"support", "founder_feedback"}
+        or not isinstance(message, str)
+        or not 10 <= len(message.strip()) <= 4_000
+        or (rating is not None and (isinstance(rating, bool) or not isinstance(rating, int) or not 1 <= rating <= 5))
+        or not isinstance(testimonial_allowed, bool)
+    ):
+        return web.json_response(_error("invalid_request", "Проверьте текст обращения"), status=400)
+    factory = get_session_factory(request.app)
+    async with factory() as database, database.begin():
+        project = await database.scalar(
+            select(Project).where(Project.id == project_id, Project.owner_user_id == user_id)
+        )
+        if project is None:
+            raise web.HTTPNotFound()
+        subscription = await database.scalar(
+            select(Subscription)
+            .where(Subscription.user_id == user_id)
+            .order_by(Subscription.created_at.desc())
+            .limit(1)
+        )
+        founder = await database.scalar(
+            select(FounderAccessGrant).where(FounderAccessGrant.user_id == user_id)
+        )
+        if kind == "founder_feedback" and founder is None:
+            return web.json_response(
+                _error("founder_feedback_unavailable", "Founder-пилот не найден"),
+                status=409,
+            )
+        row = CustomerContactRequest(
+            user_id=user_id,
+            project_id=project_id,
+            subscription_id=subscription.id if subscription is not None else None,
+            founder_grant_id=founder.id if founder is not None else None,
+            kind=kind,
+            message=message.strip(),
+            rating=rating,
+            testimonial_allowed=testimonial_allowed,
+        )
+        database.add(row)
+        if founder is not None and kind == "founder_feedback":
+            founder.feedback_state = "received"
+        await database.flush()
+        request_id = row.id
+        await record_funnel_event(
+            database,
+            event_type="support_requested",
+            event_key=f"support_requested:contact:{row.id}",
+            journey_id=project.journey_id,
+            user_id=user_id,
+            project_id=project_id,
+        )
+    return web.json_response({"request_id": str(request_id), "accepted": True}, status=201)
 
 
 def _merchant_recovery(
@@ -439,6 +646,9 @@ async def billing_success(_request: web.Request) -> web.Response:
 
 
 def setup_billing_routes(app: web.Application) -> None:
+    app.router.add_get("/api/billing/offer", publication_offer)
+    app.router.add_post("/api/billing/founder/claim", claim_founder_access)
+    app.router.add_post("/api/billing/contact", create_contact_request)
     app.router.add_post("/api/billing/checkout", create_checkout)
     app.router.add_get("/api/billing/payments/pending", pending_payment)
     app.router.add_post("/api/billing/payments/{payment_id}/resume", resume_checkout)

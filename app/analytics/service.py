@@ -23,6 +23,8 @@ FUNNEL_EVENT_TYPES = frozenset(
         "run_queued",
         "first_artifact",
         "free_result",
+        "founder_claimed",
+        "support_requested",
         "upgrade_started",
         "payment_completed",
         "published",

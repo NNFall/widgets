@@ -15,12 +15,21 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.billing.catalog import PLAN_CATALOG
 from app.billing.contracts import PaymentStatus, ProviderCheckout
 from app.billing.payments import BillingService
-from app.billing.routes import BILLING_SERVICE_KEY, setup_billing_routes
+from app.billing.routes import BILLING_SERVICE_KEY, _subscription, setup_billing_routes
 from app.billing.yookassa import YooKassaError
 from app.db.base import Base
 from app.db.models import Tenant, User
 from app.db.session import SESSION_FACTORY_KEY
-from app.saas.models import BillingPaymentMethod, PaymentAttempt, Subscription
+from app.saas.models import (
+    BillingPaymentMethod,
+    CustomerContactRequest,
+    FounderAccessGrant,
+    FunnelEvent,
+    PaymentAttempt,
+    Project,
+    Subscription,
+    UserIdentity,
+)
 from tests.saas_cases.test_billing_service import FakeProvider
 
 
@@ -37,6 +46,24 @@ async def _billing_app(tmp_path):
             [
                 User(id=10, tenant_id=1, email="owner@example.com"),
                 User(id=11, tenant_id=1, email="other@example.com"),
+            ]
+        )
+        database.add_all(
+            [
+                UserIdentity(
+                    user_id=10,
+                    provider="yandex",
+                    provider_subject="verified-owner-10",
+                    email="owner@example.com",
+                    email_verified=True,
+                ),
+                UserIdentity(
+                    user_id=11,
+                    provider="yandex",
+                    provider_subject="verified-owner-11",
+                    email="other@example.com",
+                    email_verified=True,
+                ),
             ]
         )
     provider = FakeProvider()
@@ -58,6 +85,154 @@ async def _billing_app(tmp_path):
     client = TestClient(TestServer(app))
     await client.start_server()
     return engine, factory, provider, client
+
+
+async def _ready_project(factory, *, user_id: int = 10, host: str = "brand.example"):
+    async with factory() as database, database.begin():
+        project = Project(
+            tenant_id=1,
+            owner_user_id=user_id,
+            source_url=f"https://{host}/services",
+            status="free_result_ready",
+        )
+        database.add(project)
+        await database.flush()
+        return project.id
+
+
+@pytest.mark.asyncio
+async def test_publication_offer_and_founder_claim_are_server_priced(tmp_path) -> None:
+    engine, factory, _provider, client = await _billing_app(tmp_path)
+    try:
+        project_id = await _ready_project(factory)
+        await client.post("/test/login/10")
+
+        offer = await client.get(f"/api/billing/offer?project_id={project_id}")
+        assert offer.status == 200
+        payload = await offer.json()
+        assert payload["founder"] == {
+            "eligible": True,
+            "reason": None,
+            "remaining": 20,
+            "capacity": 20,
+            "period_days": 14,
+            "generation_tokens": 1_500_000,
+        }
+        assert [plan["code"] for plan in payload["plans"]] == [
+            "starter_intro_15d",
+            "starter_monthly",
+            "starter_quarterly",
+        ]
+        assert payload["plans"][0]["renewal"] == {
+            "plan_code": "starter_monthly",
+            "amount_minor": 200_000,
+            "currency": "RUB",
+            "period_days": 30,
+        }
+
+        no_csrf = await client.post(
+            "/api/billing/founder/claim", json={"project_id": str(project_id)}
+        )
+        assert no_csrf.status == 403
+        claimed = await client.post(
+            "/api/billing/founder/claim",
+            json={"project_id": str(project_id)},
+            headers={"X-CSRF-Token": "csrf"},
+        )
+        assert claimed.status == 201
+        result = await claimed.json()
+        assert result["created"] is True
+        assert result["subscription"]["plan_code"] == "founder_14d"
+        assert result["subscription"]["auto_renew"] is False
+        assert result["subscription"]["access_kind"] == "founder"
+        assert result["subscription"]["plan_title"] == "Kaigo Founder, 14 дней"
+        assert result["subscription"]["next_charge"] is None
+
+        replay = await client.post(
+            "/api/billing/founder/claim",
+            json={"project_id": str(project_id)},
+            headers={"X-CSRF-Token": "csrf"},
+        )
+        assert replay.status == 200
+        async with factory() as database:
+            assert await database.scalar(select(func.count()).select_from(FounderAccessGrant)) == 1
+            event = await database.scalar(
+                select(FunnelEvent).where(FunnelEvent.event_type == "founder_claimed")
+            )
+            assert event is not None
+            assert event.project_id == project_id
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+def test_subscription_exposes_exact_intro_to_monthly_renewal_terms() -> None:
+    now = datetime(2026, 8, 13, 12, tzinfo=UTC)
+    renewal_at = now + timedelta(days=15)
+    intro = PLAN_CATALOG["starter_intro_15d"]
+    row = Subscription(
+        user_id=10,
+        provider="fakepay",
+        plan_code=intro.code,
+        plan_snapshot=intro.snapshot(),
+        plan_fingerprint=intro.fingerprint(),
+        status="active",
+        current_period_start=now,
+        current_period_end=renewal_at,
+        auto_renew=True,
+        next_renewal_at=renewal_at,
+    )
+
+    payload = _subscription(row, generation_tokens_remaining=400_000)
+
+    assert payload["access_kind"] == "paid"
+    assert payload["plan_title"] == "Kaigo Starter, первые 15 дней"
+    assert payload["next_charge"] == {
+        "plan_code": "starter_monthly",
+        "amount_minor": 200_000,
+        "currency": "RUB",
+        "period_days": 30,
+        "at": "2026-08-28T12:00:00Z",
+    }
+
+
+@pytest.mark.asyncio
+async def test_customer_contact_uses_authenticated_lineage(tmp_path) -> None:
+    engine, factory, _provider, client = await _billing_app(tmp_path)
+    try:
+        project_id = await _ready_project(factory)
+        await client.post("/test/login/10")
+        invalid = await client.post(
+            "/api/billing/contact",
+            json={"project_id": str(project_id), "kind": "support", "message": "x"},
+            headers={"X-CSRF-Token": "csrf"},
+        )
+        assert invalid.status == 400
+
+        response = await client.post(
+            "/api/billing/contact",
+            json={
+                "project_id": str(project_id),
+                "kind": "support",
+                "message": "Помогите установить код на сайт и проверить домен.",
+                "testimonial_allowed": False,
+            },
+            headers={"X-CSRF-Token": "csrf"},
+        )
+        assert response.status == 201
+        async with factory() as database:
+            request = await database.scalar(select(CustomerContactRequest))
+        assert request.user_id == 10
+        assert request.project_id == project_id
+        assert request.message.startswith("Помогите установить")
+        async with factory() as database:
+            event = await database.scalar(
+                select(FunnelEvent).where(FunnelEvent.event_type == "support_requested")
+            )
+        assert event is not None
+    finally:
+        await client.close()
+        await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -91,7 +266,7 @@ async def test_checkout_requires_auth_csrf_and_server_plan(tmp_path) -> None:
         assert response.status == 201
         payload = await response.json()
         assert payload["created"] is True
-        assert payload["payment"]["amount_minor"] == 199_000
+        assert payload["payment"]["amount_minor"] == 200_000
         assert payload["checkout_url"].startswith("https://pay.example/")
         replay = await client.post(
             "/api/billing/checkout",
@@ -143,6 +318,33 @@ async def test_checkout_accepts_only_explicit_boolean_auto_renew_consent(
             assert attempt.auto_renew_requested is True
             assert attempt.save_payment_method_requested is True
         assert "provider_payment_method_id" not in json.dumps(payload)
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_intro_checkout_requires_auto_renew_consent_for_monthly_transition(
+    tmp_path,
+) -> None:
+    engine, _factory, provider, client = await _billing_app(tmp_path)
+    try:
+        await client.post("/test/login/10")
+        rejected = await client.post(
+            "/api/billing/checkout",
+            json={"plan_code": "starter_intro_15d", "auto_renew": False},
+            headers={"Idempotency-Key": "intro-without-consent", "X-CSRF-Token": "csrf"},
+        )
+        assert rejected.status == 400
+
+        accepted = await client.post(
+            "/api/billing/checkout",
+            json={"plan_code": "starter_intro_15d", "auto_renew": True},
+            headers={"Idempotency-Key": "intro-with-consent-ok", "X-CSRF-Token": "csrf"},
+        )
+        assert accepted.status == 201
+        assert (await accepted.json())["payment"]["amount_minor"] == 50_000
+        assert provider.checkout_calls[-1].save_payment_method is True
     finally:
         await client.close()
         await engine.dispose()

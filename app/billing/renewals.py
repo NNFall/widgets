@@ -9,7 +9,7 @@ from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.billing.catalog import BillingPlan
+from app.billing.catalog import PLAN_CATALOG, BillingPlan
 from app.billing.contracts import (
     PaymentProvider,
     PaymentStatus,
@@ -120,6 +120,19 @@ class RenewalScheduler:
             raise BillingError("stored subscription plan snapshot was modified")
         return plan
 
+    @classmethod
+    def _renewal_plan(cls, subscription: Subscription) -> BillingPlan:
+        current = cls._plan(subscription)
+        if current.renewal_plan_code is None:
+            return current
+        try:
+            next_plan = PLAN_CATALOG[current.renewal_plan_code]
+        except KeyError as error:
+            raise BillingError("stored subscription renewal plan is unknown") from error
+        if next_plan.renewal_plan_code is not None:
+            raise BillingError("chained introductory renewal plan is invalid")
+        return next_plan
+
     def _binding_valid(
         self,
         subscription: Subscription,
@@ -204,7 +217,7 @@ class RenewalScheduler:
                 if existing is not None:
                     return existing.id
 
-                plan = self._plan(subscription)
+                plan = self._renewal_plan(subscription)
                 try:
                     receipt = await resolve_payment_receipt(
                         database,
@@ -238,9 +251,9 @@ class RenewalScheduler:
                     idempotency_key=renewal_idempotency_key(
                         subscription.id, period_start, 1
                     ),
-                    plan_code=subscription.plan_code,
-                    plan_snapshot=dict(subscription.plan_snapshot),
-                    plan_fingerprint=subscription.plan_fingerprint,
+                    plan_code=plan.code,
+                    plan_snapshot=plan.snapshot(),
+                    plan_fingerprint=plan.fingerprint(),
                     amount_minor=plan.amount.amount_minor,
                     currency=plan.amount.currency,
                     status="creating",
@@ -323,7 +336,14 @@ class RenewalScheduler:
                     await self._disable_locked(subscription, method, now=now)
                 attempt.status = "cancelled"
                 return None
-            plan = self._plan(subscription)
+            plan = self._renewal_plan(subscription)
+            if (
+                attempt.plan_code != plan.code
+                or attempt.plan_fingerprint != plan.fingerprint()
+            ):
+                await self._disable_locked(subscription, method, now=now)
+                attempt.status = "dispatch_unknown"
+                return None
             try:
                 receipt = await resolve_payment_receipt(
                     database,

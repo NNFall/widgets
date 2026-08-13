@@ -399,6 +399,8 @@ class BillingService:
         if not isinstance(auto_renew, bool):
             raise ValueError("auto_renew must be boolean")
         plan = self._plan(plan_code)
+        if plan.renewal_plan_code is not None and not auto_renew:
+            raise ValueError("introductory plan requires explicit renewal consent")
         return await self._create_checkout_with_plan(
             user_id,
             plan,

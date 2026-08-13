@@ -1127,6 +1127,9 @@ class UsageLedger(Base):
     payment_attempt_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("payment_attempts.id", ondelete="SET NULL"), index=True
     )
+    founder_grant_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("founder_access_grants.id", ondelete="SET NULL"), index=True
+    )
     bucket: Mapped[str] = mapped_column(String(32), nullable=False)
     entry_type: Mapped[str] = mapped_column(String(32), nullable=False)
     amount: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -1269,6 +1272,84 @@ class Subscription(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class FounderAccessGrant(Base):
+    __tablename__ = "founder_access_grants"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_founder_access_grant_user"),
+        UniqueConstraint("source_origin", name="uq_founder_access_grant_origin"),
+        UniqueConstraint("position", name="uq_founder_access_grant_position"),
+        CheckConstraint(
+            "position BETWEEN 1 AND 20",
+            name="ck_founder_access_grant_position",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    project_id: Mapped[UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    subscription_id: Mapped[UUID] = mapped_column(
+        ForeignKey(
+            "subscriptions.id",
+            name="fk_founder_access_grant_subscription",
+            ondelete="RESTRICT",
+            use_alter=True,
+        ),
+        nullable=False,
+        unique=True,
+    )
+    source_origin: Mapped[str] = mapped_column(String(2048), nullable=False)
+    position: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    feedback_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="requested", server_default="requested"
+    )
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class CustomerContactRequest(Base):
+    __tablename__ = "customer_contact_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('support', 'founder_feedback')",
+            name="ck_customer_contact_request_kind",
+        ),
+        CheckConstraint(
+            "rating IS NULL OR rating BETWEEN 1 AND 5",
+            name="ck_customer_contact_request_rating",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    project_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), index=True
+    )
+    subscription_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("subscriptions.id", ondelete="SET NULL"), index=True
+    )
+    founder_grant_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("founder_access_grants.id", ondelete="SET NULL"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    rating: Mapped[int | None] = mapped_column(SmallInteger)
+    testimonial_allowed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
 
