@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 NGINX_CONFIG = ROOT / "deploy" / "nginx" / "kaigo-marketing-site.conf"
 VITE_CONFIG = ROOT / "frontend" / "vite.config.ts"
 DEPLOY_SCRIPT = ROOT / "scripts" / "deploy_marketing_site.sh"
+LEGACY_LANDING_SCRIPT = ROOT / "scripts" / "prepare_legacy_landing.sh"
 DIST = ROOT / "frontend" / "dist"
 NGINX_TEST_CONFIG = ROOT / "tests" / "deployment_cases" / "nginx-marketing-test.conf"
 NGINX_TEST_PASSWORD = ROOT / "tests" / "deployment_cases" / "nginx-test.htpasswd"
@@ -69,6 +70,16 @@ def _wait_for_docker_port(
 
 
 class MarketingSitePackageTests(unittest.TestCase):
+    def test_legacy_landing_script_scopes_archived_assets_without_touching_source(self):
+        script = LEGACY_LANDING_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("source_dir=", script)
+        self.assertIn("target_dir=", script)
+        self.assertIn("cp -a", script)
+        self.assertIn("/landing-old/assets/", script)
+        self.assertIn("/landing-old/favicon.svg", script)
+        self.assertIn("target already exists", script)
+
     def test_frontend_metadata_uses_truthful_timing(self):
         index = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
 
@@ -139,9 +150,36 @@ class MarketingSitePackageTests(unittest.TestCase):
         self.assertEqual(config.count("location = /studio/ {"), 1)
         self.assertEqual(config.count("location = /tour {"), 1)
         self.assertEqual(config.count("location = /tour/ {"), 1)
+        self.assertEqual(config.count("location = /landing-old {"), 1)
+        self.assertEqual(config.count("location = /landing-old/ {"), 1)
         self.assertNotRegex(config, r"location\s+(?:\^~\s+)?/studio/")
         self.assertIn("root /var/www/kaigo-marketing/current;", config)
         self.assertGreaterEqual(config.count("try_files /index.html =404;"), 5)
+
+        old_landing = config.split("location = /landing-old/ {", 1)[1].split(
+            "}", 1
+        )[0]
+        self.assertIn(
+            "root /var/www/kaigo-marketing-archives/landing-old;",
+            old_landing,
+        )
+        self.assertIn("try_files /index.html =404;", old_landing)
+        self.assertIn('Cache-Control "no-store"', old_landing)
+        self.assertIn("font-src 'self' data:", old_landing)
+
+        old_assets = config.split("location ^~ /landing-old/assets/ {", 1)[1].split(
+            "}", 1
+        )[0]
+        self.assertIn(
+            "alias /var/www/kaigo-marketing-archives/landing-old/assets/;",
+            old_assets,
+        )
+        self.assertNotIn("proxy_pass", old_assets)
+
+        old_redirect = config.split("location = /landing-old {", 1)[1].split(
+            "}", 1
+        )[0]
+        self.assertIn("return 308 /landing-old/;", old_redirect)
 
         self.assertIn(
             'location ~* "^/assets/[^/]+-[A-Za-z0-9_-]{8}\\.',
@@ -208,11 +246,11 @@ class MarketingSitePackageTests(unittest.TestCase):
             if line.strip().startswith("add_header Content-Security-Policy")
         ]
 
-        self.assertEqual(len(csp_lines), 7)
+        self.assertEqual(len(csp_lines), 9)
         html_csp = [line for line in csp_lines if "frame-src 'self'" in line]
         asset_csp = [line for line in csp_lines if "default-src 'none'" in line]
-        self.assertEqual(len(html_csp), 5)
-        self.assertEqual(len(asset_csp), 2)
+        self.assertEqual(len(html_csp), 6)
+        self.assertEqual(len(asset_csp), 3)
         for line in html_csp:
             self.assertIn("default-src 'self'", line)
             self.assertIn("object-src 'none'", line)
