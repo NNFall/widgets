@@ -76,10 +76,11 @@ export function HeroSection() {
       <section className="hero-section" id="product" data-landing-section>
         <div className="hero-section__inner">
           <div className="hero-copy">
-            <h1 aria-label="Покажите сайт. Получите первую версию AI-консультанта">
-              <span className="hero-title-line">Покажите сайт.</span>
-              <span className="hero-title-line">Получите первую версию</span>
-              <span className="hero-title-line">AI-консультанта</span>
+            <h1 aria-label="Через 10 минут вы сможете сказать: наш бизнес использует AI">
+              <span className="hero-title-line">Через 10 минут</span>
+              <span className="hero-title-line">вы сможете сказать:</span>
+              <span className="hero-title-line">наш бизнес</span>
+              <span className="hero-title-line">использует AI</span>
             </h1>
             <p>
               Добавьте ссылку — Kaigo бесплатно создаст первую версию AI-виджета:

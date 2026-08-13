@@ -16,7 +16,7 @@ export function ProductTourPage() {
     <main className="product-tour-page">
       <header className="product-tour-page__header">
         <a href="/" aria-label="Kaigo — главная"><KaigoLogo tone="coral" /></a>
-        <a href="/">Вернуться на лендинг</a>
+        <a href="/">На главный экран</a>
       </header>
       <ProductTour standalone />
     </main>

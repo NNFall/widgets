@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kaigo — направления логотипа</title>
+    <style>
+      :root { color-scheme: light; font-family: Inter, Arial, sans-serif; color: #252b2f; background: #eef0f1; }
+      * { box-sizing: border-box; }
+      body { margin: 0; }
+      main { width: min(calc(100% - 48px), 1480px); margin: 0 auto; padding: 54px 0 80px; }
+      header { max-width: 850px; margin-bottom: 36px; }
+      .eyebrow { margin: 0 0 10px; color: #a83f21; font-size: 13px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+      h1 { margin: 0; font-size: 54px; line-height: 1.02; letter-spacing: -.055em; }
+      header > p:last-child { max-width: 720px; margin: 18px 0 0; color: #536067; font-size: 18px; line-height: 1.55; }
+      .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+      article { min-width: 0; overflow: hidden; border: 1px solid #ccd1d3; border-radius: 20px; background: #faf9f6; box-shadow: 0 22px 46px rgba(45, 51, 55, .09); }
+      .art { min-height: 330px; display: grid; place-items: center; border-bottom: 1px solid #d7dbdc; background: #fff; }
+      img { width: 100%; height: 330px; display: block; object-fit: contain; }
+      .copy { padding: 22px; }
+      .index { color: #d6552f; font-size: 12px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+      h2 { margin: 7px 0 10px; font-size: 25px; letter-spacing: -.035em; }
+      article p { margin: 0; color: #58666d; font-size: 15px; line-height: 1.5; }
+      footer { margin-top: 22px; padding: 18px 22px; border: 1px solid #d0d4d5; border-radius: 15px; color: #525e65; background: #f8f8f6; font-size: 14px; line-height: 1.5; }
+      @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } .art, img { height: 390px; } }
+      @media (max-width: 560px) { main { width: min(calc(100% - 28px), 520px); padding-top: 32px; } h1 { font-size: 38px; } .art, img { height: 280px; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">Brand exploration · 13 августа 2026</p>
+        <h1>Три направления знака Kaigo</h1>
+        <p>Не финальные логотипы, а визуальные гипотезы в новой палитре: белый, холодный металлик и фирменный оранжевый. После выбора направления знак можно упростить и перевести в точный вектор.</p>
+      </header>
+      <section class="grid" aria-label="Концепции логотипа">
+        <article>
+          <div class="art"><img src="./assets/brand-exploration/kaigo-ai-portal.png" alt="Концепция AI Portal" /></div>
+          <div class="copy"><span class="index">Направление 01</span><h2>AI Portal</h2><p>Два слоя сходятся в одном центре: сайт и AI образуют единый вход в диалог. Самый технологичный и собранный вариант.</p></div>
+        </article>
+        <article>
+          <div class="art"><img src="./assets/brand-exploration/kaigo-living-layer.png" alt="Концепция Living Layer" /></div>
+          <div class="copy"><span class="index">Направление 02</span><h2>Living Layer</h2><p>Оранжевый живой слой накладывается на металлическую основу. Передаёт идею Kaigo как нового интеллектуального слоя поверх сайта.</p></div>
+        </article>
+        <article>
+          <div class="art"><img src="./assets/brand-exploration/kaigo-answer-signal.png" alt="Концепция Answer Signal" /></div>
+          <div class="copy"><span class="index">Направление 03</span><h2>Answer Signal</h2><p>Сигнал ответа и диалог в одном компактном символе. Самый дружелюбный вариант для продукта, который должен помогать посетителю.</p></div>
+        </article>
+      </section>
+      <footer>Рекомендация для следующего раунда: взять геометрию AI Portal, упростить её до плоского знака и проверить вместе с нынешним словесным логотипом Kaigo в шапке, виджете и favicon.</footer>
+    </main>
+  </body>
+</html>

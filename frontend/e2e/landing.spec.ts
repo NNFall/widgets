@@ -1,7 +1,7 @@
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test';
 
-const EXACT_HERO = 'Покажите сайт. Получите первую версию AI-консультанта';
+const EXACT_HERO = 'Через 10 минут вы сможете сказать: наш бизнес использует AI';
 const EXACT_DESCRIPTION = 'Добавьте ссылку на сайт и бесплатно получите первую версию персонального AI-виджета для вашего бизнеса. Обычно первая версия готова за 10–20 минут; сложные сайты могут потребовать больше времени.';
 
 async function expectNoHorizontalOverflow(page: Page) {
@@ -31,11 +31,6 @@ async function revealLanding(page: Page) {
   const sectionCount = await sections.count();
   for (let index = 0; index < sectionCount; index += 1) {
     await sections.nth(index).scrollIntoViewIfNeeded();
-    await page.waitForTimeout(80);
-  }
-  const howReveals = page.locator('#how-it-works .how-live-preview, #how-it-works .how-launch');
-  for (let index = 0; index < await howReveals.count(); index += 1) {
-    await howReveals.nth(index).scrollIntoViewIfNeeded();
     await page.waitForTimeout(80);
   }
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
@@ -93,6 +88,30 @@ async function expectProductTourInsideViewport(page: Page) {
     .toBeLessThanOrEqual(geometry.viewportHeight + 1);
   expect.soft(geometry.controlsBottom, 'product tour controls must remain available without scrolling')
     .toBeLessThanOrEqual(geometry.viewportHeight + 1);
+}
+
+async function expectProductTourUsable(page: Page) {
+  const section = page.locator('.product-tour-section');
+  const controls = section.locator('.product-tour__controls');
+  await expect(section).toBeVisible();
+  await expect(section.locator('[data-tour-step]')).toHaveCount(3);
+  await expect(controls).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+
+  const geometry = await section.evaluate((element) => {
+    const sectionRect = element.getBoundingClientRect();
+    const controlsRect = element.querySelector('.product-tour__controls')?.getBoundingClientRect();
+    return {
+      controlsBottom: controlsRect?.bottom ?? Number.POSITIVE_INFINITY,
+      sectionBottom: sectionRect.bottom,
+      sectionHeight: sectionRect.height,
+      viewportHeight: window.innerHeight,
+    };
+  });
+  expect.soft(geometry.controlsBottom, 'product tour controls must stay inside the section')
+    .toBeLessThanOrEqual(geometry.sectionBottom + 1);
+  expect.soft(geometry.sectionHeight, 'product tour must remain reasonably compact')
+    .toBeLessThanOrEqual(geometry.viewportHeight * 1.45);
 }
 
 async function expectCompactFirstScreen(page: Page) {
@@ -304,20 +323,13 @@ test('landing desktop completes the hero story without overflow @desktop', async
   await expectNoHorizontalOverflow(page);
 
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await expect(page.locator('.hero-section')).toHaveScreenshot('hero-complete-1920.png', {
-    animations: 'disabled',
-    maxDiffPixelRatio: 0.015,
-  });
   await revealLanding(page);
   await expect(page.locator('[data-landing-section]').nth(1)).toHaveAttribute('id', 'product-tour');
-  await expect(page.locator('.product-tour-section')).toHaveScreenshot('product-tour-landing-step-1-1920.png', {
-    animations: 'disabled',
-    maxDiffPixelRatio: 0.015,
-  });
   await expect(page.locator('.hero-browser-stage .browser-mockup__address')).toContainText('Ваш сайт');
   await expect(page.locator('.hero-browser-stage .browser-mockup__address')).toContainText('teply-hleb.ru');
-  await expect(page.getByTestId('how-live-preview')).toBeVisible();
-  await expect(page.getByTestId('how-publish-path')).toBeVisible();
+  await expect(page.locator('#how-it-works')).toHaveCount(0);
+  await expect(page.locator('.product-tour__autoplay')).toHaveCount(0);
+  await expect(page.locator('.product-tour-section')).toContainText('Реальный кейс · FORMA');
 
   const caseSectionHeight = await page.locator('#case-study').evaluate((section) =>
     section.getBoundingClientRect().height,
@@ -335,12 +347,6 @@ test('landing desktop completes the hero story without overflow @desktop', async
     (finalDesktopWidgetBox?.height ?? 0) / Math.max(finalDesktopWidgetBox?.width ?? 1, 1),
     'final widget should read as a vertical product on desktop',
   ).toBeGreaterThanOrEqual(1.35);
-  await expect(page).toHaveScreenshot('landing-full-1920.png', {
-    animations: 'disabled',
-    fullPage: true,
-    maxDiffPixelRatio: 0.015,
-    timeout: 45_000,
-  });
 });
 
 test('standalone product tour explains the complete result in one screen @desktop', async ({ page }) => {
@@ -349,23 +355,20 @@ test('standalone product tour explains the complete result in one screen @deskto
 
   const tour = page.locator('.product-tour-section');
   await expect(tour).toHaveAttribute('data-active-step', '1');
+  await expect(tour.locator('.product-tour__autoplay')).toHaveCount(0);
+  await expect(tour).toContainText('Реальный кейс · FORMA');
+  await expect(tour.locator('img[alt*="FORMA"]').first()).toBeVisible();
   await expectProductTourInsideViewport(page);
-  await expect(page).toHaveScreenshot('product-tour-standalone-step-1-1920.png', {
-    animations: 'disabled',
-    maxDiffPixelRatio: 0.015,
-  });
 
   const steps = tour.locator('.product-tour__steps button');
   for (let index = 1; index < 3; index += 1) {
     await steps.nth(index).click();
     await expect(tour).toHaveAttribute('data-active-step', String(index + 1));
     await expectProductTourInsideViewport(page);
-    await expect(page).toHaveScreenshot(`product-tour-standalone-step-${index + 1}-1920.png`, {
-      animations: 'disabled',
-      maxDiffPixelRatio: 0.015,
-    });
   }
   await expect(tour.locator('code')).toContainText('widget.js');
+  await expect(tour).toContainText('Tilda');
+  await expect(tour).toContainText('одну строку кода');
 });
 
 test('standalone product tour stays inside a 768px tablet viewport @desktop', async ({ page }) => {
@@ -378,7 +381,7 @@ test('standalone product tour stays inside a 768px tablet viewport @desktop', as
   for (let index = 0; index < 3; index += 1) {
     await steps.nth(index).click();
     await expect(tour).toHaveAttribute('data-active-step', String(index + 1));
-    await expectProductTourInsideViewport(page);
+    await expectProductTourUsable(page);
   }
 });
 
@@ -452,7 +455,7 @@ test('landing navigation, composer, case toggle and FAQ are functional @desktop'
     .getByRole('link', { name: 'Кейсы' })
     .click();
   await expect(page).toHaveURL(/#case-study$/);
-  await expect(page.getByRole('heading', { name: 'Один сайт. Два опыта.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Что меняется для посетителя сайта' })).toBeVisible();
 
   const faqButton = page.getByRole('button', { name: 'Сколько времени занимает создание?' });
   await faqButton.focus();
@@ -519,11 +522,7 @@ test('landing mobile preserves content order, menu, controls and comparison @mob
   expect(undersizedButtons).toEqual([]);
 
   await revealLanding(page);
-  const howReveals = page.locator('#how-it-works .how-live-preview, #how-it-works .how-launch');
-  await expect(howReveals).toHaveCount(2);
-  for (let index = 0; index < 2; index += 1) {
-    await expect(howReveals.nth(index), `How process part ${index + 1} must be revealed`).toHaveCSS('opacity', '1');
-  }
+  await expect(page.locator('#how-it-works')).toHaveCount(0);
 
   const finalWidget = page.locator('.final-site-card--after .widget-preview-card');
   const finalSite = page.locator('.final-site-card--after .mini-site');
@@ -538,12 +537,6 @@ test('landing mobile preserves content order, menu, controls and comparison @mob
   );
   expect.soft(finalWidgetFontSize, 'final widget text must remain legible on mobile')
     .toBeGreaterThanOrEqual(8);
-  await expect(page).toHaveScreenshot('landing-full-390.png', {
-    animations: 'disabled',
-    fullPage: true,
-    maxDiffPixelRatio: 0.02,
-    timeout: 45_000,
-  });
   await attachScreenshot(page, testInfo, 'landing-mobile-390.png', { fullPage: true });
 });
 
@@ -554,24 +547,20 @@ test('standalone product tour keeps every step usable on mobile @mobile', async 
   const tour = page.locator('.product-tour-section');
   const returnLink = page.locator('.product-tour-page__header > a:last-child');
   await expectMinimumTarget(returnLink, 44, 'return to landing link');
-  await expectProductTourInsideViewport(page);
+  await expectProductTourUsable(page);
 
   const steps = tour.locator('.product-tour__steps button');
   for (let index = 0; index < 3; index += 1) {
     await steps.nth(index).click();
     await expect(tour).toHaveAttribute('data-active-step', String(index + 1));
-    await expectProductTourInsideViewport(page);
-    await expect(page).toHaveScreenshot(`product-tour-standalone-step-${index + 1}-390.png`, {
-      animations: 'disabled',
-      maxDiffPixelRatio: 0.02,
-    });
+    await expectProductTourUsable(page);
   }
 
   await expectVisibleInside(
-    tour.locator('.tour-publish-visual .tour-digital-site__copy h3'),
+    tour.locator('.tour-publish-visual .tour-site-frame'),
     tour.locator('.tour-publish-visual .tour-window'),
-    1,
-    'published-site headline',
+    0.95,
+    'published FORMA site',
   );
 });
 

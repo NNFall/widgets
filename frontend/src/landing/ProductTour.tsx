@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, Pause, Play } from '@phosphor-icons/react';
+import { ArrowLeft, ArrowRight } from '@phosphor-icons/react';
 import { useEffect, useState } from 'react';
 
 import { studioHref } from '../shared/campaign';
@@ -15,36 +15,39 @@ const tourScenes = [
   {
     label: 'Добавьте сайт',
     kicker: 'Этап 1 из 3',
-    title: 'Вставьте ссылку на ваш сайт',
-    copy: 'Для старта не нужна анкета или техническое задание. Достаточно адреса сайта и пары предложений о том, каким вы хотите видеть помощника.',
+    title: 'Дайте Kaigo ссылку на ваш сайт',
+    copy: 'Вставьте адрес действующего сайта. Если есть пожелание — напишите его рядом обычными словами. Анкета, макет и техническое задание не нужны.',
+    note: 'Можно начать бесплатно. Карта не нужна.',
     instructions: [
-      'Вставьте ссылку на действующий сайт.',
-      'Если есть пожелания, опишите их обычным текстом.',
-      'Нажмите «Создать». Остальное Kaigo сделает сам.',
+      'Укажите публичную ссылку на сайт бизнеса.',
+      'Коротко напишите, что важно учесть в общении или внешнем виде.',
+      'Запустите бесплатную экспресс-версию — дальше Kaigo сам изучит страницы.',
     ],
     Visual: TourIntakeVisual,
   },
   {
-    label: 'Проверьте в Studio',
+    label: 'Проверьте результат',
     kicker: 'Этап 2 из 3',
-    title: 'Через 10–20 минут проверьте результат в Studio',
-    copy: 'Kaigo сам изучит страницы, услуги и стиль общения. Первая версия появится в Studio, где её можно спокойно проверить до публикации и оплаты.',
+    title: 'Примерно через 10 минут проверьте результат',
+    copy: 'Готовая первая версия откроется в Studio. Там сразу видно внешний вид виджета и можно поговорить с ним как обычный посетитель сайта.',
+    note: 'Первая версия бесплатна для одного подтверждённого аккаунта.',
     instructions: [
-      'Откройте готовый виджет прямо в Studio.',
-      'Задайте ему несколько вопросов как клиент.',
-      'Сохраните пожелание. Доработки доступны после выбора тарифа.',
+      'Откройте виджет на компьютере или в мобильном режиме.',
+      'Задайте вопросы об услугах, стоимости и условиях.',
+      'Если результат подходит — переходите к публикации. Доработки открываются после выбора тарифа.',
     ],
     Visual: TourStudioVisual,
   },
   {
     label: 'Подключите к сайту',
     kicker: 'Этап 3 из 3',
-    title: 'Добавьте AI-сотрудника на сайт',
-    copy: 'Когда ответы и внешний вид вас устраивают, опубликуйте версию. Сам сайт переделывать не придётся, Kaigo добавляется отдельно.',
+    title: 'Добавьте AI-консультанта на сайт',
+    copy: 'После вашей проверки Kaigo выдаст одну строку кода. Вставьте её один раз в настройки сайта — и виджет появится на нужных страницах.',
+    note: 'Сам сайт переделывать не нужно.',
     instructions: [
-      'Подтвердите готовую версию и выберите публикацию.',
-      'Скопируйте одну строку кода или передайте её разработчику.',
-      'После установки виджет начнёт отвечать посетителям сайта.',
+      'На Tilda: откройте «Настройки сайта → Ещё → HTML-код для вставки» и добавьте строку перед закрывающим тегом body.',
+      'На другом сайте: вставьте строку перед закрывающим тегом body или передайте её разработчику.',
+      'Опубликуйте изменения. Дальше содержанием и версиями вы управляете в Kaigo Studio.',
     ],
     Visual: TourPublishVisual,
   },
@@ -58,10 +61,9 @@ export function ProductTour({ standalone = false }: ProductTourProps) {
   const [activeStep, setActiveStep] = useState(0);
   const [focusWithin, setFocusWithin] = useState(false);
   const [pointerInside, setPointerInside] = useState(false);
-  const [autoPlayEnabled, setAutoPlayEnabled] = useState(true);
   const campaignStudioHref = studioHref();
   const { active: motionActive, reducedMotion, ref } = useMotionActivity<HTMLElement>();
-  const autoPlay = motionActive && !reducedMotion && !focusWithin && !pointerInside && autoPlayEnabled;
+  const autoPlay = motionActive && !reducedMotion && !focusWithin && !pointerInside;
 
   useEffect(() => {
     if (!autoPlay) return undefined;
@@ -96,23 +98,9 @@ export function ProductTour({ standalone = false }: ProductTourProps) {
     >
       <div className="product-tour__topline">
         <div>
-          <span>Три понятных этапа</span>
-          <strong>От ссылки до AI-сотрудника на вашем сайте</strong>
+          <span>Реальный кейс · FORMA</span>
+          <strong>От одной ссылки до AI-консультанта на сайте</strong>
         </div>
-        <button
-          aria-label={reducedMotion
-            ? 'Автолистание отключено настройками системы'
-            : autoPlayEnabled ? 'Остановить автолистание' : 'Продолжить автолистание'}
-          className="product-tour__autoplay"
-          disabled={reducedMotion}
-          onClick={() => setAutoPlayEnabled((enabled) => !enabled)}
-          type="button"
-        >
-          {autoPlayEnabled ? <Pause size={17} weight="fill" aria-hidden /> : <Play size={17} weight="fill" aria-hidden />}
-          <span>{reducedMotion
-            ? 'Автолистание отключено'
-            : autoPlayEnabled ? 'Автолистание включено' : 'Автолистание остановлено'}</span>
-        </button>
       </div>
 
       <div className="product-tour__viewport" aria-live={autoPlay ? 'off' : 'polite'}>
@@ -130,6 +118,7 @@ export function ProductTour({ standalone = false }: ProductTourProps) {
               <span className="product-tour__kicker">{scene.kicker}</span>
               <h2 id={`product-tour-title-${index + 1}`}>{scene.title}</h2>
               <p>{scene.copy}</p>
+              <p className="product-tour__note">{scene.note}</p>
               <ol className="product-tour__instructions">
                 {scene.instructions.map((instruction, instructionIndex) => (
                   <li key={instruction}>

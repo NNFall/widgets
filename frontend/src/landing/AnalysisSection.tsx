@@ -48,11 +48,11 @@ export function AnalysisSection() {
       <div className="landing-shell analysis-layout">
         <Reveal className="analysis-copy" preset="heading">
           <p className="section-kicker">Визуальный анализ</p>
-          <h2 aria-label="Что видит Kaigo">Kaigo изучает сайт,<br />а не просто<br />читает текст</h2>
-          <p>Он проходит по страницам, видит оформление и собирает контекст, который понадобится будущему AI-консультанту.</p>
+          <h2 aria-label="Что видит Kaigo">Kaigo видит не только текст сайта</h2>
+          <p>Он изучает страницы, услуги, цены, оформление и путь клиента. На этой основе собирается консультант, который знает ваш бизнес и выглядит частью сайта.</p>
           <div className="analysis-principle">
             <MagnifierMark />
-            <span>Сначала визуальный анализ.<br />Затем — создание виджета.</span>
+            <span>Сначала Kaigo понимает сайт. Затем собирает виджет.</span>
           </div>
         </Reveal>
 
