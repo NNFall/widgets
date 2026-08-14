@@ -1319,6 +1319,11 @@ class FounderAccessGrant(Base):
 class CustomerContactRequest(Base):
     __tablename__ = "customer_contact_requests"
     __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "idempotency_key",
+            name="uq_customer_contact_request_user_idempotency",
+        ),
         CheckConstraint(
             "kind IN ('support', 'founder_feedback')",
             name="ck_customer_contact_request_kind",
@@ -1333,6 +1338,7 @@ class CustomerContactRequest(Base):
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
     project_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("projects.id", ondelete="SET NULL"), index=True
     )

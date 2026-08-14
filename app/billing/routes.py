@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -19,12 +20,14 @@ from app.billing.payments import (
     BillingError,
     BillingService,
     CheckoutIdempotencyConflict,
+    IntroOfferUnavailable,
     MerchantAccountMismatch,
     PaymentNotFound,
     UnknownPlan,
 )
 from app.billing.service import GenerationCreditService
 from app.billing.yookassa import YooKassaError, YooKassaVerificationError
+from app.db.models import User
 from app.db.session import get_session_factory
 from app.projects.routes import _require_csrf, _scope
 from app.saas.models import (
@@ -36,6 +39,7 @@ from app.saas.models import (
 )
 
 BILLING_SERVICE_KEY = "billing_service"
+_CONTACT_IDEMPOTENCY_PATTERN = re.compile(r"^[A-Za-z0-9._-]{16,128}$")
 _MERCHANT_CUTOVER_MESSAGE = (
     "Оплата начата в другом аккаунте магазина. "
     "Верните прежнюю платёжную конфигурацию для завершения."
@@ -161,6 +165,9 @@ async def publication_offer(request: web.Request) -> web.Response:
         return web.json_response(
             _error("offer_unavailable", str(error)), status=409
         )
+    plans = list(public_billing_plans())
+    if not await _service(request).intro_offer_available(user_id):
+        plans = [plan for plan in plans if plan.code != "starter_intro_15d"]
     return web.json_response(
         {
             "founder": {
@@ -171,7 +178,7 @@ async def publication_offer(request: web.Request) -> web.Response:
                 "period_days": FOUNDER_PERIOD_DAYS,
                 "generation_tokens": FOUNDER_GENERATION_TOKENS,
             },
-            "plans": [_public_plan(plan) for plan in public_billing_plans()],
+            "plans": [_public_plan(plan) for plan in plans],
         }
     )
 
@@ -215,6 +222,15 @@ async def claim_founder_access(request: web.Request) -> web.Response:
 async def create_contact_request(request: web.Request) -> web.Response:
     user_id, _tenant_id = await _scope(request, verified=False)
     await _require_csrf(request)
+    idempotency_key = request.headers.get("Idempotency-Key", "")
+    if not _CONTACT_IDEMPOTENCY_PATTERN.fullmatch(idempotency_key):
+        return web.json_response(
+            _error(
+                "invalid_idempotency_key",
+                "Передайте корректный ключ повторной отправки",
+            ),
+            status=400,
+        )
     try:
         payload = await request.json()
     except Exception as error:  # noqa: BLE001
@@ -238,39 +254,78 @@ async def create_contact_request(request: web.Request) -> web.Response:
         or not isinstance(testimonial_allowed, bool)
     ):
         return web.json_response(_error("invalid_request", "Проверьте текст обращения"), status=400)
+    normalized_message = message.strip()
     factory = get_session_factory(request.app)
     async with factory() as database, database.begin():
+        locked_user = await database.scalar(
+            select(User).where(User.id == user_id).with_for_update()
+        )
+        if locked_user is None:
+            raise web.HTTPUnauthorized()
+        existing = await database.scalar(
+            select(CustomerContactRequest).where(
+                CustomerContactRequest.user_id == user_id,
+                CustomerContactRequest.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is not None:
+            if (
+                existing.project_id != project_id
+                or existing.kind != kind
+                or existing.message != normalized_message
+                or existing.rating != rating
+                or existing.testimonial_allowed != testimonial_allowed
+            ):
+                return web.json_response(
+                    _error(
+                        "idempotency_conflict",
+                        "Этот ключ уже использован для другого обращения",
+                    ),
+                    status=409,
+                )
+            return web.json_response(
+                {"request_id": str(existing.id), "accepted": True},
+                status=200,
+            )
         project = await database.scalar(
             select(Project).where(Project.id == project_id, Project.owner_user_id == user_id)
         )
         if project is None:
             raise web.HTTPNotFound()
-        subscription = await database.scalar(
-            select(Subscription)
-            .where(Subscription.user_id == user_id)
-            .order_by(Subscription.created_at.desc())
-            .limit(1)
-        )
-        founder = await database.scalar(
-            select(FounderAccessGrant).where(FounderAccessGrant.user_id == user_id)
-        )
-        if kind == "founder_feedback" and founder is None:
-            return web.json_response(
-                _error("founder_feedback_unavailable", "Founder-пилот не найден"),
-                status=409,
+        founder = None
+        if kind == "founder_feedback":
+            founder = await database.scalar(
+                select(FounderAccessGrant).where(
+                    FounderAccessGrant.user_id == user_id,
+                    FounderAccessGrant.project_id == project_id,
+                )
+            )
+            if founder is None:
+                return web.json_response(
+                    _error("founder_feedback_unavailable", "Founder-пилот не найден"),
+                    status=409,
+                )
+            subscription = await database.get(Subscription, founder.subscription_id)
+        else:
+            subscription = await database.scalar(
+                select(Subscription)
+                .where(Subscription.user_id == user_id)
+                .order_by(Subscription.created_at.desc())
+                .limit(1)
             )
         row = CustomerContactRequest(
             user_id=user_id,
+            idempotency_key=idempotency_key,
             project_id=project_id,
             subscription_id=subscription.id if subscription is not None else None,
             founder_grant_id=founder.id if founder is not None else None,
             kind=kind,
-            message=message.strip(),
+            message=normalized_message,
             rating=rating,
             testimonial_allowed=testimonial_allowed,
         )
         database.add(row)
-        if founder is not None and kind == "founder_feedback":
+        if founder is not None:
             founder.feedback_state = "received"
         await database.flush()
         request_id = row.id
@@ -367,6 +422,14 @@ async def create_checkout(request: web.Request) -> web.Response:
             _error(
                 "idempotency_conflict",
                 "Этот ключ уже использован с другими параметрами оплаты",
+            ),
+            status=409,
+        )
+    except IntroOfferUnavailable:
+        return web.json_response(
+            _error(
+                "intro_offer_unavailable",
+                "Пробные 15 дней уже использованы. Выберите месяц или квартал.",
             ),
             status=409,
         )

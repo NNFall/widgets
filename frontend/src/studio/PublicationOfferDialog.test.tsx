@@ -69,11 +69,77 @@ describe('PublicationOfferDialog', () => {
     expect(screen.getByText('500 ₽')).toBeVisible();
     expect(screen.getByText('2 000 ₽')).toBeVisible();
     expect(screen.getByText('5 000 ₽')).toBeVisible();
-    expect(screen.getByText(/на 15-й день — 1 500 ₽/i)).toBeVisible();
+    expect(screen.getByText(/после оплаченных 15 дней — 1 500 ₽ за следующие 15 дней/i)).toBeVisible();
     expect(screen.getByText(/затем 2 000 ₽ каждые 30 дней/i)).toBeVisible();
+    expect(screen.getByText(/стартовые 15 дней доступны один раз/i)).toBeVisible();
   });
 
-  it('requires explicit monthly-renewal consent before starting the 500-ruble offer', () => {
+  it('derives intro renewal copy from the server periods and amounts', () => {
+    const customIntroOffer: BillingOffer = {
+      ...offer,
+      plans: [
+        {
+          ...offer.plans[0],
+          amount_minor: 75_000,
+          period_days: 7,
+          renewal: {
+            ...offer.plans[0].renewal!,
+            amount_minor: 125_000,
+            period_days: 21,
+            following: {
+              ...offer.plans[0].renewal!.following!,
+              amount_minor: 350_000,
+              period_days: 45,
+            },
+          },
+        },
+        ...offer.plans.slice(1),
+      ],
+    };
+
+    render(
+      <PublicationOfferDialog
+        open
+        offer={customIntroOffer}
+        busy={false}
+        error={null}
+        onClose={vi.fn()}
+        onFounder={vi.fn()}
+        onCheckout={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/после оплаченных 7 дней — 1 250 ₽ за следующие 21 день/i)).toBeVisible();
+    expect(screen.getByText(/затем 3 500 ₽ каждые 45 дней/i)).toBeVisible();
+    expect(screen.getByText(
+      'Стартовые 7 дней доступны один раз. Без галочки вы платите только 750 ₽, и доступ закончится через 7 дней. Все цены и даты подтверждает сервер.',
+    )).toBeVisible();
+  });
+
+  it('keeps only the neutral server-priced footnote when intro is hidden', () => {
+    const offerWithoutIntro = {
+      ...offer,
+      plans: offer.plans.filter((plan) => plan.code !== 'starter_intro_15d'),
+    };
+
+    render(
+      <PublicationOfferDialog
+        open
+        offer={offerWithoutIntro}
+        busy={false}
+        error={null}
+        onClose={vi.fn()}
+        onFounder={vi.fn()}
+        onCheckout={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('Все цены и даты подтверждает сервер.')).toBeVisible();
+    expect(screen.queryByText(/стартовые/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/без галочки/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps renewal optional for the 500-ruble offer', () => {
     const onCheckout = vi.fn();
     render(
       <PublicationOfferDialog
@@ -88,11 +154,10 @@ describe('PublicationOfferDialog', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: /выбрать 15 дней/i }));
-    expect(onCheckout).not.toHaveBeenCalled();
-    expect(screen.getByRole('alert')).toHaveTextContent(/подтвердите списание/i);
-    fireEvent.click(screen.getByRole('checkbox', { name: /на 15-й день/i }));
+    expect(onCheckout).toHaveBeenNthCalledWith(1, 'starter_intro_15d', false);
+    fireEvent.click(screen.getByRole('checkbox', { name: /после оплаченных 15 дней/i }));
     fireEvent.click(screen.getByRole('button', { name: /выбрать 15 дней/i }));
-    expect(onCheckout).toHaveBeenCalledWith('starter_intro_15d', true);
+    expect(onCheckout).toHaveBeenNthCalledWith(2, 'starter_intro_15d', true);
   });
 
   it('does not require auto-renew for the direct monthly and quarterly choices', () => {

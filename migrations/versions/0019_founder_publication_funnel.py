@@ -53,6 +53,7 @@ def upgrade() -> None:
         "customer_contact_requests",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("user_id", sa.Integer(), nullable=False),
+        sa.Column("idempotency_key", sa.String(length=128), nullable=False),
         sa.Column("project_id", sa.Uuid(), nullable=True),
         sa.Column("subscription_id", sa.Uuid(), nullable=True),
         sa.Column("founder_grant_id", sa.Uuid(), nullable=True),
@@ -68,6 +69,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["subscription_id"], ["subscriptions.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("user_id", "idempotency_key", name="uq_customer_contact_request_user_idempotency"),
     )
     op.create_index("ix_customer_contact_requests_user_id", "customer_contact_requests", ["user_id"])
     op.create_index("ix_customer_contact_requests_project_id", "customer_contact_requests", ["project_id"])

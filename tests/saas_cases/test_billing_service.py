@@ -20,18 +20,27 @@ from app.billing.contracts import (
     ProviderPaymentMethod,
 )
 from app.billing.catalog import PLAN_CATALOG, BillingPlan
+from app.billing.offers import (
+    FOUNDER_GENERATION_TOKENS,
+    FounderAccessService,
+    FounderOfferUnavailable,
+)
 from app.billing.payments import (
     BillingError,
     BillingService,
     CheckoutIdempotencyConflict,
+    IntroOfferUnavailable,
     UnknownPlan,
 )
 from app.billing.reconciliation import PaymentReconciler
-from app.billing.service import UsageBalanceService
+from app.billing.service import GenerationCreditService, UsageBalanceService
 from app.db.base import Base
 from app.db.models import Tenant, User
 from app.saas.models import (
     BillingPaymentMethod,
+    FounderAccessGrant,
+    GenerationRun,
+    Project,
     PaymentAttempt,
     PaymentWebhookEvent,
     Subscription,
@@ -135,6 +144,45 @@ async def billing_db(tmp_path):
         yield engine, factory
     finally:
         await engine.dispose()
+
+
+async def _seed_pending_intro_attempt(
+    factory,
+    payments: BillingService,
+    provider: FakeProvider,
+    *,
+    idempotency_key: str,
+):
+    intro = PLAN_CATALOG["starter_intro_15d"]
+    async with factory() as database, database.begin():
+        attempt = PaymentAttempt(
+            user_id=10,
+            provider=provider.name,
+            merchant_account_fingerprint=provider.merchant_account_fingerprint,
+            purpose="initial",
+            idempotency_key=idempotency_key,
+            plan_code=intro.code,
+            plan_snapshot=intro.snapshot(),
+            plan_fingerprint=intro.fingerprint(),
+            amount_minor=intro.amount.amount_minor,
+            currency=intro.amount.currency,
+            status="pending",
+            checkout_url=f"https://pay.example/{idempotency_key}",
+            provider_payment_id=f"{idempotency_key}-payment",
+            payload={"test_mode": True},
+            auto_renew_requested=False,
+        )
+        database.add(attempt)
+        await database.flush()
+        payment = ProviderPayment(
+            provider_payment_id=str(attempt.provider_payment_id),
+            status=PaymentStatus.SUCCEEDED,
+            amount=Money(attempt.amount_minor, attempt.currency),
+            paid=True,
+            metadata=payments._metadata(attempt),
+            test_mode=True,
+        )
+    return attempt, payment, intro
 
 
 @pytest.mark.asyncio
@@ -355,6 +403,1082 @@ async def test_unsaved_method_never_enables_auto_renew(billing_db) -> None:
         assert subscription.auto_renew is False
         assert subscription.payment_method_id is None
         assert subscription.next_renewal_at is None
+
+
+@pytest.mark.asyncio
+async def test_one_time_intro_fulfills_without_saving_or_scheduling_renewal(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+    provider = FakeProvider()
+    service = BillingService(factory, provider)
+    checkout = await service.create_checkout(
+        10,
+        "starter_intro_15d",
+        "one-time-intro",
+        auto_renew=False,
+    )
+
+    async with factory() as database:
+        attempt = await database.get(PaymentAttempt, checkout.payment_id)
+        assert attempt is not None
+        assert attempt.save_payment_method_requested is None
+        payment = ProviderPayment(
+            provider_payment_id=str(attempt.provider_payment_id),
+            status=PaymentStatus.SUCCEEDED,
+            amount=Money(attempt.amount_minor, attempt.currency),
+            paid=True,
+            metadata=service._metadata(attempt),
+            test_mode=True,
+            payment_method=ProviderPaymentMethod(
+                provider_payment_method_id="provider-returned-but-not-consented",
+                saved=True,
+                method_type="bank_card",
+            ),
+        )
+
+    await service.apply_verified_payment(
+        checkout.payment_id,
+        payment,
+        source="webhook",
+    )
+
+    async with factory() as database:
+        subscription = await database.scalar(select(Subscription))
+        methods = await database.scalar(
+            select(func.count()).select_from(BillingPaymentMethod)
+        )
+    assert subscription is not None
+    assert subscription.plan_code == "starter_intro_15d"
+    assert subscription.auto_renew is False
+    assert subscription.payment_method_id is None
+    assert subscription.next_renewal_at is None
+    assert methods == 0
+
+
+@pytest.mark.asyncio
+async def test_intro_offer_cannot_be_bought_twice_with_a_new_key(billing_db) -> None:
+    _engine, factory = billing_db
+    provider = FakeProvider()
+    service = BillingService(factory, provider)
+    first = await service.create_checkout(
+        10,
+        "starter_intro_15d",
+        "first-intro-purchase",
+        auto_renew=False,
+    )
+    await service.handle_notification(
+        {"payment_id": f"pay-{first.payment_id}"}
+    )
+
+    async with factory() as database:
+        subscription = await database.scalar(select(Subscription))
+        credit_before = await database.scalar(
+            select(func.sum(UsageLedger.amount)).where(
+                UsageLedger.entry_type == "subscription.credit"
+            )
+        )
+    assert subscription is not None
+    period_end_before = subscription.current_period_end
+
+    replay = await service.create_checkout(
+        10,
+        "starter_intro_15d",
+        "first-intro-purchase",
+        auto_renew=False,
+    )
+    assert replay.created is False
+    assert replay.payment_id == first.payment_id
+
+    with pytest.raises(IntroOfferUnavailable):
+        await service.create_checkout(
+            10,
+            "starter_intro_15d",
+            "second-intro-purchase",
+            auto_renew=False,
+        )
+
+    async with factory() as database:
+        subscription = await database.scalar(select(Subscription))
+        credit_after = await database.scalar(
+            select(func.sum(UsageLedger.amount)).where(
+                UsageLedger.entry_type == "subscription.credit"
+            )
+        )
+    assert subscription is not None
+    assert subscription.current_period_end == period_end_before
+    assert credit_before == credit_after == 500_000
+    assert len(provider.checkout_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_intro_cannot_replace_an_active_recurring_subscription(billing_db) -> None:
+    _engine, factory = billing_db
+    provider = FakeProvider()
+    service = BillingService(factory, provider)
+    monthly = await service.create_checkout(
+        10,
+        "starter_monthly",
+        "monthly-before-intro",
+        auto_renew=True,
+    )
+    async with factory() as database:
+        attempt = await database.get(PaymentAttempt, monthly.payment_id)
+        assert attempt is not None
+        payment = ProviderPayment(
+            provider_payment_id=str(attempt.provider_payment_id),
+            status=PaymentStatus.SUCCEEDED,
+            amount=Money(attempt.amount_minor, attempt.currency),
+            paid=True,
+            metadata=service._metadata(attempt),
+            test_mode=True,
+            payment_method=ProviderPaymentMethod(
+                provider_payment_method_id="monthly-method",
+                saved=True,
+            ),
+        )
+    await service.apply_verified_payment(monthly.payment_id, payment, source="webhook")
+
+    with pytest.raises(IntroOfferUnavailable):
+        await service.create_checkout(
+            10,
+            "starter_intro_15d",
+            "intro-after-monthly",
+            auto_renew=False,
+        )
+
+    async with factory() as database:
+        subscription = await database.scalar(select(Subscription))
+    assert subscription is not None
+    assert subscription.plan_code == "starter_monthly"
+    assert subscription.auto_renew is True
+    assert subscription.payment_method_id is not None
+    assert subscription.next_renewal_at == subscription.current_period_end
+    assert len(provider.checkout_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_founder_claim_rejects_pending_paid_intro_checkout(billing_db) -> None:
+    _engine, factory = billing_db
+    provider = FakeProvider()
+    payments = BillingService(factory, provider)
+    await payments.create_checkout(
+        10,
+        "starter_intro_15d",
+        "pending-intro-before-founder",
+        auto_renew=False,
+    )
+
+    async with factory() as database, database.begin():
+        project = Project(
+            tenant_id=1,
+            owner_user_id=10,
+            source_url="https://pending-intro.example/services",
+            status="free_result_ready",
+        )
+        database.add(project)
+        await database.flush()
+        project_id = project.id
+
+    offer = await FounderAccessService(factory).offer(10, project_id)
+    assert offer.eligible is False
+    assert offer.reason == "pending_paid_intro"
+
+    with pytest.raises(FounderOfferUnavailable, match="pending_paid_intro"):
+        await FounderAccessService(factory).claim(10, project_id)
+
+
+@pytest.mark.asyncio
+async def test_intro_webhook_cannot_replace_founder_subscription(billing_db) -> None:
+    _engine, factory = billing_db
+    provider = FakeProvider()
+    payments = BillingService(factory, provider)
+    async with factory() as database, database.begin():
+        project = Project(
+            tenant_id=1,
+            owner_user_id=10,
+            source_url="https://founder-lineage.example/services",
+            status="free_result_ready",
+        )
+        database.add(project)
+        await database.flush()
+        project_id = project.id
+    founder = await FounderAccessService(factory).claim(10, project_id)
+
+    intro = PLAN_CATALOG["starter_intro_15d"]
+    async with factory() as database, database.begin():
+        attempt = PaymentAttempt(
+            user_id=10,
+            provider=provider.name,
+            merchant_account_fingerprint=provider.merchant_account_fingerprint,
+            purpose="initial",
+            idempotency_key="stale-intro-founder-conflict",
+            plan_code=intro.code,
+            plan_snapshot=intro.snapshot(),
+            plan_fingerprint=intro.fingerprint(),
+            amount_minor=intro.amount.amount_minor,
+            currency=intro.amount.currency,
+            status="pending",
+            checkout_url="https://pay.example/stale-intro-founder-conflict",
+            provider_payment_id="stale-intro-founder-conflict-payment",
+            payload={"test_mode": True},
+            auto_renew_requested=False,
+        )
+        database.add(attempt)
+        await database.flush()
+        payment = ProviderPayment(
+            provider_payment_id=str(attempt.provider_payment_id),
+            status=PaymentStatus.SUCCEEDED,
+            amount=Money(attempt.amount_minor, attempt.currency),
+            paid=True,
+            metadata=payments._metadata(attempt),
+            test_mode=True,
+        )
+
+    replay = await FounderAccessService(factory).claim(10, project_id)
+    assert replay.created is False
+    assert replay.grant.id == founder.grant.id
+
+    first_result = await payments.apply_verified_payment(
+        attempt.id,
+        payment,
+        source="webhook",
+    )
+    assert first_result.processed is True
+
+    async with factory() as database:
+        founder_subscription = await database.get(
+            Subscription, founder.grant.subscription_id
+        )
+        paid_subscription = await database.scalar(
+            select(Subscription).where(
+                Subscription.payment_attempt_id == attempt.id
+            )
+        )
+        grant = await database.get(FounderAccessGrant, founder.grant.id)
+        attempt = await database.get(PaymentAttempt, attempt.id)
+        credit_total = await database.scalar(
+            select(func.sum(UsageLedger.amount)).where(UsageLedger.user_id == 10)
+        )
+    assert founder_subscription is not None
+    assert founder_subscription.provider == "founder"
+    assert founder_subscription.plan_code == "founder_14d"
+    assert founder_subscription.status == "expired"
+    assert paid_subscription is not None
+    assert paid_subscription.provider == provider.name
+    assert paid_subscription.plan_code == "starter_intro_15d"
+    assert paid_subscription.status == "active"
+    assert grant is not None
+    assert grant.subscription_id == founder_subscription.id
+    grant_end = grant.ends_at
+    if grant_end.tzinfo is None:
+        grant_end = grant_end.replace(tzinfo=UTC)
+    assert grant_end <= datetime.now(UTC)
+    assert attempt is not None
+    assert attempt.status == "succeeded"
+    transition = attempt.payload["founder_access_transition"]
+    assert transition == {
+        "resolution": "paid_intro_wins",
+        "grant_id": str(grant.id),
+        "subscription_id": str(founder_subscription.id),
+    }
+    assert credit_total == FOUNDER_GENERATION_TOKENS + intro.generation_tokens
+
+    second_result = await payments.apply_verified_payment(
+        attempt.id,
+        payment,
+        source="webhook",
+    )
+    assert second_result.processed is False
+    assert second_result.subscription_id == paid_subscription.id
+
+    async with factory() as database:
+        assert (
+            await database.scalar(
+                select(func.count()).select_from(UsageLedger).where(
+                    UsageLedger.user_id == 10,
+                    UsageLedger.entry_type == "subscription.credit",
+                )
+        )
+        == 2
+        )
+
+
+@pytest.mark.asyncio
+async def test_intro_webhook_does_not_extend_active_founder_with_expired_end(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+    provider = FakeProvider()
+    payments = BillingService(factory, provider)
+    async with factory() as database, database.begin():
+        project = Project(
+            tenant_id=1,
+            owner_user_id=10,
+            source_url="https://expired-active-founder.example/services",
+            status="free_result_ready",
+        )
+        database.add(project)
+        await database.flush()
+        project_id = project.id
+    founder = await FounderAccessService(factory).claim(10, project_id)
+
+    old_start = datetime.now(UTC) - timedelta(days=10)
+    old_end = datetime.now(UTC) - timedelta(days=1)
+    async with factory() as database, database.begin():
+        subscription = await database.get(Subscription, founder.grant.subscription_id)
+        assert subscription is not None
+        subscription.status = "active"
+        subscription.current_period_start = old_start
+        subscription.current_period_end = old_end
+
+    attempt, payment, _intro = await _seed_pending_intro_attempt(
+        factory,
+        payments,
+        provider,
+        idempotency_key="expired-active-founder-intro",
+    )
+    result = await payments.apply_verified_payment(
+        attempt.id,
+        payment,
+        source="webhook",
+    )
+    assert result.processed is True
+
+    async with factory() as database:
+        subscription = await database.get(Subscription, founder.grant.subscription_id)
+    assert subscription is not None
+    assert subscription.status == "expired"
+    actual_end = subscription.current_period_end
+    if actual_end.tzinfo is None:
+        actual_end = actual_end.replace(tzinfo=UTC)
+    assert actual_end == old_end
+
+
+@pytest.mark.asyncio
+async def test_intro_webhook_after_expired_founder_subscription_still_fulfills(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+    provider = FakeProvider()
+    payments = BillingService(factory, provider)
+    async with factory() as database, database.begin():
+        project = Project(
+            tenant_id=1,
+            owner_user_id=10,
+            source_url="https://expired-founder-lineage.example/services",
+            status="free_result_ready",
+        )
+        database.add(project)
+        await database.flush()
+        project_id = project.id
+    founder = await FounderAccessService(factory).claim(10, project_id)
+
+    async with factory() as database, database.begin():
+        founder_subscription = await database.get(
+            Subscription, founder.grant.subscription_id
+        )
+        assert founder_subscription is not None
+        founder_subscription.status = "expired"
+        expired_end = datetime.now(UTC) - timedelta(days=1)
+        founder_subscription.current_period_end = expired_end
+        grant = await database.get(FounderAccessGrant, founder.grant.id)
+        assert grant is not None
+        expired_grant_end = datetime.now(UTC) - timedelta(days=2)
+        grant.ends_at = expired_grant_end
+
+    attempt, payment, intro = await _seed_pending_intro_attempt(
+        factory,
+        payments,
+        provider,
+        idempotency_key="expired-intro-founder-conflict",
+    )
+
+    result = await payments.apply_verified_payment(
+        attempt.id,
+        payment,
+        source="webhook",
+    )
+    assert result.processed is True
+
+    async with factory() as database:
+        founder_subscription = await database.get(
+            Subscription, founder.grant.subscription_id
+        )
+        paid_subscription = await database.scalar(
+            select(Subscription).where(Subscription.payment_attempt_id == attempt.id)
+        )
+        grant = await database.get(FounderAccessGrant, founder.grant.id)
+        attempt = await database.get(PaymentAttempt, attempt.id)
+        credit_total = await database.scalar(
+            select(func.sum(UsageLedger.amount)).where(UsageLedger.user_id == 10)
+        )
+    assert founder_subscription is not None
+    assert founder_subscription.status == "expired"
+    actual_expired_end = founder_subscription.current_period_end
+    if actual_expired_end.tzinfo is None:
+        actual_expired_end = actual_expired_end.replace(tzinfo=UTC)
+    assert actual_expired_end == expired_end
+    assert paid_subscription is not None
+    assert paid_subscription.status == "active"
+    assert grant is not None
+    assert grant.subscription_id == founder_subscription.id
+    actual_grant_end = grant.ends_at
+    if actual_grant_end.tzinfo is None:
+        actual_grant_end = actual_grant_end.replace(tzinfo=UTC)
+    assert actual_grant_end == expired_grant_end
+    assert attempt is not None
+    assert attempt.status == "succeeded"
+    assert attempt.payload["founder_access_transition"]["grant_id"] == str(grant.id)
+    assert (
+        credit_total
+        == FOUNDER_GENERATION_TOKENS + intro.generation_tokens
+    )
+
+    replay = await payments.apply_verified_payment(
+        attempt.id,
+        payment,
+        source="webhook",
+    )
+    assert replay.processed is False
+    async with factory() as database:
+        assert (
+            await database.scalar(
+                select(func.count()).select_from(UsageLedger).where(
+                    UsageLedger.user_id == 10,
+                    UsageLedger.entry_type == "subscription.credit",
+                )
+            )
+            == 2
+        )
+
+
+@pytest.mark.asyncio
+async def test_intro_webhook_compensates_same_row_converted_paid_subscription(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+    provider = FakeProvider()
+    payments = BillingService(factory, provider)
+    async with factory() as database, database.begin():
+        project = Project(
+            tenant_id=1,
+            owner_user_id=10,
+            source_url="https://same-row-paid-lineage.example/services",
+            status="free_result_ready",
+        )
+        database.add(project)
+        await database.flush()
+        project_id = project.id
+    founder = await FounderAccessService(factory).claim(10, project_id)
+
+    monthly = PLAN_CATALOG["starter_monthly"]
+    baseline_start = datetime.now(UTC) - timedelta(days=1)
+    baseline_end = datetime.now(UTC) + timedelta(days=4)
+    async with factory() as database, database.begin():
+        subscription = await database.get(Subscription, founder.grant.subscription_id)
+        assert subscription is not None
+        monthly_attempt = PaymentAttempt(
+            user_id=10,
+            subscription_id=subscription.id,
+            provider=provider.name,
+            merchant_account_fingerprint=provider.merchant_account_fingerprint,
+            purpose="initial",
+            idempotency_key="same-row-monthly-initial",
+            plan_code=monthly.code,
+            plan_snapshot=monthly.snapshot(),
+            plan_fingerprint=monthly.fingerprint(),
+            amount_minor=monthly.amount.amount_minor,
+            currency=monthly.amount.currency,
+            status="succeeded",
+            checkout_url="https://pay.example/same-row-monthly-initial",
+            provider_payment_id="same-row-monthly-initial-payment",
+            payload={"test_mode": True},
+            auto_renew_requested=False,
+        )
+        database.add(monthly_attempt)
+        await database.flush()
+        database.add(
+            UsageLedger(
+                user_id=10,
+                payment_attempt_id=monthly_attempt.id,
+                bucket="tokens",
+                entry_type="subscription.credit",
+                amount=monthly.generation_tokens,
+                idempotency_key="payment:same-row-monthly-initial:tokens",
+                payload={"plan_code": monthly.code},
+            )
+        )
+        method = BillingPaymentMethod(
+            user_id=10,
+            provider=provider.name,
+            merchant_account_fingerprint=provider.merchant_account_fingerprint,
+            provider_payment_method_id="same-row-monthly-method",
+            status="active",
+            consent_version="test-consent",
+            consented_at=baseline_start,
+            saved_at=baseline_start,
+        )
+        database.add(method)
+        await database.flush()
+        subscription.provider = provider.name
+        subscription.payment_method_id = method.id
+        subscription.merchant_account_fingerprint = (
+            provider.merchant_account_fingerprint
+        )
+        subscription.plan_code = monthly.code
+        subscription.plan_snapshot = monthly.snapshot()
+        subscription.plan_fingerprint = monthly.fingerprint()
+        subscription.payment_attempt_id = monthly_attempt.id
+        subscription.status = "active"
+        subscription.current_period_start = baseline_start
+        subscription.current_period_end = baseline_end
+        subscription.auto_renew = True
+        subscription.next_renewal_at = baseline_end
+
+    credits = GenerationCreditService(factory)
+    assert await credits.available_tokens(10) == monthly.generation_tokens
+
+    attempt, payment, intro = await _seed_pending_intro_attempt(
+        factory,
+        payments,
+        provider,
+        idempotency_key="same-row-converted-intro",
+    )
+    result = await payments.apply_verified_payment(
+        attempt.id,
+        payment,
+        source="webhook",
+    )
+    assert result.processed is True
+
+    async with factory() as database:
+        subscription = await database.get(Subscription, founder.grant.subscription_id)
+        attempt = await database.get(PaymentAttempt, attempt.id)
+        grant = await database.get(FounderAccessGrant, founder.grant.id)
+        subscription_credits = list(
+            await database.scalars(
+                select(UsageLedger).where(
+                    UsageLedger.payment_attempt_id == monthly_attempt.id,
+                    UsageLedger.entry_type == "subscription.credit",
+                )
+            )
+        )
+    assert subscription is not None
+    assert subscription.status == "active"
+    assert subscription.provider == provider.name
+    assert subscription.plan_code == monthly.code
+    assert subscription.payment_method_id == method.id
+    assert subscription.auto_renew is True
+    actual_end = subscription.current_period_end
+    if actual_end.tzinfo is None:
+        actual_end = actual_end.replace(tzinfo=UTC)
+    assert actual_end == baseline_end + timedelta(days=intro.period_days)
+    actual_next_renewal = subscription.next_renewal_at
+    if actual_next_renewal.tzinfo is None:
+        actual_next_renewal = actual_next_renewal.replace(tzinfo=UTC)
+    assert actual_next_renewal == actual_end
+    assert grant is not None
+    assert grant.subscription_id == subscription.id
+    assert attempt is not None
+    assert attempt.status == "succeeded"
+    transition = attempt.payload["founder_access_transition"]
+    assert transition["resolution"] == "paid_intro_compensated_on_active_paid"
+    assert transition["grant_id"] == str(grant.id)
+    assert transition["subscription_id"] == str(subscription.id)
+    assert transition["paid_subscription_id"] == str(subscription.id)
+    compensation_credit = next(
+        row
+        for row in subscription_credits
+        if row.payload.get("source_payment_attempt_id") == str(attempt.id)
+    )
+    assert compensation_credit.payment_attempt_id == monthly_attempt.id
+    assert compensation_credit.payload["entitlement_payment_attempt_id"] == str(
+        monthly_attempt.id
+    )
+    assert (
+        compensation_credit.payload["compensation_resolution"]
+        == "paid_intro_compensated_on_active_paid"
+    )
+    assert await credits.available_tokens(10) == (
+        monthly.generation_tokens + intro.generation_tokens
+    )
+
+    async with factory() as database, database.begin():
+        run = GenerationRun(
+            project_id=project_id,
+            mode="express",
+            state="queued",
+            progress=0,
+            next_event_sequence=1,
+            idempotency_key="same-row-compensation-run",
+        )
+        database.add(run)
+        await database.flush()
+        reservation = await credits.reserve_in_session(
+            database,
+            user_id=10,
+            project_id=project_id,
+            run_id=run.id,
+            amount=100_000,
+        )
+        assert reservation.payment_attempt_id == monthly_attempt.id
+    assert await credits.available_tokens(10) == (
+        monthly.generation_tokens + intro.generation_tokens - 100_000
+    )
+
+    replay = await payments.apply_verified_payment(
+        attempt.id,
+        payment,
+        source="webhook",
+    )
+    assert replay.processed is False
+    assert await credits.available_tokens(10) == (
+        monthly.generation_tokens + intro.generation_tokens - 100_000
+    )
+
+
+@pytest.mark.asyncio
+async def test_intro_webhook_compensates_active_paid_with_separate_expired_founder(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+    provider = FakeProvider()
+    payments = BillingService(factory, provider)
+    async with factory() as database, database.begin():
+        project = Project(
+            tenant_id=1,
+            owner_user_id=10,
+            source_url="https://separate-paid-lineage.example/services",
+            status="free_result_ready",
+        )
+        database.add(project)
+        await database.flush()
+        project_id = project.id
+    founder = await FounderAccessService(factory).claim(10, project_id)
+
+    old_founder_end = datetime.now(UTC) - timedelta(days=3)
+    old_grant_end = datetime.now(UTC) - timedelta(days=2)
+    async with factory() as database, database.begin():
+        founder_subscription = await database.get(
+            Subscription, founder.grant.subscription_id
+        )
+        grant = await database.get(FounderAccessGrant, founder.grant.id)
+        assert founder_subscription is not None
+        assert grant is not None
+        founder_subscription.status = "expired"
+        founder_subscription.current_period_end = old_founder_end
+        grant.ends_at = old_grant_end
+
+    monthly_checkout = await payments.create_checkout(
+        10,
+        "starter_monthly",
+        "separate-active-monthly",
+        auto_renew=False,
+    )
+    await payments.handle_notification(
+        {"payment_id": f"pay-{monthly_checkout.payment_id}"}
+    )
+    async with factory() as database:
+        monthly_subscription = await database.scalar(
+            select(Subscription).where(
+                Subscription.user_id == 10,
+                Subscription.status == "active",
+            )
+        )
+        assert monthly_subscription is not None
+        monthly_end = monthly_subscription.current_period_end
+        monthly_payment_attempt_id = monthly_subscription.payment_attempt_id
+        monthly_provider = monthly_subscription.provider
+        monthly_plan_code = monthly_subscription.plan_code
+        monthly_auto_renew = monthly_subscription.auto_renew
+        monthly_method_id = monthly_subscription.payment_method_id
+    monthly = PLAN_CATALOG["starter_monthly"]
+    credits = GenerationCreditService(factory)
+    assert await credits.available_tokens(10) == monthly.generation_tokens
+
+    attempt, payment, intro = await _seed_pending_intro_attempt(
+        factory,
+        payments,
+        provider,
+        idempotency_key="separate-expired-founder-intro",
+    )
+    result = await payments.apply_verified_payment(
+        attempt.id,
+        payment,
+        source="webhook",
+    )
+    assert result.processed is True
+
+    async with factory() as database:
+        founder_subscription = await database.get(
+            Subscription, founder.grant.subscription_id
+        )
+        grant = await database.get(FounderAccessGrant, founder.grant.id)
+        monthly_subscription = await database.get(
+            Subscription, monthly_subscription.id
+        )
+        attempt = await database.get(PaymentAttempt, attempt.id)
+        subscription_credits = list(
+            await database.scalars(
+                select(UsageLedger).where(
+                    UsageLedger.payment_attempt_id == monthly_payment_attempt_id,
+                    UsageLedger.entry_type == "subscription.credit",
+                )
+            )
+        )
+        active_count = await database.scalar(
+            select(func.count()).select_from(Subscription).where(
+                Subscription.user_id == 10,
+                Subscription.status == "active",
+            )
+        )
+    assert founder_subscription is not None
+    actual_founder_end = founder_subscription.current_period_end
+    if actual_founder_end.tzinfo is None:
+        actual_founder_end = actual_founder_end.replace(tzinfo=UTC)
+    assert actual_founder_end == old_founder_end
+    assert grant is not None
+    actual_grant_end = grant.ends_at
+    if actual_grant_end.tzinfo is None:
+        actual_grant_end = actual_grant_end.replace(tzinfo=UTC)
+    assert actual_grant_end == old_grant_end
+    assert monthly_subscription is not None
+    assert monthly_subscription.status == "active"
+    assert monthly_subscription.provider == monthly_provider
+    assert monthly_subscription.plan_code == monthly_plan_code
+    assert monthly_subscription.payment_attempt_id == monthly_payment_attempt_id
+    assert monthly_subscription.auto_renew is monthly_auto_renew
+    assert monthly_subscription.payment_method_id == monthly_method_id
+    actual_monthly_end = monthly_subscription.current_period_end
+    if actual_monthly_end.tzinfo is None:
+        actual_monthly_end = actual_monthly_end.replace(tzinfo=UTC)
+    expected_monthly_end = monthly_end
+    if expected_monthly_end.tzinfo is None:
+        expected_monthly_end = expected_monthly_end.replace(tzinfo=UTC)
+    assert actual_monthly_end == expected_monthly_end + timedelta(
+        days=intro.period_days
+    )
+    assert active_count == 1
+    assert attempt is not None
+    assert attempt.status == "succeeded"
+    assert (
+        attempt.payload["founder_access_transition"]["resolution"]
+        == "paid_intro_compensated_on_active_paid"
+    )
+    compensation_credit = next(
+        row
+        for row in subscription_credits
+        if row.payload.get("source_payment_attempt_id") == str(attempt.id)
+    )
+    assert compensation_credit.payment_attempt_id == monthly_payment_attempt_id
+    assert compensation_credit.payload["entitlement_payment_attempt_id"] == str(
+        monthly_payment_attempt_id
+    )
+    assert (
+        compensation_credit.payload["compensation_resolution"]
+        == "paid_intro_compensated_on_active_paid"
+    )
+    assert await credits.available_tokens(10) == (
+        monthly.generation_tokens + intro.generation_tokens
+    )
+
+    replay = await payments.apply_verified_payment(
+        attempt.id,
+        payment,
+        source="webhook",
+    )
+    assert replay.processed is False
+    assert await credits.available_tokens(10) == (
+        monthly.generation_tokens + intro.generation_tokens
+    )
+
+
+@pytest.mark.asyncio
+async def test_compensated_intro_credit_rolls_off_after_successful_renewal(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+    provider = FakeProvider()
+    payments = BillingService(factory, provider)
+    async with factory() as database, database.begin():
+        project = Project(
+            tenant_id=1,
+            owner_user_id=10,
+            source_url="https://renewal-compensation-lineage.example/services",
+            status="free_result_ready",
+        )
+        database.add(project)
+        await database.flush()
+        project_id = project.id
+    founder = await FounderAccessService(factory).claim(10, project_id)
+
+    async with factory() as database, database.begin():
+        founder_subscription = await database.get(
+            Subscription, founder.grant.subscription_id
+        )
+        grant = await database.get(FounderAccessGrant, founder.grant.id)
+        assert founder_subscription is not None
+        assert grant is not None
+        founder_subscription.status = "expired"
+        founder_subscription.current_period_end = datetime.now(UTC) - timedelta(
+            days=2
+        )
+        grant.ends_at = datetime.now(UTC) - timedelta(days=1)
+
+    monthly = PLAN_CATALOG["starter_monthly"]
+    monthly_checkout = await payments.create_checkout(
+        10,
+        monthly.code,
+        "renewal-compensation-monthly",
+        auto_renew=False,
+    )
+    await payments.handle_notification(
+        {"payment_id": f"pay-{monthly_checkout.payment_id}"}
+    )
+    async with factory() as database, database.begin():
+        subscription = await database.scalar(
+            select(Subscription).where(
+                Subscription.user_id == 10,
+                Subscription.status == "active",
+            )
+        )
+        assert subscription is not None
+        method = BillingPaymentMethod(
+            user_id=10,
+            provider=provider.name,
+            merchant_account_fingerprint=provider.merchant_account_fingerprint,
+            provider_payment_method_id="renewal-compensation-method",
+            status="active",
+            consent_version="test-consent",
+            consented_at=datetime.now(UTC),
+            saved_at=datetime.now(UTC),
+        )
+        database.add(method)
+        await database.flush()
+        subscription.payment_method_id = method.id
+        subscription.merchant_account_fingerprint = (
+            provider.merchant_account_fingerprint
+        )
+        subscription.auto_renew = True
+        subscription.next_renewal_at = subscription.current_period_end
+        monthly_attempt_id = subscription.payment_attempt_id
+        assert monthly_attempt_id is not None
+
+    credits = GenerationCreditService(factory)
+    attempt, payment, intro = await _seed_pending_intro_attempt(
+        factory,
+        payments,
+        provider,
+        idempotency_key="renewal-compensation-intro",
+    )
+    await payments.apply_verified_payment(attempt.id, payment, source="webhook")
+    assert await credits.available_tokens(10) == (
+        monthly.generation_tokens + intro.generation_tokens
+    )
+
+    async with factory() as database, database.begin():
+        run = GenerationRun(
+            project_id=project_id,
+            mode="express",
+            state="queued",
+            progress=0,
+            next_event_sequence=1,
+            idempotency_key="renewal-compensation-run",
+        )
+        database.add(run)
+        await database.flush()
+        reservation = await credits.reserve_in_session(
+            database,
+            user_id=10,
+            project_id=project_id,
+            run_id=run.id,
+            amount=1_400_000,
+        )
+        assert reservation.payment_attempt_id == monthly_attempt_id
+    async with factory() as database, database.begin():
+        subscription = await database.scalar(
+            select(Subscription).where(
+                Subscription.user_id == 10,
+                Subscription.status == "active",
+            )
+        )
+        assert subscription is not None
+        renew_start = datetime.now(UTC)
+        subscription.current_period_start = renew_start - timedelta(days=30)
+        subscription.current_period_end = renew_start
+        subscription.next_renewal_at = renew_start
+
+    async with factory() as database, database.begin():
+        subscription = await database.scalar(
+            select(Subscription).where(
+                Subscription.user_id == 10,
+                Subscription.status == "active",
+            )
+        )
+        assert subscription is not None
+        method = await database.get(BillingPaymentMethod, subscription.payment_method_id)
+        assert method is not None
+        renewal_start = subscription.current_period_end
+        renewal_end = renewal_start + timedelta(days=monthly.period_days)
+        renewal_attempt = PaymentAttempt(
+            user_id=10,
+            provider=provider.name,
+            merchant_account_fingerprint=provider.merchant_account_fingerprint,
+            purpose="renewal",
+            subscription_id=subscription.id,
+            payment_method_id=method.id,
+            billing_period_start=renewal_start,
+            billing_period_end=renewal_end,
+            renewal_attempt_number=1,
+            retry_of_payment_attempt_id=None,
+            retry_of_renewal_attempt_number=None,
+            next_dispatch_at=None,
+            auto_renew_requested=True,
+            save_payment_method_requested=False,
+            consent_version=method.consent_version,
+            consented_at=method.consented_at,
+            idempotency_key="renewal-compensation-primary",
+            plan_code=monthly.code,
+            plan_snapshot=monthly.snapshot(),
+            plan_fingerprint=monthly.fingerprint(),
+            amount_minor=monthly.amount.amount_minor,
+            currency=monthly.amount.currency,
+            status="pending",
+            checkout_url=None,
+            provider_payment_id="renewal-compensation-payment",
+            payload={"test_mode": True},
+        )
+        database.add(renewal_attempt)
+        await database.flush()
+        renewal_payment = ProviderPayment(
+            provider_payment_id=str(renewal_attempt.provider_payment_id),
+            status=PaymentStatus.SUCCEEDED,
+            amount=Money(renewal_attempt.amount_minor, renewal_attempt.currency),
+            paid=True,
+            metadata=payments._metadata(renewal_attempt),
+            test_mode=True,
+        )
+        renewal_attempt_id = renewal_attempt.id
+
+    result = await payments.apply_verified_payment(
+        renewal_attempt_id,
+        renewal_payment,
+        source="webhook",
+    )
+    assert result.processed is True
+    async with factory() as database:
+        subscription = await database.scalar(
+            select(Subscription).where(
+                Subscription.user_id == 10,
+                Subscription.status == "active",
+            )
+        )
+        assert subscription is not None
+        assert subscription.payment_attempt_id == renewal_attempt_id
+        available = await GenerationCreditService.available_for_subscription_in_session(
+            database,
+            subscription,
+        )
+    assert available == monthly.generation_tokens
+
+
+@pytest.mark.asyncio
+async def test_founder_grant_consumes_intro_offer_after_subscription_expires(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+    provider = FakeProvider()
+    payments = BillingService(factory, provider)
+    async with factory() as database, database.begin():
+        project = Project(
+            tenant_id=1,
+            owner_user_id=10,
+            source_url="https://expired-founder.example/services",
+            status="free_result_ready",
+        )
+        database.add(project)
+        await database.flush()
+        project_id = project.id
+    founder = await FounderAccessService(factory).claim(10, project_id)
+
+    async with factory() as database, database.begin():
+        subscription = await database.get(Subscription, founder.grant.subscription_id)
+        assert subscription is not None
+        subscription.status = "expired"
+        subscription.current_period_end = datetime.now(UTC) - timedelta(days=1)
+
+    assert await payments.intro_offer_available(10) is False
+
+
+@pytest.mark.asyncio
+async def test_founder_offer_reports_active_paid_subscription_as_unavailable(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+    provider = FakeProvider()
+    payments = BillingService(factory, provider)
+    checkout = await payments.create_checkout(
+        10,
+        "starter_monthly",
+        "active-paid-before-founder",
+        auto_renew=False,
+    )
+    await payments.handle_notification({"payment_id": f"pay-{checkout.payment_id}"})
+
+    async with factory() as database, database.begin():
+        project = Project(
+            tenant_id=1,
+            owner_user_id=10,
+            source_url="https://active-paid.example/services",
+            status="free_result_ready",
+        )
+        database.add(project)
+        await database.flush()
+        project_id = project.id
+
+    offer = await FounderAccessService(factory).offer(10, project_id)
+
+    assert offer.eligible is False
+    assert offer.reason == "paid_access_used"
+
+
+@pytest.mark.asyncio
+async def test_founder_offer_and_claim_stay_blocked_after_paid_access_expires(
+    billing_db,
+) -> None:
+    _engine, factory = billing_db
+    provider = FakeProvider()
+    payments = BillingService(factory, provider)
+    checkout = await payments.create_checkout(
+        10,
+        "starter_monthly",
+        "expired-paid-before-founder",
+        auto_renew=False,
+    )
+    await payments.handle_notification({"payment_id": f"pay-{checkout.payment_id}"})
+
+    async with factory() as database, database.begin():
+        subscription = await database.scalar(select(Subscription))
+        assert subscription is not None
+        subscription.status = "expired"
+        subscription.current_period_end = datetime.now(UTC) - timedelta(days=1)
+        project = Project(
+            tenant_id=1,
+            owner_user_id=10,
+            source_url="https://expired-paid.example/services",
+            status="free_result_ready",
+        )
+        database.add(project)
+        await database.flush()
+        project_id = project.id
+
+    founder = FounderAccessService(factory)
+    offer = await founder.offer(10, project_id)
+    assert offer.eligible is False
+    assert offer.reason == "paid_access_used"
+    with pytest.raises(FounderOfferUnavailable, match="paid_access_used"):
+        await founder.claim(10, project_id)
 
 
 @pytest.mark.asyncio

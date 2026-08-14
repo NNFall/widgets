@@ -12,6 +12,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import func, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
@@ -232,6 +233,7 @@ async def test_postgres_billing_migration_and_concurrent_fulfillment(monkeypatch
         created = True
         monkeypatch.setenv("DATABASE_URL", rendered)
         config = Config(str(PROJECT_ROOT / "alembic.ini"))
+        expected_head = ScriptDirectory.from_config(config).get_current_head()
         await asyncio.to_thread(command.upgrade, config, "0008_publication_releases")
         target_engine = create_async_engine(rendered)
         factory = async_sessionmaker(target_engine, expire_on_commit=False)
@@ -450,7 +452,7 @@ async def test_postgres_billing_migration_and_concurrent_fulfillment(monkeypatch
             revision = await connection.run_sync(
                 lambda sync: MigrationContext.configure(sync).get_current_revision()
             )
-        assert revision == "0017_funnel_journeys"
+        assert revision == expected_head
 
         await asyncio.to_thread(command.downgrade, config, "0008_publication_releases")
         async with target_engine.connect() as connection:

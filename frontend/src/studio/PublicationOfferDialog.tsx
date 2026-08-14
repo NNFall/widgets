@@ -18,6 +18,21 @@ function rubles(amountMinor: number) {
   return `${new Intl.NumberFormat('ru-RU').format(amountMinor / 100)} ₽`;
 }
 
+function daysWord(value: number) {
+  const absolute = Math.abs(value) % 100;
+  if (absolute >= 11 && absolute <= 14) return 'дней';
+  switch (absolute % 10) {
+    case 1:
+      return 'день';
+    case 2:
+    case 3:
+    case 4:
+      return 'дня';
+    default:
+      return 'дней';
+  }
+}
+
 const BUTTON_LABELS: Record<string, string> = {
   starter_intro_15d: 'Выбрать 15 дней',
   starter_monthly: 'Выбрать месяц',
@@ -35,24 +50,22 @@ export function PublicationOfferDialog({
   onCheckout,
 }: PublicationOfferDialogProps) {
   const [introConsent, setIntroConsent] = useState(false);
-  const [consentError, setConsentError] = useState(false);
 
   useEffect(() => {
     if (!open) {
       setIntroConsent(false);
-      setConsentError(false);
     }
   }, [open]);
   if (!open) return null;
 
+  const introPlan = offer.plans.find((plan) => plan.code === 'starter_intro_15d');
+  const footnote = introPlan
+    ? `Стартовые ${introPlan.period_days} ${daysWord(introPlan.period_days)} доступны один раз. Без галочки вы платите только ${rubles(introPlan.amount_minor)}, и доступ закончится через ${introPlan.period_days} ${daysWord(introPlan.period_days)}. Все цены и даты подтверждает сервер.`
+    : 'Все цены и даты подтверждает сервер.';
+
   const choose = (code: string) => {
     const isIntro = code === 'starter_intro_15d';
-    if (isIntro && !introConsent) {
-      setConsentError(true);
-      return;
-    }
-    setConsentError(false);
-    onCheckout(code, isIntro);
+    onCheckout(code, isIntro && introConsent);
   };
 
   return (
@@ -77,16 +90,16 @@ export function PublicationOfferDialog({
             <div className="publication-offer__founder-mark"><Star aria-hidden size={21} weight="fill" /></div>
             <div>
               <span>ДЛЯ ПЕРВЫХ КЛИЕНТОВ · ОСТАЛОСЬ {offer.founder.remaining} МЕСТ</span>
-              <h3>14 дней бесплатно</h3>
+              <h3>{offer.founder.period_days} {daysWord(offer.founder.period_days)} бесплатно</h3>
               <p>Опубликуем виджет без карты и автосписаний. Внутри — до трёх стандартных доработок. Взамен попросим честную обратную связь.</p>
               <ul>
                 <li><Check aria-hidden /> Публикация на вашем домене</li>
                 <li><Check aria-hidden /> {new Intl.NumberFormat('ru-RU').format(offer.founder.generation_tokens)} токенов</li>
-                <li><Check aria-hidden /> Никакого платежа через 14 дней</li>
+                <li><Check aria-hidden /> Никакого платежа через {offer.founder.period_days} {daysWord(offer.founder.period_days)}</li>
               </ul>
             </div>
             <button type="button" onClick={onFounder} disabled={busy}>
-              {busy ? <Clock aria-hidden size={18} /> : null} Активировать 14 дней и опубликовать
+              {busy ? <Clock aria-hidden size={18} /> : null} Активировать {offer.founder.period_days} {daysWord(offer.founder.period_days)} и опубликовать
             </button>
           </article>
         )}
@@ -99,21 +112,18 @@ export function PublicationOfferDialog({
                 <div>
                   <span>{isIntro ? 'ПОПРОБОВАТЬ НА САЙТЕ' : plan.period_days === 90 ? 'ВЫГОДНЕЕ НА 3 МЕСЯЦА' : 'БЕЗ АВТОПРОДЛЕНИЯ'}</span>
                   <h3>{rubles(plan.amount_minor)}</h3>
-                  <p>за {plan.period_days} дней · {new Intl.NumberFormat('ru-RU').format(plan.generation_tokens)} токенов</p>
+                  <p>за {plan.period_days} {daysWord(plan.period_days)} · {new Intl.NumberFormat('ru-RU').format(plan.generation_tokens)} токенов</p>
                 </div>
                 {isIntro && plan.renewal && plan.renewal.following && (
                   <label className="publication-offer__consent">
                     <input
                       type="checkbox"
                       checked={introConsent}
-                      onChange={(event) => {
-                        setIntroConsent(event.target.checked);
-                        if (event.target.checked) setConsentError(false);
-                      }}
+                      onChange={(event) => setIntroConsent(event.target.checked)}
                       disabled={busy}
                     />
                     <span>
-                      На 15-й день — {rubles(plan.renewal.amount_minor)} за оставшиеся {plan.renewal.period_days} дней первого месяца. Затем {rubles(plan.renewal.following.amount_minor)} каждые {plan.renewal.following.period_days} дней. Можно отключить до следующего списания.
+                      Включить автопродление: после оплаченных {plan.period_days} {daysWord(plan.period_days)} — {rubles(plan.renewal.amount_minor)} за следующие {plan.renewal.period_days} {daysWord(plan.renewal.period_days)}, затем {rubles(plan.renewal.following.amount_minor)} каждые {plan.renewal.following.period_days} {daysWord(plan.renewal.following.period_days)}. Можно отключить до следующего списания.
                     </span>
                   </label>
                 )}
@@ -124,9 +134,8 @@ export function PublicationOfferDialog({
             );
           })}
         </div>}
-        {consentError && <p className="publication-offer__error" role="alert">Подтвердите списание 1 500 ₽ на 15-й день и последующие 2 000 ₽ каждые 30 дней — либо выберите другой вариант.</p>}
         {error && <p className="publication-offer__error" role="alert">{error}</p>}
-        <p className="publication-offer__footnote">Все цены и даты подтверждает сервер. Автопродление не включается без вашего отдельного согласия.</p>
+        <p className="publication-offer__footnote">{footnote}</p>
       </section>
     </div>
   );

@@ -48,6 +48,7 @@ it('loads the publication offer and sends founder and support commands with CSRF
     'project/123',
     'Полезный пилот, нужна помощь с установкой.',
     'csrf-founder',
+    'contact-stable-key-0001',
     { kind: 'founder_feedback', rating: 5, testimonialAllowed: true },
   )).resolves.toEqual(contact);
 
@@ -60,6 +61,9 @@ it('loads the publication offer and sends founder and support commands with CSRF
   const [contactUrl, contactInit] = fetchMock.mock.calls[2] as [string, RequestInit];
   expect(contactUrl).toBe('/api/billing/contact');
   expect(new Headers(contactInit.headers).get('X-CSRF-Token')).toBe('csrf-founder');
+  expect(new Headers(contactInit.headers).get('Idempotency-Key')).toBe(
+    'contact-stable-key-0001',
+  );
   expect(JSON.parse(String(contactInit.body))).toEqual({
     project_id: 'project/123',
     kind: 'founder_feedback',

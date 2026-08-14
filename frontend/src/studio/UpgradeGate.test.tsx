@@ -178,7 +178,7 @@ describe('UpgradeGate', () => {
     expect(screen.getByRole('status')).toHaveTextContent(/ожидаем подтверждение оплаты/i);
   });
 
-  it('starts the 500-ruble offer only after consent to the 1,500 balance and 2,000 renewal', async () => {
+  it('starts the 500-ruble offer without forcing renewal consent', async () => {
     vi.spyOn(window, 'open').mockReturnValue(null);
     vi.mocked(api.createBillingCheckout).mockResolvedValue({
       payment,
@@ -192,11 +192,8 @@ describe('UpgradeGate', () => {
     });
 
     await openPublicationOffer();
-    const consent = screen.getByRole('checkbox', { name: /на 15-й день/i });
+    const consent = screen.getByRole('checkbox', { name: /после оплаченных 15 дней/i });
     expect(consent).not.toBeChecked();
-    fireEvent.click(screen.getByRole('button', { name: /выбрать 15 дней/i }));
-    expect(api.createBillingCheckout).not.toHaveBeenCalled();
-    fireEvent.click(consent);
     fireEvent.click(screen.getByRole('button', { name: /выбрать 15 дней/i }));
     await act(async () => Promise.resolve());
 
@@ -205,7 +202,71 @@ describe('UpgradeGate', () => {
       'csrf-billing',
       'checkout-request-123',
       'project-123',
-      true,
+      false,
+    );
+  });
+
+  it('recovers an unavailable intro offer without consuming the retry key', async () => {
+    const replace = vi.fn();
+    const close = vi.fn();
+    const paymentWindow = {
+      location: { replace },
+      close,
+      closed: false,
+      opener: window,
+    } as unknown as Window;
+    vi.spyOn(window, 'open').mockReturnValue(paymentWindow);
+    vi.mocked(crypto.randomUUID)
+      .mockReturnValueOnce('11111111-1111-4111-8111-111111111111')
+      .mockReturnValueOnce('22222222-2222-4222-8222-222222222222');
+    vi.mocked(api.createBillingCheckout)
+      .mockRejectedValueOnce(new api.BuilderApiError('Intro offer unavailable', {
+        status: 409,
+        code: 'intro_offer_unavailable',
+        raw: 'Intro offer unavailable',
+      }))
+      .mockResolvedValueOnce({
+        payment,
+        checkout_url: 'https://yoomoney.ru/checkout/payment-123',
+        created: true,
+      });
+
+    render(<UpgradeGate csrfToken="csrf-billing" projectId="project-123" />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await openPublicationOffer();
+
+    fireEvent.click(screen.getByRole('button', { name: /выбрать 15 дней/i }));
+    await act(async () => Promise.resolve());
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(screen.getByRole('dialog', { name: /опубликовать виджет/i })).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Вводный тариф уже использован. Выберите обычный тариф.',
+    );
+    expect(screen.queryByRole('button', { name: /выбрать 15 дней/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /выбрать месяц/i })).toBeVisible();
+    expect(screen.getByRole('button', { name: /выбрать условия публикации/i })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /выбрать месяц/i }));
+    await act(async () => Promise.resolve());
+
+    expect(api.createBillingCheckout).toHaveBeenNthCalledWith(
+      1,
+      'starter_intro_15d',
+      'csrf-billing',
+      '11111111-1111-4111-8111-111111111111',
+      'project-123',
+      false,
+    );
+    expect(api.createBillingCheckout).toHaveBeenNthCalledWith(
+      2,
+      'starter_monthly',
+      'csrf-billing',
+      '22222222-2222-4222-8222-222222222222',
+      'project-123',
+      false,
     );
   });
 
@@ -531,6 +592,7 @@ describe('UpgradeGate', () => {
       'project-123',
       'Виджет понравился, но нужна помощь с установкой.',
       'csrf-billing',
+      'checkout-request-123',
       {
         kind: 'founder_feedback',
         rating: 5,
@@ -538,6 +600,125 @@ describe('UpgradeGate', () => {
       },
     ));
     expect(within(dialog).getByRole('status')).toHaveTextContent(/сообщение сохранено/i);
+  });
+
+  it('keeps one contact key across close and reopen, then resets it after success', async () => {
+    vi.useRealTimers();
+    vi.mocked(crypto.randomUUID)
+      .mockReturnValueOnce('11111111-1111-4111-8111-111111111111')
+      .mockReturnValueOnce('22222222-2222-4222-8222-222222222222');
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({
+      subscription: activeSubscription,
+    });
+    vi.mocked(api.createCustomerContact)
+      .mockRejectedValueOnce(new TypeError('network failed'))
+      .mockResolvedValueOnce({ request_id: 'contact-1', accepted: true })
+      .mockResolvedValueOnce({ request_id: 'contact-2', accepted: true });
+
+    render(<UpgradeGate {...gateProps} />);
+    await waitFor(() => expect(screen.getByRole('button', {
+      name: 'Связаться с Kaigo',
+    })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Связаться с Kaigo' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Сообщение' }), {
+      target: { value: 'Помогите установить виджет на основной сайт.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(
+      /текст сохранён в форме/i,
+    ));
+    fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Связаться с Kaigo' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Сообщение' }), {
+      target: { value: 'Помогите установить виджет на основной сайт.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(
+      /сообщение сохранено/i,
+    ));
+
+    expect(api.createCustomerContact).toHaveBeenNthCalledWith(
+      1,
+      'project-123',
+      'Помогите установить виджет на основной сайт.',
+      'csrf-billing',
+      '11111111-1111-4111-8111-111111111111',
+      {
+        kind: 'support',
+        rating: undefined,
+        testimonialAllowed: false,
+      },
+    );
+    expect(api.createCustomerContact).toHaveBeenNthCalledWith(
+      2,
+      'project-123',
+      'Помогите установить виджет на основной сайт.',
+      'csrf-billing',
+      '11111111-1111-4111-8111-111111111111',
+      {
+        kind: 'support',
+        rating: undefined,
+        testimonialAllowed: false,
+      },
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Связаться с Kaigo' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Сообщение' }), {
+      target: { value: 'Теперь нужна помощь с другим доменом.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+
+    await waitFor(() => expect(api.createCustomerContact).toHaveBeenCalledTimes(3));
+    expect(api.createCustomerContact).toHaveBeenNthCalledWith(
+      3,
+      'project-123',
+      'Теперь нужна помощь с другим доменом.',
+      'csrf-billing',
+      '22222222-2222-4222-8222-222222222222',
+      {
+        kind: 'support',
+        rating: undefined,
+        testimonialAllowed: false,
+      },
+    );
+  });
+
+  it('starts a new contact key when the failed request fields change', async () => {
+    vi.useRealTimers();
+    vi.mocked(crypto.randomUUID)
+      .mockReturnValueOnce('33333333-3333-4333-8333-333333333333')
+      .mockReturnValueOnce('44444444-4444-4444-8444-444444444444');
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({
+      subscription: activeSubscription,
+    });
+    vi.mocked(api.createCustomerContact)
+      .mockRejectedValueOnce(new TypeError('network failed'))
+      .mockResolvedValueOnce({ request_id: 'contact-2', accepted: true });
+
+    render(<UpgradeGate {...gateProps} />);
+    await waitFor(() => expect(screen.getByRole('button', {
+      name: 'Связаться с Kaigo',
+    })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Связаться с Kaigo' }));
+    const message = screen.getByRole('textbox', { name: 'Сообщение' });
+    fireEvent.change(message, {
+      target: { value: 'Помогите установить виджет на основной сайт.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toBeVisible());
+
+    fireEvent.change(message, {
+      target: { value: 'Помогите установить виджет на второй сайт.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+    await waitFor(() => expect(api.createCustomerContact).toHaveBeenCalledTimes(2));
+
+    expect(vi.mocked(api.createCustomerContact).mock.calls.map((call) => call[3])).toEqual([
+      '33333333-3333-4333-8333-333333333333',
+      '44444444-4444-4444-8444-444444444444',
+    ]);
   });
 
   it('shows the exact next server-priced charge and date', async () => {

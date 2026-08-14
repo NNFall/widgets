@@ -77,7 +77,7 @@ function safeCheckoutUrl(value: string) {
   }
 }
 
-function checkoutKey() {
+function createIdempotencyKey() {
   return crypto.randomUUID();
 }
 
@@ -135,6 +135,8 @@ export function UpgradeGate({
   const idempotencyKeyRef = useRef<string | null>(null);
   const autoRenewIntentRef = useRef<boolean | null>(null);
   const planCodeIntentRef = useRef<string | null>(null);
+  const contactIdempotencyKeyRef = useRef<string | null>(null);
+  const contactIntentRef = useRef<string | null>(null);
 
   const applyPublicationState = useCallback((restored: ProjectPublicationState | null) => {
     if (restored === null) {
@@ -336,7 +338,7 @@ export function UpgradeGate({
     setState('creating');
     setError(null);
     setCheckoutUrl(null);
-    const idempotencyKey = idempotencyKeyRef.current ?? checkoutKey();
+    const idempotencyKey = idempotencyKeyRef.current ?? createIdempotencyKey();
     const requestedPlanCode = planCodeIntentRef.current ?? planCode;
     const autoRenewIntent = autoRenewIntentRef.current ?? autoRenew;
     idempotencyKeyRef.current = idempotencyKey;
@@ -361,8 +363,26 @@ export function UpgradeGate({
       setPaymentId(checkout.payment.id);
       setState('pending');
       setOfferOpen(false);
-    } catch {
+    } catch (caught) {
       paymentWindow?.close();
+      if (
+        caught instanceof BuilderApiError
+        && caught.code === 'intro_offer_unavailable'
+      ) {
+        idempotencyKeyRef.current = null;
+        autoRenewIntentRef.current = null;
+        planCodeIntentRef.current = null;
+        setState('idle');
+        setOffer((currentOffer) => currentOffer
+          ? {
+            ...currentOffer,
+            plans: currentOffer.plans.filter(({ code }) => code !== 'starter_intro_15d'),
+          }
+          : currentOffer);
+        setOfferError('Вводный тариф уже использован. Выберите обычный тариф.');
+        setOfferOpen(true);
+        return;
+      }
       setState('checkout_error');
       setError('Не удалось открыть оплату. Попробуйте ещё раз — повторное нажатие не создаст дубль.');
     }
@@ -425,14 +445,30 @@ export function UpgradeGate({
     testimonialAllowed: boolean;
   }) => {
     if (!csrfToken || !projectId || supportPending) return;
+    const kind = subscription?.access_kind === 'founder' ? 'founder_feedback' : 'support';
+    const normalizedMessage = input.message.trim();
+    const intent = JSON.stringify({
+      projectId,
+      kind,
+      message: normalizedMessage,
+      rating: input.rating ?? null,
+      testimonialAllowed: input.testimonialAllowed,
+    });
+    const idempotencyKey = (
+      contactIntentRef.current === intent && contactIdempotencyKeyRef.current
+    ) || createIdempotencyKey();
+    contactIntentRef.current = intent;
+    contactIdempotencyKeyRef.current = idempotencyKey;
     setSupportPending(true);
     setSupportError(null);
     try {
-      await createCustomerContact(projectId, input.message, csrfToken, {
-        kind: subscription?.access_kind === 'founder' ? 'founder_feedback' : 'support',
+      await createCustomerContact(projectId, normalizedMessage, csrfToken, idempotencyKey, {
+        kind,
         rating: input.rating,
         testimonialAllowed: input.testimonialAllowed,
       });
+      contactIdempotencyKeyRef.current = null;
+      contactIntentRef.current = null;
       setSupportSent(true);
     } catch {
       setSupportError('Не удалось отправить сообщение. Текст сохранён в форме — попробуйте ещё раз.');

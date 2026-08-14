@@ -217,6 +217,7 @@ export function createCustomerContact(
   projectId: string,
   message: string,
   csrfToken: string,
+  idempotencyKey: string,
   options: {
     kind?: 'support' | 'founder_feedback';
     rating?: number;
@@ -225,7 +226,10 @@ export function createCustomerContact(
 ) {
   return saasRequestJson<{ request_id: string; accepted: true }>('/api/billing/contact', {
     method: 'POST',
-    headers: { 'X-CSRF-Token': csrfToken },
+    headers: {
+      'Idempotency-Key': idempotencyKey,
+      'X-CSRF-Token': csrfToken,
+    },
     body: JSON.stringify({
       project_id: projectId,
       kind: options.kind ?? 'support',

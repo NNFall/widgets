@@ -11,7 +11,7 @@ from typing import Literal
 from uuid import UUID, uuid4
 from weakref import WeakValueDictionary
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -32,6 +32,7 @@ from app.billing.receipts import BillingReceiptSettings, resolve_payment_receipt
 from app.db.models import User
 from app.saas.models import (
     BillingPaymentMethod,
+    FounderAccessGrant,
     PaymentAttempt,
     PaymentWebhookEvent,
     Project,
@@ -49,6 +50,10 @@ class UnknownPlan(BillingError):
 
 
 class CheckoutIdempotencyConflict(BillingError):
+    pass
+
+
+class IntroOfferUnavailable(BillingError):
     pass
 
 
@@ -161,6 +166,40 @@ def _request_fingerprint(
     ).hexdigest()
 
 
+def _effective_renewal_period(
+    attempt: PaymentAttempt,
+) -> tuple[datetime, datetime]:
+    """Resolve an immutable renewal's effective entitlement period."""
+    if attempt.billing_period_start is None or attempt.billing_period_end is None:
+        raise BillingError("renewal payment target is invalid")
+    start = attempt.billing_period_start
+    end = attempt.billing_period_end
+    payload = attempt.payload if isinstance(attempt.payload, dict) else {}
+    effective_start = payload.get("effective_entitlement_start")
+    effective_end = payload.get("effective_entitlement_end")
+    if isinstance(effective_start, str) or isinstance(effective_end, str):
+        if not isinstance(effective_start, str) or not isinstance(effective_end, str):
+            raise BillingError("renewal payment effective period is invalid")
+        try:
+            start = datetime.fromisoformat(effective_start)
+            end = datetime.fromisoformat(effective_end)
+        except ValueError as error:
+            raise BillingError("renewal payment effective period is invalid") from error
+        if start.tzinfo is None or end.tzinfo is None:
+            raise BillingError("renewal payment effective period is invalid")
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=UTC)
+    else:
+        start = start.astimezone(UTC)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=UTC)
+    else:
+        end = end.astimezone(UTC)
+    if end <= start:
+        raise BillingError("renewal payment effective period is invalid")
+    return start, end
+
+
 class BillingService:
     def __init__(
         self,
@@ -243,6 +282,143 @@ class BillingService:
                 }
             )
         return metadata
+
+    @staticmethod
+    def _utc(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    @classmethod
+    def _shift_renewal_attempt_for_intro(
+        cls,
+        attempt: PaymentAttempt,
+        *,
+        new_start: datetime,
+        source_payment_attempt_id: UUID | None = None,
+    ) -> None:
+        if attempt.billing_period_start is None or attempt.billing_period_end is None:
+            return
+        original_start = cls._utc(attempt.billing_period_start)
+        original_end = cls._utc(attempt.billing_period_end)
+        duration = original_end - original_start
+        if duration <= timedelta(0):
+            return
+        new_start = cls._utc(new_start)
+        new_end = new_start + duration
+        safe_undispatched = attempt.status in {"creating", "scheduled"}
+        payload = dict(attempt.payload)
+        payload["billing_period_shift"] = {
+            "reason": "intro_compensation",
+            "original_billing_period_start": original_start.isoformat(),
+            "original_billing_period_end": original_end.isoformat(),
+            "new_billing_period_start": new_start.isoformat(),
+            "new_billing_period_end": new_end.isoformat(),
+            "source_intro_payment_attempt_id": (
+                str(source_payment_attempt_id)
+                if source_payment_attempt_id is not None
+                else None
+            ),
+        }
+        # Billing period columns remain immutable; only payload records the
+        # compensated entitlement period.
+        payload["effective_entitlement_start"] = new_start.isoformat()
+        payload["effective_entitlement_end"] = new_end.isoformat()
+        if safe_undispatched:
+            payload["invalidated_by_intro"] = True
+            attempt.status = "canceled"
+            if attempt.renewal_attempt_number == 1:
+                attempt.next_dispatch_at = None
+            elif (
+                attempt.next_dispatch_at is None
+                or cls._utc(attempt.next_dispatch_at) < new_start
+            ):
+                # Retry rows require a non-null dispatch timestamp even while
+                # terminal; retain that invariant and keep it at the shifted
+                # boundary for audit/recovery tooling.
+                attempt.next_dispatch_at = new_start
+        attempt.payload = payload
+
+    @staticmethod
+    async def _carry_compensated_renewal_balance(
+        database: AsyncSession,
+        *,
+        subscription: Subscription,
+        renewal_attempt: PaymentAttempt,
+    ) -> None:
+        """Move the net old-primary balance to a compensated renewal once."""
+        old_primary_id = subscription.payment_attempt_id
+        if (
+            old_primary_id is None
+            or old_primary_id == renewal_attempt.id
+            or not isinstance(renewal_attempt.payload, dict)
+            or not renewal_attempt.payload.get("effective_entitlement_start")
+        ):
+            return
+        bucket = await database.scalar(
+            select(UsageLedger.bucket)
+            .where(
+                UsageLedger.user_id == subscription.user_id,
+                UsageLedger.payment_attempt_id == old_primary_id,
+                UsageLedger.bucket.in_(("tokens", "generation_tokens")),
+                UsageLedger.entry_type == "subscription.credit",
+            )
+            .order_by(
+                (UsageLedger.bucket == "tokens").desc(),
+                UsageLedger.created_at,
+            )
+            .limit(1)
+        )
+        if bucket is None:
+            return
+        remaining = await database.scalar(
+            select(func.coalesce(func.sum(UsageLedger.amount), 0)).where(
+                UsageLedger.user_id == subscription.user_id,
+                UsageLedger.payment_attempt_id == old_primary_id,
+                UsageLedger.bucket == bucket,
+            )
+        )
+        amount = int(remaining or 0)
+        if amount <= 0:
+            return
+        debit_key = f"renewal-carry:{renewal_attempt.id}:debit"
+        credit_key = f"renewal-carry:{renewal_attempt.id}:credit"
+        payload = {
+            "source_payment_attempt_id": str(old_primary_id),
+            "target_payment_attempt_id": str(renewal_attempt.id),
+            "amount": amount,
+            "reason": "intro_compensation",
+        }
+        debit = await database.scalar(
+            select(UsageLedger).where(UsageLedger.idempotency_key == debit_key)
+        )
+        if debit is None:
+            database.add(
+                UsageLedger(
+                    user_id=subscription.user_id,
+                    payment_attempt_id=old_primary_id,
+                    bucket=bucket,
+                    entry_type="subscription.credit.transfer",
+                    amount=-amount,
+                    idempotency_key=debit_key,
+                    payload=payload,
+                )
+            )
+        credit = await database.scalar(
+            select(UsageLedger).where(UsageLedger.idempotency_key == credit_key)
+        )
+        if credit is None:
+            database.add(
+                UsageLedger(
+                    user_id=subscription.user_id,
+                    payment_attempt_id=renewal_attempt.id,
+                    bucket=bucket,
+                    entry_type="subscription.credit.transfer",
+                    amount=amount,
+                    idempotency_key=credit_key,
+                    payload=payload,
+                )
+            )
 
     @staticmethod
     def _provider_idempotency_key(attempt_id: UUID) -> str:
@@ -402,8 +578,6 @@ class BillingService:
         if not isinstance(auto_renew, bool):
             raise ValueError("auto_renew must be boolean")
         plan = self._plan(plan_code)
-        if plan.renewal_plan_code is not None and not auto_renew:
-            raise ValueError("introductory plan requires explicit renewal consent")
         return await self._create_checkout_with_plan(
             user_id,
             plan,
@@ -411,6 +585,50 @@ class BillingService:
             project_id=project_id,
             auto_renew=auto_renew,
         )
+
+    async def intro_offer_available(self, user_id: int) -> bool:
+        async with self._sessions() as database:
+            return await self._intro_offer_available_in_session(
+                database,
+                user_id,
+                now=self._now(),
+            )
+
+    @staticmethod
+    async def _intro_offer_available_in_session(
+        database: AsyncSession,
+        user_id: int,
+        *,
+        now: datetime,
+    ) -> bool:
+        active_subscription = await database.scalar(
+            select(Subscription.id)
+            .where(
+                Subscription.user_id == user_id,
+                Subscription.status == "active",
+                Subscription.current_period_end > now,
+            )
+            .limit(1)
+        )
+        if active_subscription is not None:
+            return False
+        founder_grant = await database.scalar(
+            select(FounderAccessGrant.id)
+            .where(FounderAccessGrant.user_id == user_id)
+            .limit(1)
+        )
+        if founder_grant is not None:
+            return False
+        previous_paid_period = await database.scalar(
+            select(PaymentAttempt.id)
+            .where(
+                PaymentAttempt.user_id == user_id,
+                PaymentAttempt.purpose == "initial",
+                PaymentAttempt.status == "succeeded",
+            )
+            .limit(1)
+        )
+        return previous_paid_period is None
 
     async def _create_checkout_with_plan(
         self,
@@ -578,6 +796,17 @@ class BillingService:
                             attempt.payload = payload
                             dispatch = True
                     else:
+                        if (
+                            plan.code == "starter_intro_15d"
+                            and not await self._intro_offer_available_in_session(
+                                database,
+                                user_id,
+                                now=self._now(),
+                            )
+                        ):
+                            raise IntroOfferUnavailable(
+                                "introductory offer was already used"
+                            )
                         receipt = await resolve_payment_receipt(
                             database,
                             user_id=user_id,
@@ -1031,19 +1260,51 @@ class BillingService:
                 attempt.merchant_account_fingerprint = (
                     self._merchant_account_fingerprint
                 )
-            subscription_query = select(Subscription).where(
-                Subscription.user_id == user_id,
-                Subscription.status == "active",
-            )
+            subscription = None
+            renewal_attempts: list[PaymentAttempt] = []
             if attempt.purpose == "renewal":
                 if attempt.subscription_id is None:
                     raise BillingError("renewal payment has no subscription")
-                subscription_query = subscription_query.where(
-                    Subscription.id == attempt.subscription_id
+                subscription = await database.scalar(
+                    select(Subscription)
+                    .where(
+                        Subscription.id == attempt.subscription_id,
+                        Subscription.user_id == user_id,
+                        Subscription.status == "active",
+                    )
+                    .with_for_update()
                 )
-            subscription = await database.scalar(
-                subscription_query.with_for_update()
-            )
+            else:
+                active_subscription_id = await database.scalar(
+                    select(Subscription.id).where(
+                        Subscription.user_id == user_id,
+                        Subscription.status == "active",
+                    )
+                )
+                if active_subscription_id is not None:
+                    renewal_attempts = list(
+                        await database.scalars(
+                            select(PaymentAttempt)
+                            .where(
+                                PaymentAttempt.user_id == user_id,
+                                PaymentAttempt.subscription_id == active_subscription_id,
+                                PaymentAttempt.purpose == "renewal",
+                                PaymentAttempt.status.not_in(
+                                    ("succeeded", "cancelled", "canceled")
+                                ),
+                            )
+                            .with_for_update()
+                        )
+                    )
+                    subscription = await database.scalar(
+                        select(Subscription)
+                        .where(
+                            Subscription.id == active_subscription_id,
+                            Subscription.user_id == user_id,
+                            Subscription.status == "active",
+                        )
+                        .with_for_update()
+                    )
             event_name = self._event_name(payment)
             event_key = f"{event_name}:{payment.provider_payment_id}"
             existing_event = await database.scalar(
@@ -1101,6 +1362,142 @@ class BillingService:
                 return FulfillmentResult(attempt.id, None, True)
 
             plan = self._stored_plan(attempt)
+            compensated_paid_subscription = False
+            compensation_entitlement_payment_attempt_id: UUID | None = None
+            if attempt.purpose == "initial" and plan.code == "starter_intro_15d":
+                founder_grant = await database.scalar(
+                    select(FounderAccessGrant)
+                    .where(FounderAccessGrant.user_id == user_id)
+                    .with_for_update()
+                )
+                linked_founder_subscription = None
+                if founder_grant is not None:
+                    linked_founder_subscription = await database.scalar(
+                        select(Subscription)
+                        .where(Subscription.id == founder_grant.subscription_id)
+                        .with_for_update()
+                    )
+                true_founder_subscription = (
+                    subscription is not None
+                    and subscription.provider == "founder"
+                    and founder_grant is not None
+                    and linked_founder_subscription is not None
+                    and linked_founder_subscription.id == subscription.id
+                )
+                active_paid_subscription = (
+                    subscription
+                    if subscription is not None and not true_founder_subscription
+                    else None
+                )
+                transition_payload = dict(attempt.payload)
+                if true_founder_subscription:
+                    period_start = linked_founder_subscription.current_period_start
+                    if period_start is not None and period_start.tzinfo is None:
+                        period_start = period_start.replace(tzinfo=UTC)
+                    period_end = linked_founder_subscription.current_period_end
+                    if period_end is not None and period_end.tzinfo is None:
+                        period_end = period_end.replace(tzinfo=UTC)
+                    linked_founder_subscription.status = "expired"
+                    linked_founder_subscription.auto_renew = False
+                    linked_founder_subscription.next_renewal_at = None
+                    if period_end is None:
+                        truncated_end = (
+                            max(now, period_start)
+                            if period_start is not None
+                            else now
+                        )
+                    else:
+                        truncated_end = min(period_end, now)
+                        if period_start is not None:
+                            truncated_end = max(truncated_end, period_start)
+                    linked_founder_subscription.current_period_end = truncated_end
+                    grant_end = founder_grant.ends_at
+                    if grant_end.tzinfo is None:
+                        grant_end = grant_end.replace(tzinfo=UTC)
+                    if grant_end > now:
+                        founder_grant.ends_at = now
+                    transition_payload["founder_access_transition"] = {
+                        "resolution": "paid_intro_wins",
+                        "grant_id": str(founder_grant.id),
+                        "subscription_id": str(linked_founder_subscription.id),
+                    }
+                    attempt.payload = transition_payload
+                    # Release the active-founder partial index before creating
+                    # the paid intro subscription below.
+                    await database.flush()
+                    subscription = None
+                elif active_paid_subscription is not None:
+                    compensation_entitlement_payment_attempt_id = (
+                        active_paid_subscription.payment_attempt_id
+                    )
+                    period_end = active_paid_subscription.current_period_end
+                    if period_end is not None and period_end.tzinfo is None:
+                        period_end = period_end.replace(tzinfo=UTC)
+                    start = period_end if period_end and period_end > now else now
+                    compensated_end = start + timedelta(days=plan.period_days)
+                    if period_end is not None:
+                        for renewal_attempt in renewal_attempts:
+                            if renewal_attempt.billing_period_start is None:
+                                continue
+                            if self._utc(renewal_attempt.billing_period_start) != period_end:
+                                continue
+                            self._shift_renewal_attempt_for_intro(
+                                renewal_attempt,
+                                new_start=compensated_end,
+                                source_payment_attempt_id=attempt.id,
+                            )
+                    active_paid_subscription.current_period_end = compensated_end
+                    if active_paid_subscription.auto_renew:
+                        active_paid_subscription.next_renewal_at = (
+                            active_paid_subscription.current_period_end
+                        )
+                    if founder_grant is not None:
+                        grant_end = founder_grant.ends_at
+                        if grant_end.tzinfo is None:
+                            grant_end = grant_end.replace(tzinfo=UTC)
+                        if grant_end > now:
+                            founder_grant.ends_at = now
+                    attempt.subscription_id = active_paid_subscription.id
+                    entitlement_primary_recovered = (
+                        compensation_entitlement_payment_attempt_id is None
+                    )
+                    if entitlement_primary_recovered:
+                        compensation_entitlement_payment_attempt_id = attempt.id
+                        active_paid_subscription.payment_attempt_id = attempt.id
+                    transition_payload["founder_access_transition"] = {
+                        "resolution": "paid_intro_compensated_on_active_paid",
+                        "grant_id": (
+                            str(founder_grant.id) if founder_grant is not None else None
+                        ),
+                        "subscription_id": (
+                            str(linked_founder_subscription.id)
+                            if linked_founder_subscription is not None
+                            else None
+                        ),
+                        "paid_subscription_id": str(active_paid_subscription.id),
+                    }
+                    if entitlement_primary_recovered:
+                        transition_payload["founder_access_transition"][
+                            "entitlement_primary_recovered_from_null"
+                        ] = True
+                    attempt.payload = transition_payload
+                    compensated_paid_subscription = True
+                elif founder_grant is not None:
+                    grant_end = founder_grant.ends_at
+                    if grant_end.tzinfo is None:
+                        grant_end = grant_end.replace(tzinfo=UTC)
+                    if grant_end > now:
+                        founder_grant.ends_at = now
+                    transition_payload["founder_access_transition"] = {
+                        "resolution": "paid_intro_wins",
+                        "grant_id": str(founder_grant.id),
+                        "subscription_id": (
+                            str(linked_founder_subscription.id)
+                            if linked_founder_subscription is not None
+                            else None
+                        ),
+                    }
+                    attempt.payload = transition_payload
             if attempt.purpose == "renewal":
                 if (
                     subscription is None
@@ -1108,12 +1505,8 @@ class BillingService:
                     or attempt.billing_period_end is None
                 ):
                     raise BillingError("renewal payment target is invalid")
-                period_start = attempt.billing_period_start
-                period_end = attempt.billing_period_end
-                if period_start.tzinfo is None:
-                    period_start = period_start.replace(tzinfo=UTC)
-                if period_end.tzinfo is None:
-                    period_end = period_end.replace(tzinfo=UTC)
+                raw_period_start = self._utc(attempt.billing_period_start)
+                period_start, period_end = _effective_renewal_period(attempt)
                 current_end = subscription.current_period_end
                 if current_end is not None and current_end.tzinfo is None:
                     current_end = current_end.replace(tzinfo=UTC)
@@ -1122,8 +1515,17 @@ class BillingService:
                 if current_end < period_end:
                     if current_end != period_start:
                         raise BillingError("renewal payment period overlaps")
-                    subscription.current_period_start = period_start
+                    # A compensated in-flight renewal grants from the already
+                    # active period; do not move access start into the future.
+                    if period_start <= now:
+                        subscription.current_period_start = period_start
                     subscription.current_period_end = period_end
+                if period_start != raw_period_start:
+                    await self._carry_compensated_renewal_balance(
+                        database,
+                        subscription=subscription,
+                        renewal_attempt=attempt,
+                    )
                 subscription.payment_attempt_id = attempt.id
                 subscription.provider = self._provider.name
                 subscription.plan_code = plan.code
@@ -1145,7 +1547,7 @@ class BillingService:
                 )
                 database.add(subscription)
                 await database.flush()
-            else:
+            elif not compensated_paid_subscription:
                 period_end = subscription.current_period_end
                 if period_end is not None and period_end.tzinfo is None:
                     period_end = period_end.replace(tzinfo=UTC)
@@ -1171,6 +1573,7 @@ class BillingService:
                 and attempt.consented_at is not None
                 and provider_method is not None
                 and provider_method.saved is True
+                and not compensated_paid_subscription
             ):
                 saved_method = await self._activate_verified_method(
                     database,
@@ -1217,15 +1620,38 @@ class BillingService:
             if attempt.purpose == "renewal":
                 if attempt.subscription_id is None or attempt.billing_period_start is None:
                     raise BillingError("renewal payment target is invalid")
-                period_start = attempt.billing_period_start
-                if period_start.tzinfo is None:
-                    period_start = period_start.replace(tzinfo=UTC)
+                period_start, _ = _effective_renewal_period(attempt)
                 credit_key = (
                     f"renewal:{attempt.subscription_id}:"
                     f"{period_start.isoformat()}:tokens"
                 )
             else:
                 credit_key = f"payment:{attempt.id}:tokens"
+            credit_payment_attempt_id = attempt.id
+            credit_payload = {
+                "plan_code": plan.code,
+                "plan_fingerprint": plan.fingerprint(),
+                "purpose": attempt.purpose,
+            }
+            if compensated_paid_subscription:
+                if compensation_entitlement_payment_attempt_id is None:
+                    raise BillingError(
+                        "paid introductory compensation requires an entitlement"
+                    )
+                credit_payment_attempt_id = (
+                    compensation_entitlement_payment_attempt_id
+                )
+                credit_payload.update(
+                    {
+                        "source_payment_attempt_id": str(attempt.id),
+                        "entitlement_payment_attempt_id": str(
+                            compensation_entitlement_payment_attempt_id
+                        ),
+                        "compensation_resolution": (
+                            "paid_intro_compensated_on_active_paid"
+                        ),
+                    }
+                )
             existing_credit = await database.scalar(
                 select(UsageLedger).where(
                     UsageLedger.idempotency_key == credit_key
@@ -1235,16 +1661,12 @@ class BillingService:
                 database.add(
                     UsageLedger(
                         user_id=user_id,
-                        payment_attempt_id=attempt.id,
+                        payment_attempt_id=credit_payment_attempt_id,
                         bucket="tokens",
                         entry_type="subscription.credit",
                         amount=plan.generation_tokens,
                         idempotency_key=credit_key,
-                        payload={
-                            "plan_code": plan.code,
-                            "plan_fingerprint": plan.fingerprint(),
-                            "purpose": attempt.purpose,
-                        },
+                        payload=credit_payload,
                     )
                 )
             attempt.status = "succeeded"
@@ -1257,11 +1679,39 @@ class BillingService:
         subscription_id: UUID,
     ) -> Subscription:
         async with self._sessions() as database, database.begin():
+            # Ownership checks are intentionally unlocked. They prevent a
+            # caller from making us lock another user's subscription before we
+            # acquire the canonical User lock.
+            known_user_id = await database.scalar(
+                select(User.id).where(User.id == user_id)
+            )
+            if known_user_id is None:
+                raise PaymentNotFound("user not found")
+            subscription_owner_id = await database.scalar(
+                select(Subscription.user_id).where(Subscription.id == subscription_id)
+            )
+            if subscription_owner_id != user_id:
+                raise PaymentNotFound("subscription not found")
+
             user = await database.scalar(
                 select(User).where(User.id == user_id).with_for_update()
             )
             if user is None:
                 raise PaymentNotFound("user not found")
+            renewal_attempts = list(
+                await database.scalars(
+                    select(PaymentAttempt)
+                    .where(
+                        PaymentAttempt.user_id == user_id,
+                        PaymentAttempt.subscription_id == subscription_id,
+                        PaymentAttempt.purpose == "renewal",
+                        PaymentAttempt.status.not_in(
+                            ("succeeded", "cancelled", "canceled")
+                        ),
+                    )
+                    .with_for_update()
+                )
+            )
             subscription = await database.scalar(
                 select(Subscription)
                 .where(
@@ -1272,19 +1722,6 @@ class BillingService:
             )
             if subscription is None:
                 raise PaymentNotFound("subscription not found")
-            renewal_attempts = list(
-                await database.scalars(
-                    select(PaymentAttempt)
-                    .where(
-                        PaymentAttempt.subscription_id == subscription.id,
-                        PaymentAttempt.purpose == "renewal",
-                        PaymentAttempt.status.not_in(
-                            ("succeeded", "cancelled", "canceled")
-                        ),
-                    )
-                    .with_for_update()
-                )
-            )
             if any(
                 attempt.status in {"dispatching", "pending", "dispatch_unknown"}
                 for attempt in renewal_attempts

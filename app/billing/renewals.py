@@ -15,7 +15,12 @@ from app.billing.contracts import (
     PaymentStatus,
     RecurringPaymentCommand,
 )
-from app.billing.payments import BillingError, BillingService, _request_fingerprint
+from app.billing.payments import (
+    BillingError,
+    BillingService,
+    _effective_renewal_period,
+    _request_fingerprint,
+)
 from app.billing.receipts import (
     BillingReceiptSettings,
     ReceiptCustomerUnavailable,
@@ -56,6 +61,13 @@ def renewal_idempotency_key(
 ) -> str:
     start = _aware_utc(period_start).isoformat()
     return f"renewal:{subscription_id}:{start}:{attempt_number}"
+
+
+def effective_renewal_period(
+    attempt: PaymentAttempt,
+) -> tuple[datetime, datetime]:
+    """Return entitlement dates while preserving immutable attempt columns."""
+    return _effective_renewal_period(attempt)
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +187,30 @@ class RenewalScheduler:
         period_start: datetime | None = None
         try:
             async with self._sessions() as database, database.begin():
+                # The subscription is read without a lock only to discover its
+                # owner. Every writer in the billing domain locks User first.
+                candidate = await database.scalar(
+                    select(Subscription)
+                    .where(Subscription.id == subscription_id)
+                )
+                if candidate is None:
+                    return None
+                await database.scalar(
+                    select(User)
+                    .where(User.id == candidate.user_id)
+                    .with_for_update()
+                )
+                primary_attempts = list(
+                    await database.scalars(
+                        select(PaymentAttempt)
+                        .where(
+                            PaymentAttempt.subscription_id == subscription_id,
+                            PaymentAttempt.purpose == "renewal",
+                            PaymentAttempt.renewal_attempt_number == 1,
+                        )
+                        .with_for_update()
+                    )
+                )
                 subscription = await database.scalar(
                     select(Subscription)
                     .where(Subscription.id == subscription_id)
@@ -189,11 +225,6 @@ class RenewalScheduler:
                     or subscription.current_period_end is None
                 ):
                     return None
-                await database.scalar(
-                    select(User)
-                    .where(User.id == subscription.user_id)
-                    .with_for_update()
-                )
                 method = (
                     await database.scalar(
                         select(BillingPaymentMethod)
@@ -208,12 +239,14 @@ class RenewalScheduler:
                     return None
 
                 period_start = _aware_utc(subscription.current_period_end)
-                existing = await database.scalar(
-                    select(PaymentAttempt).where(
-                        PaymentAttempt.subscription_id == subscription.id,
-                        PaymentAttempt.billing_period_start == period_start,
-                        PaymentAttempt.renewal_attempt_number == 1,
-                    )
+                existing = next(
+                    (
+                        attempt
+                        for attempt in primary_attempts
+                        if attempt.status not in {"cancelled", "canceled", "succeeded"}
+                        and effective_renewal_period(attempt)[0] == period_start
+                    ),
+                    None,
                 )
                 if existing is not None:
                     return existing.id
@@ -296,6 +329,14 @@ class RenewalScheduler:
     async def _claim(self, attempt_id: UUID, *, now: datetime) -> _ClaimedRenewal | None:
         lease_token = uuid4().hex
         async with self._sessions() as database, database.begin():
+            user_id = await database.scalar(
+                select(PaymentAttempt.user_id).where(PaymentAttempt.id == attempt_id)
+            )
+            if user_id is None:
+                return None
+            await database.scalar(
+                select(User).where(User.id == user_id).with_for_update()
+            )
             attempt = await database.scalar(
                 select(PaymentAttempt)
                 .where(PaymentAttempt.id == attempt_id)
@@ -315,7 +356,13 @@ class RenewalScheduler:
             elif attempt.status == "dispatch_unknown":
                 if attempt.provider_idempotency_expires_at is None:
                     return None
-            elif attempt.status != "creating":
+            elif attempt.status == "creating":
+                if (
+                    attempt.billing_period_start is None
+                    or _aware_utc(attempt.billing_period_start) > now
+                ):
+                    return None
+            else:
                 return None
 
             subscription = await database.scalar(
@@ -461,17 +508,37 @@ class RenewalScheduler:
             attempt.provider_payment_id = payment.provider_payment_id
             attempt.status = "pending"
             attempt.next_reconcile_at = self._now()
-            attempt.payload = {"test_mode": payment.test_mode}
+            payload = dict(attempt.payload)
+            payload.pop("dispatch_lease_token", None)
+            payload.pop("dispatch_lease_expires_at", None)
+            payload["test_mode"] = payment.test_mode
+            attempt.payload = payload
             return True
 
     async def _schedule_retry_or_disable(self, attempt_id: UUID, *, now: datetime) -> None:
         async with self._sessions() as database, database.begin():
+            user_id = await database.scalar(
+                select(PaymentAttempt.user_id).where(PaymentAttempt.id == attempt_id)
+            )
+            if user_id is None:
+                return
+            await database.scalar(
+                select(User).where(User.id == user_id).with_for_update()
+            )
             attempt = await database.scalar(
                 select(PaymentAttempt)
                 .where(PaymentAttempt.id == attempt_id)
                 .with_for_update()
             )
-            if attempt is None or attempt.purpose != "renewal" or attempt.status != "cancelled":
+            if (
+                attempt is None
+                or attempt.purpose != "renewal"
+                or attempt.status not in {"cancelled", "canceled"}
+            ):
+                return
+            if attempt.payload.get("invalidated_by_intro"):
+                # A safe undispatched attempt was deliberately invalidated;
+                # it must not produce a retry at the old provider boundary.
                 return
             subscription = await database.scalar(
                 select(Subscription)
@@ -502,7 +569,19 @@ class RenewalScheduler:
                     )
                 )
                 if existing is None:
+                    effective_start, _ = effective_renewal_period(attempt)
                     retry_at = now + RENEWAL_RETRY_DELAY
+                    if effective_start is not None:
+                        retry_at = max(retry_at, effective_start)
+                    retry_payload = {
+                        key: attempt.payload[key]
+                        for key in (
+                            "billing_period_shift",
+                            "effective_entitlement_start",
+                            "effective_entitlement_end",
+                        )
+                        if key in attempt.payload
+                    }
                     retry = PaymentAttempt(
                         user_id=attempt.user_id,
                         provider=attempt.provider,
@@ -531,7 +610,7 @@ class RenewalScheduler:
                         amount_minor=attempt.amount_minor,
                         currency=attempt.currency,
                         status="scheduled",
-                        payload={},
+                        payload=retry_payload,
                     )
                     database.add(retry)
                     subscription.next_renewal_at = retry_at

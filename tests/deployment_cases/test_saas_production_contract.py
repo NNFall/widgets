@@ -534,6 +534,41 @@ def test_disposable_postgres_preflight_legacy_and_additive_round_trip(
         assert asyncio.run(revision()) == "0019_founder_publication_funnel"
 
         head_snapshot = preflight.inspect_schema(rendered)
+        contact_columns = head_snapshot.columns["customer_contact_requests"]
+        idempotency_column = (
+            "idempotency_key",
+            "varchar(128)",
+            False,
+        )
+        assert idempotency_column in contact_columns
+        idempotency_constraint = preflight._constraint_signature(
+            "uq",
+            "customer_contact_requests",
+            {
+                "name": "uq_customer_contact_request_user_idempotency",
+                "column_names": ["user_id", "idempotency_key"],
+                "dialect_options": {
+                    "postgresql_include": [],
+                    "postgresql_nulls_not_distinct": False,
+                },
+            },
+        )
+        assert idempotency_constraint in head_snapshot.constraints
+
+        pre_idempotency_columns = tuple(
+            column for column in contact_columns if column != idempotency_column
+        )
+        assert len(pre_idempotency_columns) == len(contact_columns) - 1
+        pre_idempotency_snapshot = head_snapshot.replace(
+            columns={
+                **head_snapshot.columns,
+                "customer_contact_requests": pre_idempotency_columns,
+            },
+            constraints=head_snapshot.constraints - {idempotency_constraint},
+        )
+        assert preflight._schema_fingerprint(pre_idempotency_snapshot) == (
+            "ef9665be192c16c6fd6f4f0bcc3ccf952fc22ebf48c34ea600b2fc035f3696cd"
+        )
         assert preflight._schema_fingerprint(head_snapshot) == (
             preflight.EXPECTED_VERSIONED_SCHEMA_FINGERPRINTS[
                 "0019_founder_publication_funnel"

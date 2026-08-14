@@ -172,6 +172,51 @@ async def test_publication_offer_and_founder_claim_are_server_priced(tmp_path) -
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_publication_offer_hides_intro_after_first_paid_period(tmp_path) -> None:
+    engine, factory, provider, client = await _billing_app(tmp_path)
+    try:
+        project_id = await _ready_project(factory)
+        await client.post("/test/login/10")
+        service = BillingService(factory, provider)
+        checkout = await service.create_checkout(
+            10,
+            "starter_intro_15d",
+            "consumed-intro-offer",
+            project_id=project_id,
+            auto_renew=False,
+        )
+        await service.handle_notification(
+            {"payment_id": f"pay-{checkout.payment_id}"}
+        )
+
+        offer = await client.get(f"/api/billing/offer?project_id={project_id}")
+
+        assert offer.status == 200
+        payload = await offer.json()
+        assert [plan["code"] for plan in payload["plans"]] == [
+            "starter_monthly",
+            "starter_quarterly",
+        ]
+        blocked = await client.post(
+            "/api/billing/checkout",
+            json={
+                "plan_code": "starter_intro_15d",
+                "project_id": str(project_id),
+                "auto_renew": False,
+            },
+            headers={
+                "Idempotency-Key": "second-intro-via-api",
+                "X-CSRF-Token": "csrf",
+            },
+        )
+        assert blocked.status == 409
+        assert (await blocked.json())["error"]["code"] == "intro_offer_unavailable"
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
 def test_subscription_exposes_exact_intro_balance_renewal_terms() -> None:
     now = datetime(2026, 8, 13, 12, tzinfo=UTC)
     renewal_at = now + timedelta(days=15)
@@ -211,7 +256,10 @@ async def test_customer_contact_uses_authenticated_lineage(tmp_path) -> None:
         invalid = await client.post(
             "/api/billing/contact",
             json={"project_id": str(project_id), "kind": "support", "message": "x"},
-            headers={"X-CSRF-Token": "csrf"},
+            headers={
+                "Idempotency-Key": "invalid-message-key",
+                "X-CSRF-Token": "csrf",
+            },
         )
         assert invalid.status == 400
 
@@ -223,7 +271,10 @@ async def test_customer_contact_uses_authenticated_lineage(tmp_path) -> None:
                 "message": "Помогите установить код на сайт и проверить домен.",
                 "testimonial_allowed": False,
             },
-            headers={"X-CSRF-Token": "csrf"},
+            headers={
+                "Idempotency-Key": "contact-lineage-key-0001",
+                "X-CSRF-Token": "csrf",
+            },
         )
         assert response.status == 201
         async with factory() as database:
@@ -236,6 +287,211 @@ async def test_customer_contact_uses_authenticated_lineage(tmp_path) -> None:
                 select(FunnelEvent).where(FunnelEvent.event_type == "support_requested")
             )
         assert event is not None
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_customer_contact_requires_a_strict_idempotency_key(tmp_path) -> None:
+    engine, factory, _provider, client = await _billing_app(tmp_path)
+    try:
+        project_id = await _ready_project(factory)
+        await client.post("/test/login/10")
+        payload = {
+            "project_id": str(project_id),
+            "kind": "support",
+            "message": "Please help me install the widget on my site.",
+        }
+        invalid_keys = [None, "short-key", "x" * 15, "invalid:key-0001", "x" * 129]
+        for key in invalid_keys:
+            headers = {"X-CSRF-Token": "csrf"}
+            if key is not None:
+                headers["Idempotency-Key"] = key
+            response = await client.post(
+                "/api/billing/contact",
+                json=payload,
+                headers=headers,
+            )
+            assert response.status == 400
+
+        async with factory() as database:
+            assert (
+                await database.scalar(
+                    select(func.count()).select_from(CustomerContactRequest)
+                )
+                == 0
+            )
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_customer_contact_replays_one_normalized_request(tmp_path) -> None:
+    engine, factory, _provider, client = await _billing_app(tmp_path)
+    try:
+        project_id = await _ready_project(factory)
+        await client.post("/test/login/10")
+        headers = {
+            "Idempotency-Key": "contact-replay-key-0001",
+            "X-CSRF-Token": "csrf",
+        }
+        first = await client.post(
+            "/api/billing/contact",
+            json={
+                "project_id": str(project_id),
+                "kind": "support",
+                "message": "  Please help me install the widget on my site.  ",
+                "testimonial_allowed": False,
+            },
+            headers=headers,
+        )
+        replay = await client.post(
+            "/api/billing/contact",
+            json={
+                "project_id": str(project_id),
+                "kind": "support",
+                "message": "Please help me install the widget on my site.",
+            },
+            headers=headers,
+        )
+
+        assert first.status == 201
+        assert replay.status == 200
+        assert (await replay.json())["request_id"] == (await first.json())["request_id"]
+        async with factory() as database:
+            contact = await database.scalar(select(CustomerContactRequest))
+            contact_count = await database.scalar(
+                select(func.count()).select_from(CustomerContactRequest)
+            )
+            event_count = await database.scalar(
+                select(func.count())
+                .select_from(FunnelEvent)
+                .where(FunnelEvent.event_type == "support_requested")
+            )
+        assert contact is not None
+        assert contact.idempotency_key == "contact-replay-key-0001"
+        assert contact.message == "Please help me install the widget on my site."
+        assert contact_count == 1
+        assert event_count == 1
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_customer_contact_rejects_same_key_for_any_changed_field(tmp_path) -> None:
+    engine, factory, _provider, client = await _billing_app(tmp_path)
+    try:
+        project_id = await _ready_project(factory, host="first.example")
+        other_project_id = await _ready_project(factory, host="second.example")
+        await client.post("/test/login/10")
+        headers = {
+            "Idempotency-Key": "contact-conflict-key-0001",
+            "X-CSRF-Token": "csrf",
+        }
+        original = {
+            "project_id": str(project_id),
+            "kind": "support",
+            "message": "Please help me install the widget on my site.",
+            "rating": None,
+            "testimonial_allowed": False,
+        }
+        created = await client.post(
+            "/api/billing/contact",
+            json=original,
+            headers=headers,
+        )
+        assert created.status == 201
+
+        changed_requests = [
+            {**original, "project_id": str(other_project_id)},
+            {**original, "kind": "founder_feedback"},
+            {**original, "message": "Please help me configure a different widget."},
+            {**original, "rating": 5},
+            {**original, "testimonial_allowed": True},
+        ]
+        for changed in changed_requests:
+            conflict = await client.post(
+                "/api/billing/contact",
+                json=changed,
+                headers=headers,
+            )
+            assert conflict.status == 409
+            assert (await conflict.json())["error"]["code"] == "idempotency_conflict"
+
+        async with factory() as database:
+            assert (
+                await database.scalar(
+                    select(func.count()).select_from(CustomerContactRequest)
+                )
+                == 1
+            )
+            assert (
+                await database.scalar(
+                    select(func.count())
+                    .select_from(FunnelEvent)
+                    .where(FunnelEvent.event_type == "support_requested")
+                )
+                == 1
+            )
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_founder_feedback_is_bound_to_the_granted_project(tmp_path) -> None:
+    engine, factory, _provider, client = await _billing_app(tmp_path)
+    try:
+        founder_project_id = await _ready_project(factory, host="founder.example")
+        other_project_id = await _ready_project(factory, host="other.example")
+        await client.post("/test/login/10")
+        claimed = await client.post(
+            "/api/billing/founder/claim",
+            json={"project_id": str(founder_project_id)},
+            headers={"X-CSRF-Token": "csrf"},
+        )
+        assert claimed.status == 201
+
+        wrong_project = await client.post(
+            "/api/billing/contact",
+            json={
+                "project_id": str(other_project_id),
+                "kind": "founder_feedback",
+                "message": "Хочу оставить подробную обратную связь по founder-пилоту.",
+            },
+            headers={
+                "Idempotency-Key": "founder-wrong-project-key",
+                "X-CSRF-Token": "csrf",
+            },
+        )
+        assert wrong_project.status == 409
+        assert (await wrong_project.json())["error"]["code"] == "founder_feedback_unavailable"
+
+        response = await client.post(
+            "/api/billing/contact",
+            json={
+                "project_id": str(founder_project_id),
+                "kind": "founder_feedback",
+                "message": "Хочу оставить подробную обратную связь по founder-пилоту.",
+            },
+            headers={
+                "Idempotency-Key": "founder-feedback-key-0001",
+                "X-CSRF-Token": "csrf",
+            },
+        )
+        assert response.status == 201
+        async with factory() as database:
+            contact = await database.scalar(select(CustomerContactRequest))
+            founder = await database.scalar(select(FounderAccessGrant))
+        assert contact is not None
+        assert founder is not None
+        assert contact.project_id == founder_project_id
+        assert contact.subscription_id == founder.subscription_id
+        assert contact.founder_grant_id == founder.id
+        assert founder.feedback_state == "received"
     finally:
         await client.close()
         await engine.dispose()
@@ -330,26 +586,29 @@ async def test_checkout_accepts_only_explicit_boolean_auto_renew_consent(
 
 
 @pytest.mark.asyncio
-async def test_intro_checkout_requires_auto_renew_consent_for_monthly_transition(
+async def test_intro_checkout_keeps_monthly_transition_optional(
     tmp_path,
 ) -> None:
     engine, _factory, provider, client = await _billing_app(tmp_path)
     try:
         await client.post("/test/login/10")
-        rejected = await client.post(
+        one_time = await client.post(
             "/api/billing/checkout",
             json={"plan_code": "starter_intro_15d", "auto_renew": False},
             headers={"Idempotency-Key": "intro-without-consent", "X-CSRF-Token": "csrf"},
         )
-        assert rejected.status == 400
+        assert one_time.status == 201
+        assert (await one_time.json())["payment"]["amount_minor"] == 50_000
+        assert provider.checkout_calls[-1].save_payment_method is None
 
-        accepted = await client.post(
+        await client.post("/test/login/11")
+        recurring = await client.post(
             "/api/billing/checkout",
             json={"plan_code": "starter_intro_15d", "auto_renew": True},
             headers={"Idempotency-Key": "intro-with-consent-ok", "X-CSRF-Token": "csrf"},
         )
-        assert accepted.status == 201
-        assert (await accepted.json())["payment"]["amount_minor"] == 50_000
+        assert recurring.status == 201
+        assert (await recurring.json())["payment"]["amount_minor"] == 50_000
         assert provider.checkout_calls[-1].save_payment_method is True
     finally:
         await client.close()

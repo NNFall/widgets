@@ -14,7 +14,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.analytics.service import record_funnel_event
 from app.billing.catalog import snapshot_fingerprint
-from app.saas.models import FounderAccessGrant, Project, Subscription, UsageLedger
+from app.db.models import User
+from app.saas.models import (
+    FounderAccessGrant,
+    PaymentAttempt,
+    Project,
+    Subscription,
+    UsageLedger,
+)
 
 
 FOUNDER_CAPACITY = 20
@@ -96,6 +103,7 @@ class FounderAccessService:
         return project
 
     async def offer(self, user_id: int, project_id: UUID) -> FounderOffer:
+        now = self._now()
         async with self._sessions() as database:
             project = await self._project(database, user_id, project_id)
             origin = _origin(project.source_url)
@@ -108,13 +116,79 @@ class FounderAccessService:
             count = int(
                 await database.scalar(select(func.count()).select_from(FounderAccessGrant)) or 0
             )
+            pending_paid_intro = await self._pending_paid_intro(
+                database,
+                user_id,
+            )
+            paid_access_used = await self._paid_access_used(
+                database,
+                user_id,
+            )
+            active_subscription = await database.scalar(
+                select(Subscription.id)
+                .where(
+                    Subscription.user_id == user_id,
+                    Subscription.status == "active",
+                    Subscription.current_period_end > now,
+                )
+                .limit(1)
+            )
         if existing is not None:
             return FounderOffer(False, "already_claimed", max(0, FOUNDER_CAPACITY - count))
         if claimed_origin is not None:
             return FounderOffer(False, "domain_already_claimed", max(0, FOUNDER_CAPACITY - count))
+        if pending_paid_intro:
+            return FounderOffer(False, "pending_paid_intro", max(0, FOUNDER_CAPACITY - count))
+        if paid_access_used:
+            return FounderOffer(False, "paid_access_used", max(0, FOUNDER_CAPACITY - count))
+        if active_subscription is not None:
+            return FounderOffer(False, "active_subscription", max(0, FOUNDER_CAPACITY - count))
         if count >= FOUNDER_CAPACITY:
             return FounderOffer(False, "quota_exhausted", 0)
         return FounderOffer(True, None, FOUNDER_CAPACITY - count)
+
+    @staticmethod
+    async def _pending_paid_intro(
+        database: AsyncSession,
+        user_id: int,
+        *,
+        lock: bool = False,
+    ) -> bool:
+        statement = (
+            select(PaymentAttempt.id)
+            .where(
+                PaymentAttempt.user_id == user_id,
+                PaymentAttempt.purpose == "initial",
+                PaymentAttempt.plan_code == "starter_intro_15d",
+                PaymentAttempt.status.in_(
+                    ("creating", "pending", "failed", "dispatch_unknown")
+                ),
+            )
+            .limit(1)
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return await database.scalar(statement) is not None
+
+    @staticmethod
+    async def _paid_access_used(
+        database: AsyncSession,
+        user_id: int,
+        *,
+        lock: bool = False,
+    ) -> bool:
+        statement = (
+            select(PaymentAttempt.id)
+            .where(
+                PaymentAttempt.user_id == user_id,
+                PaymentAttempt.purpose == "initial",
+                PaymentAttempt.status == "succeeded",
+            )
+            .limit(1)
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return await database.scalar(statement) is not None
 
     async def claim(self, user_id: int, project_id: UUID) -> FounderClaimResult:
         lock = _SQLITE_LOCKS.setdefault(id(self._sessions.kw["bind"]), asyncio.Lock())
@@ -127,6 +201,9 @@ class FounderAccessService:
     async def _claim_once(self, user_id: int, project_id: UUID) -> FounderClaimResult:
         now = self._now()
         async with self._sessions() as database, database.begin():
+            await database.scalar(
+                select(User.id).where(User.id == user_id).with_for_update()
+            )
             if self._dialect == "postgresql":
                 await database.execute(
                     text("SELECT pg_advisory_xact_lock(:lock_key)"),
@@ -149,6 +226,10 @@ class FounderAccessService:
                 .with_for_update()
             ) is not None:
                 raise FounderOfferUnavailable("domain_already_claimed")
+            if await self._pending_paid_intro(database, user_id, lock=True):
+                raise FounderOfferUnavailable("pending_paid_intro")
+            if await self._paid_access_used(database, user_id, lock=True):
+                raise FounderOfferUnavailable("paid_access_used")
             active = await database.scalar(
                 select(Subscription.id).where(
                     Subscription.user_id == user_id,
