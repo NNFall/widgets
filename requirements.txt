@@ -14,7 +14,7 @@ aiohttp
 pydub
 asyncpg
 aiohttp-session
-SQLAlchemy
+SQLAlchemy==2.0.49
 alembic
 bcrypt
 Pillow>=11.0.0,<13.0.0

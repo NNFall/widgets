@@ -325,6 +325,19 @@ def test_preflight_has_exact_fingerprint_for_every_migration_revision() -> None:
     assert set(preflight.EXPECTED_VERSIONED_SCHEMA_FINGERPRINTS) == revisions
 
 
+def test_preflight_sqlalchemy_inspector_is_exactly_pinned() -> None:
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    sqlalchemy_requirements = [
+        line.strip()
+        for line in requirements.splitlines()
+        if line.strip().lower().startswith("sqlalchemy")
+    ]
+
+    # Schema fingerprints include SQLAlchemy-inspected constraint text, whose
+    # rendering can change between dependency releases without database drift.
+    assert sqlalchemy_requirements == ["SQLAlchemy==2.0.49"]
+
+
 def test_preflight_treats_column_order_as_non_semantic() -> None:
     from scripts import preflight_saas_schema as preflight
 
