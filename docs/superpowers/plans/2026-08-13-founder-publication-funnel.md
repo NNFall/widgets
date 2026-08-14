@@ -133,5 +133,11 @@ React 19, TypeScript, Vitest/Testing Library, YooKassa.
   выпуска.
 - [x] Проверить `git diff --check` по owned docs; чужие dirty-файлы не менялись.
 - [x] Записать подтверждённые non-prod результаты и ограничения: независимый
-  review GO, P0/P1/P2 нет. Production deploy и smoke-check не заявлены.
-- [ ] Выпустить изменения в production и выполнить production smoke-check.
+  review GO, P0/P1/P2 нет.
+- [x] Выпустить изменения в production и выполнить production smoke-check:
+  release `cd3353f1f45d73fdf37c7aa0ca251094b9d09b76`, Alembic
+  `0019_founder_publication_funnel`, app/billing/worker на точных immutable
+  image IDs; `/api/health`, token-authenticated `/api/ready`, Studio, auth
+  session, `/landing-old/`, embed/runtime и один живой публичный chat canary
+  прошли. Реальное списание и sandbox webhook намеренно не запускались без
+  платёжной fixture/карты.

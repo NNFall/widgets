@@ -2,8 +2,8 @@
 
 Дата: 2026-08-14
 
-Статус: реализация и локальная релизная проверка завершены; production-статус
-фиксируется отдельно после развёртывания и smoke-check.
+Статус: выпущено в production 2026-08-14, release
+`cd3353f1f45d73fdf37c7aa0ca251094b9d09b76`.
 
 ## Что изменилось
 
@@ -50,6 +50,25 @@
 - PostgreSQL combined: 6 passed, включая round-trip `0018 -> 0019 -> 0018`;
 - независимый review: GO, P0/P1/P2 не обнаружены;
 - Ruff и `git diff --check`.
+
+## Проверка production
+
+- база обновлена с `0018_stage_aware_pattern_library` до
+  `0019_founder_publication_funnel` после проверенного custom-format dump;
+- `/api/health` и закрытый `/api/ready` подтвердили приложение, базу и свежий
+  heartbeat нового builder-worker;
+- app и billing-worker работают на image
+  `sha256:b4a164624d31a34b43c84d0973e422c74f104584f81a9b2a5d3d035c4c0e47af`,
+  builder-worker — на
+  `sha256:21c45a3c1d6c4f46cbd9716084fe004178aae00e6034948204ab33690385b275`;
+- главная, `/studio/`, `/landing-old/` и auth session отвечают `200`, прежний
+  закрытый `/builder/` по-прежнему отвечает `401`;
+- production smoke подтвердил embed и runtime существующей публикации; живой
+  chat canary после одного временного provider timeout вернул корректный ответ
+  на повторной попытке;
+- очистка generation forensics снова выполняется успешно и timer включён;
+- реальное списание и sandbox webhook не запускались: для безопасного выпуска
+  не использовались карта пользователя или выдуманная платёжная fixture.
 
 ## Возможный сюжет
 
