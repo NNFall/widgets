@@ -1,10 +1,13 @@
 import { AuthGate } from '../auth/AuthGate';
+import { PresentationGate } from './PresentationGate';
 import { StudioPage } from './StudioPage';
 
 export function StudioRoute() {
   return (
     <AuthGate>
-      <StudioPage />
+      <PresentationGate>
+        <StudioPage />
+      </PresentationGate>
     </AuthGate>
   );
 }

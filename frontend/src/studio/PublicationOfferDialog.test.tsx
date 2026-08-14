@@ -160,6 +160,26 @@ describe('PublicationOfferDialog', () => {
     expect(onCheckout).toHaveBeenNthCalledWith(2, 'starter_intro_15d', true);
   });
 
+  it('can open the existing intro consent for a read-only presentation', () => {
+    const onCheckout = vi.fn();
+    render(
+      <PublicationOfferDialog
+        open
+        offer={offer}
+        busy={false}
+        error={null}
+        initialIntroConsent
+        onClose={vi.fn()}
+        onFounder={vi.fn()}
+        onCheckout={onCheckout}
+      />,
+    );
+
+    expect(screen.getByRole('checkbox', { name: /после оплаченных 15 дней/i })).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: /выбрать 15 дней/i }));
+    expect(onCheckout).toHaveBeenCalledWith('starter_intro_15d', true);
+  });
+
   it('does not require auto-renew for the direct monthly and quarterly choices', () => {
     const onCheckout = vi.fn();
     render(

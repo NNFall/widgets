@@ -8,6 +8,7 @@ interface PublicationOfferDialogProps {
   offer: BillingOffer;
   busy: boolean;
   loading?: boolean;
+  initialIntroConsent?: boolean;
   error: string | null;
   onClose: () => void;
   onFounder: () => void;
@@ -44,18 +45,19 @@ export function PublicationOfferDialog({
   offer,
   busy,
   loading = false,
+  initialIntroConsent = false,
   error,
   onClose,
   onFounder,
   onCheckout,
 }: PublicationOfferDialogProps) {
-  const [introConsent, setIntroConsent] = useState(false);
+  const [introConsent, setIntroConsent] = useState(initialIntroConsent);
 
   useEffect(() => {
     if (!open) {
-      setIntroConsent(false);
+      setIntroConsent(initialIntroConsent);
     }
-  }, [open]);
+  }, [initialIntroConsent, open]);
   if (!open) return null;
 
   const introPlan = offer.plans.find((plan) => plan.code === 'starter_intro_15d');
