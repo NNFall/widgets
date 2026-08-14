@@ -7,9 +7,13 @@ import textwrap
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
+from html.parser import HTMLParser
 from pathlib import Path
+
+from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -35,6 +39,26 @@ BASH = next(
     ),
     None,
 )
+
+
+class _LinkTagParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.links: list[dict[str, str]] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() != "link":
+            return
+        self.links.append(
+            {name.lower(): (value or "") for name, value in attrs}
+        )
+
+
+def _parse_link_tags(document: str) -> list[dict[str, str]]:
+    parser = _LinkTagParser()
+    parser.feed(document)
+    parser.close()
+    return parser.links
 
 
 def _wait_for_docker_port(
@@ -91,7 +115,10 @@ class MarketingSitePackageTests(unittest.TestCase):
 
     def test_frontend_build_is_a_self_contained_hashed_static_package(self):
         index = (DIST / "index.html").read_text(encoding="utf-8")
-        favicon = DIST / "favicon.svg"
+        versioned_favicons = sorted((DIST / "assets").glob("favicon-living-fold-*.png"))
+        favicon_png = DIST / "favicon.png"
+        favicon_ico = DIST / "favicon.ico"
+        apple_touch_icon = DIST / "apple-touch-icon.png"
         built_css = "\n".join(
             path.read_text(encoding="utf-8")
             for path in (DIST / "assets").glob("*.css")
@@ -101,11 +128,66 @@ class MarketingSitePackageTests(unittest.TestCase):
             index,
         )
 
-        self.assertTrue(favicon.is_file(), "built package must include favicon.svg")
-        self.assertIn(
-            '<link rel="icon" type="image/svg+xml" href="/favicon.svg" />',
-            index,
+        self.assertEqual(
+            len(versioned_favicons),
+            1,
+            "built package must include one versioned Living Fold favicon PNG",
         )
+        versioned_favicon = versioned_favicons[0]
+        self.assertRegex(
+            versioned_favicon.name,
+            r"^favicon-living-fold-[a-f0-9]{8}\.png$",
+        )
+        self.assertTrue(favicon_png.is_file(), "built package must include favicon.png")
+        self.assertTrue(favicon_ico.is_file(), "built package must include favicon.ico")
+        self.assertTrue(
+            apple_touch_icon.is_file(),
+            "built package must include apple-touch-icon.png",
+        )
+        with Image.open(versioned_favicon) as image:
+            image.load()
+            self.assertEqual(image.format, "PNG")
+            self.assertEqual(image.size, (128, 128))
+        with Image.open(favicon_png) as image:
+            image.load()
+            self.assertEqual(image.format, "PNG")
+            self.assertEqual(image.size, (128, 128))
+        self.assertEqual(
+            favicon_png.read_bytes(),
+            versioned_favicon.read_bytes(),
+            "stable favicon.png must be byte-identical to the versioned favicon",
+        )
+        with Image.open(apple_touch_icon) as image:
+            image.load()
+            self.assertEqual(image.format, "PNG")
+            self.assertEqual(image.size, (180, 180))
+        with Image.open(favicon_ico) as image:
+            self.assertEqual(image.format, "ICO")
+            self.assertEqual(
+                set(image.ico.sizes()),
+                {(16, 16), (32, 32), (48, 48)},
+            )
+        links_by_rel: dict[str, list[dict[str, str]]] = {}
+        for link in _parse_link_tags(index):
+            rel = link.get("rel", "")
+            if rel in {"icon", "shortcut icon", "apple-touch-icon"}:
+                links_by_rel.setdefault(rel, []).append(link)
+
+        self.assertEqual(len(links_by_rel.get("icon", [])), 1)
+        self.assertEqual(len(links_by_rel.get("shortcut icon", [])), 1)
+        self.assertEqual(len(links_by_rel.get("apple-touch-icon", [])), 1)
+        favicon_link = links_by_rel["icon"][0]
+        shortcut_link = links_by_rel["shortcut icon"][0]
+        apple_link = links_by_rel["apple-touch-icon"][0]
+        self.assertEqual(
+            favicon_link.get("href"),
+            f"/assets/{versioned_favicon.name}",
+        )
+        self.assertEqual(favicon_link.get("type"), "image/png")
+        self.assertEqual(favicon_link.get("sizes"), "128x128")
+        self.assertEqual(shortcut_link.get("href"), "/favicon.ico")
+        self.assertEqual(apple_link.get("href"), "/apple-touch-icon.png")
+        self.assertEqual(apple_link.get("sizes"), "180x180")
         self.assertTrue(references, "index.html must reference built JS/CSS assets")
         self.assertTrue(any(reference.endswith(".js") for reference in references))
         self.assertTrue(any(reference.endswith(".css") for reference in references))
@@ -190,11 +272,23 @@ class MarketingSitePackageTests(unittest.TestCase):
         self.assertIn('Cache-Control "no-cache"', stable_assets)
         self.assertIn("try_files $uri =404;", config)
 
-        favicon = config.split("location = /favicon.svg {", 1)[1].split("}", 1)[0]
-        self.assertIn("root /var/www/kaigo-marketing/current;", favicon)
-        self.assertIn("try_files /favicon.svg =404;", favicon)
-        self.assertIn('Cache-Control "no-cache"', favicon)
-        self.assertIn('X-Content-Type-Options "nosniff"', favicon)
+        stable_location = (
+            "location ~ ^/(favicon\\.png|favicon\\.ico|apple-touch-icon\\.png)$ {"
+        )
+        self.assertIn(stable_location, config)
+        stable_icons = config.split(stable_location, 1)[1].split("}", 1)[0]
+        self.assertIn("root /var/www/kaigo-marketing/current;", stable_icons)
+        self.assertIn("try_files $uri =404;", stable_icons)
+        self.assertIn('Cache-Control "no-cache"', stable_icons)
+        self.assertIn('X-Content-Type-Options "nosniff"', stable_icons)
+
+        favicon_redirect = config.split("location = /favicon.svg {", 1)[1].split(
+            "}", 1
+        )[0]
+        self.assertIn(
+            "return 308 /assets/favicon-living-fold-a96d189f.png;",
+            favicon_redirect,
+        )
 
         fallback = config.split("location / {", 1)[1]
         self.assertIn("proxy_pass http://127.0.0.1:8080;", fallback)
@@ -370,16 +464,57 @@ class MarketingSitePackageTests(unittest.TestCase):
             ) as stable_response:
                 self.assertEqual(stable_response.headers["Cache-Control"], "no-cache")
 
+            index_links = _parse_link_tags(index)
+            favicon_links = [
+                link for link in index_links if link.get("rel") == "icon"
+            ]
+            self.assertEqual(len(favicon_links), 1)
+            primary_favicon_href = favicon_links[0].get("href", "")
+            self.assertRegex(
+                primary_favicon_href,
+                r"^/assets/favicon-living-fold-[a-f0-9]{8}\.png$",
+            )
             with urllib.request.urlopen(
-                f"{base_url}/favicon.svg",
+                f"{base_url}{primary_favicon_href}",
                 timeout=2,
-            ) as favicon_response:
-                self.assertEqual(favicon_response.status, 200)
-                self.assertEqual(favicon_response.headers["Cache-Control"], "no-cache")
-                self.assertEqual(
-                    favicon_response.headers["Content-Type"],
-                    "image/svg+xml",
-                )
+            ) as versioned_response:
+                self.assertEqual(versioned_response.status, 200)
+                self.assertIn("immutable", versioned_response.headers["Cache-Control"])
+                self.assertEqual(versioned_response.headers["Content-Type"], "image/png")
+
+            for stable_path, content_type in (
+                ("/favicon.png", "image/png"),
+                ("/favicon.ico", "image/x-icon"),
+                ("/apple-touch-icon.png", "image/png"),
+            ):
+                with urllib.request.urlopen(
+                    f"{base_url}{stable_path}",
+                    timeout=2,
+                ) as stable_icon_response:
+                    self.assertEqual(stable_icon_response.status, 200)
+                    self.assertEqual(
+                        stable_icon_response.headers["Cache-Control"],
+                        "no-cache",
+                    )
+                    self.assertEqual(
+                        stable_icon_response.headers["Content-Type"],
+                        content_type,
+                    )
+
+            class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, request, file, code, message, headers, newurl):
+                    return None
+
+            no_redirect_opener = urllib.request.build_opener(NoRedirectHandler)
+            with self.assertRaises(urllib.error.HTTPError) as redirect_error:
+                no_redirect_opener.open(f"{base_url}/favicon.svg", timeout=2)
+            self.assertEqual(redirect_error.exception.code, 308)
+            self.assertEqual(
+                urllib.parse.urlsplit(
+                    redirect_error.exception.headers["Location"]
+                ).path,
+                "/assets/favicon-living-fold-a96d189f.png",
+            )
         finally:
             subprocess.run(
                 [DOCKER, "rm", "-f", container],

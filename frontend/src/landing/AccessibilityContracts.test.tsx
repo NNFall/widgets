@@ -47,13 +47,25 @@ describe('landing accessibility contracts', () => {
     }
   });
 
-  it('declares the PNG favicon in the HTML shell', () => {
+  it('declares the Living Fold favicon routes in the HTML shell', () => {
     const htmlDocument = new DOMParser().parseFromString(indexHtmlSource, 'text/html');
     const favicon = htmlDocument.querySelector('link[rel="icon"]');
+    const shortcut = htmlDocument.querySelector('link[rel="shortcut icon"]');
+    const apple = htmlDocument.querySelector('link[rel="apple-touch-icon"]');
 
     expect(favicon).toBeTruthy();
-    expect(favicon?.getAttribute('href')).toBe('/favicon.png');
+    expect(favicon?.getAttribute('href')).toMatch(
+      /^\/assets\/favicon-living-fold-[a-f0-9]{8}\.png$/,
+    );
     expect(favicon?.getAttribute('type')).toBe('image/png');
+    expect(favicon?.getAttribute('sizes')).toBe('128x128');
+
+    expect(shortcut).toBeTruthy();
+    expect(shortcut?.getAttribute('href')).toBe('/favicon.ico');
+
+    expect(apple).toBeTruthy();
+    expect(apple?.getAttribute('href')).toBe('/apple-touch-icon.png');
+    expect(apple?.getAttribute('sizes')).toBe('180x180');
   });
 
   it('uses dark ink on sage and coral interactive-state surfaces', () => {
