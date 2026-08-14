@@ -139,6 +139,9 @@ recognized as ICO and exposes the requested embedded sizes.
 **Files:**
 - Modify: `frontend/index.html:10`
 - Modify: `deploy/nginx/kaigo-marketing-site.conf:21-27`
+- Modify: `scripts/run_saas_browser_acceptance.py:392-397`
+- Modify: `scripts/run_saas_browser_acceptance.py:469-473`
+- Modify: `tests/saas_cases/test_browser_acceptance_harness.py`
 - Modify: `docs/KAIGO_SPACE_OPERATIONS.md:84-125`
 
 - [ ] **Step 1: Replace the HTML metadata**
@@ -174,7 +177,16 @@ location ~ ^/(favicon\.png|favicon\.ico|apple-touch-icon\.png)$ {
 Document HEAD checks for the versioned PNG, stable PNG, ICO, Apple icon, and the
 legacy SVG redirect. Keep `/landing-old/favicon.svg` unchanged.
 
-- [ ] **Step 4: Run focused tests and confirm GREEN**
+- [ ] **Step 4: Make the browser-acceptance server mirror production icon routes**
+
+First add a failing aiohttp harness test that requests the versioned PNG,
+stable PNG, ICO, Apple icon, and legacy SVG route. Then replace the obsolete
+handler that opens `favicon.svg`: serve the three stable files from
+`acceptance_frontend_dist`, keep `/assets/` for the versioned PNG, and return a
+permanent redirect from `/favicon.svg` to the same versioned Living Fold PNG as
+nginx. This keeps real browser acceptance runs free from icon 404s.
+
+- [ ] **Step 5: Run focused tests and confirm GREEN**
 
 Run:
 
@@ -186,6 +198,7 @@ npm run lint -- --no-cache
 npm run build
 Set-Location ..
 python -m pytest tests/deployment_cases/test_marketing_site_package.py -q
+python -m pytest tests/saas_cases/test_browser_acceptance_harness.py -q
 ```
 
 Expected: all commands pass; `frontend/dist/index.html` references all three
