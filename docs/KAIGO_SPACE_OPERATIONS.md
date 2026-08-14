@@ -100,6 +100,10 @@ nginx, атомарно переключает `current`, повторно пр�
 
 ```bash
 release_sha="$(git rev-parse HEAD)"
+cd "/opt/kaigo/releases/${release_sha}/frontend"
+npm ci
+npm run build
+cd ..
 KAIGO_MARKETING_SKIP_BUILD=1 \
   bash "/opt/kaigo/releases/${release_sha}/scripts/deploy_marketing_site.sh" \
   "${release_sha}-living-fold-favicon"
