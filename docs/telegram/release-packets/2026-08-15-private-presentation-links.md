@@ -2,7 +2,9 @@
 
 Дата: 2026-08-15
 
-Статус: реализовано и локально проверено; production-выпуск ещё не выполнен.
+Статус: выпущено в production 2026-08-15, release
+`5eb8155-private-presentation`, source
+`5eb81554f60d4ab233f27c3b71c1104c5067d022`.
 
 ## Что добавлено
 
@@ -18,7 +20,7 @@
 - Это безопасный режим съёмки. Кнопки не создают checkout, не списывают деньги,
   не публикуют виджет, не меняют подписку и не записывают обращения.
 
-## Ссылки после production-выпуска
+## Ссылки
 
 - индекс: `/studio?presentation=index`;
 - начало публикации: `/studio?presentation=publication-start`;
@@ -40,6 +42,21 @@
 - Playwright compact desktop: 1 passed;
 - TypeScript, ESLint и production-сборка: passed;
 - независимое ревью: GO, замечаний P0–P2 нет.
+
+## Проверка production
+
+- `/`, `/studio?presentation=index` и `/landing-old/` отвечают `200`;
+- текущий marketing symlink указывает на
+  `/var/www/kaigo-marketing/releases/5eb8155-private-presentation`;
+- production Studio bundle содержит индекс, сценарии и запрос к
+  `/api/operator/funnel`;
+- закрытый endpoint без сессии отвечает `401`; доступ остаётся на существующей
+  exact-email operator-проверке;
+- Yandex-identity владельца подтверждена; персональный e-mail не хранится в
+  репозитории;
+- в production-базе 0 founder-активаций, поэтому съёмочный экран показывает
+  актуальные 20 свободных мест;
+- backend, база, платежи и worker при frontend-выпуске не изменялись.
 
 ## Сюжет для ролика
 
