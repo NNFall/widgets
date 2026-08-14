@@ -102,6 +102,49 @@ async def test_browser_acceptance_starts_real_studio_and_completes_mock_oauth(
 
 
 @pytest.mark.asyncio
+async def test_browser_acceptance_serves_living_fold_favicon_routes(
+    tmp_path: Path,
+) -> None:
+    dist = tmp_path / "frontend-dist"
+    assets = dist / "assets"
+    assets.mkdir(parents=True)
+    (dist / "index.html").write_text('<div id="root"></div>', encoding="utf-8")
+    versioned_path = assets / "favicon-living-fold-a96d189f.png"
+    versioned_payload = b"versioned-living-fold"
+    versioned_path.write_bytes(versioned_payload)
+    stable_payloads = {
+        "favicon.png": b"stable-png",
+        "favicon.ico": b"stable-ico",
+        "apple-touch-icon.png": b"stable-apple-touch-icon",
+    }
+    for filename, payload in stable_payloads.items():
+        (dist / filename).write_bytes(payload)
+
+    app = await create_browser_acceptance_app(
+        database=tmp_path / "browser-favicon.db",
+        frontend_dist=dist,
+        public_base_url="http://127.0.0.1:8765",
+    )
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        versioned = await client.get("/assets/favicon-living-fold-a96d189f.png")
+        assert versioned.status == 200
+        assert await versioned.read() == versioned_payload
+
+        for route, payload in stable_payloads.items():
+            response = await client.get(f"/{route}")
+            assert response.status == 200
+            assert await response.read() == payload
+
+        legacy = await client.get("/favicon.svg", allow_redirects=False)
+        assert legacy.status == 308
+        assert legacy.headers["Location"] == "/assets/favicon-living-fold-a96d189f.png"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_acceptance_routes_are_not_registered_by_the_production_app(
     tmp_path: Path,
 ) -> None:

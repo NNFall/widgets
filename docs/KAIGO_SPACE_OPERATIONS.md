@@ -81,8 +81,12 @@ curl -k https://kaigo.space/api/health/ai
    `/builder-demo/`, `/builder-comparison/` и маршруты ACME/сертификатов.
 3. Заменить только существующий fallback `location /` и существующий блок
    `/builder/` соответствующими блоками из фрагмента.
-4. Добавить exact-блоки `/`, `/favicon.svg`, `/studio`, `/studio/` и
-   `/assets/`.
+4. Добавить exact-блоки `/`, `/studio`, `/studio/`, `/favicon.svg` и
+   `/assets/`, а также allowlist для стабильных `/favicon.png`, `/favicon.ico`
+   и `/apple-touch-icon.png`. Основной PNG
+   `/assets/favicon-living-fold-a96d189f.png` должен быть immutable, стабильные
+   имена — `no-cache`, а legacy `/favicon.svg` — отдавать `308` на основной PNG.
+   Архивный `/landing-old/favicon.svg` не менять.
 5. Подтвердить, что `/etc/nginx/.htpasswd-kaigo-builder` продолжает защищать
    только legacy `/builder/`. SaaS Studio публично открывает оболочку, а
    пользовательские данные и действия защищает application session.
@@ -95,8 +99,10 @@ nginx, атомарно переключает `current`, повторно пр�
 выполняет reload:
 
 ```bash
-cd /root/ai_project
-bash scripts/deploy_marketing_site.sh "$(git rev-parse HEAD)"
+release_sha="$(git rev-parse HEAD)"
+KAIGO_MARKETING_SKIP_BUILD=1 \
+  bash "/opt/kaigo/releases/${release_sha}/scripts/deploy_marketing_site.sh" \
+  "${release_sha}-living-fold-favicon"
 ```
 
 `release-id` неизменяем: повторный deploy существующего ID завершается ошибкой
@@ -109,7 +115,11 @@ nginx с прежним релизом. Неудачный релиз остаё
 
 ```bash
 curl -fsS https://kaigo.space/ >/dev/null
-curl -fsSI https://kaigo.space/favicon.svg
+curl -fsSI https://kaigo.space/assets/favicon-living-fold-a96d189f.png
+curl -fsSI https://kaigo.space/favicon.png
+curl -fsSI https://kaigo.space/favicon.ico
+curl -fsSI https://kaigo.space/apple-touch-icon.png
+test "$(curl -sS -o /dev/null -w '%{http_code}' https://kaigo.space/favicon.svg)" = 308
 curl -fsSI https://kaigo.space/assets/ACTUAL_HASHED_ASSET.js
 curl -fsS https://kaigo.space/studio >/dev/null
 test "$(curl -sS -o /dev/null -w '%{http_code}' https://kaigo.space/builder/)" = 401
@@ -121,11 +131,14 @@ curl -fsS https://kaigo.space/w/demka >/dev/null
 
 Ожидаемая граница авторизации:
 
-- `/`, `/favicon.svg` и `/assets/*` публичны;
-- `/favicon.svg` получает `no-cache`, чтобы новый брендовый значок появлялся
-  сразу после переключения релиза;
-- файлы с Vite-hash в имени получают `immutable`, а stable-name assets —
-  `no-cache`, чтобы новый релиз не оставался со старым изображением;
+- `/`, `/assets/*`, `/favicon.png`, `/favicon.ico` и `/apple-touch-icon.png`
+  публичны;
+- `/assets/favicon-living-fold-a96d189f.png` — immutable-ресурс с хешем;
+  стабильные маршруты получают `no-cache`, чтобы новый релиз не оставался со
+  старым изображением;
+- `/favicon.svg` публичен и отвечает `308`; заголовок `Location` указывает на
+  `/assets/favicon-living-fold-a96d189f.png`;
+- остальные файлы с Vite-hash в имени также получают `immutable`;
 - `/studio` и `/studio/` публичны; `/builder/` сохраняет Basic Auth;
 - существующие `/w/*`, `/client/*`, `/admin/*`, `/api/*` и другие более
   специфичные location сохраняют прежние обработчики.

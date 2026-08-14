@@ -393,8 +393,23 @@ async def _studio_index(request: web.Request) -> web.FileResponse:
     return web.FileResponse(request.app["acceptance_frontend_dist"] / "index.html")
 
 
-async def _favicon(request: web.Request) -> web.FileResponse:
-    return web.FileResponse(request.app["acceptance_frontend_dist"] / "favicon.svg")
+_STABLE_FAVICON_ROUTES = {
+    "/favicon.png": "favicon.png",
+    "/favicon.ico": "favicon.ico",
+    "/apple-touch-icon.png": "apple-touch-icon.png",
+}
+LIVING_FOLD_FAVICON_PATH = "/assets/favicon-living-fold-a96d189f.png"
+
+
+async def _stable_favicon(request: web.Request) -> web.FileResponse:
+    filename = _STABLE_FAVICON_ROUTES.get(request.path)
+    if filename is None:
+        raise web.HTTPNotFound()
+    return web.FileResponse(request.app["acceptance_frontend_dist"] / filename)
+
+
+async def _legacy_favicon(request: web.Request) -> web.StreamResponse:
+    raise web.HTTPPermanentRedirect(LIVING_FOLD_FAVICON_PATH)
 
 
 async def create_browser_acceptance_app(
@@ -469,7 +484,9 @@ async def create_browser_acceptance_app(
     app.router.add_get("/", _studio_index)
     app.router.add_get("/studio", _studio_index)
     app.router.add_get("/studio/", _studio_index)
-    app.router.add_get("/favicon.svg", _favicon)
+    app.router.add_get("/favicon.svg", _legacy_favicon)
+    for route in _STABLE_FAVICON_ROUTES:
+        app.router.add_get(route, _stable_favicon)
     app.router.add_static("/assets/", dist_path / "assets", follow_symlinks=False)
 
     queue = PostgresWorkerQueue(factory, lease_seconds=30)
