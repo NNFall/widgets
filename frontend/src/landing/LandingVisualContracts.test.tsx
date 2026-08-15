@@ -23,26 +23,22 @@ describe('Landing visual contracts', () => {
     expect(within(promise).getByText('Оплата только перед запуском')).toBeVisible();
   });
 
-  it('keeps creation and publication inside one coherent process surface', () => {
+  it('keeps creation and publication inside one coherent FORMA tour surface', () => {
     render(<LandingPage />);
 
-    const board = document.querySelector('.how-process-board');
-    expect(board).toHaveAttribute('data-journey-layout', 'unified');
-    expect(board?.querySelector('.how-route')).toBeNull();
-    expect(within(board as HTMLElement).getByTestId('how-live-preview')).toBeVisible();
-
-    const launch = within(board as HTMLElement).getByTestId('how-publish-path');
-    expect(launch).toHaveAttribute('data-launch-integrated', 'true');
-    const action = within(launch).getByTestId('how-publish-action');
-    expect(within(action).getByRole('link', { name: 'Создать бесплатную версию' })).toBeVisible();
-    expect(within(action).getByText('Без карты. Оплата только перед публикацией.')).toBeVisible();
+    const tour = screen.getByRole('region', { name: 'Как Kaigo создаёт AI-сотрудника' });
+    expect(tour).toHaveAttribute('data-active-step', '1');
+    expect(within(tour).getByText('Реальный кейс · FORMA')).toBeVisible();
+    expect(within(tour).getByRole('link', { name: 'Создать бесплатную версию' })).toBeVisible();
+    expect(within(tour).getByText('Можно начать бесплатно. Карта не нужна.')).toBeVisible();
   });
 
   it('frames the after state as an embedded AI experience with a supported action', () => {
     render(<LandingPage />);
 
-    expect(screen.getByRole('heading', { name: 'Один сайт. Два опыта.' })).toBeVisible();
-    expect(screen.getByText('Теперь ваш сайт отвечает посетителю через AI')).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Что меняется для посетителя сайта' })).toBeVisible();
+    expect(screen.getByText('Результат после Kaigo')).toBeVisible();
+    expect(screen.getByText(/Не нужно искать ответ по разделам/i)).toBeVisible();
     expect(document.querySelector('[data-widget-placement="embedded"]')).not.toBeNull();
 
     const action = screen.getByTestId('case-action');
@@ -57,7 +53,7 @@ describe('Landing visual contracts', () => {
     expect(finalContent).toHaveAttribute('data-layout', 'split');
     expect(screen.getByText('Сайт без Kaigo')).toBeVisible();
     expect(screen.getByText('Сайт с AI-консультантом')).toBeVisible();
-    expect(screen.getByText('Ссылка нужна только для анализа. Карту не попросим.')).toBeVisible();
+    expect(screen.getByText('Нужна только публичная ссылка на сайт. Карту не попросим.')).toBeVisible();
   });
 
   it('defines one white, metallic and orange landing palette', () => {

@@ -21,6 +21,7 @@ vi.mock('../shared/MotionActivity', () => ({
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
   motionState.active = true;
   motionState.reducedMotion = false;
 });
@@ -36,39 +37,32 @@ describe('ProductTour', () => {
     expect(scenes[0]).toHaveAttribute('data-active', 'true');
     expect(scenes[1]).toHaveAttribute('aria-hidden', 'true');
 
-    expect(within(scenes[0]).getByRole('heading', { name: 'Вставьте ссылку на ваш сайт' })).toBeVisible();
-    expect(within(scenes[0]).getByText('Вставьте ссылку на действующий сайт.')).toBeInTheDocument();
-    expect(within(scenes[0]).getByText('Если есть пожелания, опишите их обычным текстом.')).toBeInTheDocument();
-    expect(within(scenes[0]).getByText('https://novaflow.ru')).toBeInTheDocument();
-    expect(within(scenes[0]).getByRole('img', { name: 'Металлическое цифровое ядро NovaFlow' }))
-      .toHaveAttribute('src', '/assets/product-tour-digital-core.webp');
-    expect(within(scenes[0]).getByRole('img', { name: 'Металлическое цифровое ядро NovaFlow' }))
+    expect(within(scenes[0]).getByRole('heading', { name: 'Дайте Kaigo ссылку на ваш сайт' })).toBeVisible();
+    expect(within(scenes[0]).getByText(/Вставьте адрес действующего сайта/i)).toBeInTheDocument();
+    expect(within(scenes[0]).getByText(/Коротко напишите, что важно учесть/i)).toBeInTheDocument();
+    expect(within(scenes[0]).getByText('https://forma-demo.ru')).toBeInTheDocument();
+    expect(within(scenes[0]).getByRole('img', { name: /FORMA до подключения/i }))
+      .toHaveAttribute('src', '/assets/forma-site-before.webp');
+    expect(within(scenes[0]).getByRole('img', { name: /FORMA до подключения/i }))
       .toHaveAttribute('loading', 'lazy');
 
     expect(within(scenes[1]).getByRole('heading', {
       hidden: true,
-      name: 'Через 10–20 минут проверьте результат в Studio',
+      name: 'Примерно через 10 минут проверьте результат',
     })).toBeInTheDocument();
-    expect(within(scenes[1]).getByText('Откройте готовый виджет прямо в Studio.')).toBeInTheDocument();
-    expect(within(scenes[1]).getByText('Задайте ему несколько вопросов как клиент.')).toBeInTheDocument();
-    expect(within(scenes[1]).getByText('Первая версия готова')).toBeInTheDocument();
-    expect(within(scenes[1]).getByText('Проверка результата бесплатна')).toBeInTheDocument();
-    expect(within(scenes[1]).getByText('Сохраните пожелание. Доработки доступны после выбора тарифа.')).toBeInTheDocument();
-    expect(within(scenes[1]).queryByText('Телефон')).not.toBeInTheDocument();
-    expect(within(scenes[1]).queryByRole('img', { name: /сайт/i })).not.toBeInTheDocument();
+    expect(within(scenes[1]).getByText(/Откройте виджет на компьютере/i)).toBeInTheDocument();
+    expect(within(scenes[1]).getByText(/Задайте вопросы об услугах/i)).toBeInTheDocument();
+    expect(within(scenes[1]).getByRole('img', { hidden: true, name: /ответ готового виджета FORMA/i })).toBeInTheDocument();
 
     expect(within(scenes[2]).getByRole('heading', {
       hidden: true,
-      name: 'Добавьте AI-сотрудника на сайт',
+      name: 'Добавьте AI-консультанта на сайт',
     })).toBeInTheDocument();
-    expect(within(scenes[2]).getByText('Скопируйте одну строку кода или передайте её разработчику.')).toBeInTheDocument();
-    expect(within(scenes[2]).getByText('Пример строки для установки')).toBeInTheDocument();
+    expect(within(scenes[2]).getByText(/вставьте её один раз в настройки сайта/i)).toBeInTheDocument();
     expect(within(scenes[2]).getByText(/widget\.js/)).toBeInTheDocument();
-    expect(within(scenes[2]).getByText('Можно подключить отчёты для руководителя?')).toBeInTheDocument();
-    expect(tour.querySelectorAll('[data-widget-shape="vertical"]')).toHaveLength(2);
-    expect(tour.querySelectorAll('img[src="/assets/product-tour-digital-core-avatar.webp"]')).toHaveLength(2);
+    expect(within(scenes[2]).getByRole('img', { hidden: true, name: /FORMA с подключённым/i })).toBeInTheDocument();
 
-    expect(tour).not.toHaveTextContent(/пекар|выпеч|торт/i);
+    expect(tour).not.toHaveTextContent(/пекар|выпеч|торт|NovaFlow/i);
     expect(screen.queryByRole('link', { name: 'Открыть демонстрацию отдельно' })).not.toBeInTheDocument();
   });
 
@@ -120,14 +114,57 @@ describe('ProductTour', () => {
     act(() => vi.advanceTimersByTime(8_000));
     expect(tour).toHaveAttribute('data-active-step', '2');
 
-    fireEvent.click(within(tour).getByRole('button', { name: 'Остановить автолистание' }));
-    expect(tour).toHaveAttribute('data-autoplay', 'false');
+    fireEvent.focus(within(tour).getByRole('button', { name: 'Следующий этап' }));
     act(() => vi.advanceTimersByTime(16_000));
     expect(tour).toHaveAttribute('data-active-step', '2');
-
-    fireEvent.click(within(tour).getByRole('button', { name: 'Продолжить автолистание' }));
+    fireEvent.blur(within(tour).getByRole('button', { name: 'Следующий этап' }), { relatedTarget: null });
     act(() => vi.advanceTimersByTime(8_000));
     expect(tour).toHaveAttribute('data-active-step', '3');
+  });
+
+  it('disables autoplay below 768px while preserving the desktop autoplay contract', () => {
+    vi.useFakeTimers();
+    const matchMediaMock = vi.fn((query: string) => ({
+      matches: query === '(max-width: 767px)',
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    vi.stubGlobal('matchMedia', matchMediaMock);
+
+    render(<ProductTour />);
+
+    const tour = screen.getByRole('region', { name: 'Как Kaigo создаёт AI-сотрудника' });
+    const stepsRail = within(tour).getByRole('navigation', { name: 'Этапы создания AI-сотрудника' });
+    expect(matchMediaMock).toHaveBeenCalledWith('(max-width: 767px)');
+    expect(tour).toHaveAttribute('data-autoplay', 'false');
+    expect(stepsRail).toHaveAttribute('data-mobile-snap', 'true');
+    expect(within(stepsRail).getAllByRole('button')).toHaveLength(3);
+    act(() => vi.advanceTimersByTime(8_000));
+    expect(tour).toHaveAttribute('data-active-step', '1');
+  });
+
+  it('keeps autoplay enabled above the mobile breakpoint', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('matchMedia', vi.fn(() => ({
+      matches: false,
+      media: '(max-width: 767px)',
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })));
+
+    render(<ProductTour />);
+
+    expect(screen.getByRole('region', { name: 'Как Kaigo создаёт AI-сотрудника' }))
+      .toHaveAttribute('data-autoplay', 'true');
   });
 
   it('does not auto-advance when motion is inactive or reduced', () => {
@@ -138,8 +175,6 @@ describe('ProductTour', () => {
 
     const tour = screen.getByRole('region', { name: 'Как Kaigo создаёт AI-сотрудника' });
     expect(tour).toHaveAttribute('data-autoplay', 'false');
-    expect(within(tour).getByRole('button', { name: 'Автолистание отключено настройками системы' })).toBeDisabled();
-    expect(within(tour).getByText('Автолистание отключено')).toBeInTheDocument();
     act(() => vi.advanceTimersByTime(24_000));
     expect(tour).toHaveAttribute('data-active-step', '1');
   });

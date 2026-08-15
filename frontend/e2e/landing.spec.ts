@@ -14,6 +14,98 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(overflow).toBeLessThanOrEqual(1);
 }
 
+async function expectContainedInViewport(locator: Locator, label: string) {
+  const box = await locator.boundingBox();
+  expect.soft(box, `${label} must have a rendered box`).not.toBeNull();
+  if (!box) return;
+  const viewportWidth = await locator.evaluate(() => window.innerWidth);
+  expect.soft(box.x, `${label} must stay inside the left viewport edge`).toBeGreaterThanOrEqual(-1);
+  expect.soft(box.x + box.width, `${label} must stay inside the right viewport edge`).toBeLessThanOrEqual(viewportWidth + 1);
+  expect.soft(box.width, `${label} must not be wider than the viewport`).toBeLessThanOrEqual(viewportWidth + 1);
+}
+
+async function expectVisibleInsideSoft(locator: Locator, container: Locator, label: string) {
+  const elementBox = await locator.boundingBox();
+  const containerBox = await container.boundingBox();
+  expect.soft(elementBox, `${label} must have a rendered box`).not.toBeNull();
+  expect.soft(containerBox, `${label} container must have a rendered box`).not.toBeNull();
+  if (!elementBox || !containerBox) return;
+
+  const elementRight = elementBox.x + elementBox.width;
+  const containerRight = containerBox.x + containerBox.width;
+  const elementBottom = elementBox.y + elementBox.height;
+  const containerBottom = containerBox.y + containerBox.height;
+  const intersectionWidth = Math.max(0, Math.min(elementRight, containerRight) - Math.max(elementBox.x, containerBox.x));
+  const intersectionHeight = Math.max(0, Math.min(elementBottom, containerBottom) - Math.max(elementBox.y, containerBox.y));
+  const elementArea = elementBox.width * elementBox.height;
+  const visibleRatio = elementArea > 0 ? (intersectionWidth * intersectionHeight) / elementArea : 0;
+  expect.soft(visibleRatio, `${label} must remain inside its container`).toBeGreaterThanOrEqual(0.95);
+}
+
+async function expectMobileTouchTargets(page: Page, viewportLabel: string) {
+  const undersized = await page.locator('a[href], button, input, textarea, summary').evaluateAll((elements) => (
+    elements.flatMap((element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      if (element.closest('[hidden], [aria-hidden="true"]') || style.display === 'none' || style.visibility === 'hidden' || rect.width === 0 || rect.height === 0) return [];
+      if (rect.width >= 44 && rect.height >= 44) return [];
+      return [{
+        name: element.getAttribute('aria-label') || element.textContent?.trim() || element.tagName,
+        width: Math.round(rect.width * 10) / 10,
+        height: Math.round(rect.height * 10) / 10,
+      }];
+    })
+  ));
+  expect.soft(undersized, `all mobile touch targets must be at least 44px at ${viewportLabel}`).toEqual([]);
+}
+
+async function expectMobileTextSizes(page: Page, viewportLabel: string) {
+  const undersized = await page.locator('h1, h2, h3, h4, p, a, button, label, input, textarea, summary, li, strong, span, small, code').evaluateAll((elements) => (
+    elements.flatMap((element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      const mockUi = element.closest(
+        '.browser-mockup, .widget-preview-card, .mini-site, [aria-hidden="true"]',
+      );
+      if (mockUi || element.classList.contains('sr-only') || style.display === 'none' || style.visibility === 'hidden' || rect.width === 0 || rect.height === 0) return [];
+      const text = element.textContent?.trim() ?? '';
+      if (!text && !element.matches('input, textarea')) return [];
+      const size = Number.parseFloat(style.fontSize);
+      const isKicker = element.matches(
+        '.section-kicker, [class*="kicker"], [class*="eyebrow"], [class*="meta"]',
+      );
+      const minimum = element.matches('input, textarea')
+        ? 16
+        : isKicker
+          ? 11
+          : element.matches('span, small, code')
+            ? 12
+            : 14;
+      if (size >= minimum) return [];
+      return [{
+        name: element.getAttribute('aria-label') || text.slice(0, 80) || element.tagName,
+        size,
+        minimum,
+      }];
+    })
+  ));
+  expect.soft(undersized, `meaningful mobile text must remain legible at ${viewportLabel}`).toEqual([]);
+}
+
+async function expectFormaImagesLoaded(container: Locator, viewportLabel: string) {
+  for (const src of ['/assets/forma-site-before.webp', '/assets/forma-widget-answer.webp', '/assets/forma-site-widget.webp']) {
+    const image = container.locator(`img[src="${src}"]`);
+    const imageCount = await image.count();
+    expect.soft(imageCount, `${src} must be present at ${viewportLabel}`).toBe(1);
+    if (imageCount === 0) continue;
+    const state = await image.evaluate((element) => {
+      const imageElement = element as HTMLImageElement;
+      return { complete: imageElement.complete, naturalWidth: imageElement.naturalWidth };
+    });
+    expect.soft(state.complete && state.naturalWidth > 0, `${src} must be loaded at ${viewportLabel}`).toBe(true);
+  }
+}
+
 async function attachScreenshot(
   page: Page,
   testInfo: TestInfo,
@@ -472,6 +564,125 @@ test('landing navigation, composer, case toggle and FAQ are functional @desktop'
   expect(page.url()).not.toContain('example.com');
   expect(page.url()).not.toContain(encodeURIComponent('Отвечай кратко'));
   await expect(page.getByRole('heading', { name: 'Сначала сохраните результат' })).toBeVisible();
+});
+
+test('Product Tour mobile contracts at 320px @mobile', async ({ page }) => {
+  test.setTimeout(30_000);
+  await page.setViewportSize({ width: 320, height: 568 });
+
+  for (const pathname of ['/', '/tour']) {
+    await page.goto(pathname);
+    const tour = page.locator('.product-tour-section');
+    const stepsRail = tour.locator('.product-tour__steps');
+    expect.soft(await tour.getAttribute('data-autoplay'), `Product Tour autoplay at 320px on ${pathname}`).toBe('false');
+    expect.soft(await stepsRail.getAttribute('data-mobile-snap'), `Product Tour snap marker at 320px on ${pathname}`).toBe('true');
+    const snapType = await stepsRail.evaluate((element) => getComputedStyle(element).scrollSnapType);
+    expect.soft(snapType, `Product Tour computed snap type at 320px on ${pathname}`).toContain('x mandatory');
+    expect.soft(await stepsRail.locator('button').count(), `Product Tour stage buttons at 320px on ${pathname}`).toBe(3);
+  }
+});
+
+test('landing mobile contracts @mobile', async ({ page }) => {
+  test.setTimeout(180_000);
+  const viewports = [
+    { width: 320, height: 568 },
+    { width: 360, height: 800 },
+    { width: 390, height: 844 },
+    { width: 430, height: 932 },
+    { width: 568, height: 320 },
+    { width: 844, height: 390 },
+  ];
+
+  for (const viewport of viewports) {
+    const viewportLabel = `${viewport.width}x${viewport.height}`;
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+    await revealLanding(page);
+    expect.soft(await page.getByRole('heading', { name: EXACT_HERO }).isVisible(), `exact hero at ${viewportLabel}`).toBe(true);
+    await expectNoHorizontalOverflow(page);
+
+    for (const [name, locator] of [
+      ['site header', page.locator('.site-header')],
+      ['hero content', page.locator('.hero-section__inner')],
+      ['product tour viewport', page.locator('.product-tour__viewport')],
+      ['active product tour scene', page.locator('.product-tour__scene[data-active="true"]')],
+      ['case comparison', page.locator('.case-comparison')],
+      ['active case panel', page.locator('.case-panel.is-mobile-active')],
+      ['capability stage', page.locator('.capability-stage')],
+      ['Studio layout', page.locator('.studio-layout')],
+      ['FAQ layout', page.locator('.faq-layout')],
+      ['final visual', page.locator('.final-cta-visual')],
+    ] as const) {
+      await locator.scrollIntoViewIfNeeded();
+      await expectContainedInViewport(locator, `${name} at ${viewportLabel}`);
+    }
+
+    const tour = page.locator('.product-tour-section');
+    await tour.scrollIntoViewIfNeeded();
+    if (viewport.width <= 767) {
+      expect.soft(await tour.getAttribute('data-autoplay'), `mobile Product Tour must stop autoplay at ${viewportLabel}`).toBe('false');
+      const stepsRail = tour.locator('.product-tour__steps');
+      expect.soft(await stepsRail.getAttribute('data-mobile-snap'), `mobile Product Tour must expose its snap rail at ${viewportLabel}`).toBe('true');
+      const snapType = await stepsRail.evaluate((element) => getComputedStyle(element).scrollSnapType);
+      expect.soft(snapType, `mobile Product Tour rail must snap horizontally at ${viewportLabel}`).toContain('x mandatory');
+    } else {
+      expect.soft(await tour.getAttribute('data-autoplay'), `desktop Product Tour must retain autoplay at ${viewportLabel}`).toBe('true');
+    }
+    const steps = tour.locator('.product-tour__steps button');
+    expect.soft(await steps.count(), `Product Tour must retain three button stages at ${viewportLabel}`).toBe(3);
+    expect.soft(await tour.locator('.product-tour__arrows button').count(), `Product Tour arrows must remain available at ${viewportLabel}`).toBe(2);
+    for (let index = 0; index < 3; index += 1) {
+      await steps.nth(index).click();
+      expect.soft(await tour.getAttribute('data-active-step'), `Product Tour stage ${index + 1} at ${viewportLabel}`).toBe(String(index + 1));
+      await expectContainedInViewport(
+        tour.locator('.product-tour__scene[data-active="true"]'),
+        `active Product Tour scene ${index + 1} at ${viewportLabel}`,
+      );
+      await expectMobileTextSizes(page, `${viewportLabel}, Product Tour stage ${index + 1}`);
+    }
+    await expectFormaImagesLoaded(tour, viewportLabel);
+
+    const caseSection = page.locator('#case-study');
+    await caseSection.scrollIntoViewIfNeeded();
+    const caseHeading = caseSection.getByRole('heading', { name: 'Что меняется для посетителя сайта' });
+    expect.soft(await caseHeading.count(), `case heading at ${viewportLabel}`).toBe(1);
+    expect.soft(await caseHeading.textContent(), `case heading copy at ${viewportLabel}`).toBe('Что меняется для посетителя сайта');
+    expect.soft(await caseSection.locator('.case-panel.is-mobile-active').count(), `one active case panel at ${viewportLabel}`).toBe(1);
+    expect.soft(await caseSection.locator('.case-panel--after.is-mobile-active').isVisible(), `after case panel at ${viewportLabel}`).toBe(true);
+    await expectContainedInViewport(caseSection.locator('.case-heading'), `case heading container at ${viewportLabel}`);
+    await expectContainedInViewport(caseSection.locator('.case-comparison'), `case comparison container at ${viewportLabel}`);
+
+    const finalSection = page.locator('#final-cta');
+    await finalSection.scrollIntoViewIfNeeded();
+    const finalSite = finalSection.locator('.final-site-card--after .mini-site');
+    const finalWidget = finalSection.locator('.final-site-card--after .widget-preview-card');
+    expect.soft(await finalSite.isVisible(), `final after visual at ${viewportLabel}`).toBe(true);
+    expect.soft(await finalWidget.isVisible(), `final after widget at ${viewportLabel}`).toBe(true);
+    await expectVisibleInsideSoft(finalWidget, finalSite, `final after widget at ${viewportLabel}`);
+
+    await expectMobileTouchTargets(page, viewportLabel);
+  }
+
+  for (const viewport of viewports) {
+    const viewportLabel = `${viewport.width}x${viewport.height}`;
+    await page.setViewportSize(viewport);
+    await page.goto('/tour');
+    const tour = page.locator('.product-tour-section--standalone');
+    if (viewport.width <= 767) {
+      expect.soft(await tour.getAttribute('data-autoplay'), `standalone Product Tour autoplay at ${viewportLabel}`).toBe('false');
+      const stepsRail = tour.locator('.product-tour__steps');
+      expect.soft(await stepsRail.getAttribute('data-mobile-snap'), `standalone tour must expose its snap rail at ${viewportLabel}`).toBe('true');
+      const snapType = await stepsRail.evaluate((element) => getComputedStyle(element).scrollSnapType);
+      expect.soft(snapType, `standalone tour rail must snap horizontally at ${viewportLabel}`).toContain('x mandatory');
+    } else {
+      expect.soft(await tour.getAttribute('data-autoplay'), `standalone Product Tour must retain autoplay at ${viewportLabel}`).toBe('true');
+    }
+    const cta = tour.getByRole('link', { name: 'Создать бесплатную версию' });
+    const ctaVisible = await cta.isVisible();
+    expect.soft(ctaVisible, `standalone CTA at ${viewportLabel}`).toBe(true);
+    if (ctaVisible) await expectContainedInViewport(cta, `standalone CTA at ${viewportLabel}`);
+    await expectFormaImagesLoaded(tour, `standalone ${viewportLabel}`);
+  }
 });
 
 test('landing mobile preserves content order, menu, controls and comparison @mobile', async ({ page }, testInfo) => {

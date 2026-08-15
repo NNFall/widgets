@@ -11,10 +11,10 @@ describe('LandingPage sections', () => {
     render(<LandingPage />);
 
     const sections = Array.from(document.querySelectorAll('section[data-landing-section]'));
-    expect(sections).toHaveLength(10);
+    expect(sections).toHaveLength(9);
     expect(sections[1]).toHaveClass('product-tour-section');
     expect(sections[2]).toHaveClass('free-result-section');
-    expect(screen.getByRole('heading', { name: 'Вставьте ссылку на ваш сайт' })).toBeVisible();
+    expect(screen.getByRole('textbox', { name: 'Ссылка на действующий сайт' })).toBeVisible();
     expect(screen.queryByRole('link', { name: 'Открыть демонстрацию отдельно' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Сначала посмотрите результат. Оплатите только публикацию.' })).toBeVisible();
     expect(screen.getByText(/экспресс-версия бесплатно/i)).toBeVisible();
@@ -30,11 +30,11 @@ describe('LandingPage sections', () => {
   it('uses the agreed B2B promise and free-version copy in the hero', () => {
     render(<LandingPage />);
 
-    expect(screen.getByRole('heading', { name: /Покажите сайт.*получите первую версию.*AI-консультанта/i })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Через 10 минут вы сможете сказать: наш бизнес использует AI' })).toBeVisible();
     expect(screen.getByText(/Kaigo бесплатно создаст первую версию AI-виджета/i)).toBeVisible();
     expect(screen.getByText(/Сначала посмотрите результат и проверьте ответы/i)).toBeVisible();
     expect(screen.getByText(/Оплата нужна только перед публикацией/i)).toBeVisible();
-    expect(screen.getByRole('heading', { name: /Сначала получите.*бесплатную экспресс-версию/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Получите бесплатную экспресс-версию.*проверьте её сами/i })).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Получить бесплатную версию' })).toHaveLength(2);
   });
 
@@ -52,30 +52,28 @@ describe('LandingPage sections', () => {
     expect(widgets.length).toBeGreaterThanOrEqual(4);
   });
 
-  it('describes the creation path as three readable ordered steps', () => {
+  it('describes the creation path as three readable stages in the real FORMA case', () => {
     render(<LandingPage />);
 
-    const process = screen.getByRole('list', { name: 'Путь от ссылки до готового виджета' });
-    expect(within(process).getAllByRole('listitem')).toHaveLength(3);
-    const board = document.querySelector('.how-process-board') as HTMLElement;
-    expect(within(board).getByText('https://teply-hleb.ru')).toBeVisible();
-    expect(within(board).getByText(/Проверяем страницы, услуги, стиль и частые вопросы/i)).toBeVisible();
-    expect(within(board).getByText(/Какие торты можно заказать к субботе/i)).toBeVisible();
+    const tour = screen.getByRole('region', { name: 'Как Kaigo создаёт AI-сотрудника' });
+    expect(within(tour).getByText('Реальный кейс · FORMA')).toBeVisible();
+    const stages = within(tour).getByRole('navigation', { name: 'Этапы создания AI-сотрудника' });
+    expect(within(stages).getAllByRole('button')).toHaveLength(3);
+    expect(within(stages).getByRole('button', { name: /этап 1.*Дайте Kaigo ссылку/i })).toBeVisible();
+    expect(within(stages).getByRole('button', { name: /этап 2.*проверьте результат/i })).toBeVisible();
+    expect(within(stages).getByRole('button', { name: /этап 3.*AI-консультанта/i })).toBeVisible();
   });
 
   it('renders the complete marketing narrative', () => {
     render(<LandingPage />);
 
-    expect(screen.getByRole('heading', { name: 'Как это работает' })).toBeVisible();
-    expect(screen.getByRole('heading', { name: 'Публикуйте только после проверки' })).toBeVisible();
-    expect(screen.getByText('Выберите тариф')).toBeVisible();
-    expect(screen.getByText('Опубликуйте версию')).toBeVisible();
-    expect(screen.getByText('Установите одной строкой')).toBeVisible();
-    expect(screen.getByText(/виджет не появится на сайте без вашего подтверждения/i)).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Дайте Kaigo ссылку на ваш сайт' })).toBeVisible();
+    expect(screen.getByText('От одной ссылки до AI-консультанта на сайте')).toBeVisible();
+    expect(screen.getByText(/Можно начать бесплатно. Карта не нужна/i)).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Что видит Kaigo' })).toBeVisible();
     expect(screen.getByRole('heading', { name: /Не просто чат/ })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Готовый вариант — под вашим контролем' })).toBeVisible();
-    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(10);
+    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(9);
     expect(screen.getAllByRole('textbox', { name: /ссылка на.*сайт/i })).toHaveLength(2);
   });
 

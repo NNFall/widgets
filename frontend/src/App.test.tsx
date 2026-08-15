@@ -24,7 +24,7 @@ describe('App', () => {
   it('renders the selected Kaigo hero and full navigation', () => {
     render(<App />);
 
-    expect(screen.getByRole('heading', { name: /Через 10 минут.*наш бизнес.*использует AI/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Через 10 минут вы сможете сказать: наш бизнес использует AI' })).toBeInTheDocument();
     expect(
       Array.from(document.querySelectorAll('.hero-title-line'), (line) => line.textContent),
     ).toEqual([
@@ -140,6 +140,20 @@ describe('App', () => {
     expect(window.location.pathname).toBe('/');
   });
 
+  it('places the invalid URL alert before the optional brief and refocuses the URL input', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const urlInput = screen.getByLabelText('Ссылка на действующий сайт');
+    const brief = screen.getAllByRole('textbox', { name: 'Пожелание к AI-виджету' })[0];
+    await user.type(urlInput, 'example.com');
+    await user.click(screen.getAllByRole('button', { name: 'Получить бесплатную версию' })[0]);
+
+    const alert = screen.getByRole('alert');
+    expect(Boolean(alert.compareDocumentPosition(brief) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    expect(urlInput).toHaveFocus();
+  });
+
   it('keeps the mobile navigation untabbable while closed and exposes it when opened', async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -157,6 +171,21 @@ describe('App', () => {
     expect(mobileNavigation).not.toHaveAttribute('hidden');
     expect(screen.getByRole('navigation', { name: 'Мобильная навигация' })).toBeVisible();
     expect(mobileProductLink).toBeVisible();
+  });
+
+  it('closes the open mobile menu on Escape and restores focus to its toggle', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    const toggle = screen.getByRole('button', { name: 'Открыть меню' });
+    await user.click(toggle);
+    const mobileNavigation = screen.getByRole('navigation', { name: 'Мобильная навигация' });
+    expect(mobileNavigation).toBeVisible();
+
+    await user.keyboard('{Escape}');
+
+    expect(mobileNavigation).toHaveAttribute('hidden');
+    expect(toggle).toHaveFocus();
   });
 
   it('closes mobile navigation and restores focus after deferred hash navigation', async () => {
@@ -212,7 +241,7 @@ describe('App', () => {
     expect(screen.getByRole('heading', { name: 'Дайте Kaigo ссылку на ваш сайт' })).toBeVisible();
     expect(document.querySelectorAll('[data-tour-step]')).toHaveLength(3);
     expect(screen.getByRole('link', { name: 'На главный экран' })).toHaveAttribute('href', '/');
-    expect(screen.queryByRole('heading', { name: /Через 10 минут.*наш бизнес.*использует AI/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Через 10 минут вы сможете сказать: наш бизнес использует AI' })).not.toBeInTheDocument();
   });
 
   it('renders the landing page for paths that only start with /studio', () => {
@@ -220,7 +249,7 @@ describe('App', () => {
 
     render(<App />);
 
-    expect(screen.getByRole('heading', { name: /Через 10 минут.*наш бизнес.*использует AI/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Через 10 минут вы сможете сказать: наш бизнес использует AI' })).toBeInTheDocument();
     expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(9);
   });
 });
