@@ -152,6 +152,10 @@ it('does not invent OAuth buttons when no providers are configured', async () =>
 
   expect(await screen.findByText('Вход временно недоступен')).toBeVisible();
   expect(screen.queryByRole('link', { name: /Продолжить с/ })).not.toBeInTheDocument();
+  expect(screen.getByRole('link', { name: /Написать в поддержку/i })).toHaveAttribute(
+    'href',
+    'mailto:support@kaigo.space',
+  );
 });
 
 it('renders Studio immediately for an authenticated browser session', async () => {

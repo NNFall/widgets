@@ -136,4 +136,32 @@ describe('Studio accessibility contracts', () => {
       /\.auth-gate__support a\s*\{[^}]*min-height:\s*44px/s,
     );
   });
+
+  it('keeps every compact workbench header action at a 44px touch target', () => {
+    const baseRule = stylesSource.match(
+      /\.studio-app--workbench \.studio-header__actions button\s*\{[^}]*\}/s,
+    )?.[0] ?? '';
+    expect(baseRule).toMatch(/min-height:\s*44px/);
+
+    const compactStart = stylesSource.indexOf(
+      '@media (max-width: 560px) {\n  .studio-app:not(.studio-app--workbench)',
+    );
+    const compactEnd = stylesSource.indexOf('@media (max-width: 390px)', compactStart);
+    const compactRules = stylesSource.slice(compactStart, compactEnd);
+    expect(compactRules).toMatch(
+      /\.studio-app--workbench \.studio-header__actions button,\s*\.studio-app--workbench \.studio-header__actions \.studio-header__publish\s*\{[^}]*width:\s*44px;[^}]*min-height:\s*44px;/s,
+    );
+    expect(compactRules).toMatch(
+      /\.studio-app--workbench \.studio-header__actions\s*\{[^}]*width:\s*auto;[^}]*display:\s*flex;[^}]*gap:\s*4px/s,
+    );
+    expect(compactRules).toMatch(
+      /\.studio-app--workbench \.studio-header\s*\{[^}]*padding:\s*0 10px;[^}]*grid-template-columns:\s*auto minmax\(0,\s*1fr\) auto/s,
+    );
+
+    const narrowStart = stylesSource.indexOf('@media (max-width: 390px)');
+    const narrowRules = stylesSource.slice(narrowStart);
+    expect(narrowRules).toMatch(
+      /\.studio-app--workbench \.studio-header \.kaigo-logo__wordmark\s*\{[^}]*display:\s*none/s,
+    );
+  });
 });

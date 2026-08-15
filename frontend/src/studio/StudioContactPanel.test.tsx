@@ -29,6 +29,9 @@ describe('StudioContactPanel', () => {
     expect(screen.getByText('Добавим после подтверждения контакта')).toBeVisible();
     expect(screen.queryByRole('link', { name: /Telegram/i })).not.toBeInTheDocument();
     expect(screen.getByText(/Ничего не отправляется автоматически/i)).toBeVisible();
+    expect(screen.getByText(/Форма только готовит письмо/i)).toBeVisible();
+    expect(screen.getByText(/Адрес временный для предпросмотра/i)).toBeVisible();
+    expect(screen.queryByText(/Команда прочитает и ответит/i)).not.toBeInTheDocument();
 
     const action = screen.getByRole('link', { name: 'Открыть письмо' });
     expect(action).not.toHaveAttribute('href');

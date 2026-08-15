@@ -7169,7 +7169,7 @@ a {
 }
 
 .studio-app--workbench .studio-header__actions button {
-  min-height: 42px;
+  min-height: 44px;
   padding-inline: 13px;
   border-radius: 10px;
   background: #fff;
@@ -8394,8 +8394,8 @@ a {
 
   .studio-app--workbench .studio-header__actions button,
   .studio-app--workbench .studio-header__actions .studio-header__publish {
-    width: 40px;
-    min-height: 40px;
+    width: 44px;
+    min-height: 44px;
     padding: 0;
   }
 

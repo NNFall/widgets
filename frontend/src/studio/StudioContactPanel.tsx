@@ -48,7 +48,7 @@ export function StudioContactPanel({ domain, projectId }: StudioContactPanelProp
       <div className="studio-contact-panel__intro">
         <p className="studio-kicker">Связь с Kaigo</p>
         <h3>Помощь и обратная связь</h3>
-        <p>Расскажите, что получилось или где нужна помощь. Команда прочитает обращение и ответит по почте.</p>
+        <p>Форма только готовит письмо в вашем почтовом приложении. Адрес временный для предпросмотра, владелец должен подтвердить, что он принимает письма.</p>
       </div>
 
       <div className="studio-contact-panel__channels" aria-label="Каналы связи">

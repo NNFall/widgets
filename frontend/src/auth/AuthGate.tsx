@@ -43,6 +43,14 @@ function safeErrorDetail(message: string) {
   return 'Не удалось подтвердить текущую сессию.';
 }
 
+function SupportContact() {
+  return (
+    <p className="auth-gate__support">
+      Если Studio не открывается, <a href={supportMailtoHref()}>Написать в поддержку: {CONTACT_CONFIG.supportEmail}</a>.
+    </p>
+  );
+}
+
 export function AuthGate({ children }: { children: ReactNode }) {
   const [state, setState] = useState<GateState>({ status: 'loading' });
   const [attempt, setAttempt] = useState(0);
@@ -126,9 +134,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
           <LockKey size={34} aria-hidden />
           <h1>Студия сейчас не открылась</h1>
           <p>Ваши проекты и сохранённая работа в безопасности. Попробуйте подключиться ещё раз.</p>
-          <p className="auth-gate__support">
-            Если Studio не открывается, <a href={supportMailtoHref()}>Написать в поддержку: {CONTACT_CONFIG.supportEmail}</a>.
-          </p>
+          <SupportContact />
           <div className="auth-gate__recovery">
             <button
               type="button"
@@ -175,7 +181,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
           )}
         </div>
         {state.providers.length === 0 && (
-          <p role="status">Вход временно недоступен</p>
+          <>
+            <p role="status">Вход временно недоступен</p>
+            <SupportContact />
+          </>
         )}
         <small>Без пароля. Генерация начнётся только после входа.</small>
       </section>
