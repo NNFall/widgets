@@ -206,6 +206,19 @@ async function expectProductTourUsable(page: Page) {
     .toBeLessThanOrEqual(geometry.viewportHeight * 1.45);
 }
 
+async function expectReasonableMobileTourHeight(
+  tour: Locator,
+  viewport: { width: number; height: number },
+  label: string,
+) {
+  const sectionHeight = await tour.evaluate((element) => element.getBoundingClientRect().height);
+  const maximumHeight = viewport.height <= 430
+    ? viewport.height * 3
+    : Math.max(1_300, viewport.height * 1.45);
+  expect.soft(sectionHeight, `${label} must keep controls within a reasonable scroll distance`)
+    .toBeLessThanOrEqual(maximumHeight);
+}
+
 async function expectCompactFirstScreen(page: Page) {
   const viewport = page.viewportSize();
   expect(viewport, 'compact project must provide a viewport').not.toBeNull();
@@ -639,6 +652,11 @@ test('landing mobile contracts @mobile', async ({ page }) => {
         tour.locator('.product-tour__scene[data-active="true"]'),
         `active Product Tour scene ${index + 1} at ${viewportLabel}`,
       );
+      await expectReasonableMobileTourHeight(
+        tour,
+        viewport,
+        `Product Tour stage ${index + 1} at ${viewportLabel}`,
+      );
       await expectMobileTextSizes(page, `${viewportLabel}, Product Tour stage ${index + 1}`);
     }
     await expectFormaImagesLoaded(tour, viewportLabel);
@@ -681,6 +699,15 @@ test('landing mobile contracts @mobile', async ({ page }) => {
       expect.soft(snapType, `standalone tour rail must snap horizontally at ${viewportLabel}`).toContain('x mandatory');
     } else {
       expect.soft(await tour.getAttribute('data-autoplay'), `standalone Product Tour must retain autoplay at ${viewportLabel}`).toBe('true');
+    }
+    const standaloneSteps = tour.locator('.product-tour__steps button');
+    for (let index = 0; index < 3; index += 1) {
+      await standaloneSteps.nth(index).click();
+      await expectReasonableMobileTourHeight(
+        tour,
+        viewport,
+        `standalone Product Tour stage ${index + 1} at ${viewportLabel}`,
+      );
     }
     const cta = tour.getByRole('link', { name: 'Создать бесплатную версию' });
     const ctaVisible = await cta.isVisible();

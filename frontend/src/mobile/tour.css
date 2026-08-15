@@ -252,7 +252,7 @@
 
   .tour-studio-visual {
     height: auto;
-    min-height: 380px;
+    min-height: 0;
     grid-template-columns: 1fr;
   }
 
@@ -261,7 +261,7 @@
   }
 
   .tour-studio-visual__preview {
-    min-height: 380px;
+    min-height: 340px;
     padding: 14px;
     gap: 10px;
   }
@@ -276,7 +276,8 @@
   }
 
   .tour-studio-visual__capture {
-    min-height: 290px;
+    height: clamp(220px, 58vw, 260px);
+    min-height: 0;
   }
 
   .tour-studio-visual__capture img {
@@ -295,7 +296,7 @@
   }
 
   .tour-publish-visual .tour-window {
-    height: clamp(230px, 64vw, 320px);
+    height: clamp(190px, 50vw, 230px);
   }
 
   .tour-publish-visual .tour-site-frame {
@@ -312,6 +313,7 @@
   }
 
   .tour-install-line > span {
+    color: var(--tour-v2-metal-deep, #39444b);
     font-size: 12px;
     line-height: 1.4;
   }
@@ -328,9 +330,7 @@
   }
 
   .tour-install-line__badges {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
+    display: none;
   }
 
   .tour-install-line__badges strong {
@@ -424,5 +424,26 @@
     gap: 10px;
     font-size: 14px;
     line-height: 1.3;
+  }
+}
+
+@media (max-width: 767px) and (orientation: landscape),
+  (hover: none) and (pointer: coarse) and (max-width: 900px) and (orientation: landscape) {
+  .product-tour__scene {
+    grid-template-columns: minmax(250px, .92fr) minmax(0, 1.08fr);
+    align-items: start;
+    gap: 18px;
+  }
+
+  .product-tour__copy h2 {
+    font-size: clamp(28px, 4.8vw, 34px);
+  }
+
+  .product-tour__instructions {
+    margin-top: 12px;
+  }
+
+  .product-tour__visual {
+    align-self: start;
   }
 }
