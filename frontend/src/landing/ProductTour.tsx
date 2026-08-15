@@ -10,6 +10,7 @@ import {
 } from './ProductTourVisuals';
 
 const AUTOPLAY_MS = 8_000;
+const MOBILE_QUERY = '(max-width: 767px)';
 
 const tourScenes = [
   {
@@ -59,11 +60,35 @@ type ProductTourProps = {
 
 export function ProductTour({ standalone = false }: ProductTourProps) {
   const [activeStep, setActiveStep] = useState(0);
+  const [isMobile, setIsMobile] = useState(false);
   const [focusWithin, setFocusWithin] = useState(false);
   const [pointerInside, setPointerInside] = useState(false);
   const campaignStudioHref = studioHref();
   const { active: motionActive, reducedMotion, ref } = useMotionActivity<HTMLElement>();
-  const autoPlay = motionActive && !reducedMotion && !focusWithin && !pointerInside;
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return undefined;
+    }
+
+    const mediaQuery = window.matchMedia(MOBILE_QUERY);
+    if (!mediaQuery) return undefined;
+
+    const syncMobileState = () => setIsMobile(mediaQuery.matches);
+
+    syncMobileState();
+    if (typeof mediaQuery.addEventListener !== 'function') return undefined;
+
+    mediaQuery.addEventListener('change', syncMobileState);
+
+    return () => {
+      if (typeof mediaQuery.removeEventListener === 'function') {
+        mediaQuery.removeEventListener('change', syncMobileState);
+      }
+    };
+  }, []);
+
+  const autoPlay = motionActive && !reducedMotion && !focusWithin && !pointerInside && !isMobile;
 
   useEffect(() => {
     if (!autoPlay) return undefined;
@@ -142,7 +167,7 @@ export function ProductTour({ standalone = false }: ProductTourProps) {
             <span>Дальше</span><ArrowRight size={20} aria-hidden />
           </button>
         </div>
-        <nav className="product-tour__steps" aria-label="Этапы создания AI-сотрудника">
+        <nav className="product-tour__steps" aria-label="Этапы создания AI-сотрудника" data-mobile-snap="true">
           {tourScenes.map((scene, index) => (
             <button
               aria-label={`Показать этап ${index + 1}: ${scene.title}`}
