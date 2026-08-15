@@ -244,6 +244,43 @@ describe('durable SaaS Studio flow', () => {
     expect(await screen.findByRole('heading', { name: 'Мои виджеты' })).toBeVisible();
   });
 
+  it('closes help when navigation changes project mode and keeps it closed on the home route', async () => {
+    window.history.replaceState({}, '', '/studio');
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/projects') return jsonResponse({ projects: [project()] });
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project());
+      if (url === `/api/projects/${PROJECT_ID}/versions`) {
+        return jsonResponse({ active_version_id: null, versions: [] });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+
+    render(<StudioPage />);
+
+    expect(await screen.findByRole('heading', { name: 'Мои виджеты' })).toBeVisible();
+    const homeHelp = screen.getByRole('button', { name: 'Помощь' });
+    await user.click(homeHelp);
+    expect(screen.getByRole('dialog', { name: 'Помощь и обратная связь' })).toBeVisible();
+
+    window.history.pushState({}, '', `/studio?project=${PROJECT_ID}`);
+    act(() => window.dispatchEvent(new PopStateEvent('popstate')));
+
+    expect(await screen.findByRole('heading', { name: 'Создайте первый AI-виджет' })).toBeVisible();
+    expect(screen.queryByRole('dialog', { name: 'Помощь и обратная связь' })).not.toBeInTheDocument();
+    expect(document.activeElement?.isConnected).toBe(true);
+
+    window.history.pushState({}, '', '/studio');
+    act(() => window.dispatchEvent(new PopStateEvent('popstate')));
+
+    expect(await screen.findByRole('heading', { name: 'Мои виджеты' })).toBeVisible();
+    expect(screen.queryByRole('dialog', { name: 'Помощь и обратная связь' })).not.toBeInTheDocument();
+    expect(document.activeElement?.isConnected).toBe(true);
+  });
+
   it('clears the previous run before hydrating a different project', async () => {
     const running = run({ status: 'running', state: 'running', progress: 38 });
     const secondProject = {

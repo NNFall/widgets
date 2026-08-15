@@ -141,6 +141,8 @@ export function StudioPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [projectPending, setProjectPending] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
+  const openContact = useCallback(() => setContactOpen(true), []);
+  const closeContact = useCallback(() => setContactOpen(false), []);
   const hydratedRun = useRef<string | null>(null);
   const previewAnchorRef = useRef<HTMLDivElement>(null);
   const newWidgetIntentRef = useRef(false);
@@ -191,10 +193,17 @@ export function StudioPage() {
   }, [controller.project, controller.snapshot]);
 
   useEffect(() => {
-    const syncProjectFromLocation = () => setProjectId(queryProjectId());
+    const syncProjectFromLocation = () => {
+      closeContact();
+      setProjectId(queryProjectId());
+    };
     window.addEventListener('popstate', syncProjectFromLocation);
     return () => window.removeEventListener('popstate', syncProjectFromLocation);
-  }, []);
+  }, [closeContact]);
+
+  useEffect(() => {
+    closeContact();
+  }, [closeContact, controller.projectMode, controller.runId, projectId]);
 
   useEffect(() => {
     if (projectId || !newWidgetIntentRef.current) return;
@@ -219,6 +228,7 @@ export function StudioPage() {
       return;
     }
     setFormError(null);
+    closeContact();
     controller.clearError();
     const canonicalUrl = canonicalWebsiteUrl(sourceUrl);
     if (!canonicalUrl) return;
@@ -244,6 +254,7 @@ export function StudioPage() {
     try {
       const canonicalUrl = canonicalWebsiteUrl(sourceUrl);
       if (!canonicalUrl) return;
+      closeContact();
       const session = await getAuthSession();
       if (!session.authenticated || !session.csrf_token) {
         setFormError('Войдите снова, чтобы создать проект.');
@@ -283,6 +294,7 @@ export function StudioPage() {
   };
 
   const openProject = (nextProjectId: string) => {
+    closeContact();
     window.history.pushState({}, '', `/studio?project=${encodeURIComponent(nextProjectId)}`);
     setProjectId(nextProjectId);
   };
@@ -295,13 +307,12 @@ export function StudioPage() {
   };
 
   const openStudioHome = (focusNewWidget: boolean) => {
+    closeContact();
     newWidgetIntentRef.current = focusNewWidget;
     window.history.pushState({}, '', focusNewWidget ? '/studio#studio-new-widget' : '/studio');
     setProjectId(null);
   };
 
-  const openContact = useCallback(() => setContactOpen(true), []);
-  const closeContact = useCallback(() => setContactOpen(false), []);
   const supportDrawer = (
     <StudioDrawer
       open={contactOpen}
