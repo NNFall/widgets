@@ -1,4 +1,5 @@
 @import './foundations.css';
 @import './tour.css';
+@import './sections.css';
 
 /* Mobile tour and section layers can be added here without changing desktop CSS. */
