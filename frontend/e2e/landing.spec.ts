@@ -781,6 +781,39 @@ test('standalone product tour keeps every step usable on mobile @mobile', async 
   );
 });
 
+test('mobile landing and every tour step have no serious accessibility violations @mobile', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/');
+  await revealLanding(page);
+
+  const menuButton = page.getByRole('button', { name: 'Открыть меню' });
+  await menuButton.click();
+  await expect(page.getByRole('navigation', { name: 'Мобильная навигация' })).toBeVisible();
+  const landingResults = await new AxeBuilder({ page })
+    .withTags(['wcag2a', 'wcag2aa'])
+    .analyze();
+  expect(landingResults.violations.filter(({ impact }) =>
+    impact === 'serious' || impact === 'critical')).toEqual([]);
+  await page.keyboard.press('Escape');
+
+  await page.goto('/tour');
+  const tour = page.locator('.product-tour-section');
+  const steps = tour.locator('.product-tour__steps button');
+  for (let index = 0; index < 3; index += 1) {
+    await steps.nth(index).click();
+    await expect(tour).toHaveAttribute('data-active-step', String(index + 1));
+    const tourResults = await new AxeBuilder({ page })
+      .withTags(['wcag2a', 'wcag2aa'])
+      .analyze();
+    expect(
+      tourResults.violations.filter(({ impact }) =>
+        impact === 'serious' || impact === 'critical'),
+      `mobile standalone product tour stage ${index + 1}`,
+    ).toEqual([]);
+  }
+});
+
 test('landing reaches the final hero state immediately with reduced motion @reduced', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/');

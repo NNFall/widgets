@@ -374,6 +374,16 @@
     line-height: 1.3;
   }
 
+  .landing-page .final-site-card__motion--before .final-site-card__label {
+    color: var(--landing-paper, #fcfaf7);
+    background: #303a40;
+  }
+
+  .landing-page .final-site-card__motion--after .final-site-card__label {
+    color: var(--landing-paper, #fcfaf7);
+    background: var(--coral-text, #a83212);
+  }
+
   .landing-page .mini-site {
     width: 100%;
     aspect-ratio: 1.55;
