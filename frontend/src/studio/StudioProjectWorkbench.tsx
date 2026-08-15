@@ -15,6 +15,7 @@ import { type FormEvent, type ReactNode, useCallback, useState } from 'react';
 import { KaigoLogo } from '../shared/KaigoLogo';
 import { ProjectVersionHistory } from './ProjectVersionHistory';
 import { StudioAccountPanel } from './StudioAccountPanel';
+import { StudioContactPanel } from './StudioContactPanel';
 import { StudioDrawer } from './StudioDrawer';
 import { StudioLibrary } from './StudioLibrary';
 import { StudioPreview } from './StudioPreview';
@@ -24,7 +25,7 @@ import { UpgradeGate } from './UpgradeGate';
 import type { PreviewViewport } from './types';
 import type { BuilderRunController } from './useBuilderRun';
 
-type WorkbenchDrawer = 'projects' | 'versions' | 'account' | 'publication' | null;
+type WorkbenchDrawer = 'projects' | 'versions' | 'account' | 'contact' | 'publication' | null;
 type MobilePane = 'chat' | 'preview';
 
 type StudioProjectWorkbenchProps = {
@@ -368,7 +369,23 @@ export function StudioProjectWorkbench({
         description="Подписка, продление и доступный объём доработок."
         onClose={closeDrawer}
       >
+        <button
+          type="button"
+          className="studio-drawer__contact-launcher"
+          onClick={() => setDrawer('contact')}
+        >
+          Помощь и обратная связь
+        </button>
         <StudioAccountPanel onOpenPublication={() => setDrawer('publication')} />
+      </StudioDrawer>
+
+      <StudioDrawer
+        open={drawer === 'contact'}
+        title="Помощь и обратная связь"
+        description="Вопрос, ошибка, идея или сотрудничество."
+        onClose={closeDrawer}
+      >
+        <StudioContactPanel domain={domain} projectId={projectId} />
       </StudioDrawer>
 
       <StudioDrawer

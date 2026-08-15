@@ -112,4 +112,28 @@ describe('Studio accessibility contracts', () => {
       /\.studio-app--workbench\s+\.studio-header__actions\s+\.studio-header__publish:active:not\(:disabled\)\s*\{[^}]*translateY\(0\)\s+scale\(\.98\)/s,
     );
   });
+
+  it('keeps Studio support actions touch-safe and the contact drawer scrollable on mobile', () => {
+    expect(stylesSource).toMatch(
+      /\.studio-help-button\s*\{[^}]*min-height:\s*44px[^}]*min-width:\s*44px/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.studio-contact-panel\s*\{[^}]*min-width:\s*0/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.studio-drawer__body\s*\{[^}]*min-height:\s*0[^}]*overflow-y:\s*auto/s,
+    );
+    expect(stylesSource).toMatch(
+      /@media \(max-width:\s*560px\)[\s\S]*\.studio-drawer__panel\s*\{[^}]*width:\s*100%/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.studio-contact-panel__telegram(?![\w-])[^}]*color:/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.studio-contact-panel__channel a\s*\{[^}]*min-height:\s*44px/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.auth-gate__support a\s*\{[^}]*min-height:\s*44px/s,
+    );
+  });
 });

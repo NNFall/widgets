@@ -183,6 +183,11 @@ describe('durable SaaS Studio flow', () => {
 
     expect(await screen.findByRole('heading', { name: 'Мои виджеты' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Создайте новый виджет' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Помощь' })).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Помощь' }));
+    expect(screen.getByRole('dialog', { name: 'Помощь и обратная связь' })).toBeVisible();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Помощь и обратная связь' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('Ссылка на сайт')).toHaveValue('https://fresh.example.com');
     await user.type(
       screen.getByRole('textbox', { name: 'Пожелание к AI-виджету' }),
@@ -992,7 +997,18 @@ describe('durable SaaS Studio flow', () => {
     expect(within(accountDialog).getByText('Доработка новыми версиями')).toBeVisible();
     expect(within(accountDialog).getByText('Публикация на выбранных сайтах')).toBeVisible();
     expect(within(accountDialog).getByText('Код установки и безопасные обновления')).toBeVisible();
+    await user.click(within(accountDialog).getByRole('button', { name: 'Помощь и обратная связь' }));
+    const contactDialog = screen.getByRole('dialog', { name: 'Помощь и обратная связь' });
+    expect(contactDialog).toBeVisible();
+    expect(within(contactDialog).getByRole('link', { name: 'support@kaigo.space' })).toHaveAttribute(
+      'href',
+      'mailto:support@kaigo.space',
+    );
+    expect(within(contactDialog).getByText('Добавим после подтверждения контакта')).toBeVisible();
+    expect(screen.queryByRole('dialog', { name: 'Тариф и лимиты' })).not.toBeInTheDocument();
     await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Помощь и обратная связь' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Открыть тариф и лимиты' })).toHaveFocus();
 
     await user.click(screen.getByRole('button', { name: 'Открыть версии' }));
     const versionsDialog = screen.getByRole('dialog', { name: 'История версий' });
@@ -1008,6 +1024,32 @@ describe('durable SaaS Studio flow', () => {
     expect(within(publicationDialog).getByText('Публикация')).toBeVisible();
     expect(within(publicationDialog).getByText('Установка')).toBeVisible();
     expect(within(publicationDialog).getByRole('button', { name: 'Опубликовать и подключить' })).toBeEnabled();
+  });
+
+  it('keeps contact support available when billing data fails to load', async () => {
+    const completed = run({ status: 'completed', state: 'completed', progress: 100 });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(completed));
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(completed);
+      if (url === `/api/projects/${PROJECT_ID}/versions`) {
+        return jsonResponse({ active_version_id: null, versions: [] });
+      }
+      if (url === '/api/billing/subscription') return jsonResponse({ error: 'temporary' }, 502);
+      throw new Error(`unexpected request: ${url}`);
+    }));
+
+    const user = userEvent.setup();
+    render(<StudioPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Открыть тариф и лимиты' }));
+    const accountDialog = screen.getByRole('dialog', { name: 'Тариф и лимиты' });
+    expect(await within(accountDialog).findByText('Не получилось загрузить тариф')).toBeVisible();
+    expect(within(accountDialog).getByRole('button', { name: 'Помощь и обратная связь' })).toBeVisible();
+
+    await user.click(within(accountDialog).getByRole('button', { name: 'Помощь и обратная связь' }));
+    expect(screen.getByRole('dialog', { name: 'Помощь и обратная связь' })).toBeVisible();
   });
 
   it('lets the owner correct a claimed URL and brief before the first run', async () => {

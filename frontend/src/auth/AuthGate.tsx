@@ -2,6 +2,7 @@ import { ArrowClockwise, ArrowRight, LockKey, SpinnerGap } from '@phosphor-icons
 import { type ReactNode, useEffect, useState } from 'react';
 
 import { ensureLandingJourney } from '../shared/journey';
+import { CONTACT_CONFIG, supportMailtoHref } from '../shared/contact';
 
 type SessionSnapshot = {
   enabled: boolean;
@@ -125,6 +126,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
           <LockKey size={34} aria-hidden />
           <h1>Студия сейчас не открылась</h1>
           <p>Ваши проекты и сохранённая работа в безопасности. Попробуйте подключиться ещё раз.</p>
+          <p className="auth-gate__support">
+            Если Studio не открывается, <a href={supportMailtoHref()}>Написать в поддержку: {CONTACT_CONFIG.supportEmail}</a>.
+          </p>
           <div className="auth-gate__recovery">
             <button
               type="button"

@@ -2917,6 +2917,41 @@ a {
   opacity: .62;
 }
 
+.studio-help-button {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid rgba(7, 27, 47, .14);
+  border-radius: 12px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, .78);
+  cursor: pointer;
+  font-weight: 800;
+  transition: border-color 180ms ease, background-color 180ms ease, transform 180ms cubic-bezier(.16, 1, .3, 1);
+}
+
+.studio-help-button:hover {
+  border-color: rgba(7, 27, 47, .28);
+  background: #fff;
+  transform: translateY(-1px);
+}
+
+.studio-help-button:active {
+  transform: translateY(0) scale(.98);
+}
+
+.studio-help-button--compact {
+  min-width: 44px;
+}
+
+.studio-header__actions--support {
+  min-width: 44px;
+}
+
 .studio-shell {
   width: calc(100% - 32px);
   max-width: 1480px;
@@ -5188,6 +5223,22 @@ a {
 .auth-gate__recovery button,
 .auth-gate__recovery a { min-height: 48px; padding: 0 18px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid rgba(7, 27, 47, .15); border-radius: 12px; color: var(--ink); background: #fff; font: inherit; font-weight: 800; text-decoration: none; }
 .auth-gate__recovery button { color: #fff; border-color: var(--ink); background: var(--ink); cursor: pointer; }
+.auth-gate__support {
+  margin-top: 16px !important;
+  color: #5f6f79;
+  font-size: 14px !important;
+  line-height: 1.5 !important;
+}
+.auth-gate__support a {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  color: #a84427;
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+}
 .auth-gate__details { margin-top: 18px; border-top: 1px solid rgba(7, 27, 47, .1); }
 .auth-gate__details summary { min-height: 44px; display: flex; align-items: center; color: #667680; cursor: pointer; font-size: 13px; font-weight: 700; }
 .auth-gate__details p { margin: 0 0 4px; color: #77858d; font-size: 13px; }
@@ -7909,6 +7960,125 @@ a {
   line-height: 1.45;
 }
 
+.studio-contact-panel {
+  min-width: 0;
+  display: grid;
+  gap: 18px;
+}
+
+.studio-contact-panel__intro h3 {
+  margin: 4px 0 0;
+  color: var(--ink);
+  font-size: 22px;
+  letter-spacing: -.03em;
+}
+
+.studio-contact-panel__intro > p:last-child {
+  margin: 8px 0 0;
+  color: #5f707a;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.studio-contact-panel__channels {
+  min-width: 0;
+  border-top: 1px solid rgba(7, 27, 47, .1);
+  border-bottom: 1px solid rgba(7, 27, 47, .1);
+}
+
+.studio-contact-panel__channel {
+  min-width: 0;
+  padding: 13px 0;
+  display: grid;
+  grid-template-columns: 66px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+}
+
+.studio-contact-panel__channel + .studio-contact-panel__channel {
+  border-top: 1px solid rgba(7, 27, 47, .08);
+}
+
+.studio-contact-panel__channel > span {
+  padding-top: 2px;
+  color: #687983;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.studio-contact-panel__channel > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.studio-contact-panel__channel a {
+  min-height: 44px;
+  width: max-content;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  color: #a84427;
+  font-size: 15px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.studio-contact-panel__channel small {
+  color: #657680;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.studio-contact-panel__channel > svg {
+  margin-top: 1px;
+  color: #a45437;
+}
+
+.studio-contact-panel__telegram {
+  color: #536a60;
+}
+
+.studio-contact-panel__telegram strong {
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.studio-contact-panel__telegram > svg {
+  color: #7a9990;
+}
+
+.studio-contact-panel__composer.feedback-composer {
+  padding: 18px;
+  border-radius: 16px;
+}
+
+.studio-drawer__contact-launcher {
+  width: 100%;
+  min-height: 48px;
+  margin-bottom: 16px;
+  padding: 0 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(254, 105, 54, .28);
+  border-radius: 11px;
+  color: #8f3e23;
+  background: #fff7f2;
+  cursor: pointer;
+  font-weight: 800;
+  transition: border-color 180ms ease, background-color 180ms ease, transform 180ms cubic-bezier(.16, 1, .3, 1);
+}
+
+.studio-drawer__contact-launcher:hover {
+  border-color: rgba(185, 71, 36, .46);
+  background: #ffede5;
+  transform: translateY(-1px);
+}
+
 .studio-drawer {
   position: fixed;
   inset: 0;
@@ -7955,8 +8125,8 @@ a {
 }
 
 .studio-drawer__header button {
-  width: 42px;
-  height: 42px;
+  width: 44px;
+  height: 44px;
   flex: 0 0 auto;
   display: grid;
   place-items: center;
@@ -8185,6 +8355,16 @@ a {
 }
 
 @media (max-width: 560px) {
+  .studio-app:not(.studio-app--workbench) .studio-header__actions--support {
+    gap: 0;
+  }
+
+  .studio-app:not(.studio-app--workbench) .studio-header__actions--support .studio-help-button {
+    min-height: 44px;
+    padding-inline: 11px;
+    font-size: 12px;
+  }
+
   .studio-app--workbench .studio-header {
     min-height: 60px;
     padding: 0 10px;
@@ -8289,9 +8469,25 @@ a {
   .studio-drawer__panel {
     width: 100%;
   }
+
+  .studio-contact-panel__channel {
+    grid-template-columns: 58px minmax(0, 1fr) auto;
+  }
 }
 
 @media (max-width: 390px) {
+  .studio-app:not(.studio-app--workbench) .studio-header__actions--support {
+    width: auto;
+    grid-template-columns: 44px;
+    justify-self: end;
+  }
+
+  .studio-app:not(.studio-app--workbench) .studio-header__actions--support .studio-help-button {
+    width: 44px;
+    padding: 0;
+    font-size: 0;
+  }
+
   .studio-app--workbench .studio-header .kaigo-logo__wordmark {
     display: none;
   }
@@ -8312,6 +8508,14 @@ a {
   .studio-drawer__header {
     padding-inline: 16px;
   }
+
+  .studio-contact-panel .feedback-topic-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .studio-contact-panel__composer.feedback-composer {
+    padding: 16px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -8322,6 +8526,11 @@ a {
   .studio-conversation__avatar::after,
   .studio-account__loading > span {
     animation: none !important;
+  }
+
+  .studio-help-button,
+  .studio-drawer__contact-launcher {
+    transition: none !important;
   }
 
   .kaigo-logo__mark,

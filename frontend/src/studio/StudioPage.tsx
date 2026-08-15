@@ -12,7 +12,7 @@ import {
   StopCircle,
 } from '@phosphor-icons/react';
 import { motion, useReducedMotion } from 'motion/react';
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { KaigoLogo } from '../shared/KaigoLogo';
 import { campaignFromSearch } from '../shared/campaign';
@@ -24,6 +24,8 @@ import { StudioComposer } from './StudioComposer';
 import { StudioLibrary } from './StudioLibrary';
 import { ProjectVersionHistory } from './ProjectVersionHistory';
 import { StudioProjectWorkbench } from './StudioProjectWorkbench';
+import { StudioContactPanel, StudioHelpButton } from './StudioContactPanel';
+import { StudioDrawer } from './StudioDrawer';
 import { UpgradeGate } from './UpgradeGate';
 import type {
   BuilderEngine,
@@ -138,6 +140,7 @@ export function StudioPage() {
   const [viewport, setViewport] = useState<PreviewViewport>('desktop');
   const [formError, setFormError] = useState<string | null>(null);
   const [projectPending, setProjectPending] = useState(false);
+  const [contactOpen, setContactOpen] = useState(false);
   const hydratedRun = useRef<string | null>(null);
   const previewAnchorRef = useRef<HTMLDivElement>(null);
   const newWidgetIntentRef = useRef(false);
@@ -297,6 +300,22 @@ export function StudioPage() {
     setProjectId(null);
   };
 
+  const openContact = useCallback(() => setContactOpen(true), []);
+  const closeContact = useCallback(() => setContactOpen(false), []);
+  const supportDrawer = (
+    <StudioDrawer
+      open={contactOpen}
+      title="Помощь и обратная связь"
+      description="Вопрос, ошибка, идея или сотрудничество."
+      onClose={closeContact}
+    >
+      <StudioContactPanel
+        domain={controller.projectMode ? headerProjectDomain : undefined}
+        projectId={controller.projectMode ? projectId : undefined}
+      />
+    </StudioDrawer>
+  );
+
   if (!projectId && !legacyBuilder) {
     return (
       <div className="studio-app studio-app--home">
@@ -307,6 +326,9 @@ export function StudioPage() {
           <div className="studio-header__session">
             <span>Kaigo Studio</span>
             <strong>Ваши проекты</strong>
+          </div>
+          <div className="studio-header__actions studio-header__actions--support">
+            <StudioHelpButton compact onOpen={openContact} />
           </div>
         </header>
         <main className="studio-home">
@@ -327,6 +349,7 @@ export function StudioPage() {
             />
           </div>
         </main>
+        {supportDrawer}
       </div>
     );
   }
@@ -342,6 +365,9 @@ export function StudioPage() {
             <span>Kaigo Studio</span>
             <strong data-connection={controller.connection}>{controller.activityMessage}</strong>
             {controller.connection === 'polling' && <small>Резервный режим обновления</small>}
+          </div>
+          <div className="studio-header__actions studio-header__actions--support">
+            <StudioHelpButton compact onOpen={openContact} />
           </div>
         </header>
         <main className="studio-shell studio-shell--composer">
@@ -364,6 +390,7 @@ export function StudioPage() {
             <ErrorNotice error={controller.error} persistence={persistence} />
           )}
         </main>
+        {supportDrawer}
       </div>
     );
   }

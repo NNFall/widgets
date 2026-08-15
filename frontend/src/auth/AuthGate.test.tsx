@@ -192,3 +192,19 @@ it('recovers from a temporary session error without exposing raw failure text', 
   expect(await screen.findByRole('heading', { name: 'Студия доступна' })).toBeVisible();
   expect(sessionAttempt).toBe(2);
 });
+
+it('offers direct support mail during a temporary authentication error', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === '/api/analytics/entry') return new Response(null, { status: 204 });
+    if (url === '/api/auth/session') return new Response(null, { status: 503 });
+    throw new Error(`unexpected request: ${url}`);
+  }));
+
+  render(<AuthGate><h1>Студия доступна</h1></AuthGate>);
+
+  expect(await screen.findByRole('heading', { name: 'Студия сейчас не открылась' })).toBeVisible();
+  const supportLink = screen.getByRole('link', { name: /Написать в поддержку/i });
+  expect(supportLink).toHaveAttribute('href', 'mailto:support@kaigo.space');
+  expect(supportLink).toHaveTextContent('support@kaigo.space');
+});
