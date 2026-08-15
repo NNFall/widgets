@@ -1,5 +1,5 @@
 import { LinkSimple } from '@phosphor-icons/react';
-import { useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 
 import { campaignFromSearch, studioHrefWithDraft } from './campaign';
 import { ensureLandingJourney } from './journey';
@@ -49,16 +49,37 @@ export function UrlComposer({
   const inputId = useId();
   const errorId = useId();
   const briefId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const errorRef = useRef<HTMLParagraphElement>(null);
+  const shouldFocusInputRef = useRef(false);
   const [value, setValue] = useState('');
   const [brief, setBrief] = useState('');
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    if (!error || !shouldFocusInputRef.current) return;
+
+    shouldFocusInputRef.current = false;
+    inputRef.current?.focus({ preventScroll: true });
+
+    const mediaQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(max-width: 767px)')
+      : null;
+    const isMobileViewport = Boolean(mediaQuery?.matches);
+    const errorElement = errorRef.current;
+    if (isMobileViewport && typeof errorElement?.scrollIntoView === 'function') {
+      errorElement.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [error]);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const normalizedValue = canonicalWebsiteUrl(value);
 
     if (!normalizedValue) {
+      shouldFocusInputRef.current = true;
+      inputRef.current?.focus({ preventScroll: true });
       setError(URL_ERROR);
       return;
     }
@@ -98,6 +119,7 @@ export function UrlComposer({
       <div className={`url-composer__control${error ? ' url-composer__control--error' : ''}`}>
         <LinkSimple size={25} weight="regular" aria-hidden="true" />
         <input
+          ref={inputRef}
           id={inputId}
           type="url"
           inputMode="url"
@@ -116,6 +138,9 @@ export function UrlComposer({
           {pending ? 'Сохраняем…' : 'Получить бесплатную версию'}
         </button>
       </div>
+      <p className="url-composer__error" id={errorId} role={error ? 'alert' : undefined} ref={errorRef}>
+        {error}
+      </p>
       <label className="sr-only" htmlFor={briefId}>
         Пожелание к AI-виджету
       </label>
@@ -127,9 +152,6 @@ export function UrlComposer({
         value={brief}
         onChange={(event) => setBrief(event.target.value)}
       />
-      <p className="url-composer__error" id={errorId} role={error ? 'alert' : undefined}>
-        {error}
-      </p>
     </form>
   );
 }

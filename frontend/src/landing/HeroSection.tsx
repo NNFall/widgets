@@ -1,5 +1,5 @@
 import { CheckCircle, List, X } from '@phosphor-icons/react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { KaigoLogo } from '../shared/KaigoLogo';
 import { UrlComposer } from '../shared/UrlComposer';
@@ -25,7 +25,7 @@ export function HeroSection() {
     }
   }, []);
 
-  const closeMobileMenu = () => {
+  const closeMobileMenu = useCallback(() => {
     setMenuOpen(false);
     if (focusFrameRef.current !== null) {
       window.cancelAnimationFrame(focusFrameRef.current);
@@ -34,7 +34,20 @@ export function HeroSection() {
       focusFrameRef.current = null;
       menuToggleRef.current?.focus({ preventScroll: true });
     });
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeMobileMenu();
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [closeMobileMenu, menuOpen]);
 
   return (
     <>
