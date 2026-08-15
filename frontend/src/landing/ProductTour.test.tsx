@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import stylesSource from '../styles.css?raw';
+import { LANDING_MOBILE_MEDIA_QUERY } from '../shared/mobileLayout';
 import { ProductTour } from './ProductTour';
 
 const motionState = {
@@ -122,10 +123,10 @@ describe('ProductTour', () => {
     expect(tour).toHaveAttribute('data-active-step', '3');
   });
 
-  it('disables autoplay below 768px while preserving the desktop autoplay contract', () => {
+  it('disables autoplay for narrow and phone-sized coarse-pointer layouts', () => {
     vi.useFakeTimers();
     const matchMediaMock = vi.fn((query: string) => ({
-      matches: query === '(max-width: 767px)',
+      matches: query === LANDING_MOBILE_MEDIA_QUERY,
       media: query,
       onchange: null,
       addListener: vi.fn(),
@@ -140,7 +141,7 @@ describe('ProductTour', () => {
 
     const tour = screen.getByRole('region', { name: 'Как Kaigo создаёт AI-сотрудника' });
     const stepsRail = within(tour).getByRole('navigation', { name: 'Этапы создания AI-сотрудника' });
-    expect(matchMediaMock).toHaveBeenCalledWith('(max-width: 767px)');
+    expect(matchMediaMock).toHaveBeenCalledWith(LANDING_MOBILE_MEDIA_QUERY);
     expect(tour).toHaveAttribute('data-autoplay', 'false');
     expect(stepsRail).toHaveAttribute('data-mobile-snap', 'true');
     expect(within(stepsRail).getAllByRole('button')).toHaveLength(3);

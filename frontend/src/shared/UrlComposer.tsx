@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 
 import { campaignFromSearch, studioHrefWithDraft } from './campaign';
 import { ensureLandingJourney } from './journey';
+import { LANDING_MOBILE_MEDIA_QUERY } from './mobileLayout';
 
 const URL_ERROR = 'Введите публичный HTTPS-адрес без параметров и авторизации';
 const PRIVATE_SUFFIXES = ['.internal', '.localhost', '.local', '.lan', '.home'];
@@ -64,7 +65,7 @@ export function UrlComposer({
     inputRef.current?.focus({ preventScroll: true });
 
     const mediaQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia('(max-width: 767px)')
+      ? window.matchMedia(LANDING_MOBILE_MEDIA_QUERY)
       : null;
     const isMobileViewport = Boolean(mediaQuery?.matches);
     const errorElement = errorRef.current;

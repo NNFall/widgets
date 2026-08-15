@@ -1,9 +1,10 @@
 /*
  * Landing mobile foundations.
  *
- * These rules intentionally live behind a 767px boundary. The desktop landing
- * remains owned by styles.css, while this layer gives touch-first screens a
- * predictable rhythm, readable controls, and contained evidence visuals.
+ * These rules cover narrow screens plus phone-sized coarse-pointer landscape.
+ * The desktop landing remains owned by styles.css, while this layer gives
+ * touch-first screens a predictable rhythm, readable controls, and contained
+ * evidence visuals.
  */
 
 /* Preserve the original desktop visual order while keeping the accessible
@@ -27,7 +28,7 @@
   }
 }
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (hover: none) and (pointer: coarse) and (max-width: 900px) {
   .landing-page {
     --mobile-gutter: clamp(16px, 5vw, 24px);
   }
@@ -129,6 +130,18 @@
 
   .landing-page .url-composer {
     width: 100%;
+  }
+
+  .landing-page .url-composer__control {
+    order: 1;
+  }
+
+  .landing-page .url-composer__error {
+    order: 2;
+  }
+
+  .landing-page .url-composer__brief {
+    order: 3;
   }
 
   .landing-page .url-composer__control {
@@ -418,7 +431,8 @@
   }
 }
 
-@media (max-width: 767px) and (orientation: landscape) {
+@media (max-width: 767px) and (orientation: landscape),
+  (hover: none) and (pointer: coarse) and (max-width: 900px) and (orientation: landscape) {
   .landing-page .hero-section {
     padding-block: 24px 32px;
   }
@@ -437,7 +451,7 @@
   }
 
   .landing-page .hero-proof {
-    font-size: 12px;
+    font-size: 14px;
   }
 
   .landing-page .hero-scene {

@@ -3,11 +3,12 @@ import { motion } from 'motion/react';
 import { useCallback, useState, useSyncExternalStore } from 'react';
 
 import { BrowserMockup } from '../shared/BrowserMockup';
+import { LANDING_MOBILE_MEDIA_QUERY } from '../shared/mobileLayout';
 import { useMotionActivity } from '../shared/MotionActivity';
 import { Reveal } from '../shared/Reveal';
 import { studioHref } from '../shared/campaign';
 
-export const MOBILE_CASE_MEDIA_QUERY = '(max-width: 767px)';
+export const MOBILE_CASE_MEDIA_QUERY = LANDING_MOBILE_MEDIA_QUERY;
 
 export function useMediaQuery(query: string): boolean {
   const subscribe = useCallback((onStoreChange: () => void) => {

@@ -1,6 +1,6 @@
 /* Mobile-native layouts for the landing evidence and support sections. */
 
-@media (max-width: 767px) {
+@media (max-width: 767px), (hover: none) and (pointer: coarse) and (max-width: 900px) {
   .landing-page .analysis-section,
   .landing-page .case-section,
   .landing-page .capabilities-section,
@@ -613,7 +613,8 @@
   }
 }
 
-@media (min-width: 360px) and (max-width: 767px) {
+@media (min-width: 360px) and (max-width: 767px),
+  (hover: none) and (pointer: coarse) and (min-width: 360px) and (max-width: 900px) {
   .landing-page .analysis-scene {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -623,7 +624,8 @@
   }
 }
 
-@media (max-width: 767px) and (orientation: landscape) {
+@media (max-width: 767px) and (orientation: landscape),
+  (hover: none) and (pointer: coarse) and (max-width: 900px) and (orientation: landscape) {
   .landing-page .analysis-section,
   .landing-page .case-section,
   .landing-page .capabilities-section,

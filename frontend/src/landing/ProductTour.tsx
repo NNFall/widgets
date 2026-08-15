@@ -2,6 +2,7 @@ import { ArrowLeft, ArrowRight } from '@phosphor-icons/react';
 import { useEffect, useState } from 'react';
 
 import { studioHref } from '../shared/campaign';
+import { LANDING_MOBILE_MEDIA_QUERY } from '../shared/mobileLayout';
 import { useMotionActivity } from '../shared/MotionActivity';
 import {
   TourIntakeVisual,
@@ -10,7 +11,6 @@ import {
 } from './ProductTourVisuals';
 
 const AUTOPLAY_MS = 8_000;
-const MOBILE_QUERY = '(max-width: 767px)';
 
 const tourScenes = [
   {
@@ -71,7 +71,7 @@ export function ProductTour({ standalone = false }: ProductTourProps) {
       return undefined;
     }
 
-    const mediaQuery = window.matchMedia(MOBILE_QUERY);
+    const mediaQuery = window.matchMedia(LANDING_MOBILE_MEDIA_QUERY);
     if (!mediaQuery) return undefined;
 
     const syncMobileState = () => setIsMobile(mediaQuery.matches);

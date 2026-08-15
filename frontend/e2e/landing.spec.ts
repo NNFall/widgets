@@ -595,6 +595,7 @@ test('landing mobile contracts @mobile', async ({ page }) => {
 
   for (const viewport of viewports) {
     const viewportLabel = `${viewport.width}x${viewport.height}`;
+    const mobileLike = viewport.width <= 767 || (viewport.width <= 900 && viewport.height <= 430);
     await page.setViewportSize(viewport);
     await page.goto('/');
     await revealLanding(page);
@@ -619,7 +620,7 @@ test('landing mobile contracts @mobile', async ({ page }) => {
 
     const tour = page.locator('.product-tour-section');
     await tour.scrollIntoViewIfNeeded();
-    if (viewport.width <= 767) {
+    if (mobileLike) {
       expect.soft(await tour.getAttribute('data-autoplay'), `mobile Product Tour must stop autoplay at ${viewportLabel}`).toBe('false');
       const stepsRail = tour.locator('.product-tour__steps');
       expect.soft(await stepsRail.getAttribute('data-mobile-snap'), `mobile Product Tour must expose its snap rail at ${viewportLabel}`).toBe('true');
@@ -649,6 +650,9 @@ test('landing mobile contracts @mobile', async ({ page }) => {
     expect.soft(await caseHeading.textContent(), `case heading copy at ${viewportLabel}`).toBe('Что меняется для посетителя сайта');
     expect.soft(await caseSection.locator('.case-panel.is-mobile-active').count(), `one active case panel at ${viewportLabel}`).toBe(1);
     expect.soft(await caseSection.locator('.case-panel--after.is-mobile-active').isVisible(), `after case panel at ${viewportLabel}`).toBe(true);
+    const inactiveCasePanel = caseSection.locator('.case-panel:not(.is-mobile-active)');
+    expect.soft(await inactiveCasePanel.getAttribute('aria-hidden'), `inactive case panel aria-hidden at ${viewportLabel}`).toBe('true');
+    expect.soft(await inactiveCasePanel.getAttribute('inert'), `inactive case panel inert at ${viewportLabel}`).not.toBeNull();
     await expectContainedInViewport(caseSection.locator('.case-heading'), `case heading container at ${viewportLabel}`);
     await expectContainedInViewport(caseSection.locator('.case-comparison'), `case comparison container at ${viewportLabel}`);
 
@@ -665,10 +669,11 @@ test('landing mobile contracts @mobile', async ({ page }) => {
 
   for (const viewport of viewports) {
     const viewportLabel = `${viewport.width}x${viewport.height}`;
+    const mobileLike = viewport.width <= 767 || (viewport.width <= 900 && viewport.height <= 430);
     await page.setViewportSize(viewport);
     await page.goto('/tour');
     const tour = page.locator('.product-tour-section--standalone');
-    if (viewport.width <= 767) {
+    if (mobileLike) {
       expect.soft(await tour.getAttribute('data-autoplay'), `standalone Product Tour autoplay at ${viewportLabel}`).toBe('false');
       const stepsRail = tour.locator('.product-tour__steps');
       expect.soft(await stepsRail.getAttribute('data-mobile-snap'), `standalone tour must expose its snap rail at ${viewportLabel}`).toBe('true');
