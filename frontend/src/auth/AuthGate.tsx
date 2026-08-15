@@ -2,6 +2,7 @@ import { ArrowClockwise, ArrowRight, LockKey, SpinnerGap } from '@phosphor-icons
 import { type ReactNode, useEffect, useState } from 'react';
 
 import { ensureLandingJourney } from '../shared/journey';
+import { VkOneTap } from './VkOneTap';
 
 type SessionSnapshot = {
   enabled: boolean;
@@ -22,6 +23,7 @@ const OAUTH_ERROR_MESSAGES: Record<string, string> = {
   access_denied: 'Вход отменён. Выберите способ входа и попробуйте ещё раз.',
   provider_unavailable: 'Сервис входа временно недоступен. Попробуйте ещё раз.',
   identity_unverified: 'Не удалось подтвердить почту аккаунта. Попробуйте другой аккаунт.',
+  account_link_required: 'Эта почта уже используется. Войдите прежним способом; VK ID можно будет подключить позже.',
   oauth_failed: 'Не удалось завершить вход. Попробуйте ещё раз.',
 };
 
@@ -45,6 +47,7 @@ function safeErrorDetail(message: string) {
 export function AuthGate({ children }: { children: ReactNode }) {
   const [state, setState] = useState<GateState>({ status: 'loading' });
   const [attempt, setAttempt] = useState(0);
+  const [vkBootstrapSettled, setVkBootstrapSettled] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -129,6 +132,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
             <button
               type="button"
               onClick={() => {
+                setVkBootstrapSettled(false);
                 setState({ status: 'loading' });
                 setAttempt((value) => value + 1);
               }}
@@ -148,6 +152,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }
 
   const suffix = state.draftId ? `?draft_id=${encodeURIComponent(state.draftId)}` : '';
+  const hasVk = state.providers.includes('vk');
+  const providerLinksEnabled = !hasVk || vkBootstrapSettled;
   return (
     <main className="auth-gate">
       <section className="auth-gate__card">
@@ -160,14 +166,28 @@ export function AuthGate({ children }: { children: ReactNode }) {
         </p>
         <div className="auth-gate__actions">
           {state.providers.includes('google') && (
-            <a href={`/api/auth/google/start${suffix}`}>
+            <a
+              href={providerLinksEnabled ? `/api/auth/google/start${suffix}` : undefined}
+              aria-disabled={providerLinksEnabled ? undefined : true}
+              tabIndex={providerLinksEnabled ? undefined : -1}
+            >
               Продолжить с Google <ArrowRight size={18} aria-hidden />
             </a>
           )}
           {state.providers.includes('yandex') && (
-            <a href={`/api/auth/yandex/start${suffix}`}>
+            <a
+              href={providerLinksEnabled ? `/api/auth/yandex/start${suffix}` : undefined}
+              aria-disabled={providerLinksEnabled ? undefined : true}
+              tabIndex={providerLinksEnabled ? undefined : -1}
+            >
               Продолжить с Яндексом <ArrowRight size={18} aria-hidden />
             </a>
+          )}
+          {hasVk && (
+            <VkOneTap
+              draftId={state.draftId}
+              onSettled={() => setVkBootstrapSettled(true)}
+            />
           )}
         </div>
         {state.providers.length === 0 && (

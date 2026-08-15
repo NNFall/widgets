@@ -90,8 +90,11 @@ is performed by this repository task.
 3. Fill the production environment from `.env.example` and set
    `KAIGO_ENVIRONMENT=production` exactly; missing values and spelling mistakes
    stop both application startup and schema preflight. Production must set
-   `KAIGO_PUBLIC_AUTH_ENABLED=true` and at least one complete Google or Yandex
-   OAuth credential pair; an incomplete pair stops application startup.
+   `KAIGO_PUBLIC_AUTH_ENABLED=true` and at least one OAuth provider. Google and
+   Yandex require complete credential pairs; VK ID uses only a positive public
+   `VK_OAUTH_APP_ID` with PKCE. Protected/service VK keys are not application
+   configuration and must not be copied to the host. An incomplete Google or
+   Yandex pair stops application startup.
    Configure the dedicated entry-endpoint trusted-proxy CIDR setting supplied
    by the auth hardening change (`KAIGO_ENTRY_TRUSTED_PROXY_CIDRS`) with only
    the immediate production nginx/proxy address or subnet. Do not trust all

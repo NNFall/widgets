@@ -343,8 +343,10 @@ class MarketingSitePackageTests(unittest.TestCase):
         self.assertEqual(len(csp_lines), 9)
         html_csp = [line for line in csp_lines if "frame-src 'self'" in line]
         asset_csp = [line for line in csp_lines if "default-src 'none'" in line]
+        vk_csp = [line for line in html_csp if "https://id.vk.ru" in line]
         self.assertEqual(len(html_csp), 6)
         self.assertEqual(len(asset_csp), 3)
+        self.assertEqual(len(vk_csp), 2)
         for line in html_csp:
             self.assertIn("default-src 'self'", line)
             self.assertIn("object-src 'none'", line)
@@ -352,6 +354,12 @@ class MarketingSitePackageTests(unittest.TestCase):
             self.assertIn("frame-ancestors 'self'", line)
             self.assertNotIn("script-src 'self' 'unsafe-inline'", line)
             self.assertNotIn("*", line)
+            self.assertNotIn("unpkg.com", line)
+            self.assertNotIn("mytopf.com", line)
+        for line in vk_csp:
+            self.assertIn("connect-src 'self' https://id.vk.ru", line)
+            self.assertIn("frame-src 'self' https://id.vk.ru", line)
+            self.assertIn("script-src 'self';", line)
         for line in asset_csp:
             self.assertIn("object-src 'none'", line)
             self.assertIn("frame-ancestors 'none'", line)

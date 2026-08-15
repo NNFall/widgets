@@ -4,6 +4,19 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 import { AuthGate } from './AuthGate';
 
+vi.mock('./VkOneTap', () => ({
+  VkOneTap: ({ draftId, onSettled }: { draftId: string | null; onSettled: () => void }) => (
+    <button
+      type="button"
+      data-testid="vk-one-tap"
+      data-draft-id={draftId ?? ''}
+      onClick={onSettled}
+    >
+      Войти с VK ID
+    </button>
+  ),
+}));
+
 afterEach(() => {
   cleanup();
   window.history.replaceState({}, '', '/');
@@ -65,6 +78,32 @@ it('does not attach an unbound draft id to OAuth', async () => {
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 
+it('adds VK One Tap without removing Google and Yandex', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input) === '/api/analytics/entry') {
+      return new Response(null, { status: 204 });
+    }
+    return new Response(JSON.stringify({
+      enabled: true,
+      authenticated: false,
+      pending_draft_id: 'draft-vk',
+      providers: ['google', 'vk', 'yandex'],
+    }));
+  }));
+
+  render(<AuthGate><h1>Закрытая студия</h1></AuthGate>);
+
+  const vkOneTap = await screen.findByTestId('vk-one-tap');
+  expect(vkOneTap).toHaveAttribute('data-draft-id', 'draft-vk');
+  expect(screen.queryByRole('link', { name: 'Продолжить с Google' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: 'Продолжить с Яндексом' })).not.toBeInTheDocument();
+
+  await userEvent.click(vkOneTap);
+
+  expect(screen.getByRole('link', { name: 'Продолжить с Google' })).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Продолжить с Яндексом' })).toBeVisible();
+});
+
 it('explains a cancelled OAuth callback in Russian and keeps retry actions', async () => {
   window.history.replaceState({}, '', '/studio?auth_error=access_denied');
   vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({
@@ -86,6 +125,27 @@ it('explains a cancelled OAuth callback in Russian and keeps retry actions', asy
   expect(screen.getByRole('link', { name: 'Продолжить с Яндексом' })).toHaveAttribute(
     'href',
     '/api/auth/yandex/start?draft_id=draft-retry',
+  );
+});
+
+it('explains when VK cannot be linked safely by email alone', async () => {
+  window.history.replaceState({}, '', '/studio?auth_error=account_link_required');
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input) === '/api/analytics/entry') {
+      return new Response(null, { status: 204 });
+    }
+    return new Response(JSON.stringify({
+      enabled: true,
+      authenticated: false,
+      pending_draft_id: null,
+      providers: ['google', 'vk', 'yandex'],
+    }));
+  }));
+
+  render(<AuthGate><h1>Закрытая студия</h1></AuthGate>);
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Эта почта уже используется. Войдите прежним способом; VK ID можно будет подключить позже.',
   );
 });
 

@@ -13,13 +13,20 @@ from aiohttp_session import get_session, setup as setup_session
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.auth.oauth import OAuthError, OAuthIdentity
-from app.auth.routes import OAUTH_PROVIDERS_KEY, setup_auth_routes
+from app.auth.oauth import OAuthError, OAuthIdentity, VKOAuthProvider
+from app.auth.routes import OAUTH_PROVIDERS_KEY, build_oauth_providers, setup_auth_routes
 from app.auth.session_storage import DatabaseSessionStorage
 from app.db.base import Base
 from app.db.models import Tenant, User
 from app.db.session import SESSION_FACTORY_KEY
-from app.saas.models import AnonymousDraft, AuthSession, OAuthState, Project
+from app.config import AppConfig
+from app.saas.models import (
+    AnonymousDraft,
+    AuthSession,
+    OAuthState,
+    Project,
+    UserIdentity,
+)
 
 
 class FakeProvider:
@@ -92,6 +99,172 @@ class ConcurrencyTrackingProvider(FakeProvider):
             return await super().exchange(transaction, callback)
         finally:
             self.active -= 1
+
+
+class FakeVkProvider(FakeProvider):
+    app_id = 54_721_213
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.callback = None
+
+    async def exchange(self, transaction, callback):
+        self.callback = callback
+        assert transaction.state == callback.state
+        assert callback.code == "valid-code"
+        return OAuthIdentity(
+            provider="vk",
+            subject="vk-subject-1",
+            email="owner@example.com",
+            email_verified=True,
+            display_name="Owner",
+            profile={"name": "Owner"},
+        )
+
+
+def test_build_oauth_providers_includes_public_vk_app() -> None:
+    providers = build_oauth_providers(
+        AppConfig(
+            database_url="sqlite+aiosqlite:///:memory:",
+            environment="test",
+            vk_oauth_app_id=54_721_213,
+        )
+    )
+
+    assert set(providers) == {"vk"}
+    assert isinstance(providers["vk"], VKOAuthProvider)
+
+
+@pytest.mark.asyncio
+async def test_vk_bootstrap_binds_draft_and_callback_passes_device_id() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    app = web.Application()
+    app[SESSION_FACTORY_KEY] = factory
+    provider = FakeVkProvider()
+    app[OAUTH_PROVIDERS_KEY] = {"vk": provider}
+    setup_session(
+        app,
+        DatabaseSessionStorage(
+            cookie_name="kaigo_session", max_age=3600, secure=False, samesite="Lax"
+        ),
+    )
+    setup_auth_routes(app, public_base_url="https://kaigo.space")
+    client = TestClient(TestServer(app))
+    await client.start_server()
+
+    try:
+        draft_response = await client.post(
+            "/api/drafts",
+            json={"url": "https://example.com", "brief": "VK draft"},
+        )
+        draft_id = (await draft_response.json())["id"]
+
+        bootstrap_response = await client.post(
+            f"/api/auth/vk/bootstrap?draft_id={draft_id}"
+        )
+
+        assert bootstrap_response.status == 200
+        assert bootstrap_response.headers["Cache-Control"] == "no-store"
+        bootstrap = await bootstrap_response.json()
+        assert set(bootstrap) == {
+            "app_id",
+            "redirect_uri",
+            "state",
+            "code_verifier",
+        }
+        assert bootstrap["app_id"] == 54_721_213
+        assert bootstrap["redirect_uri"] == "https://kaigo.space/api/auth/vk/callback"
+        assert bootstrap["state"]
+        assert bootstrap["code_verifier"]
+        assert not any("secret" in key or "service" in key for key in bootstrap)
+
+        async with factory() as database:
+            oauth_state = (await database.execute(select(OAuthState))).scalar_one()
+            assert oauth_state.provider == "vk"
+            assert str(oauth_state.draft_id) == draft_id
+            assert oauth_state.pkce_verifier == bootstrap["code_verifier"]
+
+        callback_response = await client.get(
+            "/api/auth/vk/callback",
+            params={
+                "state": bootstrap["state"],
+                "code": "valid-code",
+                "device_id": "vk-device-1",
+            },
+            allow_redirects=False,
+        )
+
+        assert callback_response.status == 302
+        assert callback_response.headers["Location"].startswith("/studio")
+        assert provider.callback.device_id == "vk-device-1"
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_vk_callback_refuses_implicit_link_to_existing_email_account() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as database, database.begin():
+        tenant = Tenant(name="Existing owner", slug="existing-owner")
+        database.add(tenant)
+        await database.flush()
+        user = User(
+            tenant_id=tenant.id,
+            email="owner@example.com",
+            password_hash=None,
+            role="tenant_admin",
+        )
+        database.add(user)
+        await database.flush()
+        database.add(
+            UserIdentity(
+                user_id=user.id,
+                provider="google",
+                provider_subject="existing-google-subject",
+                email="owner@example.com",
+                email_verified=True,
+                profile={},
+            )
+        )
+
+    app = web.Application()
+    app[SESSION_FACTORY_KEY] = factory
+    app[OAUTH_PROVIDERS_KEY] = {"vk": FakeVkProvider()}
+    setup_session(app, DatabaseSessionStorage(max_age=3600, secure=False))
+    setup_auth_routes(app, public_base_url="https://kaigo.space")
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        bootstrap = await (await client.post("/api/auth/vk/bootstrap")).json()
+        callback = await client.get(
+            "/api/auth/vk/callback",
+            params={
+                "state": bootstrap["state"],
+                "code": "valid-code",
+                "device_id": "vk-device-1",
+            },
+            allow_redirects=False,
+        )
+
+        assert callback.status == 302
+        assert callback.headers["Location"] == (
+            "/studio?auth_error=account_link_required"
+        )
+        async with factory() as database:
+            identities = list((await database.scalars(select(UserIdentity))).all())
+        assert [(identity.provider, identity.provider_subject) for identity in identities] == [
+            ("google", "existing-google-subject")
+        ]
+    finally:
+        await client.close()
+        await engine.dispose()
 
 
 @pytest.mark.asyncio

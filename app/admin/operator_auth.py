@@ -35,6 +35,7 @@ async def require_verified_operator(request: web.Request) -> int:
             select(UserIdentity.id)
             .where(
                 UserIdentity.user_id == user_id,
+                UserIdentity.provider.in_(("google", "yandex")),
                 UserIdentity.email_verified.is_(True),
                 func.lower(UserIdentity.email).in_(config.admin_emails),
             )

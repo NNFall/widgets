@@ -41,6 +41,7 @@ class AppConfig:
     google_oauth_client_secret: str | None = field(default=None, repr=False)
     yandex_oauth_client_id: str | None = None
     yandex_oauth_client_secret: str | None = field(default=None, repr=False)
+    vk_oauth_app_id: int | None = None
     yookassa_shop_id: str | None = None
     yookassa_secret_key: str | None = field(default=None, repr=False)
     yookassa_test_mode: bool = True
@@ -129,6 +130,14 @@ class AppConfig:
                     f"{missing_name} is missing"
                 )
             complete_oauth_providers += int(has_client and has_secret)
+        if self.vk_oauth_app_id is not None:
+            if (
+                isinstance(self.vk_oauth_app_id, bool)
+                or not isinstance(self.vk_oauth_app_id, int)
+                or self.vk_oauth_app_id <= 0
+            ):
+                raise ValueError("VK_OAUTH_APP_ID must be a positive integer")
+            complete_oauth_providers += 1
         if self.environment == "production":
             if not self.public_auth_enabled:
                 raise ValueError(
@@ -136,8 +145,7 @@ class AppConfig:
                 )
             if complete_oauth_providers == 0:
                 raise ValueError(
-                    "at least one complete OAuth provider credential pair is required "
-                    "in production"
+                    "at least one OAuth provider must be configured in production"
                 )
             if not self.public_base_url:
                 raise ValueError("public_base_url is required in production")
@@ -421,6 +429,9 @@ def load_config() -> AppConfig:
     google_oauth_client_secret = _first_nonblank("GOOGLE_OAUTH_CLIENT_SECRET")
     yandex_oauth_client_id = _first_nonblank("YANDEX_OAUTH_CLIENT_ID")
     yandex_oauth_client_secret = _first_nonblank("YANDEX_OAUTH_CLIENT_SECRET")
+    vk_oauth_app_id = _env_optional_int("VK_OAUTH_APP_ID")
+    if vk_oauth_app_id is not None and vk_oauth_app_id <= 0:
+        raise RuntimeError("VK_OAUTH_APP_ID must be a positive integer")
     oauth_pairs = (
         (
             "GOOGLE_OAUTH_CLIENT_ID",
@@ -444,11 +455,12 @@ def load_config() -> AppConfig:
             )
     if production and not public_auth_enabled:
         raise RuntimeError("KAIGO_PUBLIC_AUTH_ENABLED=true is required in production")
-    if production and not any(
-        client and secret for _, client, _, secret in oauth_pairs
+    if production and not (
+        any(client and secret for _, client, _, secret in oauth_pairs)
+        or vk_oauth_app_id is not None
     ):
         raise RuntimeError(
-            "at least one complete OAuth provider credential pair is required in production"
+            "at least one OAuth provider must be configured in production"
         )
     entry_trusted_proxy_cidrs = tuple(
         part.strip()
@@ -482,6 +494,7 @@ def load_config() -> AppConfig:
         google_oauth_client_secret=google_oauth_client_secret,
         yandex_oauth_client_id=yandex_oauth_client_id,
         yandex_oauth_client_secret=yandex_oauth_client_secret,
+        vk_oauth_app_id=vk_oauth_app_id,
         yookassa_shop_id=yookassa_shop_id,
         yookassa_secret_key=yookassa_secret_key,
         yookassa_test_mode=_env_flag("YOOKASSA_TEST_MODE", True),

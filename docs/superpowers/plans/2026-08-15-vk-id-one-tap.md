@@ -16,11 +16,11 @@
 - Modify: `app/auth/oauth.py`
 - Test: `tests/saas_cases/test_oauth.py`
 
-- [ ] Написать RED-тесты для VK authorization URL, обязательного `device_id`, PKCE token exchange, state response и user-info profile.
-- [ ] Запустить `python -m pytest -q tests/saas_cases/test_oauth.py -k vk` и подтвердить RED.
-- [ ] Добавить `device_id: str | None` в `OAuthCallback` без изменения Google/Яндекс.
-- [ ] Реализовать `VKOAuthProvider` с `id.vk.ru`, scope `email`, строгой валидацией state/id/email и безопасным профилем.
-- [ ] Запустить focused и полный `test_oauth.py` до GREEN.
+- [x] Написать RED-тесты для VK authorization URL, обязательного `device_id`, PKCE token exchange, state response и user-info profile.
+- [x] Запустить `python -m pytest -q tests/saas_cases/test_oauth.py -k vk` и подтвердить RED.
+- [x] Добавить `device_id: str | None` в `OAuthCallback` без изменения Google/Яндекс.
+- [x] Реализовать `VKOAuthProvider` с `id.vk.ru`, scope `email`, строгой валидацией state/id/email и безопасным профилем.
+- [x] Запустить focused и полный `test_oauth.py` до GREEN.
 
 ## Task 2: Конфигурация и provider registry
 
@@ -31,10 +31,10 @@
 - Test: `tests/saas_cases/test_config.py`
 - Test: `tests/saas_cases/test_auth_routes.py`
 
-- [ ] Написать RED-тесты на положительный integer `VK_OAUTH_APP_ID`, provider registry и список `/api/auth/session`.
-- [ ] Реализовать `vk_oauth_app_id: int | None`; не добавлять secret/service key.
-- [ ] Зарегистрировать `VKOAuthProvider` только при валидном App ID.
-- [ ] Подтвердить, что Google/Яндекс по-прежнему требуют полную пару id+secret и их тесты зелёные.
+- [x] Написать RED-тесты на положительный integer `VK_OAUTH_APP_ID`, provider registry и список `/api/auth/session`.
+- [x] Реализовать `vk_oauth_app_id: int | None`; не добавлять secret/service key.
+- [x] Зарегистрировать `VKOAuthProvider` только при валидном App ID.
+- [x] Подтвердить, что Google/Яндекс по-прежнему требуют полную пару id+secret и их тесты зелёные.
 
 ## Task 3: Одноразовый VK bootstrap и callback
 
@@ -42,12 +42,14 @@
 - Modify: `app/auth/routes.py`
 - Test: `tests/saas_cases/test_auth_routes.py`
 
-- [ ] Вынести создание OAuth state/PKCE/browser binding из `auth_start` в общий приватный helper.
-- [ ] Написать RED-тесты `POST /api/auth/vk/bootstrap`: rate limit, bound draft, journey, no-store, безопасный JSON и отсутствие не-VK provider.
-- [ ] Реализовать bootstrap route и зарегистрировать его до generic provider route.
-- [ ] Написать RED-тест callback с `device_id`, invalid/missing device id и повторным state.
-- [ ] Передавать `device_id` в `OAuthCallback`, сохранив существующий consume-before-exchange порядок.
-- [ ] Прогнать `test_auth_routes.py` и `test_oauth.py` до GREEN.
+- [x] Вынести создание OAuth state/PKCE/browser binding из `auth_start` в общий приватный helper.
+- [x] Написать RED-тесты `POST /api/auth/vk/bootstrap`: rate limit, bound draft, journey, no-store, безопасный JSON и отсутствие не-VK provider.
+- [x] Реализовать bootstrap route и зарегистрировать его до generic provider route.
+- [x] Написать RED-тест callback с `device_id`, invalid/missing device id и повторным state.
+- [x] Передавать `device_id` в `OAuthCallback`, сохранив существующий consume-before-exchange порядок.
+- [x] Запретить автоматическое VK↔Google/Яндекс объединение только по совпавшей почте и закрыть VK email для operator allowlist.
+- [x] Добавить регрессии на оба направления конфликтного linking и безопасный callback redirect.
+- [x] Прогнать `test_auth_routes.py` и `test_oauth.py` до GREEN.
 
 ## Task 4: Официальный One Tap во frontend
 
@@ -59,13 +61,14 @@
 - Modify: `frontend/src/auth/AuthGate.tsx`
 - Modify: `frontend/src/auth/AuthGate.test.tsx`
 
-- [ ] Установить exact `@vkid/sdk@2.6.1`.
-- [ ] Написать RED-тесты bootstrap request и `Config.init` с app/redirect/state/codeVerifier/scope/mode.
-- [ ] Написать RED-тест render с `fastAuthEnabled:false`, `showAlternativeLogin:false`, light/primary, 44 px, radius 8, full width.
-- [ ] Написать RED-тест fallback-ссылки при bootstrap/SDK/render error и draft suffix.
-- [ ] Реализовать изолированный `VkOneTap`, не сохраняя токены и очищая container/widget при unmount.
-- [ ] Вставить его в `AuthGate` только когда provider list содержит `vk`; сохранить Google/Яндекс.
-- [ ] Прогнать targeted Vitest, затем весь `src/auth`.
+- [x] Установить exact `@vkid/sdk@2.6.1`.
+- [x] Написать RED-тесты bootstrap request и `Config.init` с app/redirect/state/codeVerifier/scope/mode.
+- [x] Написать RED-тест render с `fastAuthEnabled:false`, `showAlternativeLogin:false`, light/primary, 44 px, radius 8, full width.
+- [x] Написать RED-тест fallback-ссылки при bootstrap/SDK/render error и draft suffix.
+- [x] Реализовать изолированный `VkOneTap`, не сохраняя токены и очищая container/widget при unmount.
+- [x] Вставить его в `AuthGate` только когда provider list содержит `vk`; сохранить Google/Яндекс.
+- [x] Блокировать Google/Яндекс только до settled VK bootstrap, исключив late-save race единственной browser-bound OAuth transaction.
+- [x] Прогнать targeted Vitest, затем весь `src/auth`.
 
 ## Task 5: CSP без стороннего tracker
 
@@ -73,10 +76,10 @@
 - Modify: `deploy/nginx/kaigo-marketing-site.conf`
 - Modify: `tests/deployment_cases/test_marketing_site_package.py`
 
-- [ ] Написать RED-контракт: Studio/SPA CSP содержит `connect-src 'self' https://id.vk.ru` и `frame-src 'self' https://id.vk.ru`.
-- [ ] Зафиксировать, что `script-src` остаётся только `'self'`, без `unsafe-inline`, unpkg и MyTracker.
-- [ ] Обновить только CSP браузерного приложения; embed/archive политики не расширять.
-- [ ] Прогнать deployment contract tests.
+- [x] Написать RED-контракт: Studio/SPA CSP содержит `connect-src 'self' https://id.vk.ru` и `frame-src 'self' https://id.vk.ru`.
+- [x] Зафиксировать, что `script-src` остаётся только `'self'`, без `unsafe-inline`, unpkg и MyTracker.
+- [x] Обновить только CSP браузерного приложения; embed/archive политики не расширять.
+- [x] Прогнать deployment contract tests.
 
 ## Task 6: Полная локальная проверка и журнал продукта
 
@@ -85,11 +88,11 @@
 - Create: `docs/telegram/release-packets/2026-08-15-vk-id-one-tap.md`
 - Modify: `docs/telegram/content-backlog.md`
 
-- [ ] Выполнить backend auth/config suites.
-- [ ] Выполнить frontend targeted/full Vitest, typecheck, lint и build.
-- [ ] Выполнить CSP/deployment tests, Ruff, compileall и `git diff --check`.
+- [x] Выполнить backend auth/config suites.
+- [x] Выполнить frontend targeted/full Vitest, typecheck, lint и build.
+- [x] Выполнить CSP/deployment tests, Ruff, compileall и `git diff --check`.
 - [ ] Запустить локальный браузерный smoke: окно входа, One Tap iframe/fallback, сохранение Google/Яндекс, отсутствие overflow.
-- [ ] Записать только подтверждённые результаты в journal/release packet/backlog, без ключей и персональных данных.
+- [x] Записать только подтверждённые результаты в journal/release packet/backlog, без ключей и персональных данных.
 
 ## Task 7: Безопасный production-релиз
 

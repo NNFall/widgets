@@ -31,9 +31,14 @@ from app.auth.oauth import (
     OAuthProvider,
     OAuthTransaction,
     UnverifiedIdentity,
+    VKOAuthProvider,
     YandexOAuthProvider,
 )
-from app.auth.service import draft_project_id, link_identity_and_claim_draft
+from app.auth.service import (
+    IdentityLinkConflict,
+    draft_project_id,
+    link_identity_and_claim_draft,
+)
 from app.auth.session_storage import DatabaseSessionStorage
 from app.auth.tokens import issue_token, token_digest
 from app.config import AppConfig
@@ -155,6 +160,8 @@ def build_oauth_providers(config: AppConfig) -> Mapping[str, OAuthProvider]:
         providers["yandex"] = YandexOAuthProvider(
             config.yandex_oauth_client_id, config.yandex_oauth_client_secret
         )
+    if config.vk_oauth_app_id is not None:
+        providers["vk"] = VKOAuthProvider(config.vk_oauth_app_id)
     return providers
 
 
@@ -360,6 +367,45 @@ async def auth_start(request: web.Request) -> web.StreamResponse:
         else None,
         scope="oauth_start",
     )
+    transaction = await _create_oauth_transaction(
+        request, provider_name=provider_name, session=session
+    )
+    raise web.HTTPFound(provider.authorization_url(transaction))
+
+
+async def vk_auth_bootstrap(request: web.Request) -> web.Response:
+    provider = request.app[OAUTH_PROVIDERS_KEY].get("vk")
+    app_id = getattr(provider, "app_id", None)
+    if provider is None or isinstance(app_id, bool) or not isinstance(app_id, int):
+        raise web.HTTPNotFound(
+            text=_json_error("oauth provider is not configured"),
+            content_type="application/json",
+        )
+    session = await get_session(request)
+    await request.app[ENTRY_RATE_LIMITER_KEY].check(
+        request,
+        account_id=session.get("user_id")
+        if isinstance(session.get("user_id"), int)
+        else None,
+        scope="oauth_start",
+    )
+    transaction = await _create_oauth_transaction(
+        request, provider_name="vk", session=session
+    )
+    return web.json_response(
+        {
+            "app_id": app_id,
+            "redirect_uri": transaction.redirect_uri,
+            "state": transaction.state,
+            "code_verifier": transaction.code_verifier,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def _create_oauth_transaction(
+    request: web.Request, *, provider_name: str, session
+) -> OAuthTransaction:
     requested_draft = request.query.get("draft_id")
     pending_draft = session.get("pending_draft_id")
     draft_id = None
@@ -431,7 +477,7 @@ async def auth_start(request: web.Request) -> web.StreamResponse:
             oauth_state_id=oauth_state.id,
             campaign=draft.campaign if draft is not None else None,
         )
-    raise web.HTTPFound(provider.authorization_url(transaction))
+    return transaction
 
 
 async def auth_callback(request: web.Request) -> web.StreamResponse:
@@ -444,6 +490,7 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
         )
     raw_state = request.query.get("state", "")
     code = request.query.get("code", "")
+    device_id = request.query.get("device_id")
     browser_session = await get_session(request)
     await request.app[ENTRY_RATE_LIMITER_KEY].check(
         request,
@@ -525,7 +572,8 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
     try:
         async with request.app[OAUTH_CALLBACK_SEMAPHORE_KEY]:
             identity = await provider.exchange(
-                transaction, OAuthCallback(code=code, state=raw_state)
+                transaction,
+                OAuthCallback(code=code, state=raw_state, device_id=device_id),
             )
     except OAuthError as error:
         public_code = _exchange_public_code(error)
@@ -557,14 +605,24 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
         if str(draft_id) != browser_session.get("pending_draft_id"):
             draft_id = None
             raw_claim = None
-        user, project = await link_identity_and_claim_draft(
-            database,
-            identity,
-            draft_id=draft_id,
-            claim_token_digest=token_digest(raw_claim)
-            if isinstance(raw_claim, str)
-            else None,
-        )
+        try:
+            user, project = await link_identity_and_claim_draft(
+                database,
+                identity,
+                draft_id=draft_id,
+                claim_token_digest=token_digest(raw_claim)
+                if isinstance(raw_claim, str)
+                else None,
+            )
+        except IdentityLinkConflict:
+            _log_oauth_failure(
+                provider=provider_name,
+                public_code="account_link_required",
+                failure="IdentityLinkConflict",
+            )
+            raise web.HTTPFound(
+                _oauth_failure_location("account_link_required")
+            ) from None
         await record_funnel_event(
             database,
             event_type="auth_completed",
@@ -661,6 +719,7 @@ def setup_auth_routes(
     app[OAUTH_CALLBACK_SEMAPHORE_KEY] = Semaphore(configured_callback_concurrency)
     app.router.add_post("/api/drafts", create_draft)
     app.router.add_post("/api/drafts/{draft_id}/claim", claim_draft)
+    app.router.add_post("/api/auth/vk/bootstrap", vk_auth_bootstrap)
     app.router.add_get("/api/auth/{provider}/start", auth_start)
     app.router.add_get("/api/auth/{provider}/callback", auth_callback)
     app.router.add_get("/api/auth/session", auth_session)

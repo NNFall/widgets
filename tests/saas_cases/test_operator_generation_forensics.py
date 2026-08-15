@@ -44,6 +44,7 @@ async def test_operator_timeline_requires_verified_oauth_allowlist_and_leaks_no_
                 User(id=10, tenant_id=1, email="operator@example.com"),
                 User(id=11, tenant_id=1, email="outsider@example.com"),
                 User(id=12, tenant_id=1, email="unverified@example.com"),
+                User(id=13, tenant_id=1, email="vk-operator@example.com"),
             ]
         )
     async with factory() as database, database.begin():
@@ -71,6 +72,14 @@ async def test_operator_timeline_requires_verified_oauth_allowlist_and_leaks_no_
                     provider_subject="unverified-subject",
                     email="operator@example.com",
                     email_verified=False,
+                    profile={},
+                ),
+                UserIdentity(
+                    user_id=13,
+                    provider="vk",
+                    provider_subject="vk-operator-subject",
+                    email="operator@example.com",
+                    email_verified=True,
                     profile={},
                 ),
             ]
@@ -182,6 +191,10 @@ async def test_operator_timeline_requires_verified_oauth_allowlist_and_leaks_no_
         await client.post("/test/login/12")
         unverified = await client.get("/api/operator/generation-runs")
         assert unverified.status == 403
+
+        await client.post("/test/login/13")
+        vk_email_only = await client.get("/api/operator/generation-runs")
+        assert vk_email_only.status == 403
 
         await client.post("/test/login/10")
         listing = await client.get("/api/operator/generation-runs")

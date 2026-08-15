@@ -34,6 +34,7 @@ class OAuthTransaction:
 class OAuthCallback:
     code: str
     state: str
+    device_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,6 +213,115 @@ class YandexOAuthProvider:
             email_verified=True,
             display_name=_optional_text(profile.get("display_name")),
             profile=_public_profile(profile),
+        )
+
+
+class VKOAuthProvider:
+    authorization_endpoint = "https://id.vk.ru/authorize"
+    token_endpoint = "https://id.vk.ru/oauth2/auth"
+    profile_endpoint = "https://id.vk.ru/oauth2/user_info"
+
+    def __init__(
+        self,
+        app_id: int,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+        timeout_seconds: float = 15.0,
+    ) -> None:
+        if isinstance(app_id, bool) or not isinstance(app_id, int) or app_id <= 0:
+            raise ValueError("VK OAuth app id must be a positive integer")
+        self.app_id = app_id
+        self._transport = transport
+        self._timeout_seconds = timeout_seconds
+
+    def authorization_url(self, transaction: OAuthTransaction) -> str:
+        query = urlencode(
+            {
+                "client_id": str(self.app_id),
+                "redirect_uri": transaction.redirect_uri,
+                "response_type": "code",
+                "scope": "email",
+                "state": transaction.state,
+                "code_challenge": transaction.code_challenge,
+                "code_challenge_method": "S256",
+            }
+        )
+        return f"{self.authorization_endpoint}?{query}"
+
+    async def exchange(
+        self, transaction: OAuthTransaction, callback: OAuthCallback
+    ) -> OAuthIdentity:
+        _validate_callback(transaction, callback)
+        if not isinstance(callback.device_id, str) or not callback.device_id.strip():
+            raise InvalidOAuthCallback("VK callback has no device id")
+
+        async with httpx.AsyncClient(
+            transport=self._transport, timeout=self._timeout_seconds
+        ) as client:
+            token_response = await client.post(
+                self.token_endpoint,
+                params={
+                    "grant_type": "authorization_code",
+                    "redirect_uri": transaction.redirect_uri,
+                    "client_id": str(self.app_id),
+                    "code_verifier": transaction.code_verifier,
+                    "state": transaction.state,
+                    "device_id": callback.device_id,
+                },
+                data={"code": callback.code},
+            )
+            _raise_provider_error(token_response, "VK token exchange failed")
+            token_payload = token_response.json()
+            if token_payload.get("state") != transaction.state:
+                raise InvalidOAuthCallback("VK token response state mismatch")
+            access_token = token_payload.get("access_token")
+            if not isinstance(access_token, str) or not access_token:
+                raise InvalidOAuthCallback("VK response did not contain an access token")
+
+            profile_response = await client.post(
+                self.profile_endpoint,
+                params={"client_id": str(self.app_id)},
+                data={"access_token": access_token},
+            )
+            _raise_provider_error(profile_response, "VK profile request failed")
+            profile_payload = profile_response.json()
+
+        profile = profile_payload.get("user")
+        if not isinstance(profile, Mapping):
+            raise UnverifiedIdentity("VK profile response has no user")
+        raw_subject = profile.get("user_id")
+        subject = (
+            str(raw_subject)
+            if isinstance(raw_subject, (str, int)) and not isinstance(raw_subject, bool)
+            else ""
+        )
+        email = profile.get("email")
+        if not subject:
+            raise UnverifiedIdentity("VK profile has no stable subject")
+        if not isinstance(email, str) or not email:
+            raise UnverifiedIdentity("VK profile has no verified email")
+
+        display_name = " ".join(
+            part
+            for part in (
+                _optional_text(profile.get("first_name")),
+                _optional_text(profile.get("last_name")),
+            )
+            if part
+        ) or None
+        public_profile: dict[str, Any] = {}
+        if display_name:
+            public_profile["name"] = display_name
+        avatar = _optional_text(profile.get("avatar"))
+        if avatar:
+            public_profile["picture"] = avatar
+        return OAuthIdentity(
+            provider="vk",
+            subject=subject,
+            email=email,
+            email_verified=True,
+            display_name=display_name,
+            profile=public_profile,
         )
 
 

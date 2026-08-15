@@ -11,6 +11,7 @@ from builder_lab.forensics.config import GenerationForensicsConfig
 def _database(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://kaigo:test@db/kaigo")
     for name in (
+        "VK_OAUTH_APP_ID",
         "KAIGO_GENERATION_FORENSICS_ENABLED",
         "KAIGO_GENERATION_FORENSICS_ROOT",
         "KAIGO_GENERATION_FORENSICS_TTL_HOURS",
@@ -134,7 +135,7 @@ def test_production_requires_public_auth_and_one_complete_oauth_provider(
         load_config()
 
     monkeypatch.setenv("KAIGO_PUBLIC_AUTH_ENABLED", "true")
-    with pytest.raises(RuntimeError, match="at least one complete OAuth provider"):
+    with pytest.raises(RuntimeError, match="at least one OAuth provider"):
         load_config()
 
 
@@ -142,7 +143,7 @@ def test_production_app_config_enforces_public_oauth_contract() -> None:
     with pytest.raises(ValueError, match="KAIGO_PUBLIC_AUTH_ENABLED=true"):
         AppConfig(database_url="postgresql://db", environment="production")
 
-    with pytest.raises(ValueError, match="at least one complete OAuth provider"):
+    with pytest.raises(ValueError, match="at least one OAuth provider"):
         AppConfig(
             database_url="postgresql://db",
             environment="production",
@@ -164,6 +165,48 @@ def test_production_app_config_enforces_public_oauth_contract() -> None:
         expected_worker_boot_id="boot-1",
     )
     assert config.public_auth_enabled is True
+
+
+def test_load_config_reads_public_vk_oauth_app_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _database(monkeypatch)
+    monkeypatch.setenv("KAIGO_ENVIRONMENT", "test")
+    monkeypatch.setenv("VK_OAUTH_APP_ID", "54721213")
+
+    config = load_config()
+
+    assert config.vk_oauth_app_id == 54_721_213
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "not-an-integer"])
+def test_load_config_rejects_invalid_vk_oauth_app_id(
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    _database(monkeypatch)
+    monkeypatch.setenv("KAIGO_ENVIRONMENT", "test")
+    monkeypatch.setenv("VK_OAUTH_APP_ID", value)
+
+    with pytest.raises((RuntimeError, ValueError), match="VK_OAUTH_APP_ID"):
+        load_config()
+
+
+def test_production_accepts_vk_as_the_only_oauth_provider() -> None:
+    config = AppConfig(
+        database_url="postgresql://db",
+        environment="production",
+        public_auth_enabled=True,
+        public_base_url="https://kaigo.space",
+        vk_oauth_app_id=54_721_213,
+        entry_trusted_proxy_cidrs=("127.0.0.0/8",),
+        readiness_token="r" * 32,
+        expected_worker_deployment_id="release-1",
+        expected_worker_image_identity="sha256:" + "a" * 64,
+        expected_worker_boot_id="boot-1",
+    )
+
+    assert config.vk_oauth_app_id == 54_721_213
 
 
 def test_production_requires_private_readiness_identity() -> None:

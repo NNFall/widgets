@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +15,13 @@ from app.saas.models import (
     TrialEntitlement,
     UserIdentity,
 )
+
+
+_EMAIL_LINKING_PROVIDERS = frozenset({"google", "yandex"})
+
+
+class IdentityLinkConflict(RuntimeError):
+    """An OAuth subject cannot be safely linked to an account by email alone."""
 
 
 def draft_project_id(draft_id: UUID) -> UUID:
@@ -75,6 +82,31 @@ async def _attach_identity(
         return linked_user
 
 
+async def _email_link_is_trusted(
+    database: AsyncSession,
+    identity: OAuthIdentity,
+    *,
+    user: User,
+) -> bool:
+    if (
+        not identity.email_verified
+        or identity.provider not in _EMAIL_LINKING_PROVIDERS
+    ):
+        return False
+    existing_trusted_identity = await database.scalar(
+        select(UserIdentity.id)
+        .where(
+            UserIdentity.user_id == user.id,
+            UserIdentity.provider.in_(_EMAIL_LINKING_PROVIDERS),
+            UserIdentity.email_verified.is_(True),
+            func.lower(func.trim(UserIdentity.email))
+            == identity.email.strip().lower(),
+        )
+        .limit(1)
+    )
+    return existing_trusted_identity is not None
+
+
 async def _resolve_identity_user(
     database: AsyncSession, identity: OAuthIdentity
 ) -> User:
@@ -87,6 +119,8 @@ async def _resolve_identity_user(
         await database.execute(select(User).where(User.email == normalized_email))
     ).scalar_one_or_none()
     if user is not None:
+        if not await _email_link_is_trusted(database, identity, user=user):
+            raise IdentityLinkConflict("OAuth identity requires explicit account linking")
         return await _attach_identity(database, identity, user=user)
 
     try:
@@ -123,6 +157,8 @@ async def _resolve_identity_user(
         ).scalar_one_or_none()
         if user is None:
             raise
+        if not await _email_link_is_trusted(database, identity, user=user):
+            raise IdentityLinkConflict("OAuth identity requires explicit account linking")
         return await _attach_identity(database, identity, user=user)
 
 
