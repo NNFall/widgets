@@ -161,7 +161,7 @@
   }
 
   .landing-page .case-heading__outcome > span {
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .landing-page .case-heading__outcome strong {
@@ -378,7 +378,7 @@
   .landing-page .capability-chat__user {
     justify-self: end;
     max-width: 88%;
-    font-size: 13px;
+    font-size: 14px;
     line-height: 1.4;
   }
 
@@ -470,7 +470,7 @@
   }
 
   .landing-page .studio-demo__sidebar > p {
-    font-size: 13px;
+    font-size: 14px;
   }
 
   .landing-page .studio-demo__checklist {
