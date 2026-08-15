@@ -33,6 +33,10 @@ export function supportMailtoHref(): string {
   return `mailto:${CONTACT_CONFIG.supportEmail}`;
 }
 
+function normalizeLineEndings(value: string): string {
+  return value.replace(/\r\n?|\n/g, '\r\n');
+}
+
 function topicLabel(topic: FeedbackTopicId): string {
   return feedbackTopics.find((candidate) => candidate.id === topic)?.label ?? feedbackTopics[0].label;
 }
@@ -48,13 +52,13 @@ export function composeFeedbackMail({ topic, message, page = '/', studioContext 
     `Страница: ${page || '/'}`,
     '',
     'Сообщение:',
-    message.trim(),
+    normalizeLineEndings(message.trim()),
     '',
     `Согласие с документом: ${CONTACT_CONFIG.consentDocumentVersion}`,
   ];
 
   if (studioContext?.trim()) {
-    bodyLines.push(`Контекст Studio: ${studioContext.trim()}`);
+    bodyLines.push(`Контекст Studio: ${normalizeLineEndings(studioContext.trim())}`);
   }
 
   const body = bodyLines.join('\r\n');

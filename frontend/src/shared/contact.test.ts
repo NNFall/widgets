@@ -46,6 +46,23 @@ describe('shared contact contract', () => {
     expect(mail.href).toContain(encodeURIComponent('Не работает «Ответ» & /'));
   });
 
+  it('normalizes mixed user line endings to CRLF in the encoded mail body', () => {
+    const mail = composeFeedbackMail({
+      topic: 'question',
+      message: 'message one\r\nmessage two\rmessage three\nmessage four',
+      studioContext: 'studio one\nstudio two\r\nstudio three\rstudio four',
+    });
+    const encodedBody = mail.href.split('&body=')[1] ?? '';
+    const decodedBody = decodeURIComponent(encodedBody);
+
+    expect(encodedBody).toContain('%0D%0A');
+    expect(encodedBody.replaceAll('%0D%0A', '')).not.toContain('%0A');
+    expect(decodedBody).not.toMatch(/(^|[^\r])\n/);
+    expect(decodedBody).not.toContain('\r\r\n');
+    expect(decodedBody).toContain('message one\r\nmessage two\r\nmessage three\r\nmessage four');
+    expect(decodedBody).toContain('Контекст Studio: studio one\r\nstudio two\r\nstudio three\r\nstudio four');
+  });
+
   it('requires both a non-empty message and separate consent', () => {
     expect(isFeedbackReady('', false)).toBe(false);
     expect(isFeedbackReady('   ', true)).toBe(false);
