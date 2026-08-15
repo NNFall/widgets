@@ -4,6 +4,7 @@ import { useState } from 'react';
 
 import { Reveal } from '../shared/Reveal';
 import { studioHref } from '../shared/campaign';
+import { marketingHref } from '../shared/marketing';
 
 const questions = [
   {
@@ -30,6 +31,7 @@ const questions = [
 
 export function FaqSection() {
   const campaignStudioHref = studioHref();
+  const contactHref = marketingHref('#contact');
   const [openIndex, setOpenIndex] = useState(0);
   const reducedMotion = useReducedMotion();
 
@@ -43,7 +45,7 @@ export function FaqSection() {
           <div className="faq-help">
             <Question size={55} weight="regular" aria-hidden="true" />
             <span><strong>Нужна помощь с первым запуском?</strong><small>Откройте студию или посмотрите пошаговую инструкцию.</small></span>
-            <div><a className="primary-button" href={campaignStudioHref}>Перейти в студию</a><a className="secondary-button" href="#how-it-works">Открыть инструкцию</a></div>
+            <div><a className="primary-button" href={campaignStudioHref}>Перейти в студию</a><a className="secondary-button" href={contactHref}>Написать в Kaigo</a></div>
           </div>
         </Reveal>
 

@@ -209,7 +209,7 @@ describe('landing motion contracts', () => {
     expect(faqSectionSource).not.toContain('setInterval');
   });
 
-  it('stages the final CTA once from one parent and leaves the footer outside it', () => {
+  it('stages the final CTA once from one parent and leaves the reusable footer to the page shell', () => {
     expect(finalCtaSectionSource).toContain('className="landing-shell final-cta-content final-cta-motion"');
     expect(finalCtaSectionSource).toContain("initial={reducedMotion || !viewportMotionAvailable ? false : 'hidden'}");
     expect(finalCtaSectionSource).toContain('whileInView="visible"');
@@ -218,10 +218,7 @@ describe('landing motion contracts', () => {
     expect(finalCtaSectionSource).toContain('className="final-site-card__motion final-site-card__motion--after"');
     expect(finalCtaSectionSource).toContain('className="mini-site__widget-halo"');
 
-    const footerStart = finalCtaSectionSource.indexOf('<footer className="site-footer">');
-    const motionEnd = finalCtaSectionSource.lastIndexOf('</motion.div>', footerStart);
-    expect(motionEnd).toBeGreaterThan(-1);
-    expect(footerStart).toBeGreaterThan(motionEnd);
+    expect(finalCtaSectionSource).not.toContain('<footer className="site-footer">');
   });
 
   it('keeps the remaining Studio preview motion reduced-motion safe', () => {

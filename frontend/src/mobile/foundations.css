@@ -468,3 +468,131 @@
     max-height: 240px;
   }
 }
+
+@media (max-width: 767px), (hover: none) and (pointer: coarse) and (max-width: 900px) {
+  .landing-page .contact-section {
+    padding-block: 64px;
+  }
+
+  .landing-page .contact-section__layout {
+    gap: 34px;
+  }
+
+  .landing-page .contact-section__copy h2 {
+    max-width: none;
+    font-size: clamp(37px, 11vw, 48px);
+  }
+
+  .landing-page .contact-section__copy > p:not(.section-kicker) {
+    font-size: 16px;
+    line-height: 1.5;
+  }
+
+  .landing-page .contact-section__channels {
+    margin-top: 30px;
+  }
+
+  .landing-page .contact-channel {
+    min-height: 0;
+    padding-block: 15px;
+    grid-template-columns: 1fr;
+    gap: 7px;
+  }
+
+  .landing-page .contact-channel > a,
+  .landing-page .contact-channel > small {
+    grid-column: auto;
+  }
+
+  .landing-page .contact-channel > a {
+    font-size: 17px;
+  }
+
+  .landing-page .feedback-composer {
+    padding: 21px 17px;
+    border-radius: 16px;
+  }
+
+  .landing-page .feedback-topic-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .landing-page .feedback-topic {
+    min-height: 52px;
+  }
+
+  .landing-page .feedback-composer__message textarea {
+    min-height: 136px;
+  }
+
+  .landing-page .feedback-composer__consent {
+    font-size: 12px;
+  }
+
+  .landing-page .site-footer__inner,
+  .legal-page .site-footer__inner {
+    width: min(calc(100% - (var(--mobile-gutter, 16px) * 2)), var(--container, 1180px));
+    padding-block: 30px 34px;
+    grid-template-columns: 1fr;
+    gap: 23px;
+  }
+
+  .landing-page .site-footer__nav,
+  .landing-page .site-footer__legal,
+  .legal-page .site-footer__nav,
+  .legal-page .site-footer__legal {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px 13px;
+  }
+
+  .landing-page .site-footer__operator,
+  .legal-page .site-footer__operator {
+    grid-column: auto;
+  }
+
+  .landing-page .site-footer__nav a,
+  .landing-page .site-footer__legal a,
+  .legal-page .site-footer__nav a,
+  .legal-page .site-footer__legal a {
+    font-size: 13px;
+  }
+
+  .legal-shell {
+    width: min(calc(100% - 32px), 760px);
+  }
+
+  .legal-header__inner {
+    min-height: 68px;
+  }
+
+  .legal-header__logo .kaigo-logo__wordmark {
+    font-size: 23px;
+  }
+
+  .legal-back {
+    font-size: 13px;
+  }
+
+  .legal-layout {
+    padding-block: 27px 58px;
+  }
+
+  .legal-document h1 {
+    max-width: none;
+    font-size: clamp(35px, 10vw, 48px);
+  }
+
+  .legal-document__lead {
+    font-size: 17px;
+  }
+
+  .legal-document p {
+    font-size: 15px;
+    line-height: 1.62;
+  }
+
+  .legal-contents {
+    margin-block: 30px 37px;
+    padding-inline: 0;
+  }
+}

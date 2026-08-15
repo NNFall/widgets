@@ -2,6 +2,8 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 
 import { LandingPage } from './landing/LandingPage';
 import { ProductTourPage } from './landing/ProductTourPage';
+import { LegalPage } from './legal/LegalPage';
+import { legalDocumentForPath } from './legal/legalDocuments';
 
 const StudioRoute = lazy(async () => {
   const module = await import('./studio/StudioRoute');
@@ -23,6 +25,11 @@ export function App() {
 
   if (pathname === '/tour') {
     return <ProductTourPage />;
+  }
+
+  const legalDocument = legalDocumentForPath(pathname);
+  if (legalDocument) {
+    return <LegalPage document={legalDocument} />;
   }
 
   if (pathname !== '/studio') {

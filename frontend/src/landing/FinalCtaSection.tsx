@@ -2,10 +2,8 @@ import { Code, Eye, ShieldCheck } from '@phosphor-icons/react';
 import { motion, useReducedMotion } from 'motion/react';
 import type { Variants } from 'motion/react';
 
-import { KaigoLogo } from '../shared/KaigoLogo';
 import { UrlComposer } from '../shared/UrlComposer';
 import { WidgetPreviewCard } from '../shared/WidgetPreviewCard';
-import { studioHref } from '../shared/campaign';
 
 const guarantees = [
   { label: 'Без кода', Icon: Code },
@@ -60,7 +58,6 @@ const finalWidgetHaloVariants = {
 
 export function FinalCtaSection() {
   const reducedMotion = Boolean(useReducedMotion());
-  const campaignStudioHref = studioHref();
   const viewportMotionAvailable = import.meta.env.MODE !== 'test'
     && typeof IntersectionObserver !== 'undefined';
 
@@ -109,15 +106,6 @@ export function FinalCtaSection() {
           ))}
         </motion.div>
       </motion.div>
-      <footer className="site-footer">
-        <div className="landing-shell site-footer__inner">
-          <div><KaigoLogo tone="coral" /><p>Персональные AI-виджеты<br />для бизнеса.</p></div>
-          <nav aria-label="Навигация в подвале">
-            <a href="#product">Продукт</a><a href="#product-tour">Как это работает</a><a href="#case-study">Кейсы</a><a href="#faq">Помощь</a><a href={campaignStudioHref}>Студия</a>
-          </nav>
-          <div className="site-footer__legal"><span>Политика конфиденциальности</span><span>Условия использования</span></div>
-        </div>
-      </footer>
     </section>
   );
 }

@@ -47,7 +47,7 @@ describe('App', () => {
       'href',
       '/studio',
     );
-    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(9);
+    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(10);
     expect(document.querySelector('#how-it-works')).toBeNull();
     expect(document.querySelector('.product-tour__autoplay')).toBeNull();
     expect(screen.getByText('Реальный кейс · FORMA')).toBeVisible();
@@ -250,6 +250,24 @@ describe('App', () => {
     render(<App />);
 
     expect(screen.getByRole('heading', { name: 'Через 10 минут вы сможете сказать: наш бизнес использует AI' })).toBeInTheDocument();
-    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(9);
+    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(10);
+  });
+
+  it.each([
+    ['/privacy', 'Политика конфиденциальности'],
+    ['/privacy/', 'Политика конфиденциальности'],
+    ['/personal-data-consent', 'Согласие на обработку персональных данных'],
+    ['/personal-data-consent/', 'Согласие на обработку персональных данных'],
+    ['/terms', 'Условия использования'],
+    ['/terms/', 'Условия использования'],
+    ['/offer', 'Предварительная публичная оферта'],
+    ['/offer/', 'Предварительная публичная оферта'],
+  ] as const)('renders the legal document at the exact route %s', (pathname, title) => {
+    window.history.replaceState({}, '', pathname);
+
+    render(<App />);
+
+    expect(screen.getByRole('heading', { name: title, level: 1 })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'Через 10 минут вы сможете сказать: наш бизнес использует AI' })).not.toBeInTheDocument();
   });
 });

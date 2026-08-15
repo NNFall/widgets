@@ -11,7 +11,7 @@ describe('LandingPage sections', () => {
     render(<LandingPage />);
 
     const sections = Array.from(document.querySelectorAll('section[data-landing-section]'));
-    expect(sections).toHaveLength(9);
+    expect(sections).toHaveLength(10);
     expect(sections[1]).toHaveClass('product-tour-section');
     expect(sections[2]).toHaveClass('free-result-section');
     expect(screen.getByRole('textbox', { name: 'Ссылка на действующий сайт' })).toBeVisible();
@@ -73,7 +73,7 @@ describe('LandingPage sections', () => {
     expect(screen.getByRole('heading', { name: 'Что видит Kaigo' })).toBeVisible();
     expect(screen.getByRole('heading', { name: /Не просто чат/ })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Готовый вариант — под вашим контролем' })).toBeVisible();
-    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(9);
+    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(10);
     expect(screen.getAllByRole('textbox', { name: /ссылка на.*сайт/i })).toHaveLength(2);
   });
 
@@ -109,7 +109,7 @@ describe('LandingPage sections', () => {
     expect(timeQuestion).toHaveAttribute('aria-expanded', 'false');
   });
 
-  it('does not expose demo-only controls or unavailable legal pages as actions', () => {
+  it('does not expose demo-only controls and exposes truthful legal pages as actions', () => {
     render(<LandingPage />);
 
     expect(screen.queryByRole('button', { name: 'Какие торты можно заказать к субботе?' })).not.toBeInTheDocument();
@@ -118,8 +118,14 @@ describe('LandingPage sections', () => {
     expect(screen.getByText('Какие торты можно заказать к субботе?', { selector: 'span' })).toBeVisible();
     expect(screen.getByText('Предпросмотр', { selector: 'span' })).toBeVisible();
     expect(screen.getByText('Опубликовать', { selector: 'span' })).toBeVisible();
-    expect(screen.queryByRole('link', { name: 'Политика конфиденциальности' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Условия использования' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Политика конфиденциальности' })).toHaveAttribute('href', '/privacy/');
+    expect(screen.getByRole('link', { name: 'Условия использования' })).toHaveAttribute('href', '/terms/');
+  });
+
+  it('routes the FAQ help action to the contact band', () => {
+    render(<LandingPage />);
+
+    expect(screen.getByRole('link', { name: 'Написать в Kaigo' })).toHaveAttribute('href', '#contact');
   });
 
   it('promises only preview, dialogue checks, publication and connection', () => {
