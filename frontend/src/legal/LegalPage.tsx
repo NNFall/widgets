@@ -69,7 +69,7 @@ export function LegalPage({ document }: LegalPageProps) {
           <section className="legal-contact" id="legal-contact" aria-labelledby="legal-contact-title">
             <h2 id="legal-contact-title">Контакт и статус реквизитов</h2>
             <p>Почта для вопросов: <a href={`mailto:${encodeURIComponent(CONTACT_CONFIG.supportEmail)}`}>{CONTACT_CONFIG.supportEmail}</a>. Это provisional-адрес для предпросмотра, его приём должен подтвердить владелец.</p>
-            <p>Оператор: уточняется до подтверждения. Статус (подтверждено владельцем): {CONTACT_CONFIG.operatorStatus}. ФИО: уточняется. ИНН и адрес: уточняются. Telegram пока не опубликован.</p>
+            <p>Оператор: уточняется до подтверждения. Статус, указанный владельцем: {CONTACT_CONFIG.operatorStatus}. ФИО: уточняется. ИНН и адрес: уточняются. Telegram пока не опубликован.</p>
           </section>
         </article>
       </div>

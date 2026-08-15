@@ -78,6 +78,28 @@ describe('legal information architecture', () => {
     expect(getComputedStyle(mailLink).minHeight).toBe('44px');
   });
 
+  it('keeps every legal contents link as a wrapping 44px touch target', () => {
+    const style = document.createElement('style');
+    style.dataset.testLegalStyles = 'true';
+    style.textContent = stylesSource;
+    document.head.append(style);
+    render(<LegalPage document={LEGAL_DOCUMENTS.privacy} />);
+
+    const contents = document.querySelector('.legal-contents') as HTMLElement;
+    const links = within(contents).getAllByRole('link');
+    expect(links.length).toBeGreaterThan(1);
+    links.forEach((link) => {
+      const computed = getComputedStyle(link);
+      expect(computed.minHeight).toBe('44px');
+      expect(computed.display).toBe('flex');
+      expect(computed.whiteSpace).toBe('normal');
+      expect(computed.overflowWrap).toBe('anywhere');
+    });
+    expect(stylesSource).toMatch(
+      /\.legal-contents a\s*\{[^}]*min-height:\s*44px;[^}]*display:\s*flex;[^}]*overflow-wrap:\s*anywhere;/s,
+    );
+  });
+
   it('keeps privacy categories, purposes, rights and unconfirmed operator fields explicit', () => {
     render(<LegalPage document={LEGAL_DOCUMENTS.privacy} />);
 
@@ -88,6 +110,8 @@ describe('legal information architecture', () => {
     expect(main).toHaveTextContent(/для ответа на обращение.*защиты от злоупотреблений.*улучшения продукта/i);
     expect(main).toHaveTextContent(/исправление или удаление.*отозвать согласие/i);
     expect(main).toHaveTextContent(/Оператор: уточняется до подтверждения/i);
+    expect(main).toHaveTextContent(/Статус, указанный владельцем: самозанятый, плательщик НПД/i);
+    expect(main).not.toHaveTextContent(/подтверждено владельцем/i);
     expect(main).toHaveTextContent(/ИНН и адрес: уточняются/i);
   });
 

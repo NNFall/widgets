@@ -24,7 +24,8 @@ describe('SiteFooter', () => {
     expect(screen.getByRole('link', { name: 'Условия использования' })).toHaveAttribute('href', '/terms/');
     expect(screen.getByRole('link', { name: 'Предварительная оферта' })).toHaveAttribute('href', '/offer/');
     expect(screen.getByText(/Оператор: уточняется до подтверждения/i)).toBeVisible();
-    expect(screen.getByText(/самозанятый, плательщик НПД/i)).toBeVisible();
+    expect(screen.getByText(/Статус, указанный владельцем: самозанятый, плательщик НПД/i)).toBeVisible();
+    expect(screen.queryByText(/подтверждено владельцем/i)).not.toBeInTheDocument();
     expect(screen.getByText(/ФИО: уточняется/i)).toBeVisible();
     expect(screen.getByText(/ИНН: уточняется/i)).toBeVisible();
     expect(screen.getByText(/Адрес: уточняется/i)).toBeVisible();

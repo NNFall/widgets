@@ -5044,9 +5044,16 @@ a {
 }
 
 .legal-contents a {
+  min-height: 44px;
+  padding-block: 8px;
+  display: flex;
+  align-items: center;
+  min-width: 0;
   color: var(--legal-accent);
   font-size: 14px;
   line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: anywhere;
   text-decoration: underline;
   text-underline-offset: 3px;
 }

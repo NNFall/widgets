@@ -32,7 +32,7 @@ export function SiteFooter() {
 
         <div className="site-footer__operator" data-preview-placeholder>
           <span>Реквизиты для предпросмотра</span>
-          <p>Оператор: уточняется до подтверждения<br />Статус (подтверждено владельцем): {CONTACT_CONFIG.operatorStatus}<br />ФИО: уточняется<br />ИНН: уточняется<br />Адрес: уточняется</p>
+          <p>Оператор: уточняется до подтверждения<br />Статус, указанный владельцем: {CONTACT_CONFIG.operatorStatus}<br />ФИО: уточняется<br />ИНН: уточняется<br />Адрес: уточняется</p>
           <a href={`mailto:${encodeURIComponent(CONTACT_CONFIG.supportEmail)}`}>{CONTACT_CONFIG.supportEmail}</a>
         </div>
       </div>
