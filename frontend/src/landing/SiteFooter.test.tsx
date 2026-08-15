@@ -29,6 +29,10 @@ describe('SiteFooter', () => {
     expect(screen.getByText(/ФИО: уточняется/i)).toBeVisible();
     expect(screen.getByText(/ИНН: уточняется/i)).toBeVisible();
     expect(screen.getByText(/Адрес: уточняется/i)).toBeVisible();
+    expect(screen.getByRole('link', { name: 'support@kaigo.space' })).toHaveAttribute(
+      'href',
+      'mailto:support@kaigo.space',
+    );
   });
 
   it('keeps new footer destinations inside an isolated archive preview', () => {

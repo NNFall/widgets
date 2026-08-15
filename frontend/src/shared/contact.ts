@@ -29,6 +29,10 @@ export type FeedbackMail = {
   body: string;
 };
 
+export function supportMailtoHref(): string {
+  return `mailto:${CONTACT_CONFIG.supportEmail}`;
+}
+
 function topicLabel(topic: FeedbackTopicId): string {
   return feedbackTopics.find((candidate) => candidate.id === topic)?.label ?? feedbackTopics[0].label;
 }
@@ -53,10 +57,10 @@ export function composeFeedbackMail({ topic, message, page = '/', studioContext 
     bodyLines.push(`Контекст Studio: ${studioContext.trim()}`);
   }
 
-  const body = bodyLines.join('\n');
+  const body = bodyLines.join('\r\n');
   const query = `subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   return {
-    href: `mailto:${encodeURIComponent(CONTACT_CONFIG.supportEmail)}?${query}`,
+    href: `${supportMailtoHref()}?${query}`,
     subject,
     body,
   };

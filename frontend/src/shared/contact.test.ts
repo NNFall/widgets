@@ -5,11 +5,13 @@ import {
   composeFeedbackMail,
   feedbackTopics,
   isFeedbackReady,
+  supportMailtoHref,
 } from './contact';
 
 describe('shared contact contract', () => {
   it('keeps provisional contact values explicit and the topic set finite', () => {
     expect(CONTACT_CONFIG.supportEmail).toBe('support@kaigo.space');
+    expect(supportMailtoHref()).toBe('mailto:support@kaigo.space');
     expect(CONTACT_CONFIG.telegramUrl).toBeNull();
     expect(CONTACT_CONFIG.consentDocumentPath).toBe('/personal-data-consent/');
     expect(CONTACT_CONFIG.consentDocumentVersion).toBeTruthy();
@@ -32,8 +34,12 @@ describe('shared contact contract', () => {
 
     expect(parsed.protocol).toBe('mailto:');
     expect(decodeURIComponent(parsed.pathname)).toBe(CONTACT_CONFIG.supportEmail);
+    expect(mail.href).toMatch(/^mailto:support@kaigo\.space\?/);
+    expect(mail.href).not.toContain('%40');
+    expect(mail.href).toContain('%0D%0A');
     expect(mail.subject).toContain('Ошибка');
     expect(mail.body).toContain('Не работает «Ответ» & /');
+    expect(mail.body).toContain('\r\n');
     expect(parsed.searchParams.get('body')).toContain('Контекст Studio: preview-project-1');
     expect(parsed.searchParams.get('subject')).toBe(mail.subject);
     expect(parsed.searchParams.get('body')).toBe(mail.body);

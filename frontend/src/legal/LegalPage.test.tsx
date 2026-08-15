@@ -76,6 +76,25 @@ describe('legal information architecture', () => {
     const contact = document.getElementById('legal-contact') as HTMLElement;
     const mailLink = within(contact).getByRole('link', { name: 'support@kaigo.space' });
     expect(getComputedStyle(mailLink).minHeight).toBe('44px');
+    expect(mailLink).toHaveAttribute('href', 'mailto:support@kaigo.space');
+    expect(mailLink).not.toHaveAttribute('href', expect.stringContaining('%40'));
+  });
+
+  it('keeps the legal heading wrap-safe at narrow mobile widths', () => {
+    const style = document.createElement('style');
+    style.dataset.testLegalStyles = 'true';
+    style.textContent = stylesSource;
+    document.head.append(style);
+    render(<LegalPage document={LEGAL_DOCUMENTS.privacy} />);
+
+    const heading = screen.getByRole('heading', { name: 'Политика конфиденциальности', level: 1 });
+    const computed = getComputedStyle(heading);
+    expect(computed.hyphens).toBe('auto');
+    expect(computed.overflowWrap).toBe('anywhere');
+    expect(computed.minWidth).toBe('0px');
+    expect(stylesSource).toMatch(
+      /\.legal-document h1\s*\{[^}]*min-width:\s*0;[^}]*hyphens:\s*auto;[^}]*overflow-wrap:\s*anywhere;/s,
+    );
   });
 
   it('keeps every legal contents link as a wrapping 44px touch target', () => {

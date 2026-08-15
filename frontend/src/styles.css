@@ -4786,6 +4786,19 @@ a {
   text-underline-offset: 3px;
 }
 
+.feedback-composer__consent > span {
+  min-width: 0;
+}
+
+.feedback-composer__consent a {
+  min-height: 44px;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .feedback-composer__action-row {
   margin-top: 20px;
   display: grid;
@@ -5002,11 +5015,14 @@ a {
 }
 
 .legal-document h1 {
+  min-width: 0;
   max-width: 18ch;
   margin: 0 0 18px;
   font-size: clamp(38px, 5vw, 64px);
   line-height: 1.06;
   letter-spacing: -.055em;
+  hyphens: auto;
+  overflow-wrap: anywhere;
 }
 
 .legal-document__lead {

@@ -1,5 +1,5 @@
 import { FeedbackComposer } from '../shared/FeedbackComposer';
-import { CONTACT_CONFIG } from '../shared/contact';
+import { CONTACT_CONFIG, supportMailtoHref } from '../shared/contact';
 
 export function ContactSection() {
   return (
@@ -12,7 +12,7 @@ export function ContactSection() {
           <div className="contact-section__channels" aria-label="Каналы связи">
             <div className="contact-channel">
               <span>Поддержка</span>
-              <a href={`mailto:${encodeURIComponent(CONTACT_CONFIG.supportEmail)}`}>{CONTACT_CONFIG.supportEmail}</a>
+              <a href={supportMailtoHref()}>{CONTACT_CONFIG.supportEmail}</a>
               <small>Адрес временный для предпросмотра, владелец должен подтвердить, что он принимает письма.</small>
             </div>
             <div className="contact-channel contact-channel--pending">

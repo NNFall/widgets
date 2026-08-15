@@ -1,5 +1,5 @@
 import { KaigoLogo } from '../shared/KaigoLogo';
-import { CONTACT_CONFIG } from '../shared/contact';
+import { CONTACT_CONFIG, supportMailtoHref } from '../shared/contact';
 import { studioHref } from '../shared/campaign';
 import { marketingHref } from '../shared/marketing';
 
@@ -33,7 +33,7 @@ export function SiteFooter() {
         <div className="site-footer__operator" data-preview-placeholder>
           <span>Реквизиты для предпросмотра</span>
           <p>Оператор: уточняется до подтверждения<br />Статус, указанный владельцем: {CONTACT_CONFIG.operatorStatus}<br />ФИО: уточняется<br />ИНН: уточняется<br />Адрес: уточняется</p>
-          <a href={`mailto:${encodeURIComponent(CONTACT_CONFIG.supportEmail)}`}>{CONTACT_CONFIG.supportEmail}</a>
+          <a href={supportMailtoHref()}>{CONTACT_CONFIG.supportEmail}</a>
         </div>
       </div>
     </footer>
