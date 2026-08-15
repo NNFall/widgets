@@ -1,5 +1,6 @@
 export const CONTACT_CONFIG = {
   supportEmail: 'support@kaigo.space',
+  operatorStatus: 'самозанятый, плательщик НПД',
   telegramUrl: null,
   consentDocumentPath: '/personal-data-consent/',
   consentDocumentVersion: 'preview-2026-08-15',

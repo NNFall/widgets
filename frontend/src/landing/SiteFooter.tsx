@@ -15,11 +15,11 @@ export function SiteFooter() {
         </div>
 
         <nav className="site-footer__nav" aria-label="Навигация в подвале">
-          <a href={marketingHref('#product')}>Продукт</a>
-          <a href={marketingHref('#product-tour')}>Как это работает</a>
-          <a href={marketingHref('#case-study')}>Кейсы</a>
-          <a href={marketingHref('#faq')}>Помощь</a>
-          <a href={marketingHref('#contact')}>Связаться с командой</a>
+          <a href={marketingHref('/#product')}>Продукт</a>
+          <a href={marketingHref('/#product-tour')}>Как это работает</a>
+          <a href={marketingHref('/#case-study')}>Кейсы</a>
+          <a href={marketingHref('/#faq')}>Помощь</a>
+          <a href={marketingHref('/#contact')}>Связаться с командой</a>
           <a href={marketingHref(studioHref())}>Студия</a>
         </nav>
 
@@ -32,7 +32,7 @@ export function SiteFooter() {
 
         <div className="site-footer__operator" data-preview-placeholder>
           <span>Реквизиты для предпросмотра</span>
-          <p>Оператор: уточняется до подтверждения<br />ИНН: уточняется<br />Адрес: уточняется</p>
+          <p>Оператор: уточняется до подтверждения<br />Статус (подтверждено владельцем): {CONTACT_CONFIG.operatorStatus}<br />ФИО: уточняется<br />ИНН: уточняется<br />Адрес: уточняется</p>
           <a href={`mailto:${encodeURIComponent(CONTACT_CONFIG.supportEmail)}`}>{CONTACT_CONFIG.supportEmail}</a>
         </div>
       </div>

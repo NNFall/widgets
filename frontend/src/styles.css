@@ -1924,7 +1924,6 @@ a {
 .site-footer .kaigo-logo__mark { width: 34px; height: 41px; }
 .site-footer .kaigo-logo__wordmark { font-size: 29px; }
 .site-footer p { margin: 12px 0 0; color: #66798a; font-size: 14px; line-height: 1.45; }
-.site-footer nav { display: flex; justify-content: center; gap: clamp(22px, 3.4vw, 56px); font-size: 15px; }
 .site-footer__legal { display: grid; gap: 11px; justify-items: start; color: #66798a; font-size: 14px; }
 
 @media (min-width: 1281px) and (max-width: 1680px) {
@@ -2768,7 +2767,6 @@ a {
   .final-composer .url-composer__control { min-height: 0; }
   .guarantee-row { margin-bottom: 50px; display: grid; justify-content: start; gap: 16px; text-align: left; }
   .site-footer__inner { grid-template-columns: 1fr; gap: 25px; }
-  .site-footer nav { display: grid; grid-template-columns: 1fr 1fr; justify-content: start; gap: 14px 28px; }
   .site-footer__legal { grid-column: auto; display: grid; justify-content: start; }
 }
 
@@ -4850,6 +4848,11 @@ a {
   gap: 6px;
 }
 
+.landing-page .site-footer__nav,
+.legal-page .site-footer__nav {
+  display: grid;
+}
+
 .site-footer__nav a,
 .site-footer__legal a {
   min-height: 44px;
@@ -4886,6 +4889,14 @@ a {
   color: var(--landing-metal-deep, #46525a);
   font-size: 12px;
   line-height: 1.55;
+}
+
+.contact-channel > a,
+.site-footer__operator > a,
+.legal-contact a[href^='mailto:'] {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
 }
 
 .site-footer__operator a {

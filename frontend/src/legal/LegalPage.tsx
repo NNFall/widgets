@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { ArrowLeft } from '@phosphor-icons/react';
 
 import { CONTACT_CONFIG } from '../shared/contact';
@@ -12,6 +13,15 @@ type LegalPageProps = {
 };
 
 export function LegalPage({ document }: LegalPageProps) {
+  useEffect(() => {
+    const previousTitle = window.document.title;
+    window.document.title = `Kaigo — ${document.title}`;
+
+    return () => {
+      window.document.title = previousTitle;
+    };
+  }, [document.title]);
+
   return (
     <main className="legal-page">
       <header className="legal-header">
@@ -35,7 +45,7 @@ export function LegalPage({ document }: LegalPageProps) {
           <p className="legal-document__kicker">Kaigo · {document.path}</p>
           <h1>{document.title}</h1>
           <p className="legal-document__lead">{document.lead}</p>
-          <p className="legal-document__revision">Редакция для предпросмотра от 15 августа 2026</p>
+          <p className="legal-document__revision">Редакция для предпросмотра. Дата вступления в силу уточняется.</p>
 
           <nav className="legal-contents" aria-label="Содержание документа">
             <strong>Содержание</strong>
@@ -59,7 +69,7 @@ export function LegalPage({ document }: LegalPageProps) {
           <section className="legal-contact" id="legal-contact" aria-labelledby="legal-contact-title">
             <h2 id="legal-contact-title">Контакт и статус реквизитов</h2>
             <p>Почта для вопросов: <a href={`mailto:${encodeURIComponent(CONTACT_CONFIG.supportEmail)}`}>{CONTACT_CONFIG.supportEmail}</a>. Это provisional-адрес для предпросмотра, его приём должен подтвердить владелец.</p>
-            <p>Оператор: уточняется до подтверждения. ИНН и адрес: уточняются. Telegram пока не опубликован.</p>
+            <p>Оператор: уточняется до подтверждения. Статус (подтверждено владельцем): {CONTACT_CONFIG.operatorStatus}. ФИО: уточняется. ИНН и адрес: уточняются. Telegram пока не опубликован.</p>
           </section>
         </article>
       </div>
