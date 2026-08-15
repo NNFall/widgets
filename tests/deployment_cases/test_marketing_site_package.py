@@ -151,6 +151,38 @@ class MarketingSitePackageTests(unittest.TestCase):
         self.assertIn("proxy_pass http://127.0.0.1:8080;", fallback)
         self.assertIn("proxy_set_header Host $host;", fallback)
 
+    def test_nginx_contract_owns_each_legal_route_exactly_with_static_spa_headers(self):
+        config = NGINX_CONFIG.read_text(encoding="utf-8")
+        legal_paths = (
+            "/privacy",
+            "/privacy/",
+            "/personal-data-consent",
+            "/personal-data-consent/",
+            "/terms",
+            "/terms/",
+            "/offer",
+            "/offer/",
+        )
+
+        for path in legal_paths:
+            marker = f"location = {path} {{"
+            self.assertEqual(config.count(marker), 1, path)
+            block = config.split(marker, 1)[1].split("}", 1)[0]
+            self.assertIn("root /var/www/kaigo-marketing/current;", block, path)
+            self.assertIn("try_files /index.html =404;", block, path)
+            self.assertIn('Cache-Control "no-store";', block, path)
+            self.assertIn("Content-Security-Policy", block, path)
+            self.assertIn("Referrer-Policy", block, path)
+            self.assertIn("X-Content-Type-Options", block, path)
+            self.assertIn("X-Frame-Options", block, path)
+
+        self.assertNotRegex(
+            config,
+            r"location\s+(?:\^~\s+)?/(?:privacy|personal-data-consent|terms|offer)/",
+        )
+        fallback = config.split("location / {", 1)[1]
+        self.assertIn("proxy_pass http://127.0.0.1:8080;", fallback)
+
     def test_only_legacy_builder_uses_basic_auth(self):
         config = NGINX_CONFIG.read_text(encoding="utf-8")
         auth_file = "/etc/nginx/.htpasswd-kaigo-builder"
@@ -197,10 +229,10 @@ class MarketingSitePackageTests(unittest.TestCase):
             if line.strip().startswith("add_header Content-Security-Policy")
         ]
 
-        self.assertEqual(len(csp_lines), 5)
+        self.assertEqual(len(csp_lines), 13)
         html_csp = [line for line in csp_lines if "frame-src 'self'" in line]
         asset_csp = [line for line in csp_lines if "default-src 'none'" in line]
-        self.assertEqual(len(html_csp), 3)
+        self.assertEqual(len(html_csp), 11)
         self.assertEqual(len(asset_csp), 2)
         for line in html_csp:
             self.assertIn("default-src 'self'", line)
@@ -241,6 +273,35 @@ class MarketingSitePackageTests(unittest.TestCase):
         )
         self.assertNotIn("[A-Za-z0-9_-]{8,}", script)
         self.assertNotIn('rm -rf -- "${current_link}"', script)
+
+    def test_contact_legal_handoff_names_the_backend_and_compliance_boundaries(self):
+        handoff = (ROOT / "docs" / "CONTACT_AND_LEGAL_HANDOFF.md").read_text(encoding="utf-8")
+
+        for required in (
+            "POST /api/feedback",
+            "topic",
+            "name",
+            "contact",
+            "message",
+            "page",
+            "idempotency",
+            "202",
+            "receipt",
+            "CSRF",
+            "rate limit",
+            "dead-letter",
+            "support@kaigo.space",
+            "152-ФЗ",
+            "Статья 18.1",
+            "https://ips.pravo.gov.ru/api/ips/legislation/document?baseid=None&hash=98490812b3409e2a8d78a11ca9010f434ea3d9250a11dbbdb78690cd5551bdd6",
+            "https://government.ru/docs/all/98196/?page=4",
+            "https://82.rkn.gov.ru/directions/pers/p15375/",
+            "https://www.nalog.gov.ru/rn28/news/activities_fts/12403644/",
+            "https://zpp.rospotrebnadzor.ru/npa/federal/turist/192115",
+            "https://www.consultant.ru/document/cons_doc_LAW_5142/1a77b2ec302d6a384a228dff59e53680ccffaaca/",
+            "юрист",
+        ):
+            self.assertIn(required, handoff)
 
     @unittest.skipUnless(DOCKER, "requires Docker with a local nginx:alpine image")
     def test_nginx_fixture_serves_real_route_and_cache_contract(self):
@@ -303,6 +364,20 @@ class MarketingSitePackageTests(unittest.TestCase):
             for studio_path in ("/studio", "/studio/"):
                 with urllib.request.urlopen(f"{base_url}{studio_path}", timeout=2) as accepted:
                     self.assertEqual(accepted.status, 200)
+
+            for legal_path in (
+                "/privacy",
+                "/privacy/",
+                "/personal-data-consent",
+                "/personal-data-consent/",
+                "/terms",
+                "/terms/",
+                "/offer",
+                "/offer/",
+            ):
+                with urllib.request.urlopen(f"{base_url}{legal_path}", timeout=2) as accepted:
+                    self.assertEqual(accepted.status, 200)
+                    self.assertEqual(accepted.headers["Cache-Control"], "no-store")
 
             index = (DIST / "index.html").read_text(encoding="utf-8")
             hashed_asset = re.search(
