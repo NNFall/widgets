@@ -39,7 +39,7 @@ const versions = [
 
 const v11 = {
   id: 'v11',
-  commit: '5cea81e5fa35ddc427c2b04d843ceacceba89af0',
+  commit: 'f5772c464aaf3f039165f4b9e1b099abeb186040',
   date: '16 августа',
   title: 'Контакт и правовые страницы',
   description: 'Контакт, обратная связь и четыре правовые страницы для честного предпросмотра.',
