@@ -123,7 +123,7 @@ describe('FeedbackComposer', () => {
     }
   });
 
-  it('uses the server-provided message limit when bootstrapping an anonymous session', async () => {
+  it('caps a server limit above the product limit at 4000 characters', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(sessionResponse({ message_max_length: 5120 }))
@@ -136,7 +136,25 @@ describe('FeedbackComposer', () => {
     await user.click(screen.getByRole('button', { name: 'Отправить' }));
 
     await waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument());
-    expect(message).toHaveAttribute('maxLength', '5120');
+    expect(message).toHaveAttribute('maxLength', '4000');
+  });
+
+  it('retains an oversized message and skips POST after applying a lower server limit', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockResolvedValueOnce(sessionResponse({ message_max_length: 12 }));
+    vi.stubGlobal('fetch', fetchMock);
+    renderComposer({ source: 'landing_contact' });
+
+    const message = screen.getByRole('textbox', { name: 'Сообщение' });
+    await user.type(message, ' 1234567890123 ');
+    await user.click(screen.getByRole('button', { name: 'Отправить' }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(
+      'Сократите сообщение до 12 символов.',
+    ));
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(message).toHaveValue(' 1234567890123 ');
+    expect(message).toHaveAttribute('maxLength', '12');
   });
 
   it('posts Studio feedback directly with the configured consent version', async () => {
@@ -226,6 +244,7 @@ describe('FeedbackComposer', () => {
     expect(message).toHaveValue('  Повторить отправку  ');
     expect(screen.getByRole('button', { name: 'Повторить' })).toBeEnabled();
 
+    await user.type(message, '   ');
     await user.click(screen.getByRole('button', { name: 'Повторить' }));
     await waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument());
 
@@ -234,6 +253,32 @@ describe('FeedbackComposer', () => {
     expect(postHeaders(retryPost).get('Idempotency-Key')).toBe(
       postHeaders(firstPost).get('Idempotency-Key'),
     );
+  });
+
+  it('creates a new idempotency key when the failed topic changes', async () => {
+    const user = userEvent.setup();
+    const randomUUID = vi.fn()
+      .mockReturnValueOnce('uuid-1')
+      .mockReturnValueOnce('uuid-2');
+    vi.stubGlobal('crypto', { randomUUID });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(failedResponse())
+      .mockResolvedValueOnce(receiptResponse('changed-topic-receipt'));
+    vi.stubGlobal('fetch', fetchMock);
+    renderComposer({ source: 'studio_account', csrfToken: 'studio-csrf' });
+
+    await user.type(screen.getByRole('textbox', { name: 'Сообщение' }), 'Одинаковый текст');
+    await user.click(screen.getByRole('button', { name: 'Отправить' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+
+    await user.click(screen.getByRole('radio', { name: 'Ошибка' }));
+    await user.click(screen.getByRole('button', { name: 'Повторить' }));
+    await waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument());
+
+    const firstPost = fetchMock.mock.calls[0] as [string, RequestInit];
+    const changedTopicPost = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(postHeaders(firstPost).get('Idempotency-Key')).toBe('feedback-uuid-1');
+    expect(postHeaders(changedTopicPost).get('Idempotency-Key')).toBe('feedback-uuid-2');
   });
 
   it('creates a new idempotency key after the failed fingerprint changes', async () => {

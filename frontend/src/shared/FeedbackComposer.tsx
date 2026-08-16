@@ -47,6 +47,7 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
   const [message, setMessage] = useState('');
   const [messageMaxLength, setMessageMaxLength] = useState(MAX_MESSAGE_LENGTH);
   const [status, setStatus] = useState<ComposerStatus>('idle');
+  const [errorMessage, setErrorMessage] = useState(ERROR_MESSAGE);
   const idempotencyRef = useRef<IdempotencyState | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
@@ -77,6 +78,7 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    setErrorMessage(ERROR_MESSAGE);
     setStatus('sending');
 
     try {
@@ -85,13 +87,20 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
         : null;
       const token = session?.csrfToken ?? csrfToken;
       const consentVersion = session?.consentVersion ?? CONTACT_CONFIG.consentDocumentVersion;
+      const effectiveMaxLength = session
+        ? Math.min(MAX_MESSAGE_LENGTH, session.messageMaxLength)
+        : MAX_MESSAGE_LENGTH;
 
       if (!token) {
         throw new Error('feedback_csrf_missing');
       }
 
-      if (session) {
-        setMessageMaxLength(session.messageMaxLength);
+      setMessageMaxLength(effectiveMaxLength);
+
+      if (normalizedMessage.length > effectiveMaxLength) {
+        setErrorMessage(`Сократите сообщение до ${effectiveMaxLength} символов.`);
+        setStatus('error');
+        return;
       }
 
       await submitFeedback({
@@ -112,6 +121,7 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
       setStatus('success');
     } catch (error) {
       if (!mountedRef.current || isAbortError(error)) return;
+      setErrorMessage(ERROR_MESSAGE);
       setStatus('error');
     } finally {
       if (abortControllerRef.current === controller) {
@@ -199,7 +209,7 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
       )}
       {status === 'error' && (
         <p className="feedback-composer__result feedback-composer__error" role="alert">
-          {ERROR_MESSAGE}
+          {errorMessage}
         </p>
       )}
     </form>
