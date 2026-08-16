@@ -556,7 +556,7 @@
   .landing-page .site-footer__legal a,
   .legal-page .site-footer__nav a,
   .legal-page .site-footer__legal a {
-    font-size: 13px;
+    font-size: 14px;
   }
 
   .legal-shell {
@@ -572,7 +572,7 @@
   }
 
   .legal-back {
-    font-size: 13px;
+    font-size: 14px;
   }
 
   .legal-layout {
@@ -581,7 +581,7 @@
 
   .legal-document h1 {
     max-width: none;
-    font-size: clamp(35px, 10vw, 48px);
+    font-size: clamp(28px, 8.75vw, 48px);
   }
 
   .legal-document__lead {

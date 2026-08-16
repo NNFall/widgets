@@ -42,7 +42,7 @@ export function LegalPage({ document }: LegalPageProps) {
             <strong>Тестовая редакция</strong>
             <p>{previewReminder}</p>
           </div>
-          <p className="legal-document__kicker">Kaigo · {document.path}</p>
+          <p className="legal-document__kicker">Kaigo · Правовая информация</p>
           <h1>{document.title}</h1>
           <p className="legal-document__lead">{document.lead}</p>
           <p className="legal-document__revision">Редакция для предпросмотра. Дата вступления в силу уточняется.</p>
@@ -68,7 +68,7 @@ export function LegalPage({ document }: LegalPageProps) {
 
           <section className="legal-contact" id="legal-contact" aria-labelledby="legal-contact-title">
             <h2 id="legal-contact-title">Контакт и статус реквизитов</h2>
-            <p>Почта для вопросов: <a href={supportMailtoHref()}>{CONTACT_CONFIG.supportEmail}</a>. Это provisional-адрес для предпросмотра, его приём должен подтвердить владелец.</p>
+            <p>Почта для вопросов: <a href={supportMailtoHref()}>{CONTACT_CONFIG.supportEmail}</a>. Это предварительный адрес для предпросмотра, его приём должен подтвердить владелец.</p>
             <p>Оператор: уточняется до подтверждения. Статус, указанный владельцем: {CONTACT_CONFIG.operatorStatus}. ФИО: уточняется. ИНН и адрес: уточняются. Telegram пока не опубликован.</p>
           </section>
         </article>

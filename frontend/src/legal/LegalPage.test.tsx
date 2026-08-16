@@ -2,6 +2,7 @@ import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import stylesSource from '../styles.css?raw';
+import mobileStylesSource from '../mobile/foundations.css?raw';
 import { LegalPage } from './LegalPage';
 import { LEGAL_DOCUMENTS } from './legalDocuments';
 
@@ -38,6 +39,38 @@ describe('legal information architecture', () => {
     expect(within(main).getByText(/Срок хранения и точный маршрут данных уточняются/i)).toBeVisible();
     expect(within(main).queryByText(/уведомил Роскомнадзор/i)).not.toBeInTheDocument();
   });
+
+  it('uses the dark coral text color for small interactive links', () => {
+    expect(stylesSource).toMatch(
+      /\.contact-channel\s*>\s*a\s*\{[^}]*color:\s*var\(--coral-text,\s*#a83212\);/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.feedback-composer__consent a,\s*\.feedback-composer__support a\s*\{[^}]*color:\s*var\(--coral-text,\s*#a83212\);/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.site-footer__operator a\s*\{[^}]*color:\s*var\(--coral-text,\s*#a83212\);/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.site-footer__nav a:hover,\s*\.site-footer__legal a:hover,\s*\.site-footer__operator a:hover\s*\{[^}]*color:\s*var\(--coral-text,\s*#a83212\);/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.studio-contact-panel__channel\s*>\s*span\s*\{[^}]*color:\s*#657681;/s,
+    );
+    expect(stylesSource).not.toMatch(
+      /\.site-footer__nav a:hover,\s*\.site-footer__legal a:hover,\s*\.site-footer__operator a:hover\s*\{[^}]*color:\s*var\(--landing-accent/s,
+    );
+  });
+
+  it.each(['privacy', 'personal-data-consent', 'terms', 'offer'] as const)(
+    'keeps %s legal copy understandable without internal English jargon',
+    (documentId) => {
+      render(<LegalPage document={LEGAL_DOCUMENTS[documentId]} />);
+
+      expect(screen.getByRole('main').textContent ?? '').not.toMatch(
+        /\b(?:backend|production|billing|mail-only|provisional)\b/i,
+      );
+    },
+  );
 
   it('keeps the legal page navigation inside an isolated archive preview', () => {
     window.history.replaceState({}, '', '/frontend/v11/privacy/');
@@ -80,6 +113,22 @@ describe('legal information architecture', () => {
     expect(mailLink).not.toHaveAttribute('href', expect.stringContaining('%40'));
   });
 
+  it('keeps the footer brand link at a 44px touch target without scaling the logo', () => {
+    const style = document.createElement('style');
+    style.dataset.testLegalStyles = 'true';
+    style.textContent = stylesSource;
+    document.head.append(style);
+    render(<LegalPage document={LEGAL_DOCUMENTS.privacy} />);
+
+    const logoLink = document.querySelector('.site-footer__brand > a') as HTMLAnchorElement;
+    const computed = getComputedStyle(logoLink);
+    expect(computed.minHeight).toBe('44px');
+    expect(computed.display).toBe('inline-flex');
+    expect(stylesSource).toMatch(
+      /\.site-footer__brand\s*>\s*a\s*\{[^}]*min-height:\s*44px;[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;/s,
+    );
+  });
+
   it('keeps the legal heading wrap-safe at narrow mobile widths', () => {
     const style = document.createElement('style');
     style.dataset.testLegalStyles = 'true';
@@ -89,12 +138,46 @@ describe('legal information architecture', () => {
 
     const heading = screen.getByRole('heading', { name: 'Политика конфиденциальности', level: 1 });
     const computed = getComputedStyle(heading);
-    expect(computed.hyphens).toBe('auto');
-    expect(computed.overflowWrap).toBe('anywhere');
+    expect(computed.hyphens).toBe('none');
+    expect(computed.overflowWrap).toBe('break-word');
     expect(computed.minWidth).toBe('0px');
     expect(stylesSource).toMatch(
-      /\.legal-document h1\s*\{[^}]*min-width:\s*0;[^}]*hyphens:\s*auto;[^}]*overflow-wrap:\s*anywhere;/s,
+      /\.legal-document h1\s*\{[^}]*min-width:\s*0;[^}]*hyphens:\s*none;[^}]*overflow-wrap:\s*break-word;/s,
     );
+  });
+
+  it('uses a readable minimum mobile size for long legal headings', () => {
+    expect(mobileStylesSource).toMatch(
+      /@media\s+\(max-width:\s*767px\)[\s\S]*?\.legal-document h1\s*\{[^}]*font-size:\s*clamp\(28px,\s*8\.75vw,\s*48px\);/s,
+    );
+  });
+
+  it('keeps legal mobile navigation and footer text readable', () => {
+    expect(mobileStylesSource).toMatch(
+      /\.legal-back\s*\{[^}]*font-size:\s*14px;/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.legal-contents\s*>\s*strong\s*\{[^}]*font-size:\s*14px;/s,
+    );
+    expect(mobileStylesSource).toMatch(
+      /\.landing-page \.site-footer__nav a,\s*\.landing-page \.site-footer__legal a,\s*\.legal-page \.site-footer__nav a,\s*\.legal-page \.site-footer__legal a\s*\{[^}]*font-size:\s*14px;/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.site-footer__operator\s*>\s*span\s*\{[^}]*font-size:\s*12px;/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.site-footer__operator p\s*\{[^}]*font-size:\s*14px;/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.site-footer__operator a\s*\{[^}]*font-size:\s*14px;/s,
+    );
+  });
+
+  it('uses a human-readable legal information kicker', () => {
+    render(<LegalPage document={LEGAL_DOCUMENTS['personal-data-consent']} />);
+
+    expect(screen.getByText('Kaigo · Правовая информация')).toBeVisible();
+    expect(screen.queryByText(/PERSONAL-DATA-CONSENT/i)).not.toBeInTheDocument();
   });
 
   it('keeps every legal contents link as a wrapping 44px touch target', () => {
@@ -142,6 +225,8 @@ describe('legal information architecture', () => {
     expect(main).toHaveTextContent(/получение, запись, систематизация, использование/i);
     expect(main).toHaveTextContent(/срок действия согласия и срок хранения/i);
     expect(main).toHaveTextContent(/отзыва или запроса на удаление/i);
+    expect(main).toHaveTextContent(/не должно использоваться как рабочее согласие/i);
+    expect(main).not.toHaveTextContent(/оферта для рабочей версии/i);
     expect(main).toHaveTextContent(/не записывает согласие на сервере/i);
   });
 

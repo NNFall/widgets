@@ -53,6 +53,16 @@ describe('FeedbackComposer', () => {
     );
   });
 
+  it('keeps the consent punctuation attached to the touch target', () => {
+    render(<FeedbackComposer />);
+
+    const consentLink = screen.getByRole('link', { name: 'текстом согласия на обработку персональных данных' });
+    expect(consentLink).toHaveAttribute('aria-label', 'текстом согласия на обработку персональных данных');
+    expect(consentLink.textContent).toMatch(/\.$/);
+    expect(consentLink.children).toHaveLength(0);
+    expect(consentLink.nextSibling).toBeNull();
+  });
+
   it('exposes exactly one selected topic and explains the mail application handoff', () => {
     render(<FeedbackComposer />);
 

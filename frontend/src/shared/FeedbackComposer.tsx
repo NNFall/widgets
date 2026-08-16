@@ -59,7 +59,12 @@ export function FeedbackComposer({ page = '/contact', studioContext, className =
         <input type="checkbox" checked={consentGiven} onChange={(event) => setConsentGiven(event.target.checked)} />
         <span>
           Я соглашаюсь на обработку сообщения в соответствии с{' '}
-          <a href={marketingHref(CONTACT_CONFIG.consentDocumentPath)}>текстом согласия на обработку персональных данных</a>.
+          <a
+            href={marketingHref(CONTACT_CONFIG.consentDocumentPath)}
+            aria-label="текстом согласия на обработку персональных данных"
+          >
+            текстом согласия на обработку персональных данных.
+          </a>
         </span>
       </label>
 

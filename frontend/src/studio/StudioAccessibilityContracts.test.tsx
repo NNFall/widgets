@@ -137,6 +137,27 @@ describe('Studio accessibility contracts', () => {
     );
   });
 
+  it('keeps Studio contact drawer copy readable without changing form controls', () => {
+    expect(stylesSource).toMatch(
+      /\.studio-drawer__header p\s*\{[^}]*font-size:\s*14px/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.studio-contact-panel \.studio-kicker\s*\{[^}]*font-size:\s*12px/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.studio-contact-panel__intro\s*>\s*p:last-child\s*\{[^}]*font-size:\s*14px/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.studio-contact-panel__channel\s*>\s*span\s*\{[^}]*font-size:\s*12px/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.studio-contact-panel \.feedback-composer__consent\s*\{[^}]*font-size:\s*14px/s,
+    );
+    expect(stylesSource).toMatch(
+      /\.studio-contact-panel \.feedback-composer__note\s*\{[^}]*font-size:\s*14px/s,
+    );
+  });
+
   it('keeps every compact workbench header action at a 44px touch target', () => {
     const baseRule = stylesSource.match(
       /\.studio-app--workbench \.studio-header__actions button\s*\{[^}]*\}/s,
