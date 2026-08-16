@@ -3,6 +3,18 @@ import { expect, test, type Locator, type Page, type TestInfo } from '@playwrigh
 
 const EXACT_HERO = 'Через 10 минут вы сможете сказать: наш бизнес использует AI';
 const EXACT_DESCRIPTION = 'Добавьте ссылку на сайт и бесплатно получите первую версию персонального AI-виджета для вашего бизнеса. Обычно первая версия готова за 10–20 минут; сложные сайты могут потребовать больше времени.';
+const PHONE_VIEWPORTS = [
+  { width: 320, height: 568 },
+  { width: 360, height: 800 },
+  { width: 390, height: 844 },
+  { width: 430, height: 932 },
+] as const;
+
+function viewportsForProject(testInfo: TestInfo) {
+  return testInfo.project.name === 'desktop-1920'
+    ? [{ width: 1_920, height: 1_080 }]
+    : PHONE_VIEWPORTS;
+}
 
 async function expectNoHorizontalOverflow(page: Page) {
   const overflow = await page.evaluate(() =>
@@ -90,6 +102,75 @@ async function expectMobileTextSizes(page: Page, viewportLabel: string) {
     })
   ));
   expect.soft(undersized, `meaningful mobile text must remain legible at ${viewportLabel}`).toEqual([]);
+}
+
+async function expectHeadingWordsFit(locator: Locator, label: string) {
+  const measurement = await locator.evaluate((heading) => {
+    const styles = getComputedStyle(heading);
+    const probe = document.createElement('span');
+    probe.setAttribute('aria-hidden', 'true');
+    probe.style.position = 'fixed';
+    probe.style.left = '-10000px';
+    probe.style.top = '0';
+    probe.style.visibility = 'hidden';
+    probe.style.whiteSpace = 'nowrap';
+    probe.style.display = 'inline-block';
+    probe.style.fontFamily = styles.fontFamily;
+    probe.style.fontSize = styles.fontSize;
+    probe.style.fontStyle = styles.fontStyle;
+    probe.style.fontWeight = styles.fontWeight;
+    probe.style.fontStretch = styles.fontStretch;
+    probe.style.letterSpacing = styles.letterSpacing;
+    probe.style.textTransform = styles.textTransform;
+    document.body.appendChild(probe);
+    const words = heading.textContent?.trim().split(/\s+/).filter(Boolean) ?? [];
+    const widths = words.map((word) => {
+      probe.textContent = word;
+      return probe.getBoundingClientRect().width;
+    });
+    const result = {
+      headingWidth: heading.clientWidth,
+      maxWordWidth: Math.max(0, ...widths),
+      words,
+    };
+    probe.remove();
+    return result;
+  });
+  expect(
+    measurement.maxWordWidth,
+    `${label}: every H1 word must fit the heading width (${measurement.words.join(', ')})`,
+  ).toBeLessThanOrEqual(measurement.headingWidth + 1);
+}
+
+async function expectLegalDocumentContent(page: Page, title: string, label: string) {
+  await expect(page.locator('.legal-page')).toBeVisible();
+  const heading = page.getByRole('heading', { level: 1, name: title });
+  await expect(heading).toBeVisible();
+  await expectHeadingWordsFit(heading, label);
+  await expectMobileTextSizes(page, label);
+
+  const toc = page.getByRole('navigation', { name: 'Содержание документа' });
+  await expect(toc).toBeVisible();
+  const tocLinks = toc.getByRole('link');
+  const tocCount = await tocLinks.count();
+  expect(tocCount, `${label}: TOC must include every section and contact`).toBeGreaterThan(1);
+
+  for (let index = 0; index < tocCount; index += 1) {
+    const href = await tocLinks.nth(index).getAttribute('href');
+    expect(href, `${label}: TOC link ${index + 1} must point to a local section`).toMatch(/^#[a-z0-9-]+$/);
+    const target = page.locator(`[id="${href?.slice(1)}"]`);
+    await expect(target, `${label}: TOC target ${href}`).toHaveCount(1);
+    await expect(target.getByRole('heading', { level: 2 })).toBeVisible();
+    await expect(target.locator('p').filter({ hasText: /\S/ }).first()).toBeVisible();
+  }
+
+  const sections = page.locator('.legal-document__sections .legal-section, .legal-contact');
+  const sectionCount = await sections.count();
+  expect(sectionCount, `${label}: all document sections must render`).toBe(tocCount);
+  for (let index = 0; index < sectionCount; index += 1) {
+    await expect(sections.nth(index).getByRole('heading', { level: 2 })).toBeVisible();
+    await expect(sections.nth(index).locator('p').filter({ hasText: /\S/ }).first()).toBeVisible();
+  }
 }
 
 async function expectFormaImagesLoaded(container: Locator, viewportLabel: string) {
@@ -782,6 +863,119 @@ test('landing mobile preserves content order, menu, controls and comparison @mob
   expect.soft(finalWidgetFontSize, 'final widget text must remain legible on mobile')
     .toBeGreaterThanOrEqual(8);
   await attachScreenshot(page, testInfo, 'landing-mobile-390.png', { fullPage: true });
+});
+
+test('landing feedback prepares and opens a mailto without mutating feedback APIs @mobile @desktop', async ({ page }, testInfo) => {
+  test.setTimeout(180_000);
+  const apiRequests: string[] = [];
+  const actionMutations: string[] = [];
+  let mailtoActionActive = false;
+  await page.addInitScript(() => {
+    document.addEventListener('click', (event) => {
+      const target = event.target instanceof Element
+        ? event.target.closest<HTMLAnchorElement>('a[href^="mailto:"]')
+        : null;
+      if (target) event.preventDefault();
+    }, true);
+  });
+  page.on('request', (request) => {
+    try {
+      const url = new URL(request.url());
+      if (url.pathname.startsWith('/api/')) apiRequests.push(`${request.method()} ${url.pathname}`);
+      if (
+        mailtoActionActive
+        && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method().toUpperCase())
+        && /feedback|contact|support|message/i.test(url.pathname)
+      ) {
+        actionMutations.push(`${request.method()} ${url.pathname}`);
+      }
+    } catch {
+      // Ignore non-HTTP requests such as the mailto protocol.
+    }
+  });
+
+  const viewports = viewportsForProject(testInfo);
+
+  for (const viewport of viewports) {
+    const viewportLabel = `${viewport.width}x${viewport.height}`;
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+    const section = page.locator('#contact');
+    await section.scrollIntoViewIfNeeded();
+    await expect(section.getByRole('heading', { name: 'Есть вопрос или идея?' })).toBeVisible();
+
+    const form = section.locator('form.feedback-composer');
+    await expect(form).toHaveCount(1);
+    await form.getByLabel('Сообщение').fill(`Проверка обратной связи ${viewportLabel}`);
+    await form.locator('input[type="checkbox"]').check();
+
+    const mailLink = form.getByRole('link', { name: 'Открыть письмо' });
+    await expect(mailLink).toHaveAttribute('aria-disabled', 'false');
+    const href = await mailLink.getAttribute('href');
+    expect(href, `feedback mailto at ${viewportLabel}`).toMatch(/^mailto:support@kaigo\.space\?subject=/);
+    expect(decodeURIComponent(href ?? ''), `feedback body at ${viewportLabel}`).toContain(
+      `Проверка обратной связи ${viewportLabel}`,
+    );
+    const requestCountBeforeClick = apiRequests.length;
+    mailtoActionActive = true;
+    await mailLink.click();
+    await expect(mailLink).toBeVisible();
+    await page.waitForTimeout(100);
+    mailtoActionActive = false;
+    expect(actionMutations, `mailto click must not mutate feedback at ${viewportLabel}`).toEqual([]);
+    expect(
+      apiRequests.slice(requestCountBeforeClick).filter((request) => !request.endsWith('/api/analytics/entry')),
+      `feedback must not call a feedback API at ${viewportLabel}`,
+    ).toEqual([]);
+    if (viewport.width <= 767) {
+      await expectNoHorizontalOverflow(page);
+      const undersizedFeedbackTargets = await section.locator(
+        'a[href]:visible, textarea:visible, .feedback-topic:visible, .feedback-composer__consent:visible',
+      ).evaluateAll((elements) => elements.flatMap((element) => {
+        const bounds = element.getBoundingClientRect();
+        if (bounds.width >= 44 && bounds.height >= 44) return [];
+        return [{
+          name: element.getAttribute('aria-label') || element.textContent?.trim().slice(0, 80) || element.tagName,
+          width: Math.round(bounds.width * 10) / 10,
+          height: Math.round(bounds.height * 10) / 10,
+        }];
+      }));
+      expect(undersizedFeedbackTargets, `feedback targets at ${viewportLabel}`).toEqual([]);
+    }
+  }
+});
+
+test('all legal pages stay readable and touch-safe on supported viewports @mobile @desktop', async ({ page }, testInfo) => {
+  test.setTimeout(180_000);
+  const legalRoutes = [
+    ['/privacy/', 'Политика конфиденциальности'],
+    ['/personal-data-consent/', 'Согласие на обработку персональных данных'],
+    ['/terms/', 'Условия использования'],
+    ['/offer/', 'Предварительная публичная оферта'],
+  ] as const;
+  const viewports = viewportsForProject(testInfo);
+
+  for (const viewport of viewports) {
+    const viewportLabel = `${viewport.width}x${viewport.height}`;
+    await page.setViewportSize(viewport);
+    for (const [pathname, title] of legalRoutes) {
+      await page.goto(pathname);
+      await expectLegalDocumentContent(page, title, `${pathname} at ${viewportLabel}`);
+      if (viewport.width <= 767) {
+        await expectNoHorizontalOverflow(page);
+        await expectMobileTouchTargets(page, `${pathname} at ${viewportLabel}`);
+      }
+      if (viewport.width === 320) {
+        const legalResults = await new AxeBuilder({ page })
+          .withTags(['wcag2a', 'wcag2aa'])
+          .analyze();
+        const blocking = legalResults.violations.filter(({ impact }) =>
+          impact === 'serious' || impact === 'critical',
+        );
+        expect(blocking, `${pathname} at ${viewportLabel}`).toEqual([]);
+      }
+    }
+  }
 });
 
 test('standalone product tour keeps every step usable on mobile @mobile', async ({ page }) => {

@@ -1,6 +1,20 @@
 import AxeBuilder from '@axe-core/playwright';
 
 import { expect, test } from './fixtures/builder';
+import type { Locator, Page, TestInfo } from '@playwright/test';
+
+const PHONE_VIEWPORTS = [
+  { width: 320, height: 568 },
+  { width: 360, height: 800 },
+  { width: 390, height: 844 },
+  { width: 430, height: 932 },
+] as const;
+
+function viewportsForProject(testInfo: TestInfo) {
+  return testInfo.project.name === 'desktop-1920'
+    ? [{ width: 1_920, height: 1_080 }]
+    : PHONE_VIEWPORTS;
+}
 
 async function expectNoHorizontalOverflow(page: import('@playwright/test').Page) {
   const overflow = await page.evaluate(() =>
@@ -10,6 +24,69 @@ async function expectNoHorizontalOverflow(page: import('@playwright/test').Page)
     ) - window.innerWidth,
   );
   expect(overflow).toBeLessThanOrEqual(1);
+}
+
+async function expectDrawerFits(dialog: Locator, label: string) {
+  // The drawer enters with a 220ms translate animation; measure its settled geometry.
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const geometry = await dialog.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return {
+      left: bounds.left,
+      right: bounds.right,
+      width: bounds.width,
+      viewportWidth: window.innerWidth,
+      innerOverflow: element.scrollWidth - element.clientWidth,
+    };
+  });
+  expect(geometry.left, `${label} left edge`).toBeGreaterThanOrEqual(-1);
+  expect(geometry.right, `${label} right edge`).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+  expect(geometry.width, `${label} width`).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+  expect(geometry.innerOverflow, `${label} inner horizontal overflow`).toBeLessThanOrEqual(1);
+}
+
+async function expectContactTargetsAreTouchSafe(dialog: Locator, label: string) {
+  const undersized = await dialog.locator(
+    'button:visible, a[href]:visible, textarea:visible, .feedback-topic:visible, .feedback-composer__consent:visible',
+  ).evaluateAll((elements) => elements.flatMap((element) => {
+    const bounds = element.getBoundingClientRect();
+    if (bounds.width >= 44 && bounds.height >= 44) return [];
+    return [{
+      name: element.getAttribute('aria-label') || element.textContent?.trim().slice(0, 80) || element.tagName,
+      width: Math.round(bounds.width * 10) / 10,
+      height: Math.round(bounds.height * 10) / 10,
+    }];
+  }));
+  expect(undersized, `Studio contact targets at ${label}`).toEqual([]);
+}
+
+async function expectFocusInside(page: Page, dialog: Locator, label: string) {
+  expect(
+    await dialog.evaluate((element) => element.contains(document.activeElement)),
+    `${label} focus must remain inside the dialog`,
+  ).toBe(true);
+}
+
+async function expectDrawerAccessibility(page: Page, label: string) {
+  const results = await new AxeBuilder({ page })
+    .include('.studio-drawer')
+    .withTags(['wcag2a', 'wcag2aa'])
+    .analyze();
+  const blocking = results.violations.filter(({ impact }) =>
+    impact === 'serious' || impact === 'critical',
+  );
+  expect(blocking, `${label} drawer accessibility`).toEqual([]);
+}
+
+async function preventMailtoNavigation(page: Page) {
+  await page.addInitScript(() => {
+    document.addEventListener('click', (event) => {
+      const target = event.target instanceof Element
+        ? event.target.closest<HTMLAnchorElement>('a[href^="mailto:"]')
+        : null;
+      if (target) event.preventDefault();
+    }, true);
+  });
 }
 
 test('Studio creates an owned project and renders the refreshed SaaS run @desktop', async ({ page, builderApi }) => {
@@ -264,6 +341,134 @@ test('Studio mobile restores a SaaS project, switches preview and has no overflo
     maxDiffPixelRatio: 0.02,
     timeout: 30_000,
   });
+});
+
+test('Studio home and composer expose support without a mutating feedback API call @mobile @desktop', async ({ page, builderApi }, testInfo) => {
+  test.setTimeout(180_000);
+  await preventMailtoNavigation(page);
+  const viewports = viewportsForProject(testInfo);
+  let drawerA11yChecked = false;
+
+  for (const viewport of viewports) {
+    const viewportLabel = `${viewport.width}x${viewport.height}`;
+    await page.setViewportSize(viewport);
+
+    for (const pathname of ['/studio', `/studio?project=${builderApi.projectId}`]) {
+      await page.goto(pathname);
+      await expect(page.getByRole('button', { name: 'Помощь', exact: true })).toBeVisible();
+      const helpButton = page.getByRole('button', { name: 'Помощь', exact: true });
+      await helpButton.focus();
+      const requestCountBeforeContact = builderApi.requests.length;
+      await helpButton.click();
+
+      const contactDialog = page.getByRole('dialog', { name: 'Помощь и обратная связь' });
+      await expect(contactDialog).toBeVisible();
+      await expectDrawerFits(contactDialog, `${pathname} contact drawer at ${viewportLabel}`);
+      await expectContactTargetsAreTouchSafe(contactDialog, `${pathname} at ${viewportLabel}`);
+      await expectFocusInside(page, contactDialog, `${pathname} at ${viewportLabel}`);
+      if (!drawerA11yChecked && (viewport.width === 320 || testInfo.project.name === 'desktop-1920')) {
+        await expectDrawerAccessibility(page, `${pathname} at ${viewportLabel}`);
+        drawerA11yChecked = true;
+      }
+
+      const composer = contactDialog.locator('form.feedback-composer');
+      await composer.getByLabel('Сообщение').fill(`Проверка Studio ${viewportLabel}`);
+      await composer.locator('input[type="checkbox"]').check();
+      const mailLink = composer.getByRole('link', { name: 'Открыть письмо' });
+      await expect(mailLink).toHaveAttribute(
+        'href',
+        /^mailto:support@kaigo\.space\?subject=/,
+      );
+      const requestCountBeforeClick = builderApi.requests.length;
+      await mailLink.click();
+      await expect(mailLink).toBeVisible();
+      await page.waitForTimeout(100);
+      const actionMutations = builderApi.requests.slice(requestCountBeforeClick).filter(({ method, pathname: requestPath }) =>
+        ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase())
+        && /feedback|contact|support|message/i.test(requestPath),
+      );
+      expect(actionMutations, `${pathname} must not mutate feedback at ${viewportLabel}`).toEqual([]);
+      expect(
+        builderApi.requests.slice(requestCountBeforeContact).filter(({ method, pathname: requestPath }) =>
+          ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase())
+          && /feedback|contact|support|message/i.test(requestPath),
+        ),
+        `${pathname} must not call a feedback API at ${viewportLabel}`,
+      ).toEqual([]);
+
+      await page.keyboard.press('Escape');
+      await expect(contactDialog).toHaveCount(0);
+      await expect(helpButton).toBeFocused();
+      await expectNoHorizontalOverflow(page);
+    }
+  }
+});
+
+test('Studio account opens support, traps keyboard focus and closes on Escape @mobile @desktop', async ({ page, builderApi }, testInfo) => {
+  test.setTimeout(180_000);
+  await preventMailtoNavigation(page);
+  builderApi.seedRun('run-contact-mobile');
+  const viewports = viewportsForProject(testInfo);
+  let drawerA11yChecked = false;
+
+  for (const viewport of viewports) {
+    const viewportLabel = `${viewport.width}x${viewport.height}`;
+    await page.setViewportSize(viewport);
+    await page.goto(`/studio?project=${builderApi.projectId}`);
+    await expect(page.getByRole('heading', { name: 'Чат с Kaigo' })).toBeVisible();
+
+    const accountButton = page.getByRole('button', { name: 'Открыть тариф и лимиты' });
+    await accountButton.focus();
+    await accountButton.click();
+    const accountDialog = page.getByRole('dialog', { name: 'Тариф и лимиты' });
+    await expect(accountDialog).toBeVisible();
+    await expectDrawerFits(accountDialog, `account drawer at ${viewportLabel}`);
+
+    await accountDialog.getByRole('button', { name: 'Помощь и обратная связь' }).click();
+    const contactDialog = page.getByRole('dialog', { name: 'Помощь и обратная связь' });
+    await expect(contactDialog).toBeVisible();
+    await expect(accountDialog).toHaveCount(0);
+    await expectDrawerFits(contactDialog, `account contact drawer at ${viewportLabel}`);
+    await expectContactTargetsAreTouchSafe(contactDialog, `account contact at ${viewportLabel}`);
+    await expectFocusInside(page, contactDialog, `account contact at ${viewportLabel}`);
+    if (!drawerA11yChecked && (viewport.width === 320 || testInfo.project.name === 'desktop-1920')) {
+      await expectDrawerAccessibility(page, `account contact at ${viewportLabel}`);
+      drawerA11yChecked = true;
+    }
+
+    const composer = contactDialog.locator('form.feedback-composer');
+    await composer.getByLabel('Сообщение').fill(`Проверка account Studio ${viewportLabel}`);
+    await composer.locator('input[type="checkbox"]').check();
+    const mailLink = composer.getByRole('link', { name: 'Открыть письмо' });
+    await expect(mailLink).toHaveAttribute('href', /^mailto:support@kaigo\.space\?subject=/);
+    const requestCountBeforeClick = builderApi.requests.length;
+    await mailLink.click();
+    await expect(mailLink).toBeVisible();
+    await page.waitForTimeout(100);
+    const actionMutations = builderApi.requests.slice(requestCountBeforeClick).filter(({ method, pathname: requestPath }) =>
+      ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase())
+      && /feedback|contact|support|message/i.test(requestPath),
+    );
+    expect(actionMutations, `account contact must not mutate feedback at ${viewportLabel}`).toEqual([]);
+
+    const focusables = contactDialog.locator(
+      'button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    const focusableCount = await focusables.count();
+    expect(focusableCount, `contact dialog has focusable controls at ${viewportLabel}`).toBeGreaterThan(1);
+    const firstFocusable = focusables.first();
+    const lastFocusable = focusables.last();
+    await firstFocusable.focus();
+    await page.keyboard.press('Shift+Tab');
+    await expect(lastFocusable).toBeFocused();
+    await lastFocusable.focus();
+    await page.keyboard.press('Tab');
+    await expect(firstFocusable).toBeFocused();
+
+    await page.keyboard.press('Escape');
+    await expect(contactDialog).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
+  }
 });
 
 test('Studio SaaS project is immediately usable with reduced motion @reduced', async ({ page, builderApi }) => {
