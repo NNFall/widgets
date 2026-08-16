@@ -8,7 +8,7 @@ export function ContactSection() {
         <div className="contact-section__copy">
           <p className="section-kicker">Связь с командой</p>
           <h2 id="contact-title">Есть вопрос или идея?</h2>
-          <p>Напишите, если хотите разобраться с первым запуском, сообщить об ошибке, предложить улучшение или обсудить сотрудничество. Сообщения читает команда Kaigo.</p>
+          <p>Выберите тему и напишите сообщение. Форма подготовит письмо в вашем почтовом приложении; приём по временному адресу поддержки пока подтверждается.</p>
           <div className="contact-section__channels" aria-label="Каналы связи">
             <div className="contact-channel">
               <span>Поддержка</span>

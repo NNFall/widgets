@@ -11,6 +11,10 @@ describe('ContactSection', () => {
 
     expect(screen.getByRole('region', { name: 'Связаться с командой Kaigo' })).toHaveAttribute('id', 'contact');
     expect(screen.getByRole('heading', { name: 'Есть вопрос или идея?' })).toBeVisible();
+    expect(screen.queryByText('Сообщения читает команда Kaigo.')).not.toBeInTheDocument();
+    expect(screen.getByText(
+      'Выберите тему и напишите сообщение. Форма подготовит письмо в вашем почтовом приложении; приём по временному адресу поддержки пока подтверждается.',
+    )).toBeVisible();
     expect(screen.getByRole('link', { name: 'support@kaigo.space' })).toHaveAttribute(
       'href',
       'mailto:support@kaigo.space',

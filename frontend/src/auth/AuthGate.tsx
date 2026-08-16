@@ -46,7 +46,8 @@ function safeErrorDetail(message: string) {
 function SupportContact() {
   return (
     <p className="auth-gate__support">
-      Если Studio не открывается, <a href={supportMailtoHref()}>Написать в поддержку: {CONTACT_CONFIG.supportEmail}</a>.
+      Если Studio не открывается, <a href={supportMailtoHref()}>Подготовить письмо на {CONTACT_CONFIG.supportEmail}</a>.
+      {' '}Адрес предварительный; получение писем пока не подтверждено.
     </p>
   );
 }
