@@ -294,14 +294,43 @@ class MarketingSitePackageTests(unittest.TestCase):
             "152-ФЗ",
             "Статья 18.1",
             "https://ips.pravo.gov.ru/api/ips/legislation/document?baseid=None&hash=98490812b3409e2a8d78a11ca9010f434ea3d9250a11dbbdb78690cd5551bdd6",
+            "https://publication.pravo.gov.ru/Document/View/0001201811270056",
             "https://government.ru/docs/all/98196/?page=4",
             "https://82.rkn.gov.ru/directions/pers/p15375/",
-            "https://www.nalog.gov.ru/rn28/news/activities_fts/12403644/",
-            "https://zpp.rospotrebnadzor.ru/npa/federal/turist/192115",
-            "https://www.consultant.ru/document/cons_doc_LAW_5142/1a77b2ec302d6a384a228dff59e53680ccffaaca/",
+            "Первичные нормативные источники",
+            "Ведомственные разъяснения",
+            "accepted_at",
+            "сервером по UTC-часам",
+            "клиентское время неавторитетно",
+            "официальном портале",
             "юрист",
         ):
             self.assertIn(required, handoff)
+
+        # Consent evidence is created by the backend after validation. A browser
+        # clock must never become the authoritative legal timestamp.
+        self.assertNotRegex(handoff, r'"timestamp"\s*:')
+        self.assertNotRegex(
+            handoff,
+            r"(?is)(?:клиент|client)[^\n.]{0,100}(?:\bauthoritative\b|\bавторитетное\b|\bавторитетным\b)",
+        )
+        for forbidden_phrase in (
+            "authoritative client timestamp",
+            "client timestamp is authoritative",
+            "authoritative client time",
+            "клиентское время является авторитетным",
+        ):
+            self.assertNotIn(forbidden_phrase, handoff.lower())
+        self.assertNotIn("timestamp принимается только в проверяемом UTC-формате", handoff)
+
+        # These are deliberately stale/secondary URLs and must not be presented
+        # as the mandatory source list for legal review.
+        for forbidden in (
+            "https://www.nalog.gov.ru/rn28/news/activities_fts/12403644/",
+            "https://zpp.rospotrebnadzor.ru/npa/federal/turist/192115",
+            "https://www.consultant.ru/document/cons_doc_LAW_5142/1a77b2ec302d6a384a228dff59e53680ccffaaca/",
+        ):
+            self.assertNotIn(forbidden, handoff)
 
     @unittest.skipUnless(DOCKER, "requires Docker with a local nginx:alpine image")
     def test_nginx_fixture_serves_real_route_and_cache_contract(self):
