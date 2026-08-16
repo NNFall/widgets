@@ -62,6 +62,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  document.head.querySelectorAll('style[data-test-feedback-styles]').forEach((style) => style.remove());
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -120,6 +121,55 @@ describe('FeedbackComposer', () => {
     });
     for (const forbiddenField of ['email', 'contact', 'name', 'project_id', 'run_id', 'user_id']) {
       expect(postBody(postCall)).not.toHaveProperty(forbiddenField);
+    }
+  });
+
+  it('replays a failed landing attempt without refetching the session', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(sessionResponse({ consent_version: 'feedback-v4' }))
+      .mockResolvedValueOnce(failedResponse(503))
+      .mockResolvedValueOnce(receiptResponse('landing-replay-receipt'));
+    vi.stubGlobal('fetch', fetchMock);
+    renderComposer({ source: 'landing_contact' });
+
+    await user.type(screen.getByRole('textbox', { name: 'Сообщение' }), '  Повторить точно  ');
+    await user.click(screen.getByRole('button', { name: 'Отправить' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(
+      'Не удалось отправить. Ваш текст остался в форме.',
+    ));
+
+    await user.click(screen.getByRole('button', { name: 'Повторить' }));
+    await waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument());
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/feedback/session');
+    const firstPost = fetchMock.mock.calls[1] as [string, RequestInit];
+    const replayPost = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(replayPost[0]).toBe('/api/feedback');
+    expect(postBody(replayPost)).toEqual(postBody(firstPost));
+    expect(postHeaders(replayPost).get('Idempotency-Key')).toBe(
+      postHeaders(firstPost).get('Idempotency-Key'),
+    );
+    expect(postHeaders(replayPost).get('X-CSRF-Token')).toBe(
+      postHeaders(firstPost).get('X-CSRF-Token'),
+    );
+  });
+
+  it('gives each composer instance a unique textarea id and label association', () => {
+    render(
+      <>
+        <FeedbackComposer source="landing_contact" />
+        <FeedbackComposer source="studio_account" csrfToken="studio-csrf" />
+      </>,
+    );
+
+    const textareas = screen.getAllByRole('textbox', { name: 'Сообщение' });
+    const ids = textareas.map((textarea) => textarea.id);
+    expect(new Set(ids).size).toBe(2);
+    for (const id of ids) {
+      expect(id).not.toBe('');
+      expect(document.querySelector(`label[for="${id}"]`)).toBeInTheDocument();
     }
   });
 
@@ -309,6 +359,99 @@ describe('FeedbackComposer', () => {
     expect(postHeaders(changedPost).get('Idempotency-Key')).toBe('feedback-uuid-2');
   });
 
+  it('shows a safe recovery action for a bad request', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(failedResponse(400)));
+    renderComposer({ source: 'studio_account', csrfToken: 'studio-csrf' });
+
+    await user.type(screen.getByRole('textbox', { name: 'Сообщение' }), 'Неверный запрос');
+    await user.click(screen.getByRole('button', { name: 'Отправить' }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(
+      'Проверьте текст и попробуйте ещё раз.',
+    ));
+    expect(screen.getByRole('button', { name: 'Повторить' })).toBeEnabled();
+  });
+
+  it('blocks an immediate retry after rate limiting and explains the wait', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, {
+      status: 429,
+      headers: { 'Retry-After': '17' },
+    })));
+    renderComposer({ source: 'studio_account', csrfToken: 'studio-csrf' });
+
+    await user.type(screen.getByRole('textbox', { name: 'Сообщение' }), 'Слишком часто');
+    await user.click(screen.getByRole('button', { name: 'Отправить' }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(
+      'Слишком много запросов. Повторите через 17 с.',
+    ));
+    expect(screen.getByRole('button', { name: 'Повторить через 17 с' })).toBeDisabled();
+  });
+
+  it('starts a fresh landing session and key after CSRF recovery from 403', async () => {
+    const user = userEvent.setup();
+    const randomUUID = vi.fn()
+      .mockReturnValueOnce('uuid-1')
+      .mockReturnValueOnce('uuid-2');
+    vi.stubGlobal('crypto', { randomUUID });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(sessionResponse({ csrf_token: 'csrf-old', consent_version: 'feedback-old' }))
+      .mockResolvedValueOnce(failedResponse(403))
+      .mockResolvedValueOnce(sessionResponse({ csrf_token: 'csrf-new', consent_version: 'feedback-new' }))
+      .mockResolvedValueOnce(receiptResponse('csrf-recovery-receipt'));
+    vi.stubGlobal('fetch', fetchMock);
+    renderComposer({ source: 'landing_contact' });
+
+    await user.type(screen.getByRole('textbox', { name: 'Сообщение' }), 'Обновить сессию');
+    await user.click(screen.getByRole('button', { name: 'Отправить' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(
+      'Сессия обратной связи устарела.',
+    ));
+
+    await user.click(screen.getByRole('button', { name: 'Повторить' }));
+    await waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument());
+
+    expect(fetchMock.mock.calls.filter(([url]) => url === '/api/feedback/session')).toHaveLength(2);
+    const firstPost = fetchMock.mock.calls[1] as [string, RequestInit];
+    const recoveredPost = fetchMock.mock.calls[3] as [string, RequestInit];
+    expect(postHeaders(firstPost).get('Idempotency-Key')).toBe('feedback-uuid-1');
+    expect(postHeaders(recoveredPost).get('Idempotency-Key')).toBe('feedback-uuid-2');
+    expect(postHeaders(recoveredPost).get('X-CSRF-Token')).toBe('csrf-new');
+    expect(postBody(recoveredPost)).toMatchObject({
+      message: 'Обновить сессию',
+      consent: { version: 'feedback-new', accepted: true },
+    });
+  });
+
+  it('uses a fresh key after an idempotency conflict', async () => {
+    const user = userEvent.setup();
+    const randomUUID = vi.fn()
+      .mockReturnValueOnce('uuid-1')
+      .mockReturnValueOnce('uuid-2');
+    vi.stubGlobal('crypto', { randomUUID });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(failedResponse(409))
+      .mockResolvedValueOnce(receiptResponse('conflict-recovery-receipt'));
+    vi.stubGlobal('fetch', fetchMock);
+    renderComposer({ source: 'studio_account', csrfToken: 'studio-csrf' });
+
+    await user.type(screen.getByRole('textbox', { name: 'Сообщение' }), 'Конфликт ключа');
+    await user.click(screen.getByRole('button', { name: 'Отправить' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(
+      'новой попытки',
+    ));
+
+    await user.click(screen.getByRole('button', { name: 'Повторить' }));
+    await waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument());
+
+    const firstPost = fetchMock.mock.calls[0] as [string, RequestInit];
+    const recoveredPost = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(postHeaders(firstPost).get('Idempotency-Key')).toBe('feedback-uuid-1');
+    expect(postHeaders(recoveredPost).get('Idempotency-Key')).toBe('feedback-uuid-2');
+  });
+
   it('aborts an in-flight request when the composer unmounts', async () => {
     const user = userEvent.setup();
     let resolvePost!: (response: Response) => void;
@@ -331,6 +474,20 @@ describe('FeedbackComposer', () => {
   });
 
   it('keeps the action and legal-link geometry while adding busy and outcome styles', () => {
+    const style = document.createElement('style');
+    style.dataset.testFeedbackStyles = 'true';
+    style.textContent = stylesSource;
+    document.head.append(style);
+    renderComposer({ source: 'landing_contact' });
+
+    const consent = document.querySelector('.feedback-composer__consent');
+    const consentLink = screen.getByRole('link', { name: 'текстом согласия на обработку персональных данных' });
+    expect(consent).not.toBeNull();
+    expect(getComputedStyle(consent as HTMLElement).display).toBe('block');
+    expect(getComputedStyle(consentLink).display).toBe('inline-flex');
+    expect(getComputedStyle(consentLink).minHeight).toBe('44px');
+    expect(getComputedStyle(consentLink).whiteSpace).toBe('normal');
+    expect(getComputedStyle(consentLink).overflowWrap).toBe('anywhere');
     expect(stylesSource).toMatch(/\.feedback-composer__action\s*\{[^}]*min-height:\s*56px;/s);
     expect(stylesSource).toMatch(/\.feedback-composer__consent a\s*\{[^}]*min-height:\s*44px;[^}]*display:\s*inline-flex;[^}]*overflow-wrap:\s*anywhere;/s);
     expect(stylesSource).toMatch(/\.feedback-composer\[aria-busy=["']true["']\]\s+\.feedback-composer__topics\s*\{[^}]*opacity:/s);

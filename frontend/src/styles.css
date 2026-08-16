@@ -4802,8 +4802,7 @@ a {
 .feedback-composer__consent {
   min-height: 44px;
   margin-top: 17px;
-  display: flex;
-  align-items: flex-start;
+  display: block;
   color: var(--landing-metal-deep, #46525a);
   font-size: 13px;
   line-height: 1.45;
