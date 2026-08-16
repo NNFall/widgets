@@ -8490,7 +8490,7 @@ a {
   }
 
   .studio-contact-panel__channel {
-    grid-template-columns: 58px minmax(0, 1fr) auto;
+    grid-template-columns: 72px minmax(0, 1fr) auto;
   }
 }
 

@@ -158,6 +158,16 @@ describe('Studio accessibility contracts', () => {
     );
   });
 
+  it('keeps the Telegram label in one mobile grid column', () => {
+    const compactStart = stylesSource.lastIndexOf('@media (max-width: 560px) {');
+    const compactEnd = stylesSource.indexOf('@media (max-width: 390px)', compactStart);
+    const compactRules = stylesSource.slice(compactStart, compactEnd);
+
+    expect(compactRules).toMatch(
+      /\.studio-contact-panel__channel\s*\{[^}]*grid-template-columns:\s*72px\s+minmax\(0,\s*1fr\)\s+auto;/s,
+    );
+  });
+
   it('keeps every compact workbench header action at a 44px touch target', () => {
     const baseRule = stylesSource.match(
       /\.studio-app--workbench \.studio-header__actions button\s*\{[^}]*\}/s,
