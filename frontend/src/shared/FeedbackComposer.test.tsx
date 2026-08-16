@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -62,6 +62,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   document.head.querySelectorAll('style[data-test-feedback-styles]').forEach((style) => style.remove());
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -390,6 +391,66 @@ describe('FeedbackComposer', () => {
     expect(screen.getByRole('button', { name: 'Повторить через 17 с' })).toBeDisabled();
   });
 
+  it('counts down Retry-After, unlocks, and replays the exact attempt', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, {
+        status: 429,
+        headers: { 'Retry-After': '2' },
+      }))
+      .mockResolvedValueOnce(receiptResponse('rate-limit-replay-receipt'));
+    vi.stubGlobal('fetch', fetchMock);
+    renderComposer({ source: 'studio_account', csrfToken: 'studio-csrf' });
+
+    const message = screen.getByRole('textbox', { name: 'Сообщение' });
+    fireEvent.change(message, { target: { value: 'Повторить после лимита' } });
+    fireEvent.submit(message.closest('form') as HTMLFormElement);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.getByRole('button', { name: 'Повторить через 2 с' })).toBeDisabled();
+
+    await act(async () => { vi.advanceTimersByTime(1000); await Promise.resolve(); });
+    expect(screen.getByRole('button', { name: 'Повторить через 1 с' })).toBeDisabled();
+    expect(screen.getByRole('alert')).toHaveTextContent('Повторите через 1 с.');
+
+    await act(async () => { vi.advanceTimersByTime(1000); await Promise.resolve(); });
+    expect(screen.getByRole('button', { name: 'Повторить' })).toBeEnabled();
+    expect(screen.getByRole('alert')).toHaveTextContent('Ограничение снято. Можно повторить отправку.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.getByRole('status')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const firstPost = fetchMock.mock.calls[0] as [string, RequestInit];
+    const replayPost = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(postBody(replayPost)).toEqual(postBody(firstPost));
+    expect(postHeaders(replayPost).get('Idempotency-Key')).toBe(
+      postHeaders(firstPost).get('Idempotency-Key'),
+    );
+  });
+
+  it('allows an immediate retry when Retry-After is zero', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, {
+        status: 429,
+        headers: { 'Retry-After': '0' },
+      }))
+      .mockResolvedValueOnce(receiptResponse('zero-rate-limit-receipt'));
+    vi.stubGlobal('fetch', fetchMock);
+    renderComposer({ source: 'studio_account', csrfToken: 'studio-csrf' });
+
+    const message = screen.getByRole('textbox', { name: 'Сообщение' });
+    fireEvent.change(message, { target: { value: 'Повторить сразу' } });
+    fireEvent.submit(message.closest('form') as HTMLFormElement);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.getByRole('button', { name: 'Повторить' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.getByRole('status')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('starts a fresh landing session and key after CSRF recovery from 403', async () => {
     const user = userEvent.setup();
     const randomUUID = vi.fn()
@@ -423,6 +484,24 @@ describe('FeedbackComposer', () => {
       message: 'Обновить сессию',
       consent: { version: 'feedback-new', accepted: true },
     });
+  });
+
+  it('does not resubmit an injected Studio token after 403 and offers a page refresh', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockResolvedValue(failedResponse(403));
+    vi.stubGlobal('fetch', fetchMock);
+    renderComposer({ source: 'studio_account', csrfToken: 'stale-studio-csrf' });
+
+    await user.type(screen.getByRole('textbox', { name: 'Сообщение' }), 'Studio сессия');
+    await user.click(screen.getByRole('button', { name: 'Отправить' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(
+      'Сессия Studio устарела. Обновите страницу и попробуйте снова.',
+    ));
+
+    expect(screen.queryByRole('button', { name: 'Повторить' })).not.toBeInTheDocument();
+    const refresh = screen.getByRole('link', { name: 'Обновить страницу' });
+    expect(refresh).toHaveAttribute('href', window.location.href);
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it('uses a fresh key after an idempotency conflict', async () => {

@@ -47,8 +47,10 @@ const SUCCESS_MESSAGE = 'Спасибо. Сообщение сохранено �
 const ERROR_MESSAGE = 'Не удалось отправить. Ваш текст остался в форме.';
 const BAD_REQUEST_MESSAGE = 'Не удалось принять сообщение. Проверьте текст и попробуйте ещё раз.';
 const FORBIDDEN_MESSAGE = 'Сессия обратной связи устарела. Нажмите «Повторить», чтобы получить новый токен.';
+const STUDIO_FORBIDDEN_MESSAGE = 'Сессия Studio устарела. Обновите страницу и попробуйте снова.';
 const CONFLICT_MESSAGE = 'Не удалось подтвердить попытку отправки. Нажмите «Повторить» для новой попытки.';
 const RATE_LIMIT_LATER_MESSAGE = 'Слишком много запросов. Повторите позже.';
+const RATE_LIMIT_READY_MESSAGE = 'Ограничение снято. Можно повторить отправку.';
 
 function feedbackFingerprint(input: {
   source: FeedbackSource;
@@ -74,11 +76,51 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
   const [errorMessage, setErrorMessage] = useState(ERROR_MESSAGE);
   const [retryAfterSeconds, setRetryAfterSeconds] = useState<number | null>(null);
   const [retryBlocked, setRetryBlocked] = useState(false);
+  const [requiresStudioRefresh, setRequiresStudioRefresh] = useState(false);
   const attemptRef = useRef<FeedbackAttempt | null>(null);
   const sessionRef = useRef<FeedbackSession | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const rateLimitTimerRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
   const messageId = useId();
+
+  function clearRateLimitTimer() {
+    if (rateLimitTimerRef.current !== null) {
+      window.clearInterval(rateLimitTimerRef.current);
+      rateLimitTimerRef.current = null;
+    }
+  }
+
+  function startRateLimitCountdown(seconds: number | null) {
+    clearRateLimitTimer();
+    if (seconds === null) {
+      setRetryAfterSeconds(null);
+      setRetryBlocked(true);
+      setErrorMessage(RATE_LIMIT_LATER_MESSAGE);
+      return;
+    }
+    if (seconds <= 0) {
+      setRetryAfterSeconds(null);
+      setRetryBlocked(false);
+      setErrorMessage(RATE_LIMIT_READY_MESSAGE);
+      return;
+    }
+
+    setRetryAfterSeconds(seconds);
+    setRetryBlocked(true);
+    setErrorMessage(RATE_LIMIT_LATER_MESSAGE);
+    rateLimitTimerRef.current = window.setInterval(() => {
+      setRetryAfterSeconds((currentSeconds) => {
+        if (currentSeconds === null || currentSeconds <= 1) {
+          clearRateLimitTimer();
+          setRetryBlocked(false);
+          setErrorMessage(RATE_LIMIT_READY_MESSAGE);
+          return null;
+        }
+        return currentSeconds - 1;
+      });
+    }, 1000);
+  }
 
   useEffect(() => {
     mountedRef.current = true;
@@ -86,11 +128,12 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
       mountedRef.current = false;
       abortControllerRef.current?.abort();
       abortControllerRef.current = null;
+      clearRateLimitTimer();
     };
   }, []);
 
   const isSending = status === 'sending';
-  const canSubmit = isFeedbackReady(message) && !isSending && !retryBlocked;
+  const canSubmit = isFeedbackReady(message) && !isSending && !retryBlocked && !requiresStudioRefresh;
   const formClassName = ['feedback-composer', className].filter(Boolean).join(' ');
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -178,34 +221,51 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
       if (!mountedRef.current) return;
       attemptRef.current = null;
       setMessage('');
+      clearRateLimitTimer();
       setRetryAfterSeconds(null);
       setRetryBlocked(false);
+      setRequiresStudioRefresh(false);
       setStatus('success');
     } catch (error) {
       if (!mountedRef.current || isAbortError(error)) return;
-      setRetryAfterSeconds(null);
-      setRetryBlocked(false);
       if (error instanceof FeedbackApiError) {
         if (error.status === 429) {
-          setRetryAfterSeconds(error.retryAfter);
-          setRetryBlocked(true);
-          setErrorMessage(error.retryAfter === null
-            ? RATE_LIMIT_LATER_MESSAGE
-            : `Слишком много запросов. Повторите через ${error.retryAfter} с.`);
+          startRateLimitCountdown(error.retryAfter);
         } else if (error.status === 400) {
+          clearRateLimitTimer();
+          setRetryAfterSeconds(null);
+          setRetryBlocked(false);
           attemptRef.current = null;
           setErrorMessage(BAD_REQUEST_MESSAGE);
         } else if (error.status === 403) {
+          clearRateLimitTimer();
+          setRetryAfterSeconds(null);
+          setRetryBlocked(false);
           attemptRef.current = null;
           sessionRef.current = null;
-          setErrorMessage(FORBIDDEN_MESSAGE);
+          if (csrfToken !== null && csrfToken !== undefined) {
+            setRequiresStudioRefresh(true);
+            setErrorMessage(STUDIO_FORBIDDEN_MESSAGE);
+          } else {
+            setRequiresStudioRefresh(false);
+            setErrorMessage(FORBIDDEN_MESSAGE);
+          }
         } else if (error.status === 409) {
+          clearRateLimitTimer();
+          setRetryAfterSeconds(null);
+          setRetryBlocked(false);
           attemptRef.current = null;
           setErrorMessage(CONFLICT_MESSAGE);
         } else {
+          clearRateLimitTimer();
+          setRetryAfterSeconds(null);
+          setRetryBlocked(false);
           setErrorMessage(ERROR_MESSAGE);
         }
       } else {
+        clearRateLimitTimer();
+        setRetryAfterSeconds(null);
+        setRetryBlocked(false);
         setErrorMessage(ERROR_MESSAGE);
       }
       setStatus('error');
@@ -227,6 +287,10 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
         ? retryAfterSeconds === null ? 'Повторить позже' : `Повторить через ${retryAfterSeconds} с`
         : 'Повторить'
       : 'Отправить';
+  const visibleErrorMessage = retryBlocked && retryAfterSeconds !== null
+    ? `Слишком много запросов. Повторите через ${retryAfterSeconds} с.`
+    : errorMessage;
+  const refreshHref = typeof window === 'undefined' ? '/' : window.location.href;
 
   return (
     <form
@@ -285,6 +349,10 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
           >
             Отправить ещё
           </button>
+        ) : status === 'error' && requiresStudioRefresh ? (
+          <a className="primary-button feedback-composer__action" href={refreshHref}>
+            Обновить страницу
+          </a>
         ) : (
           <button
             className="primary-button feedback-composer__action"
@@ -303,7 +371,7 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
       )}
       {status === 'error' && (
         <p className="feedback-composer__result feedback-composer__error" role="alert">
-          {errorMessage}
+          {visibleErrorMessage}
         </p>
       )}
     </form>
