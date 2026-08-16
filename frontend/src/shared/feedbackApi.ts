@@ -32,20 +32,61 @@ type JsonRecord = Record<string, unknown>;
 function retryAfterSeconds(response: Response): number | null {
   const header = response.headers.get('Retry-After');
   if (header === null) return null;
-  const seconds = Number(header);
-  return Number.isFinite(seconds) ? seconds : null;
+  const value = header.trim();
+  if (!/^\d+$/.test(value)) return null;
+  const seconds = Number(value);
+  return Number.isSafeInteger(seconds) ? seconds : null;
 }
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function isNonBlankString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
+function isUtcTimestamp(value: unknown): value is string {
+  if (
+    !isNonBlankString(value)
+    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|\+00:00)$/.test(value)
+  ) {
+    return false;
+  }
+  return Number.isFinite(Date.parse(value));
+}
+
+function isNamedError(value: unknown, name: string): boolean {
+  return typeof value === 'object'
+    && value !== null
+    && 'name' in value
+    && value.name === name;
+}
+
 async function readJson(response: Response): Promise<unknown> {
   try {
     return await response.json();
-  } catch {
-    return null;
+  } catch (error) {
+    if (isNamedError(error, 'AbortError')) throw error;
+    if (isNamedError(error, 'SyntaxError')) return null;
+    throw error;
   }
+}
+
+function toFeedbackPayload(payload: FeedbackSubmission): FeedbackSubmission {
+  return {
+    topic: payload.topic,
+    message: payload.message,
+    source: payload.source,
+    consent: {
+      version: payload.consent.version,
+      accepted: true,
+    },
+  };
 }
 
 export async function fetchFeedbackSession(signal?: AbortSignal) {
@@ -65,9 +106,9 @@ export async function fetchFeedbackSession(signal?: AbortSignal) {
   const payload = await readJson(response);
   if (
     !isRecord(payload)
-    || typeof payload.csrf_token !== 'string'
-    || typeof payload.consent_version !== 'string'
-    || typeof payload.message_max_length !== 'number'
+    || !isNonBlankString(payload.csrf_token)
+    || !isNonBlankString(payload.consent_version)
+    || !isPositiveSafeInteger(payload.message_max_length)
   ) {
     throw new FeedbackApiError(
       'invalid_feedback_session',
@@ -98,7 +139,7 @@ export async function submitFeedback(input: {
       'X-CSRF-Token': input.csrfToken,
       'Idempotency-Key': input.idempotencyKey,
     },
-    body: JSON.stringify(input.payload),
+    body: JSON.stringify(toFeedbackPayload(input.payload)),
     signal: input.signal,
   });
 
@@ -114,8 +155,8 @@ export async function submitFeedback(input: {
   if (
     !isRecord(payload)
     || payload.status !== 'stored'
-    || typeof payload.receipt_id !== 'string'
-    || typeof payload.received_at !== 'string'
+    || !isNonBlankString(payload.receipt_id)
+    || !isUtcTimestamp(payload.received_at)
   ) {
     throw new FeedbackApiError(
       'invalid_feedback_receipt',
