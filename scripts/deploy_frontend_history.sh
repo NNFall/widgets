@@ -97,7 +97,7 @@ while IFS=$'\t' read -r version_id commit_hash; do
   worktree_owned=1
   git -C "${repository_root}" worktree add --detach "${active_worktree}" "${commit_hash}"
   npm --prefix "${active_worktree}/frontend" ci --no-audit --no-fund
-  VITE_BUILDER_BASE_URL=/frontend-preview-api/ npm --prefix "${active_worktree}/frontend" run build -- --base="/frontend/${version_id}/"
+  VITE_BUILDER_BASE_URL=/frontend-preview-api/ npm --prefix "${active_worktree}/frontend" run build -- --base="/frontend/${version_id}/" --assetsInlineLimit=0
   node "${transformer}" transform "${manifest}" "${active_worktree}/frontend/dist" "${version_id}"
 
   if [[ ! -f "${active_worktree}/frontend/dist/index.html" || ! -d "${active_worktree}/frontend/dist/assets" ]]; then

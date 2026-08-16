@@ -274,6 +274,17 @@ class MarketingSitePackageTests(unittest.TestCase):
         self.assertNotIn("[A-Za-z0-9_-]{8,}", script)
         self.assertNotIn('rm -rf -- "${current_link}"', script)
 
+    def test_frontend_history_archive_build_disables_vite_asset_inlining(self):
+        script = (ROOT / "scripts" / "deploy_frontend_history.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            'npm --prefix "${active_worktree}/frontend" run build -- '
+            '--base="/frontend/${version_id}/" --assetsInlineLimit=0',
+            script,
+        )
+
     def test_contact_legal_handoff_names_the_backend_and_compliance_boundaries(self):
         handoff = (ROOT / "docs" / "CONTACT_AND_LEGAL_HANDOFF.md").read_text(encoding="utf-8")
 
