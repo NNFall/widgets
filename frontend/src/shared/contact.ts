@@ -1,10 +1,7 @@
 export const CONTACT_CONFIG = {
-  supportEmail: 'support@kaigo.space',
   operatorStatus: 'самозанятый, плательщик НПД',
-  telegramUrl: null,
   consentDocumentPath: '/personal-data-consent/',
-  consentDocumentVersion: 'preview-2026-08-15',
-  subjectPrefix: 'Kaigo, обратная связь',
+  consentDocumentVersion: 'feedback-v2',
 } as const;
 
 export const feedbackTopics = [
@@ -16,56 +13,6 @@ export const feedbackTopics = [
 
 export type FeedbackTopicId = (typeof feedbackTopics)[number]['id'];
 
-export type FeedbackMailInput = {
-  topic: FeedbackTopicId;
-  message: string;
-  page?: string;
-  studioContext?: string;
-};
-
-export type FeedbackMail = {
-  href: string;
-  subject: string;
-  body: string;
-};
-
-export function supportMailtoHref(): string {
-  return `mailto:${CONTACT_CONFIG.supportEmail}`;
-}
-
-function normalizeLineEndings(value: string): string {
-  return value.replace(/\r\n?|\n/g, '\r\n');
-}
-
-function topicLabel(topic: FeedbackTopicId): string {
-  return feedbackTopics.find((candidate) => candidate.id === topic)?.label ?? feedbackTopics[0].label;
-}
-
-export function isFeedbackReady(message: string, consentGiven: boolean): boolean {
-  return consentGiven && message.trim().length > 0;
-}
-
-export function composeFeedbackMail({ topic, message, page = '/', studioContext }: FeedbackMailInput): FeedbackMail {
-  const subject = `${CONTACT_CONFIG.subjectPrefix}: ${topicLabel(topic)}`;
-  const bodyLines = [
-    `Тема: ${topicLabel(topic)}`,
-    `Страница: ${page || '/'}`,
-    '',
-    'Сообщение:',
-    normalizeLineEndings(message.trim()),
-    '',
-    `Согласие с документом: ${CONTACT_CONFIG.consentDocumentVersion}`,
-  ];
-
-  if (studioContext?.trim()) {
-    bodyLines.push(`Контекст Studio: ${normalizeLineEndings(studioContext.trim())}`);
-  }
-
-  const body = bodyLines.join('\r\n');
-  const query = `subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-  return {
-    href: `${supportMailtoHref()}?${query}`,
-    subject,
-    body,
-  };
+export function isFeedbackReady(message: string): boolean {
+  return message.trim().length > 0;
 }
