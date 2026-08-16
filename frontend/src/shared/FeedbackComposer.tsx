@@ -50,7 +50,8 @@ const FORBIDDEN_MESSAGE = 'Сессия обратной связи устаре
 const STUDIO_FORBIDDEN_MESSAGE = 'Сессия Studio устарела. Обновите страницу и попробуйте снова.';
 const CONFLICT_MESSAGE = 'Не удалось подтвердить попытку отправки. Нажмите «Повторить» для новой попытки.';
 const RATE_LIMIT_LATER_MESSAGE = 'Слишком много запросов. Повторите позже.';
-const RATE_LIMIT_READY_MESSAGE = 'Ограничение снято. Можно повторить отправку.';
+const RATE_LIMIT_READY_MESSAGE = 'Теперь можно повторить отправку.';
+const RATE_LIMIT_FALLBACK_SECONDS = 60;
 
 function feedbackFingerprint(input: {
   source: FeedbackSource;
@@ -74,8 +75,10 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
   const [messageMaxLength, setMessageMaxLength] = useState(MAX_MESSAGE_LENGTH);
   const [status, setStatus] = useState<ComposerStatus>('idle');
   const [errorMessage, setErrorMessage] = useState(ERROR_MESSAGE);
-  const [retryAfterSeconds, setRetryAfterSeconds] = useState<number | null>(null);
+  const [rateLimitDeadlineMs, setRateLimitDeadlineMs] = useState<number | null>(null);
+  const [rateLimitNowMs, setRateLimitNowMs] = useState(() => Date.now());
   const [retryBlocked, setRetryBlocked] = useState(false);
+  const [rateLimitReady, setRateLimitReady] = useState(false);
   const [requiresStudioRefresh, setRequiresStudioRefresh] = useState(false);
   const attemptRef = useRef<FeedbackAttempt | null>(null);
   const sessionRef = useRef<FeedbackSession | null>(null);
@@ -93,32 +96,32 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
 
   function startRateLimitCountdown(seconds: number | null) {
     clearRateLimitTimer();
-    if (seconds === null) {
-      setRetryAfterSeconds(null);
-      setRetryBlocked(true);
+    const delaySeconds = seconds ?? RATE_LIMIT_FALLBACK_SECONDS;
+    const now = Date.now();
+    if (delaySeconds <= 0) {
+      setRateLimitDeadlineMs(null);
+      setRateLimitNowMs(now);
+      setRetryBlocked(false);
+      setRateLimitReady(true);
       setErrorMessage(RATE_LIMIT_LATER_MESSAGE);
       return;
     }
-    if (seconds <= 0) {
-      setRetryAfterSeconds(null);
-      setRetryBlocked(false);
-      setErrorMessage(RATE_LIMIT_READY_MESSAGE);
-      return;
-    }
 
-    setRetryAfterSeconds(seconds);
+    const deadline = now + delaySeconds * 1000;
+    setRateLimitDeadlineMs(deadline);
+    setRateLimitNowMs(now);
     setRetryBlocked(true);
+    setRateLimitReady(false);
     setErrorMessage(RATE_LIMIT_LATER_MESSAGE);
     rateLimitTimerRef.current = window.setInterval(() => {
-      setRetryAfterSeconds((currentSeconds) => {
-        if (currentSeconds === null || currentSeconds <= 1) {
-          clearRateLimitTimer();
-          setRetryBlocked(false);
-          setErrorMessage(RATE_LIMIT_READY_MESSAGE);
-          return null;
-        }
-        return currentSeconds - 1;
-      });
+      const currentTime = Date.now();
+      setRateLimitNowMs(currentTime);
+      if (currentTime >= deadline) {
+        clearRateLimitTimer();
+        setRateLimitDeadlineMs(null);
+        setRetryBlocked(false);
+        setRateLimitReady(true);
+      }
     }, 1000);
   }
 
@@ -132,7 +135,19 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
     };
   }, []);
 
+  useEffect(() => {
+    if (csrfToken !== null && csrfToken !== undefined && attemptRef.current) {
+      attemptRef.current = {
+        ...attemptRef.current,
+        csrfToken,
+      };
+    }
+  }, [csrfToken]);
+
   const isSending = status === 'sending';
+  const rateLimitRemainingSeconds = rateLimitDeadlineMs === null
+    ? null
+    : Math.max(0, Math.ceil((rateLimitDeadlineMs - rateLimitNowMs) / 1000));
   const canSubmit = isFeedbackReady(message) && !isSending && !retryBlocked && !requiresStudioRefresh;
   const formClassName = ['feedback-composer', className].filter(Boolean).join(' ');
 
@@ -144,6 +159,7 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
     const controller = new AbortController();
     abortControllerRef.current = controller;
     setErrorMessage(ERROR_MESSAGE);
+    setRateLimitReady(false);
     setStatus('sending');
 
     try {
@@ -222,8 +238,10 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
       attemptRef.current = null;
       setMessage('');
       clearRateLimitTimer();
-      setRetryAfterSeconds(null);
+      setRateLimitDeadlineMs(null);
+      setRateLimitNowMs(Date.now());
       setRetryBlocked(false);
+      setRateLimitReady(false);
       setRequiresStudioRefresh(false);
       setStatus('success');
     } catch (error) {
@@ -231,16 +249,20 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
       if (error instanceof FeedbackApiError) {
         if (error.status === 429) {
           startRateLimitCountdown(error.retryAfter);
-        } else if (error.status === 400) {
+        } else if (error.status === 400 || error.status === 422) {
           clearRateLimitTimer();
-          setRetryAfterSeconds(null);
+          setRateLimitDeadlineMs(null);
+          setRateLimitNowMs(Date.now());
           setRetryBlocked(false);
+          setRateLimitReady(false);
           attemptRef.current = null;
           setErrorMessage(BAD_REQUEST_MESSAGE);
         } else if (error.status === 403) {
           clearRateLimitTimer();
-          setRetryAfterSeconds(null);
+          setRateLimitDeadlineMs(null);
+          setRateLimitNowMs(Date.now());
           setRetryBlocked(false);
+          setRateLimitReady(false);
           attemptRef.current = null;
           sessionRef.current = null;
           if (csrfToken !== null && csrfToken !== undefined) {
@@ -252,20 +274,26 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
           }
         } else if (error.status === 409) {
           clearRateLimitTimer();
-          setRetryAfterSeconds(null);
+          setRateLimitDeadlineMs(null);
+          setRateLimitNowMs(Date.now());
           setRetryBlocked(false);
+          setRateLimitReady(false);
           attemptRef.current = null;
           setErrorMessage(CONFLICT_MESSAGE);
         } else {
           clearRateLimitTimer();
-          setRetryAfterSeconds(null);
+          setRateLimitDeadlineMs(null);
+          setRateLimitNowMs(Date.now());
           setRetryBlocked(false);
+          setRateLimitReady(false);
           setErrorMessage(ERROR_MESSAGE);
         }
       } else {
         clearRateLimitTimer();
-        setRetryAfterSeconds(null);
+        setRateLimitDeadlineMs(null);
+        setRateLimitNowMs(Date.now());
         setRetryBlocked(false);
+        setRateLimitReady(false);
         setErrorMessage(ERROR_MESSAGE);
       }
       setStatus('error');
@@ -284,12 +312,9 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
     ? 'Отправляем…'
     : status === 'error'
       ? retryBlocked
-        ? retryAfterSeconds === null ? 'Повторить позже' : `Повторить через ${retryAfterSeconds} с`
+        ? rateLimitRemainingSeconds === null ? 'Повторить позже' : `Повторить через ${rateLimitRemainingSeconds} с`
         : 'Повторить'
       : 'Отправить';
-  const visibleErrorMessage = retryBlocked && retryAfterSeconds !== null
-    ? `Слишком много запросов. Повторите через ${retryAfterSeconds} с.`
-    : errorMessage;
   const refreshHref = typeof window === 'undefined' ? '/' : window.location.href;
 
   return (
@@ -370,9 +395,21 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
         </p>
       )}
       {status === 'error' && (
-        <p className="feedback-composer__result feedback-composer__error" role="alert">
-          {visibleErrorMessage}
-        </p>
+        <>
+          <p className="feedback-composer__result feedback-composer__error" role="alert">
+            {errorMessage}
+          </p>
+          {retryBlocked && rateLimitRemainingSeconds !== null && (
+            <p className="feedback-composer__result feedback-composer__rate-limit-countdown" aria-live="off">
+              Повторите через {rateLimitRemainingSeconds} с.
+            </p>
+          )}
+          {rateLimitReady && (
+            <p className="feedback-composer__result feedback-composer__rate-limit-ready" role="status" aria-live="polite">
+              {RATE_LIMIT_READY_MESSAGE}
+            </p>
+          )}
+        </>
       )}
     </form>
   );
