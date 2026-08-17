@@ -50,11 +50,11 @@ desktop-captures в этой подборке нет.
 npx playwright test e2e/landing.spec.ts e2e/studio.spec.ts --project=desktop-1920 --project=mobile-390 --grep "feedback"
 ```
 
-Контракт требует ноль вызовов feedback-session и авторизованный CSRF. Текущий
-повтор даёт `6 passed, 2 failed`: оба падения — Studio home без project, где
-текущий frontend пока запрашивает feedback-session вместо передачи auth CSRF.
-Это блокер исходного Studio wiring, а не успешный backend storage; после
-исправления wiring ожидается `8 passed`, и команду нужно повторить.
+Контракт требует ноль вызовов feedback-session в авторизованной Studio и
+серверный auth CSRF. После исправления hydration для Studio home целевой прогон
+даёт `8 passed`: landing использует анонимную feedback-session, Studio — токен
+авторизованной сессии, а повтор после неоднозначной ошибки сохраняет точное тело
+и idempotency key.
 
 Более широкий регрессионный прогон без `--grep`:
 
@@ -62,18 +62,19 @@ npx playwright test e2e/landing.spec.ts e2e/studio.spec.ts --project=desktop-192
 npx playwright test e2e/landing.spec.ts e2e/studio.spec.ts --project=desktop-1920 --project=mobile-390
 ```
 
-Текущий повтор дал `23 passed, 2 failed`. Оба падения совпадают с описанным
-Studio home CSRF blocker; stale assertions размеров footer/радио/consent
-исправлены. Этот результат не является live backend storage proof.
+Текущий повтор дал `25 passed` за `3.3m`. В прогон входят desktop 1920 и mobile
+390, landing, Studio home, Studio drawer, keyboard/focus, overflow и feedback
+контракты. Это проверка frontend с mock API, а не доказательство live backend
+storage.
 
-Проверенный baseline этой задачи — commit `b351e11`
-(`test(frontend): verify stored feedback journey`). Backend-чат обязан
+Проверенный baseline этой задачи — commit `a948372`
+(`fix(frontend): hydrate Studio feedback csrf`). Backend-чат обязан
 интегрировать этот commit или reviewed descendant и записать фактический SHA в
 свой deployment record:
 
 ```text
-test(frontend): verify stored feedback journey
-Minimum verified baseline: b351e11
+fix(frontend): hydrate Studio feedback csrf
+Minimum verified baseline: a948372
 ```
 
 ## Что не выполнялось

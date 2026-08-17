@@ -195,7 +195,7 @@ Frontend содержит отдельные маршруты:
 ### Current frontend
 
 Рабочая ветка: `codex/product-ui`. Известный проверенный baseline Task 5:
-`b351e11` (`test(frontend): verify stored feedback journey`). Backend-чат должен
+`a948372` (`fix(frontend): hydrate Studio feedback csrf`). Backend-чат должен
 интегрировать этот commit или его reviewed descendant; перед production нужно
 зафиксировать фактический интегрируемый SHA в своём backend deployment record.
 
