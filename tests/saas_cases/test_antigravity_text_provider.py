@@ -30,6 +30,8 @@ def _success_body(**overrides: object) -> dict[str, object]:
     body: dict[str, object] = {
         "request_id": "agt-request-1",
         "model": MODEL,
+        "actual_provider": "gemini",
+        "actual_model": "gemini-3.7-flash",
         "reasoning_effort": "high",
         "output_text": '{"direction":"bold"}',
         "tool_calls": [],
@@ -83,8 +85,8 @@ async def test_provider_sends_text_only_structured_request_and_normalizes_result
     assert response.text == '{"direction":"bold"}'
     assert response.parsed == {"direction": "bold"}
     assert response.request_id == "agt-request-1"
-    assert response.actual_provider == "antigravity_cli"
-    assert response.actual_model == MODEL
+    assert response.actual_provider == "gemini"
+    assert response.actual_model == "gemini-3.7-flash"
     assert response.reported_cost_microusd is None
     assert response.no_charge_confirmed is False
     assert response.usage.input_tokens == 11
@@ -180,6 +182,59 @@ async def test_provider_accepts_upstream_usage_defaults() -> None:
     assert response.usage.output_tokens == 0
     assert response.usage.thinking_tokens == 0
     assert response.usage.cache_read_tokens == 0
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_provider_preserves_confirmed_cli_backend_identity() -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                json=_success_body(
+                    actual_provider="antigravity_cli",
+                    actual_model=MODEL,
+                ),
+            )
+        )
+    )
+
+    response = await _provider(client).generate(
+        ModelRequest(prompt="Answer"),
+        model=MODEL,
+    )
+
+    assert response.actual_provider == "antigravity_cli"
+    assert response.actual_model == MODEL
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "identity",
+    [
+        {"actual_provider": None},
+        {"actual_model": None},
+        {"actual_provider": ""},
+        {"actual_model": ""},
+        {"actual_provider": "untrusted_gateway"},
+    ],
+)
+async def test_provider_rejects_missing_or_unknown_backend_identity(
+    identity: dict[str, object],
+) -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                json=_success_body(**identity),
+            )
+        )
+    )
+
+    with pytest.raises(InvalidModelResponse):
+        await _provider(client).generate(ModelRequest(prompt="Answer"), model=MODEL)
+
     await client.aclose()
 
 
@@ -319,9 +374,9 @@ async def test_provider_classifies_timeout_and_transport_failure() -> None:
             usage={
                 "input_tokens": 2,
                 "output_tokens": 1,
-                "thinking_tokens": 2,
+                "thinking_tokens": 1,
                 "cache_read_tokens": 0,
-                "total_tokens": 3,
+                "total_tokens": -1,
             }
         ),
     ],
@@ -358,11 +413,14 @@ async def test_provider_rejects_invalid_structured_output(output_text: str) -> N
         )
     )
 
-    with pytest.raises(InvalidModelResponse):
+    with pytest.raises(InvalidModelResponse) as captured:
         await _provider(client).generate(
             ModelRequest(prompt="Hello", response_schema=SCHEMA),
             model=MODEL,
         )
+
+    assert captured.value.actual_provider == "gemini"
+    assert captured.value.actual_model == "gemini-3.7-flash"
 
     await client.aclose()
 

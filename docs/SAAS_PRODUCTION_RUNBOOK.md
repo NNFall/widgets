@@ -341,6 +341,8 @@ jq -e '
   and .finish_reason == "stop"
   and .model == "gemini-3.7-flash-high"
   and .reasoning_effort == "high"
+  and .actual_provider == "gemini"
+  and (.actual_model | type == "string" and length > 0)
   and (.request_id | type == "string" and length > 0)
   and (.duration_ms | type == "number" and . >= 0 and floor == .)
   and (.usage | type == "object")

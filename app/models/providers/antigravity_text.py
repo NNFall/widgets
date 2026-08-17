@@ -25,6 +25,7 @@ from app.models.contracts import (
 
 
 _REASONING_EFFORTS = frozenset({"low", "medium", "high"})
+_ACTUAL_PROVIDERS = frozenset({"antigravity_cli", "gemini"})
 
 
 class AntigravityTextProvider:
@@ -178,11 +179,15 @@ def _normalize_response(
         raise InvalidModelResponse("AntiGravity returned a non-object response")
     try:
         request_id = _required_string(body.get("request_id"))
-        actual_model = _required_string(body.get("model"))
+        reported_model = _required_string(body.get("model"))
+        actual_provider = _required_string(body.get("actual_provider"))
+        actual_model = _required_string(body.get("actual_model"))
         actual_effort = _required_string(body.get("reasoning_effort"))
         text = _required_string(body.get("output_text"))
         duration_ms = _non_negative_int(body.get("duration_ms"))
-        if actual_model != requested_model or actual_effort != reasoning_effort:
+        if actual_provider not in _ACTUAL_PROVIDERS:
+            raise ValueError("provider identity is unsupported")
+        if reported_model != requested_model or actual_effort != reasoning_effort:
             raise ValueError("provider identity mismatch")
         if body.get("conversation_deleted") is not True:
             raise ValueError("conversation was not deleted")
@@ -210,7 +215,7 @@ def _normalize_response(
                 "AntiGravity returned invalid structured JSON",
                 usage=usage,
                 request_id=request_id,
-                actual_provider="antigravity_cli",
+                actual_provider=actual_provider,
                 actual_model=actual_model,
             ) from error
         if not isinstance(parsed, (dict, list)):
@@ -218,7 +223,7 @@ def _normalize_response(
                 "AntiGravity structured response is not JSON data",
                 usage=usage,
                 request_id=request_id,
-                actual_provider="antigravity_cli",
+                actual_provider=actual_provider,
                 actual_model=actual_model,
             )
         try:
@@ -228,7 +233,7 @@ def _normalize_response(
                 "AntiGravity structured response does not match the schema",
                 usage=usage,
                 request_id=request_id,
-                actual_provider="antigravity_cli",
+                actual_provider=actual_provider,
                 actual_model=actual_model,
             ) from error
 
@@ -242,7 +247,7 @@ def _normalize_response(
             "conversation_deleted": True,
             "provider_warnings": list(warnings),
         },
-        actual_provider="antigravity_cli",
+        actual_provider=actual_provider,
         actual_model=actual_model,
     )
 

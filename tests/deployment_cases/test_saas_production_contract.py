@@ -1044,6 +1044,8 @@ def test_production_runbook_smokes_provider_before_atomic_antigravity_enable() -
     assert "Authorization: Bearer" in runbook
     assert '"response_format":{"type":"json_schema"' in runbook
     assert 'and .reasoning_effort == "high"' in runbook
+    assert 'and .actual_provider == "gemini"' in runbook
+    assert 'and (.actual_model | type == "string" and length > 0)' in runbook
     assert 'and (.request_id | type == "string" and length > 0)' in runbook
     assert 'all(.[]; type == "number" and . >= 0 and floor == .)' in runbook
     assert 'and ((.output_text | fromjson) == {"ready":true})' in runbook
