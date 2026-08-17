@@ -865,72 +865,88 @@ test('landing mobile preserves content order, menu, controls and comparison @mob
   await attachScreenshot(page, testInfo, 'landing-mobile-390.png', { fullPage: true });
 });
 
-test('landing feedback prepares and opens a mailto without mutating feedback APIs @mobile @desktop', async ({ page }, testInfo) => {
+test('landing feedback stores a consented message through the API contract @mobile @desktop', async ({ page }, testInfo) => {
   test.setTimeout(180_000);
-  const apiRequests: string[] = [];
-  const actionMutations: string[] = [];
-  let mailtoActionActive = false;
-  await page.addInitScript(() => {
-    document.addEventListener('click', (event) => {
-      const target = event.target instanceof Element
-        ? event.target.closest<HTMLAnchorElement>('a[href^="mailto:"]')
-        : null;
-      if (target) event.preventDefault();
-    }, true);
+  const captured: Array<{
+    headers: Record<string, string>;
+    body: Record<string, unknown>;
+  }> = [];
+  let sessionRequests = 0;
+
+  await page.route('**/api/feedback/session', async (route) => {
+    sessionRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        csrf_token: 'csrf-feedback',
+        consent_version: 'feedback-v2',
+        message_max_length: 4000,
+      }),
+    });
   });
-  page.on('request', (request) => {
-    try {
-      const url = new URL(request.url());
-      if (url.pathname.startsWith('/api/')) apiRequests.push(`${request.method()} ${url.pathname}`);
-      if (
-        mailtoActionActive
-        && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method().toUpperCase())
-        && /feedback|contact|support|message/i.test(url.pathname)
-      ) {
-        actionMutations.push(`${request.method()} ${url.pathname}`);
-      }
-    } catch {
-      // Ignore non-HTTP requests such as the mailto protocol.
+  await page.route('**/api/feedback', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue();
+      return;
     }
+    captured.push({
+      headers: route.request().headers(),
+      body: route.request().postDataJSON() as Record<string, unknown>,
+    });
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        receipt_id: `fb_e2e_${captured.length}`,
+        status: 'stored',
+        received_at: '2026-08-17T10:00:00Z',
+      }),
+    });
   });
 
-  const viewports = viewportsForProject(testInfo);
-
-  for (const viewport of viewports) {
+  for (const viewport of viewportsForProject(testInfo)) {
     const viewportLabel = `${viewport.width}x${viewport.height}`;
+    captured.length = 0;
+    sessionRequests = 0;
     await page.setViewportSize(viewport);
     await page.goto('/');
+
     const section = page.locator('#contact');
     await section.scrollIntoViewIfNeeded();
     await expect(section.getByRole('heading', { name: 'Есть вопрос или идея?' })).toBeVisible();
+    await expect(section.locator('a[href^="mailto:"]')).toHaveCount(0);
+    await expect(page.locator('footer a[href^="mailto:"]')).toHaveCount(0);
+    await expect(page.locator('body')).not.toContainText(/support@kaigo\.space/i);
 
     const form = section.locator('form.feedback-composer');
-    await expect(form).toHaveCount(1);
-    await form.getByLabel('Сообщение').fill(`Проверка обратной связи ${viewportLabel}`);
-    await form.locator('input[type="checkbox"]').check();
-
-    const mailLink = form.getByRole('link', { name: 'Открыть письмо' });
-    await expect(mailLink).toHaveAttribute('aria-disabled', 'false');
-    const href = await mailLink.getAttribute('href');
-    expect(href, `feedback mailto at ${viewportLabel}`).toMatch(/^mailto:support@kaigo\.space\?subject=/);
-    expect(decodeURIComponent(href ?? ''), `feedback body at ${viewportLabel}`).toContain(
-      `Проверка обратной связи ${viewportLabel}`,
+    const message = `Проверка обратной связи ${viewportLabel}`;
+    await form.getByLabel('Сообщение').fill(message);
+    await form.getByRole('button', { name: 'Отправить' }).click();
+    await expect(form.getByRole('status')).toHaveText(
+      'Спасибо. Сообщение сохранено и поможет улучшать Kaigo.',
     );
-    const requestCountBeforeClick = apiRequests.length;
-    mailtoActionActive = true;
-    await mailLink.click();
-    await expect(mailLink).toBeVisible();
-    await page.waitForTimeout(100);
-    mailtoActionActive = false;
-    expect(actionMutations, `mailto click must not mutate feedback at ${viewportLabel}`).toEqual([]);
-    expect(
-      apiRequests.slice(requestCountBeforeClick).filter((request) => !request.endsWith('/api/analytics/entry')),
-      `feedback must not call a feedback API at ${viewportLabel}`,
-    ).toEqual([]);
+
+    expect(sessionRequests, `one landing session request at ${viewportLabel}`).toBe(1);
+    expect(captured, `one stored landing request at ${viewportLabel}`).toHaveLength(1);
+    expect(captured[0].headers['x-csrf-token']).toBe('csrf-feedback');
+    expect(captured[0].headers['idempotency-key']).toMatch(/^feedback-/);
+    expect(captured[0].body).toEqual({
+      topic: 'question',
+      message,
+      source: 'landing_contact',
+      consent: { version: 'feedback-v2', accepted: true },
+    });
+    for (const forbiddenField of [
+      'email', 'contact', 'name', 'page', 'project', 'project_id', 'run', 'run_id', 'domain', 'context',
+    ]) {
+      expect(captured[0].body, `${forbiddenField} must not be client supplied`).not.toHaveProperty(forbiddenField);
+    }
+
     if (viewport.width <= 767) {
       await expectNoHorizontalOverflow(page);
       const undersizedFeedbackTargets = await section.locator(
-        'a[href]:visible, textarea:visible, .feedback-topic:visible, .feedback-composer__consent:visible',
+        'a[href]:visible, button:visible, textarea:visible, .feedback-topic:visible',
       ).evaluateAll((elements) => elements.flatMap((element) => {
         const bounds = element.getBoundingClientRect();
         if (bounds.width >= 44 && bounds.height >= 44) return [];
@@ -943,6 +959,75 @@ test('landing feedback prepares and opens a mailto without mutating feedback API
       expect(undersizedFeedbackTargets, `feedback targets at ${viewportLabel}`).toEqual([]);
     }
   }
+});
+
+test('landing feedback retains text and replays an ambiguous 500 with the same request identity @mobile @desktop', async ({ page }) => {
+  test.setTimeout(60_000);
+  const posts: Array<{
+    headers: Record<string, string>;
+    body: Record<string, unknown>;
+  }> = [];
+  let sessionRequests = 0;
+
+  await page.route('**/api/feedback/session', async (route) => {
+    sessionRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        csrf_token: 'csrf-feedback',
+        consent_version: 'feedback-v2',
+        message_max_length: 4000,
+      }),
+    });
+  });
+  await page.route('**/api/feedback', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+    posts.push({
+      headers: route.request().headers(),
+      body: route.request().postDataJSON() as Record<string, unknown>,
+    });
+    if (posts.length === 1) {
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: { code: 'temporary_failure' } }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        receipt_id: 'fb_e2e_retry',
+        status: 'stored',
+        received_at: '2026-08-17T10:00:00Z',
+      }),
+    });
+  });
+
+  await page.goto('/');
+  const section = page.locator('#contact');
+  await section.scrollIntoViewIfNeeded();
+  const form = section.locator('form.feedback-composer');
+  const message = 'Проверка повтора после временной ошибки';
+  await form.getByLabel('Сообщение').fill(message);
+  await form.getByRole('button', { name: 'Отправить' }).click();
+  await expect(form.getByRole('alert')).toHaveText('Не удалось отправить. Ваш текст остался в форме.');
+  await expect(form.getByLabel('Сообщение')).toHaveValue(message);
+  await form.getByRole('button', { name: 'Повторить' }).click();
+  await expect(form.getByRole('status')).toHaveText(
+    'Спасибо. Сообщение сохранено и поможет улучшать Kaigo.',
+  );
+
+  expect(sessionRequests).toBe(1);
+  expect(posts).toHaveLength(2);
+  expect(posts[1].body).toEqual(posts[0].body);
+  expect(posts[1].headers['idempotency-key']).toBe(posts[0].headers['idempotency-key']);
+  expect(posts[1].headers['x-csrf-token']).toBe(posts[0].headers['x-csrf-token']);
 });
 
 test('all legal pages stay readable and touch-safe on supported viewports @mobile @desktop', async ({ page }, testInfo) => {

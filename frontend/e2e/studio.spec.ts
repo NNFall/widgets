@@ -78,17 +78,6 @@ async function expectDrawerAccessibility(page: Page, label: string) {
   expect(blocking, `${label} drawer accessibility`).toEqual([]);
 }
 
-async function preventMailtoNavigation(page: Page) {
-  await page.addInitScript(() => {
-    document.addEventListener('click', (event) => {
-      const target = event.target instanceof Element
-        ? event.target.closest<HTMLAnchorElement>('a[href^="mailto:"]')
-        : null;
-      if (target) event.preventDefault();
-    }, true);
-  });
-}
-
 test('Studio creates an owned project and renders the refreshed SaaS run @desktop', async ({ page, builderApi }) => {
   test.setTimeout(60_000);
   await page.goto('/studio?url=https%3A%2F%2Fexample.com');
@@ -343,9 +332,45 @@ test('Studio mobile restores a SaaS project, switches preview and has no overflo
   });
 });
 
-test('Studio home and composer expose support without a mutating feedback API call @mobile @desktop', async ({ page, builderApi }, testInfo) => {
+test('Studio home and composer store feedback with the authenticated session token @mobile @desktop', async ({ page, builderApi }, testInfo) => {
   test.setTimeout(180_000);
-  await preventMailtoNavigation(page);
+  const feedbackRequests: Array<{
+    headers: Record<string, string>;
+    body: Record<string, unknown>;
+  }> = [];
+  const feedbackSessionToken = 'csrf-feedback';
+  let feedbackSessionRequests = 0;
+  await page.route('**/api/feedback/session', async (route) => {
+    feedbackSessionRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        csrf_token: feedbackSessionToken,
+        consent_version: 'feedback-v2',
+        message_max_length: 4000,
+      }),
+    });
+  });
+  await page.route('**/api/feedback', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+    feedbackRequests.push({
+      headers: route.request().headers(),
+      body: route.request().postDataJSON() as Record<string, unknown>,
+    });
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        receipt_id: `fb_studio_${feedbackRequests.length}`,
+        status: 'stored',
+        received_at: '2026-08-17T10:00:00Z',
+      }),
+    });
+  });
   const viewports = viewportsForProject(testInfo);
   let drawerA11yChecked = false;
 
@@ -358,7 +383,6 @@ test('Studio home and composer expose support without a mutating feedback API ca
       await expect(page.getByRole('button', { name: 'Помощь', exact: true })).toBeVisible();
       const helpButton = page.getByRole('button', { name: 'Помощь', exact: true });
       await helpButton.focus();
-      const requestCountBeforeContact = builderApi.requests.length;
       await helpButton.click();
 
       const contactDialog = page.getByRole('dialog', { name: 'Помощь и обратная связь' });
@@ -372,29 +396,32 @@ test('Studio home and composer expose support without a mutating feedback API ca
       }
 
       const composer = contactDialog.locator('form.feedback-composer');
-      await composer.getByLabel('Сообщение').fill(`Проверка Studio ${viewportLabel}`);
-      await composer.locator('input[type="checkbox"]').check();
-      const mailLink = composer.getByRole('link', { name: 'Открыть письмо' });
-      await expect(mailLink).toHaveAttribute(
-        'href',
-        /^mailto:support@kaigo\.space\?subject=/,
+      const message = `Проверка Studio ${viewportLabel}`;
+      feedbackRequests.length = 0;
+      feedbackSessionRequests = 0;
+      await composer.getByLabel('Сообщение').fill(message);
+      await composer.getByRole('button', { name: 'Отправить' }).click();
+      await expect(composer.getByRole('status')).toHaveText(
+        'Спасибо. Сообщение сохранено и поможет улучшать Kaigo.',
       );
-      const requestCountBeforeClick = builderApi.requests.length;
-      await mailLink.click();
-      await expect(mailLink).toBeVisible();
-      await page.waitForTimeout(100);
-      const actionMutations = builderApi.requests.slice(requestCountBeforeClick).filter(({ method, pathname: requestPath }) =>
-        ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase())
-        && /feedback|contact|support|message/i.test(requestPath),
-      );
-      expect(actionMutations, `${pathname} must not mutate feedback at ${viewportLabel}`).toEqual([]);
-      expect(
-        builderApi.requests.slice(requestCountBeforeContact).filter(({ method, pathname: requestPath }) =>
-          ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase())
-          && /feedback|contact|support|message/i.test(requestPath),
-        ),
-        `${pathname} must not call a feedback API at ${viewportLabel}`,
-      ).toEqual([]);
+      await expect(contactDialog.locator('a[href^="mailto:"]')).toHaveCount(0);
+      await expect(contactDialog).not.toContainText('Telegram');
+      expect(feedbackRequests, `${pathname} must store one feedback message at ${viewportLabel}`).toHaveLength(1);
+      const expectedCsrfToken = feedbackSessionRequests > 0 ? feedbackSessionToken : builderApi.csrfToken;
+      expect(feedbackSessionRequests, `${pathname} feedback session request count at ${viewportLabel}`).toBeLessThanOrEqual(1);
+      expect(feedbackRequests[0].headers['x-csrf-token']).toBe(expectedCsrfToken);
+      expect(feedbackRequests[0].headers['idempotency-key']).toMatch(/^feedback-/);
+      expect(feedbackRequests[0].body).toEqual({
+        topic: 'question',
+        message,
+        source: 'studio_account',
+        consent: { version: 'feedback-v2', accepted: true },
+      });
+      for (const forbiddenField of [
+        'email', 'contact', 'name', 'page', 'project', 'project_id', 'run', 'run_id', 'domain', 'context',
+      ]) {
+        expect(feedbackRequests[0].body, `${forbiddenField} must not be client supplied`).not.toHaveProperty(forbiddenField);
+      }
 
       await page.keyboard.press('Escape');
       await expect(contactDialog).toHaveCount(0);
@@ -404,9 +431,45 @@ test('Studio home and composer expose support without a mutating feedback API ca
   }
 });
 
-test('Studio account opens support, traps keyboard focus and closes on Escape @mobile @desktop', async ({ page, builderApi }, testInfo) => {
+test('Studio account stores feedback and preserves drawer focus behavior @mobile @desktop', async ({ page, builderApi }, testInfo) => {
   test.setTimeout(180_000);
-  await preventMailtoNavigation(page);
+  const feedbackRequests: Array<{
+    headers: Record<string, string>;
+    body: Record<string, unknown>;
+  }> = [];
+  const feedbackSessionToken = 'csrf-feedback';
+  let feedbackSessionRequests = 0;
+  await page.route('**/api/feedback/session', async (route) => {
+    feedbackSessionRequests += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        csrf_token: feedbackSessionToken,
+        consent_version: 'feedback-v2',
+        message_max_length: 4000,
+      }),
+    });
+  });
+  await page.route('**/api/feedback', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+    feedbackRequests.push({
+      headers: route.request().headers(),
+      body: route.request().postDataJSON() as Record<string, unknown>,
+    });
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        receipt_id: `fb_studio_account_${feedbackRequests.length}`,
+        status: 'stored',
+        received_at: '2026-08-17T10:00:00Z',
+      }),
+    });
+  });
   builderApi.seedRun('run-contact-mobile');
   const viewports = viewportsForProject(testInfo);
   let drawerA11yChecked = false;
@@ -437,19 +500,32 @@ test('Studio account opens support, traps keyboard focus and closes on Escape @m
     }
 
     const composer = contactDialog.locator('form.feedback-composer');
-    await composer.getByLabel('Сообщение').fill(`Проверка account Studio ${viewportLabel}`);
-    await composer.locator('input[type="checkbox"]').check();
-    const mailLink = composer.getByRole('link', { name: 'Открыть письмо' });
-    await expect(mailLink).toHaveAttribute('href', /^mailto:support@kaigo\.space\?subject=/);
-    const requestCountBeforeClick = builderApi.requests.length;
-    await mailLink.click();
-    await expect(mailLink).toBeVisible();
-    await page.waitForTimeout(100);
-    const actionMutations = builderApi.requests.slice(requestCountBeforeClick).filter(({ method, pathname: requestPath }) =>
-      ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase())
-      && /feedback|contact|support|message/i.test(requestPath),
+    const message = `Проверка account Studio ${viewportLabel}`;
+    feedbackRequests.length = 0;
+    feedbackSessionRequests = 0;
+    await composer.getByLabel('Сообщение').fill(message);
+    await composer.getByRole('button', { name: 'Отправить' }).click();
+    await expect(composer.getByRole('status')).toHaveText(
+      'Спасибо. Сообщение сохранено и поможет улучшать Kaigo.',
     );
-    expect(actionMutations, `account contact must not mutate feedback at ${viewportLabel}`).toEqual([]);
+    await expect(contactDialog.locator('a[href^="mailto:"]')).toHaveCount(0);
+    await expect(contactDialog).not.toContainText('Telegram');
+    expect(feedbackRequests, `account contact must store one message at ${viewportLabel}`).toHaveLength(1);
+    const expectedCsrfToken = feedbackSessionRequests > 0 ? feedbackSessionToken : builderApi.csrfToken;
+    expect(feedbackSessionRequests).toBeLessThanOrEqual(1);
+    expect(feedbackRequests[0].headers['x-csrf-token']).toBe(expectedCsrfToken);
+    expect(feedbackRequests[0].headers['idempotency-key']).toMatch(/^feedback-/);
+    expect(feedbackRequests[0].body).toEqual({
+      topic: 'question',
+      message,
+      source: 'studio_account',
+      consent: { version: 'feedback-v2', accepted: true },
+    });
+    for (const forbiddenField of [
+      'email', 'contact', 'name', 'page', 'project', 'project_id', 'run', 'run_id', 'domain', 'context',
+    ]) {
+      expect(feedbackRequests[0].body, `${forbiddenField} must not be client supplied`).not.toHaveProperty(forbiddenField);
+    }
 
     const focusables = contactDialog.locator(
       'button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
