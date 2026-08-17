@@ -7923,77 +7923,6 @@ a {
   line-height: 1.5;
 }
 
-.studio-contact-panel__channels {
-  min-width: 0;
-  border-top: 1px solid rgba(7, 27, 47, .1);
-  border-bottom: 1px solid rgba(7, 27, 47, .1);
-}
-
-.studio-contact-panel__channel {
-  min-width: 0;
-  padding: 13px 0;
-  display: grid;
-  grid-template-columns: 66px minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 10px;
-}
-
-.studio-contact-panel__channel + .studio-contact-panel__channel {
-  border-top: 1px solid rgba(7, 27, 47, .08);
-}
-
-.studio-contact-panel__channel > span {
-  padding-top: 2px;
-  color: #657681;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: .06em;
-  text-transform: uppercase;
-}
-
-.studio-contact-panel__channel > div {
-  min-width: 0;
-  display: grid;
-  gap: 4px;
-}
-
-.studio-contact-panel__channel a {
-  min-height: 44px;
-  width: max-content;
-  max-width: 100%;
-  display: inline-flex;
-  align-items: center;
-  color: #a84427;
-  font-size: 15px;
-  font-weight: 800;
-  overflow-wrap: anywhere;
-}
-
-.studio-contact-panel__channel small {
-  color: #657680;
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.studio-contact-panel__channel > svg {
-  margin-top: 1px;
-  color: #a45437;
-}
-
-.studio-contact-panel__telegram {
-  color: #536a60;
-}
-
-.studio-contact-panel__telegram strong {
-  color: var(--ink);
-  font-size: 13px;
-  line-height: 1.4;
-}
-
-.studio-contact-panel__telegram > svg {
-  color: #7a9990;
-}
-
 .studio-contact-panel__composer.feedback-composer {
   padding: 18px;
   border-radius: 16px;
@@ -8413,9 +8342,6 @@ a {
     width: 100%;
   }
 
-  .studio-contact-panel__channel {
-    grid-template-columns: 72px minmax(0, 1fr) auto;
-  }
 }
 
 @media (max-width: 390px) {

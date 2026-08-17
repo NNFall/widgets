@@ -29,6 +29,22 @@ function sessionResponse() {
   });
 }
 
+function feedbackSessionResponse(csrfToken = 'csrf-feedback') {
+  return jsonResponse({
+    csrf_token: csrfToken,
+    consent_version: 'feedback-v2',
+    message_max_length: 4000,
+  });
+}
+
+function feedbackStoredResponse() {
+  return jsonResponse({
+    status: 'stored',
+    receipt_id: 'receipt-studio-flow',
+    received_at: '2026-08-17T08:00:00Z',
+  }, 201);
+}
+
 function project(activeRun: Record<string, unknown> | null = null) {
   return {
     id: PROJECT_ID,
@@ -174,6 +190,8 @@ describe('durable SaaS Studio flow', () => {
       if (url === '/api/projects' && !init?.method) return jsonResponse({ projects: [] });
       if (url === '/api/projects' && init?.method === 'POST') return jsonResponse(project(), 201);
       if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project());
+      if (url === '/api/feedback/session') return feedbackSessionResponse('csrf-feedback-home');
+      if (url === '/api/feedback' && init?.method === 'POST') return feedbackStoredResponse();
       throw new Error(`unexpected request: ${url}`);
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -185,7 +203,22 @@ describe('durable SaaS Studio flow', () => {
     expect(screen.getByRole('heading', { name: 'Создайте новый виджет' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Помощь' })).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Помощь' }));
-    expect(screen.getByRole('dialog', { name: 'Помощь и обратная связь' })).toBeVisible();
+    const contactDialog = screen.getByRole('dialog', { name: 'Помощь и обратная связь' });
+    expect(contactDialog).toBeVisible();
+    await user.type(within(contactDialog).getByRole('textbox', { name: 'Сообщение' }), 'Вопрос из Studio');
+    await user.click(within(contactDialog).getByRole('button', { name: 'Отправить' }));
+    await waitFor(() => expect(within(contactDialog).getByRole('status')).toHaveTextContent(/Сообщение сохранено/i));
+    const feedbackRequests = requests.filter(({ url, init }) => url === '/api/feedback' && init?.method === 'POST');
+    expect(feedbackRequests).toHaveLength(1);
+    expect(new Headers(feedbackRequests[0].init?.headers).get('X-CSRF-Token')).toBe('csrf-feedback-home');
+    const feedbackBody = JSON.parse(String(feedbackRequests[0].init?.body)) as Record<string, unknown>;
+    expect(feedbackBody).toEqual({
+      topic: 'question',
+      message: 'Вопрос из Studio',
+      source: 'studio_account',
+      consent: { version: 'feedback-v2', accepted: true },
+    });
+    expect(JSON.stringify(feedbackBody)).not.toMatch(/email|contact|name|project_id|run_id|domain|page|context/i);
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog', { name: 'Помощь и обратная связь' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('Ссылка на сайт')).toHaveValue('https://fresh.example.com');
@@ -973,8 +1006,10 @@ describe('durable SaaS Studio flow', () => {
         source: 'accepted_artifact',
       },
     });
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      requests.push({ url, init });
       if (url === '/api/auth/session') return sessionResponse();
       if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(completed));
       if (url === `/api/runs/${RUN_ID}`) return jsonResponse(completed);
@@ -1007,6 +1042,7 @@ describe('durable SaaS Studio flow', () => {
       if (url === '/api/billing/payments/pending') {
         return jsonResponse({ payment: null, checkout_url: null });
       }
+      if (url === '/api/feedback' && init?.method === 'POST') return feedbackStoredResponse();
       throw new Error(`unexpected request: ${url}`);
     }));
 
@@ -1037,11 +1073,22 @@ describe('durable SaaS Studio flow', () => {
     await user.click(within(accountDialog).getByRole('button', { name: 'Помощь и обратная связь' }));
     const contactDialog = screen.getByRole('dialog', { name: 'Помощь и обратная связь' });
     expect(contactDialog).toBeVisible();
-    expect(within(contactDialog).getByRole('link', { name: 'support@kaigo.space' })).toHaveAttribute(
-      'href',
-      'mailto:support@kaigo.space',
-    );
-    expect(within(contactDialog).getByText('Добавим после подтверждения контакта')).toBeVisible();
+    expect(within(contactDialog).queryByText('support@kaigo.space')).not.toBeInTheDocument();
+    expect(within(contactDialog).queryByText('Telegram')).not.toBeInTheDocument();
+    await user.type(within(contactDialog).getByRole('textbox', { name: 'Сообщение' }), 'Предложение из проекта');
+    await user.click(within(contactDialog).getByRole('button', { name: 'Отправить' }));
+    await waitFor(() => expect(within(contactDialog).getByRole('status')).toHaveTextContent(/Сообщение сохранено/i));
+    const feedbackRequests = requests.filter(({ url, init }) => url === '/api/feedback' && init?.method === 'POST');
+    expect(feedbackRequests).toHaveLength(1);
+    expect(new Headers(feedbackRequests[0].init?.headers).get('X-CSRF-Token')).toBe('csrf-for-studio');
+    const feedbackBody = JSON.parse(String(feedbackRequests[0].init?.body)) as Record<string, unknown>;
+    expect(feedbackBody).toEqual({
+      topic: 'question',
+      message: 'Предложение из проекта',
+      source: 'studio_account',
+      consent: { version: 'feedback-v2', accepted: true },
+    });
+    expect(JSON.stringify(feedbackBody)).not.toMatch(/email|contact|name|project_id|run_id|domain|page|context/i);
     expect(screen.queryByRole('dialog', { name: 'Тариф и лимиты' })).not.toBeInTheDocument();
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog', { name: 'Помощь и обратная связь' })).not.toBeInTheDocument();

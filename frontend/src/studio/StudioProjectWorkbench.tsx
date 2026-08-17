@@ -385,7 +385,7 @@ export function StudioProjectWorkbench({
         description="Вопрос, ошибка, идея или сотрудничество."
         onClose={closeDrawer}
       >
-        <StudioContactPanel domain={domain} projectId={projectId} />
+        <StudioContactPanel csrfToken={controller.csrfToken} />
       </StudioDrawer>
 
       <StudioDrawer

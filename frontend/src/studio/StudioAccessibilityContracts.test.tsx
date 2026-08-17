@@ -126,12 +126,7 @@ describe('Studio accessibility contracts', () => {
     expect(stylesSource).toMatch(
       /@media \(max-width:\s*560px\)[\s\S]*\.studio-drawer__panel\s*\{[^}]*width:\s*100%/s,
     );
-    expect(stylesSource).toMatch(
-      /\.studio-contact-panel__telegram(?![\w-])[^}]*color:/s,
-    );
-    expect(stylesSource).toMatch(
-      /\.studio-contact-panel__channel a\s*\{[^}]*min-height:\s*44px/s,
-    );
+    expect(stylesSource).not.toMatch(/\.studio-contact-panel__(?:channels?|telegram)\b/);
     expect(stylesSource).toMatch(
       /\.auth-gate__support a\s*\{[^}]*min-height:\s*44px/s,
     );
@@ -148,24 +143,10 @@ describe('Studio accessibility contracts', () => {
       /\.studio-contact-panel__intro\s*>\s*p:last-child\s*\{[^}]*font-size:\s*14px/s,
     );
     expect(stylesSource).toMatch(
-      /\.studio-contact-panel__channel\s*>\s*span\s*\{[^}]*font-size:\s*12px/s,
-    );
-    expect(stylesSource).toMatch(
       /\.studio-contact-panel \.feedback-composer__consent\s*\{[^}]*font-size:\s*14px/s,
     );
-    expect(stylesSource).toMatch(
-      /\.studio-contact-panel \.feedback-composer__note\s*\{[^}]*font-size:\s*14px/s,
-    );
-  });
-
-  it('keeps the Telegram label in one mobile grid column', () => {
-    const compactStart = stylesSource.lastIndexOf('@media (max-width: 560px) {');
-    const compactEnd = stylesSource.indexOf('@media (max-width: 390px)', compactStart);
-    const compactRules = stylesSource.slice(compactStart, compactEnd);
-
-    expect(compactRules).toMatch(
-      /\.studio-contact-panel__channel\s*\{[^}]*grid-template-columns:\s*72px\s+minmax\(0,\s*1fr\)\s+auto;/s,
-    );
+    expect(stylesSource).not.toMatch(/\.studio-contact-panel__channel\b/);
+    expect(stylesSource).toMatch(/\.studio-contact-panel \.feedback-topic-grid\s*\{[^}]*grid-template-columns:\s*1fr/s);
   });
 
   it('keeps every compact workbench header action at a 44px touch target', () => {

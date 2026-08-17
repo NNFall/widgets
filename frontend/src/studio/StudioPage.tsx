@@ -320,10 +320,7 @@ export function StudioPage() {
       description="Вопрос, ошибка, идея или сотрудничество."
       onClose={closeContact}
     >
-      <StudioContactPanel
-        domain={controller.projectMode ? headerProjectDomain : undefined}
-        projectId={controller.projectMode ? projectId : undefined}
-      />
+      <StudioContactPanel csrfToken={controller.csrfToken} />
     </StudioDrawer>
   );
 
