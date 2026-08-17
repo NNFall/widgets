@@ -206,7 +206,7 @@ Frontend содержит отдельные маршруты:
 ### Current frontend
 
 Рабочая ветка: `codex/product-ui`. Известный проверенный baseline Task 5:
-`a948372` (`fix(frontend): hydrate Studio feedback csrf`). Backend-чат должен
+`dcc5db6` (`fix(frontend): add public feedback honeypot`). Backend-чат должен
 интегрировать этот commit или его reviewed descendant; перед production нужно
 зафиксировать фактический интегрируемый SHA в своём backend deployment record.
 

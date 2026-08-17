@@ -70,19 +70,19 @@ npx playwright test e2e/landing.spec.ts e2e/studio.spec.ts --project=desktop-192
 npx playwright test e2e/landing.spec.ts e2e/studio.spec.ts --project=desktop-1920 --project=mobile-390
 ```
 
-Текущий повтор дал `25 passed` за `3.3m`. В прогон входят desktop 1920 и mobile
+Текущий повтор дал `25 passed` за `2.9m`. В прогон входят desktop 1920 и mobile
 390, landing, Studio home, Studio drawer, keyboard/focus, overflow и feedback
 контракты. Это проверка frontend с mock API, а не доказательство live backend
 storage.
 
-Проверенный baseline этой задачи — commit `a948372`
-(`fix(frontend): hydrate Studio feedback csrf`). Backend-чат обязан
+Проверенный baseline этой задачи — commit `dcc5db6`
+(`fix(frontend): add public feedback honeypot`). Backend-чат обязан
 интегрировать этот commit или reviewed descendant и записать фактический SHA в
 свой deployment record:
 
 ```text
-fix(frontend): hydrate Studio feedback csrf
-Minimum verified baseline: a948372
+fix(frontend): add public feedback honeypot
+Minimum verified baseline: dcc5db6
 ```
 
 ## Что не выполнялось
