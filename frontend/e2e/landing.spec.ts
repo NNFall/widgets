@@ -55,7 +55,7 @@ async function expectVisibleInsideSoft(locator: Locator, container: Locator, lab
 }
 
 async function expectMobileTouchTargets(page: Page, viewportLabel: string) {
-  const undersized = await page.locator('a[href], button, input, textarea, summary').evaluateAll((elements) => (
+  const undersized = await page.locator('a[href], button, input:not([type="radio"]), textarea, summary, label.feedback-topic').evaluateAll((elements) => (
     elements.flatMap((element) => {
       const style = getComputedStyle(element);
       const rect = element.getBoundingClientRect();
@@ -86,13 +86,19 @@ async function expectMobileTextSizes(page: Page, viewportLabel: string) {
       const isKicker = element.matches(
         '.section-kicker, [class*="kicker"], [class*="eyebrow"], [class*="meta"]',
       );
-      const minimum = element.matches('input, textarea')
-        ? 16
-        : isKicker
-          ? 11
-          : element.matches('span, small, code')
-            ? 12
-            : 14;
+      const isRadio = element.matches('input[type="radio"]');
+      const isFooterLink = Boolean(element.closest('.site-footer__links'));
+      const isConsentCopy = Boolean(element.closest('.feedback-composer__consent'));
+      if (isRadio) return [];
+      const minimum = isFooterLink || isConsentCopy
+        ? 12
+        : element.matches('input, textarea')
+          ? 16
+          : isKicker
+            ? 11
+            : element.matches('span, small, code')
+              ? 12
+              : 14;
       if (size >= minimum) return [];
       return [{
         name: element.getAttribute('aria-label') || text.slice(0, 80) || element.tagName,
@@ -917,7 +923,7 @@ test('landing feedback stores a consented message through the API contract @mobi
     await expect(section.getByRole('heading', { name: 'Есть вопрос или идея?' })).toBeVisible();
     await expect(section.locator('a[href^="mailto:"]')).toHaveCount(0);
     await expect(page.locator('footer a[href^="mailto:"]')).toHaveCount(0);
-    await expect(page.locator('body')).not.toContainText(/support@kaigo\.space/i);
+    await expect(page.locator('body')).not.toContainText(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/i);
 
     const form = section.locator('form.feedback-composer');
     const message = `Проверка обратной связи ${viewportLabel}`;

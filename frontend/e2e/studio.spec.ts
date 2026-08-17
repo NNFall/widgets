@@ -338,19 +338,11 @@ test('Studio home and composer store feedback with the authenticated session tok
     headers: Record<string, string>;
     body: Record<string, unknown>;
   }> = [];
-  const feedbackSessionToken = 'csrf-feedback';
   let feedbackSessionRequests = 0;
-  await page.route('**/api/feedback/session', async (route) => {
-    feedbackSessionRequests += 1;
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        csrf_token: feedbackSessionToken,
-        consent_version: 'feedback-v2',
-        message_max_length: 4000,
-      }),
-    });
+  page.on('request', (request) => {
+    if (request.method() === 'GET' && new URL(request.url()).pathname === '/api/feedback/session') {
+      feedbackSessionRequests += 1;
+    }
   });
   await page.route('**/api/feedback', async (route) => {
     if (route.request().method() !== 'POST') {
@@ -407,9 +399,8 @@ test('Studio home and composer store feedback with the authenticated session tok
       await expect(contactDialog.locator('a[href^="mailto:"]')).toHaveCount(0);
       await expect(contactDialog).not.toContainText('Telegram');
       expect(feedbackRequests, `${pathname} must store one feedback message at ${viewportLabel}`).toHaveLength(1);
-      const expectedCsrfToken = feedbackSessionRequests > 0 ? feedbackSessionToken : builderApi.csrfToken;
-      expect(feedbackSessionRequests, `${pathname} feedback session request count at ${viewportLabel}`).toBeLessThanOrEqual(1);
-      expect(feedbackRequests[0].headers['x-csrf-token']).toBe(expectedCsrfToken);
+      expect(feedbackSessionRequests, `${pathname} must use authenticated Studio CSRF at ${viewportLabel}`).toBe(0);
+      expect(feedbackRequests[0].headers['x-csrf-token']).toBe(builderApi.csrfToken);
       expect(feedbackRequests[0].headers['idempotency-key']).toMatch(/^feedback-/);
       expect(feedbackRequests[0].body).toEqual({
         topic: 'question',
@@ -437,19 +428,11 @@ test('Studio account stores feedback and preserves drawer focus behavior @mobile
     headers: Record<string, string>;
     body: Record<string, unknown>;
   }> = [];
-  const feedbackSessionToken = 'csrf-feedback';
   let feedbackSessionRequests = 0;
-  await page.route('**/api/feedback/session', async (route) => {
-    feedbackSessionRequests += 1;
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        csrf_token: feedbackSessionToken,
-        consent_version: 'feedback-v2',
-        message_max_length: 4000,
-      }),
-    });
+  page.on('request', (request) => {
+    if (request.method() === 'GET' && new URL(request.url()).pathname === '/api/feedback/session') {
+      feedbackSessionRequests += 1;
+    }
   });
   await page.route('**/api/feedback', async (route) => {
     if (route.request().method() !== 'POST') {
@@ -511,9 +494,8 @@ test('Studio account stores feedback and preserves drawer focus behavior @mobile
     await expect(contactDialog.locator('a[href^="mailto:"]')).toHaveCount(0);
     await expect(contactDialog).not.toContainText('Telegram');
     expect(feedbackRequests, `account contact must store one message at ${viewportLabel}`).toHaveLength(1);
-    const expectedCsrfToken = feedbackSessionRequests > 0 ? feedbackSessionToken : builderApi.csrfToken;
-    expect(feedbackSessionRequests).toBeLessThanOrEqual(1);
-    expect(feedbackRequests[0].headers['x-csrf-token']).toBe(expectedCsrfToken);
+    expect(feedbackSessionRequests).toBe(0);
+    expect(feedbackRequests[0].headers['x-csrf-token']).toBe(builderApi.csrfToken);
     expect(feedbackRequests[0].headers['idempotency-key']).toMatch(/^feedback-/);
     expect(feedbackRequests[0].body).toEqual({
       topic: 'question',

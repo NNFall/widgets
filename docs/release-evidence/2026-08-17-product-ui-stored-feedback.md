@@ -17,7 +17,7 @@
   `Idempotency-Key`;
 - успешный UI только для валидного ответа `200/201` со статусом `stored`;
 - сохранение текста и повтор с тем же ключом/телом после временного `500`;
-- компактный footer без неподтверждённого `support@kaigo.space` и `mailto:`;
+- компактный footer без неподтверждённого почтового адреса и `mailto:`;
 - мобильная проверка без горизонтального overflow и с touch-safe controls;
 - сохранение фокуса, Escape и focus trap контактного drawer в Studio.
 
@@ -36,28 +36,44 @@ production нет подтверждённых `GET /api/feedback/session`, `POS
 и PostgreSQL `feedback_submissions`. Поэтому live success, реальная история,
 email- или Telegram-доставка не заявляются.
 
-Четыре реальные локальные captures (390×844, in-app browser, explicit contract
-mock) сохранены в папке assets и перечислены в
+Четыре реальные локальные captures (375×811 для трёх landing-кадров и 390×843
+для Studio, in-app browser, explicit contract mock) сохранены в папке assets и перечислены в
 [`assets/2026-08-17-product-ui-stored-feedback/README.md`](assets/2026-08-17-product-ui-stored-feedback/README.md).
 Они показывают только frontend UX и не являются production-доказательством;
 desktop-captures в этой подборке нет.
 
 ## Проверочная команда
 
-Из `frontend/`:
+Точный targeted-прогон из `frontend/`:
+
+```powershell
+npx playwright test e2e/landing.spec.ts e2e/studio.spec.ts --project=desktop-1920 --project=mobile-390 --grep "feedback"
+```
+
+Контракт требует ноль вызовов feedback-session и авторизованный CSRF. Текущий
+повтор даёт `6 passed, 2 failed`: оба падения — Studio home без project, где
+текущий frontend пока запрашивает feedback-session вместо передачи auth CSRF.
+Это блокер исходного Studio wiring, а не успешный backend storage; после
+исправления wiring ожидается `8 passed`, и команду нужно повторить.
+
+Более широкий регрессионный прогон без `--grep`:
 
 ```powershell
 npx playwright test e2e/landing.spec.ts e2e/studio.spec.ts --project=desktop-1920 --project=mobile-390
 ```
 
-Полный результат и финальный SHA нужно записать после запуска на текущем HEAD.
-Backend-чат обязан интегрировать именно финальный commit этой задачи, который
-будет вписан в handoff после commit:
+Текущий повтор дал `23 passed, 2 failed`. Оба падения совпадают с описанным
+Studio home CSRF blocker; stale assertions размеров footer/радио/consent
+исправлены. Этот результат не является live backend storage proof.
+
+Проверенный baseline этой задачи — commit `b351e11`
+(`test(frontend): verify stored feedback journey`). Backend-чат обязан
+интегрировать этот commit или reviewed descendant и записать фактический SHA в
+свой deployment record:
 
 ```text
 test(frontend): verify stored feedback journey
-SHA: `<FINAL_TASK_5_COMMIT_SHA>` (fill with `git rev-parse HEAD` immediately
-before backend integration).
+Minimum verified baseline: b351e11
 ```
 
 ## Что не выполнялось

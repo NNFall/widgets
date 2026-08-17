@@ -18,8 +18,8 @@ production-деплой, миграцию или перезапуск серви
 - согласие ведёт на отдельную страницу персональных данных и отправляется как
   версия документа `feedback-v2`.
 
-`support@kaigo.space` не является подтверждённым почтовым ящиком и удалён из
-пользовательского сценария. Frontend не обещает письмо, личный ответ или
+Неподтверждённый почтовый адрес удалён из пользовательского сценария.
+Frontend не обещает письмо, личный ответ или
 Telegram-доставку. Реальная история обращений появится только после backend
 интеграции.
 
@@ -120,22 +120,27 @@ Backend должен добавить таблицу `feedback_submissions` в �
 
 | Поле | Назначение |
 | --- | --- |
-| `id` | внутренний UUID/целочисленный PK |
+| `id` | внутренний UUID/PK, никогда не выдаётся клиенту |
 | `receipt_id` | публичный непрозрачный уникальный receipt |
-| `tenant_id` | tenant пользователя Studio, nullable для landing |
-| `actor_user_id` | авторизованный пользователь, nullable для landing |
+| `user_id` | авторизованный пользователь Studio, nullable для landing |
+| `tenant_id` | tenant авторизованного пользователя, nullable для landing |
 | `source` | whitelist источника формы |
 | `topic` | whitelist темы |
 | `message` | нормализованный текст обращения |
+| `verified_project_id` | project ID, проверенный сервером по сессии Studio |
+| `verified_run_id` | run ID, проверенный сервером по сессии Studio |
 | `consent_version` | точная версия документа |
 | `consent_accepted` | зафиксированное `true` после валидации |
-| `consent_accepted_at` | серверное UTC-время |
+| `consent_accepted_at` | серверное UTC-время после проверки согласия |
 | `idempotency_key` | ключ с уникальностью в области субъекта |
-| `status` | минимум `stored`, затем операционные статусы |
+| `request_hash` | HMAC/криптографический hash нормализованного тела для проверки конфликта |
+| `status` | внутренний enum `new`, `reviewing`, `resolved`, `spam` |
 | `created_at`, `updated_at` | серверные timestamps |
+| `purge_after` | вычисленная дата удаления по retention-конфигурации |
 
 Индексы нужны для операторской истории по `created_at`, `status`, `topic` и
-tenant/пользователю. Срок хранения должен задаваться конфигурацией, быть
+tenant/пользователю, а также по `idempotency_key` в области субъекта. Срок
+хранения должен задаваться конфигурацией через `purge_after`, быть
 документированным и включать процедуру удаления/экспорта по запросу субъекта.
 Не добавлять frontend-поля для имени, email или произвольного client context.
 
@@ -147,8 +152,13 @@ tenant/пользователю. Срок хранения должен зада
 ## CSRF, rate limit и операторская история
 
 - Проверять CSRF для браузерной сессии до записи.
-- Для landing применить anti-spam и rate limit по IP/сессии; для Studio — по
-  пользователю/tenant и IP.
+- Ограничить тело JSON ровно `16 KiB` (16 384 байта после декодирования) до
+  разбора и нормализации.
+- Для анонимного landing применять rate limit `5 запросов за 10 минут на
+  сессию` и `20 запросов в час на IP`; для авторизованного Studio — `30
+  запросов в час на user_id` плюс тот же IP-limit.
+- Не хранить IP в plaintext: для лимитов и расследований использовать
+  keyed HMAC IP fingerprint с ротацией ключа, а не исходный адрес.
 - Ограничить размер JSON и длину нормализованного сообщения до записи.
 - Не выводить содержимое сообщения в access/error logs.
 - Сделать операторский список с фильтрами по статусу/теме/дате и audit trail
@@ -184,11 +194,10 @@ Frontend содержит отдельные маршруты:
 
 ### Current frontend
 
-Рабочая ветка: `codex/product-ui`. Базовый commit перед Task 5:
-`0ab09f3`. После принятия этого handoff backend-чат должен интегрировать именно
-финальный commit задачи `test(frontend): verify stored feedback journey`:
-`<FINAL_TASK_5_COMMIT_SHA>` (`test(frontend): verify stored feedback journey`;
-fill with `git rev-parse HEAD` immediately before backend integration).
+Рабочая ветка: `codex/product-ui`. Известный проверенный baseline Task 5:
+`b351e11` (`test(frontend): verify stored feedback journey`). Backend-чат должен
+интегрировать этот commit или его reviewed descendant; перед production нужно
+зафиксировать фактический интегрируемый SHA в своём backend deployment record.
 
 ### Requested implementation
 
