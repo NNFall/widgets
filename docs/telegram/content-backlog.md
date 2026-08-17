@@ -38,7 +38,7 @@
 | TG-027 | 1 | ready | Как из четырёх металлических K выбрали знак Kaigo | Living Fold сохранил строгий B2B-силуэт и сделал оранжевый AI-слой частью самой буквы | [Release packet](release-packets/2026-08-13-living-fold-brand.md) |
 | TG-028 | 1 | ready | Как выглядит весь путь от бесплатной публикации до тарифа | Закрытые ссылки показывают каждый экран реальной цепочки без тестовых списаний и изменений в проекте | [Release packet](release-packets/2026-08-15-private-presentation-links.md) |
 | TG-029 | 1 | ready | Почему третья кнопка входа — это не просто синяя плашка | VK ID выглядит одной короткой строкой, а под ней остаются PKCE, одноразовый state, server callback и сохранённый сайт | [Release packet](release-packets/2026-08-15-vk-id-one-tap.md) |
-| TG-030 | 1 | hold | Почему зелёного health-check недостаточно | AntiGravity-маршрут прошёл 237 targeted-проверок и получил отдельный secret-env и точечный egress, но реальный turn выявил отсутствующую лицензию до production | [Release packet](release-packets/2026-08-17-antigravity-text-provider.md) |
+| TG-030 | 1 | hold | Почему работающий AI-провайдер — ещё не широкий rollout | Один run получил два Gemini-кандидата, но не прошёл visual gate; verified Basecamp опубликовался через Codex fallback, поэтому решение ждёт 30 candidate-вызовов | [Release packet](release-packets/2026-08-17-antigravity-text-provider.md) |
 
 ## Как добавлять тему
 
