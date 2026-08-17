@@ -80,7 +80,7 @@ def _inner_document(release: PublishedRelease) -> tuple[str, str]:
   const launcher = document.querySelector('[data-region="launcher"]');
   const panel = document.querySelector('[data-region="panel"]');
   let animationFrame = 0;
-  function report() {
+  function report(measurementId = null) {
     const state = root && root.dataset.state === 'open' ? 'open' : 'closed';
     const target = state === 'open' ? panel : launcher;
     if (!target) return;
@@ -94,6 +94,7 @@ def _inner_document(release: PublishedRelease) -> tuple[str, str]:
       channel_id: channelId,
       type: 'kaigo:inner-geometry',
       revision,
+      measurement_id: Number.isSafeInteger(measurementId) ? measurementId : null,
       state,
       width: Math.ceil(width),
       height: Math.ceil(height)
@@ -114,14 +115,16 @@ def _inner_document(release: PublishedRelease) -> tuple[str, str]:
     attributeFilter: ['class', 'data-state']
   });
   if (typeof ResizeObserver === 'function') {
-    const observer = new ResizeObserver(report);
+    const observer = new ResizeObserver(() => report());
     if (launcher) observer.observe(launcher);
     if (panel) observer.observe(panel);
   }
   addEventListener('message', event => {
     const data = event.data;
     if (event.source !== window.parent || !data || data.type !== 'kaigo:measure' || data.channel_id !== channelId) return;
-    followMotion();
+    const measurementId = Number(data.measurement_id);
+    if (!Number.isSafeInteger(measurementId) || measurementId < 1) return;
+    requestAnimationFrame(() => report(measurementId));
   });
   addEventListener('load', followMotion);
   followMotion();
@@ -168,6 +171,9 @@ def render_runtime(
   const bytes=Uint8Array.from(atob({encoded_inner!r}),c=>c.charCodeAt(0));
   frame.srcdoc=new TextDecoder().decode(bytes);
   let state='loading';
+  let openGeneration=0;
+  let pendingOpenMeasurement=0;
+  let openGeometryLocked=false;
   addEventListener('message',event=>{{
     const data=event.data;
     if(event.source!==frame.contentWindow||!data||typeof data!=='object'||data.source!=='kaigo-builder-preview'||data.version!==2||data.channel_id!==channelId||data.revision!==revision)return;
@@ -199,13 +205,38 @@ def render_runtime(
     const height=Number(data.height);
     if(!Number.isFinite(width)||!Number.isFinite(height))return;
     const nextState=data.state==='open'?'open':'closed';
-    if(nextState==='open'&&state!=='open'){{
-      parent.postMessage({{type:'kaigo:geometry',key,state:'open',width:420,height:640}},'*');
-      requestAnimationFrame(()=>frame.contentWindow.postMessage({{type:'kaigo:measure',channel_id:channelId}},'*'));
+    if(nextState==='closed'){{
+      openGeneration+=1;
+      pendingOpenMeasurement=0;
+      openGeometryLocked=false;
+      state='closed';
+      parent.postMessage({{
+        type:'kaigo:geometry',key,state,
+        width:Math.max(1,Math.min(420,Math.ceil(width))),
+        height:Math.max(1,Math.min(640,Math.ceil(height)))
+      }},'*');
+      return;
     }}
-    state=nextState;
+    if(nextState==='open'&&state!=='open'){{
+      if(data.measurement_id!==null&&data.measurement_id!==undefined)return;
+      state='open';
+      openGeometryLocked=false;
+      const generation=++openGeneration;
+      pendingOpenMeasurement=generation;
+      parent.postMessage({{type:'kaigo:geometry',key,state:'open',width:420,height:640}},'*');
+      requestAnimationFrame(()=>requestAnimationFrame(()=>{{
+        if(state!=='open'||openGeneration!==generation||pendingOpenMeasurement!==generation||openGeometryLocked)return;
+        frame.contentWindow.postMessage({{type:'kaigo:measure',channel_id:channelId,measurement_id:generation}},'*');
+      }}));
+      return;
+    }}
+    if(openGeometryLocked)return;
+    const measurementId=Number(data.measurement_id);
+    if(!Number.isSafeInteger(measurementId)||measurementId!==pendingOpenMeasurement)return;
+    openGeometryLocked=true;
+    pendingOpenMeasurement=0;
     parent.postMessage({{
-      type:'kaigo:geometry',key,state,
+      type:'kaigo:geometry',key,state:'open',
       width:Math.max(1,Math.min(420,Math.ceil(width))),
       height:Math.max(1,Math.min(640,Math.ceil(height)))
     }},'*');

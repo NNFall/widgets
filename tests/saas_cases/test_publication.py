@@ -14,6 +14,7 @@ import pytest_asyncio
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 from aiohttp_session import SimpleCookieStorage, get_session, setup as setup_session
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -1472,6 +1473,272 @@ async def test_published_runtime_keeps_fixed_widget_interactions_and_closed_hitb
         assert call["context"].brief == "Private prompt must never be published"
         assert call["context"].art_direction == interactive.art_direction
         assert call["run_id"]
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("viewport", "bootstrap", "minimum_open"),
+    (
+        pytest.param(
+            {"width": 1280, "height": 800},
+            {"width": 420, "height": 640},
+            {"width": 350, "height": 500},
+            id="desktop",
+        ),
+        pytest.param(
+            {"width": 320, "height": 480},
+            {"width": 288, "height": 448},
+            {"width": 260, "height": 420},
+            id="mobile",
+        ),
+    ),
+)
+async def test_public_runtime_bootstraps_responsive_panel_before_settled_measurement(
+    tmp_path,
+    viewport: dict[str, int],
+    bootstrap: dict[str, int],
+    minimum_open: dict[str, int],
+) -> None:
+    config = SimpleNamespace(
+        public_auth_enabled=False,
+        public_base_url=None,
+        environment="development",
+        publication_allow_insecure_origins=True,
+    )
+    engine, factory, client, ids = await _publication_app(tmp_path, config=config)
+    try:
+        responsive = artifact(
+            revision=1,
+            body_html=artifact(revision=1).body_html.replace(
+                '<header class="kaigo-widget__header" data-region="header">',
+                '<header class="kaigo-widget__header" data-region="header">'
+                '<button type="button" data-action="close">Close</button>',
+            ),
+            css=artifact(revision=1).css
+            + """
+.kaigo-widget { position: fixed; right: 0; bottom: 0; width: 100%; height: 100%; }
+.kaigo-widget [data-region="launcher"] { width: 64px; height: 60px; }
+.kaigo-widget [data-region="panel"] {
+  width: min(360px, calc(100vw - 16px));
+  height: min(520px, calc(100vh - 16px));
+  background: white;
+}
+.kaigo-widget [data-region="panel"][aria-hidden="true"] { display: none; }
+""",
+        )
+        async with factory() as database, database.begin():
+            row = await database.get(GenerationArtifact, ids["first"])
+            row.html = responsive.body_html
+            row.css = responsive.css
+            row.javascript = responsive.javascript
+            row.config = {"artifact": responsive.to_dict()}
+
+        await client.post("/test/login/10")
+        published = await client.post(
+            f"/api/projects/{ids['project']}/publish",
+            json={
+                "artifact_id": str(ids["first"]),
+                "allowed_domains": [str(client.make_url("/")).rstrip("/")],
+            },
+            headers={"X-CSRF-Token": "csrf"},
+        )
+        assert published.status == 201
+        key = (await published.json())["stable_key"]
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page(viewport=viewport)
+                await page.add_init_script(
+                    """(() => {
+                      if (!location.pathname.startsWith('/runtime/')) return;
+                      const nativeRequestAnimationFrame = requestAnimationFrame.bind(window);
+                      window.requestAnimationFrame = callback => nativeRequestAnimationFrame(
+                        timestamp => setTimeout(() => callback(timestamp), 75)
+                      );
+                    })();"""
+                )
+                page.set_default_timeout(15_000)
+                response = await page.goto(
+                    str(client.make_url(f"/test/host/{key}")),
+                    wait_until="commit",
+                    timeout=60_000,
+                )
+                assert response is not None and response.ok
+                await page.wait_for_function(
+                    'key => { const f=document.querySelector(`iframe[data-kaigo-widget-key="${key}"]`); return f && parseInt(f.style.width,10) <= 80 && parseInt(f.style.height,10) <= 80; }',
+                    arg=key,
+                    timeout=5_000,
+                )
+                await page.evaluate(
+                    """key => {
+                      const frame = document.querySelector(`iframe[data-kaigo-widget-key="${key}"]`);
+                      window.__kaigoGeometryHistory = [];
+                      const record = () => window.__kaigoGeometryHistory.push({
+                        width: parseInt(frame.style.width, 10),
+                        height: parseInt(frame.style.height, 10)
+                      });
+                      new MutationObserver(record).observe(frame, {
+                        attributes: true,
+                        attributeFilter: ['style']
+                      });
+                      record();
+                    }""",
+                    key,
+                )
+
+                runtime_frame = page.frames[1]
+                generated_frame = runtime_frame.child_frames[0]
+                await generated_frame.locator('[data-region="launcher"]').click()
+                await generated_frame.locator('[data-region="panel"]').wait_for(
+                    state="visible"
+                )
+                await page.wait_for_function(
+                    """({key, bootstrap}) => {
+                      const frame = document.querySelector(`iframe[data-kaigo-widget-key="${key}"]`);
+                      return frame
+                        && parseInt(frame.style.width, 10) === bootstrap.width
+                        && parseInt(frame.style.height, 10) === bootstrap.height;
+                    }""",
+                    arg={"key": key, "bootstrap": bootstrap},
+                    timeout=5_000,
+                )
+                await generated_frame.locator('[data-action="close"]').click()
+                await page.wait_for_function(
+                    'key => { const f=document.querySelector(`iframe[data-kaigo-widget-key="${key}"]`); return f && parseInt(f.style.width,10) <= 80 && parseInt(f.style.height,10) <= 80; }',
+                    arg=key,
+                    timeout=5_000,
+                )
+                await generated_frame.locator('[data-region="launcher"]').click()
+                await generated_frame.locator('[data-region="panel"]').wait_for(
+                    state="visible"
+                )
+                try:
+                    await page.wait_for_function(
+                        """({key, minimum}) => {
+                          const frame = document.querySelector(`iframe[data-kaigo-widget-key="${key}"]`);
+                          return frame
+                            && parseInt(frame.style.width, 10) >= minimum.width
+                            && parseInt(frame.style.height, 10) >= minimum.height;
+                        }""",
+                        arg={"key": key, "minimum": minimum_open},
+                        timeout=5_000,
+                    )
+                except PlaywrightTimeoutError as error:
+                    diagnostics = await page.evaluate(
+                        """key => {
+                          const frame = document.querySelector(`iframe[data-kaigo-widget-key="${key}"]`);
+                          return {
+                            current: {
+                              width: parseInt(frame.style.width, 10),
+                              height: parseInt(frame.style.height, 10)
+                            },
+                            history: window.__kaigoGeometryHistory
+                          };
+                        }""",
+                        key,
+                    )
+                    diagnostics["inner"] = await generated_frame.evaluate(
+                        """() => {
+                          const panel = document.querySelector('[data-region="panel"]');
+                          const rect = panel.getBoundingClientRect();
+                          const style = getComputedStyle(panel);
+                          return {
+                            viewport: {width: innerWidth, height: innerHeight},
+                            rect: {width: rect.width, height: rect.height},
+                            computed: {width: style.width, height: style.height}
+                          };
+                        }"""
+                    )
+                    raise AssertionError(
+                        f"responsive panel stayed clipped: {diagnostics}"
+                    ) from error
+                await page.wait_for_timeout(1_500)
+                settled_size = await page.evaluate(
+                    """key => {
+                      const frame = document.querySelector(`iframe[data-kaigo-widget-key="${key}"]`);
+                      return {
+                        width: parseInt(frame.style.width, 10),
+                        height: parseInt(frame.style.height, 10)
+                      };
+                    }""",
+                    key,
+                )
+                await page.wait_for_timeout(250)
+                stable_size = await page.evaluate(
+                    """key => {
+                      const frame = document.querySelector(`iframe[data-kaigo-widget-key="${key}"]`);
+                      return {
+                        width: parseInt(frame.style.width, 10),
+                        height: parseInt(frame.style.height, 10)
+                      };
+                    }""",
+                    key,
+                )
+                assert settled_size == stable_size
+                assert settled_size["width"] >= minimum_open["width"]
+                assert settled_size["height"] >= minimum_open["height"]
+                assert settled_size["width"] <= viewport["width"] - 32
+                assert settled_size["height"] <= viewport["height"] - 32
+                history = await page.evaluate("window.__kaigoGeometryHistory")
+                assert any(
+                    item["width"] == bootstrap["width"]
+                    and item["height"] == bootstrap["height"]
+                    for item in history
+                )
+
+                await generated_frame.locator('[data-action="close"]').click()
+                await page.wait_for_function(
+                    'key => { const f=document.querySelector(`iframe[data-kaigo-widget-key="${key}"]`); return f && parseInt(f.style.width,10) <= 80 && parseInt(f.style.height,10) <= 80; }',
+                    arg=key,
+                    timeout=5_000,
+                )
+
+                await generated_frame.locator('[data-region="launcher"]').click()
+                await generated_frame.locator('[data-region="panel"]').wait_for(
+                    state="visible"
+                )
+                await page.wait_for_timeout(1_500)
+                reopened_size = await page.evaluate(
+                    """key => {
+                      const frame = document.querySelector(`iframe[data-kaigo-widget-key="${key}"]`);
+                      return {
+                        width: parseInt(frame.style.width, 10),
+                        height: parseInt(frame.style.height, 10)
+                      };
+                    }""",
+                    key,
+                )
+                await page.wait_for_timeout(250)
+                reopened_stable_size = await page.evaluate(
+                    """key => {
+                      const frame = document.querySelector(`iframe[data-kaigo-widget-key="${key}"]`);
+                      return {
+                        width: parseInt(frame.style.width, 10),
+                        height: parseInt(frame.style.height, 10)
+                      };
+                    }""",
+                    key,
+                )
+                assert reopened_size == reopened_stable_size
+                assert reopened_size["width"] >= minimum_open["width"]
+                assert reopened_size["height"] >= minimum_open["height"]
+                assert reopened_size["width"] <= viewport["width"] - 32
+                assert reopened_size["height"] <= viewport["height"] - 32
+                history = await page.evaluate("window.__kaigoGeometryHistory")
+                assert (
+                    sum(
+                        item["width"] == bootstrap["width"]
+                        and item["height"] == bootstrap["height"]
+                        for item in history
+                    )
+                    >= 3
+                )
+            finally:
+                await browser.close()
     finally:
         await client.close()
         await engine.dispose()
