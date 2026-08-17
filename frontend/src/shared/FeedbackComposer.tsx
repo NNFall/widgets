@@ -396,9 +396,11 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
       )}
       {status === 'error' && (
         <>
-          <p className="feedback-composer__result feedback-composer__error" role="alert">
-            {errorMessage}
-          </p>
+          {!rateLimitReady && (
+            <p className="feedback-composer__result feedback-composer__error" role="alert">
+              {errorMessage}
+            </p>
+          )}
           {retryBlocked && rateLimitRemainingSeconds !== null && (
             <p className="feedback-composer__result feedback-composer__rate-limit-countdown" aria-live="off">
               Повторите через {rateLimitRemainingSeconds} с.

@@ -473,7 +473,7 @@ describe('FeedbackComposer', () => {
 
     await act(async () => { vi.advanceTimersByTime(1000); await Promise.resolve(); });
     expect(screen.getByRole('button', { name: 'Повторить' })).toBeEnabled();
-    expect(screen.getByRole('alert')).toHaveTextContent('Слишком много запросов. Повторите позже.');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('Теперь можно повторить отправку.');
     expect(screen.queryByText('Повторите через 0 с.')).not.toBeInTheDocument();
 
@@ -505,7 +505,7 @@ describe('FeedbackComposer', () => {
     fireEvent.submit(message.closest('form') as HTMLFormElement);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(screen.getByRole('button', { name: 'Повторить' })).toBeEnabled();
-    expect(screen.getByRole('alert')).toHaveTextContent('Слишком много запросов. Повторите позже.');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('Теперь можно повторить отправку.');
 
     fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
