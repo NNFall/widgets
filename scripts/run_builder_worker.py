@@ -19,8 +19,9 @@ if __package__ in {None, ""}:
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.models.providers.gemini import GeminiModelProvider
+from app.models.providers.antigravity_text import AntigravityTextProvider
 from app.models.providers.codex_bridge import CodexBridgeProvider
+from app.models.providers.gemini import GeminiModelProvider
 from app.models.providers.openai_compatible import OpenAICompatibleProvider
 from app.models.lineage import ModelInvocationContext
 from app.models.router import (
@@ -240,8 +241,15 @@ def worker_service_identity() -> tuple[str, str, str]:
 
 def make_runtime_model_router(config, factory) -> ModelRouter:
     codex_enabled = bool(getattr(config, "codex_bridge_enabled", False))
+    antigravity_enabled = bool(
+        getattr(config, "antigravity_api_enabled", False)
+    )
     if not config.gemini_api_key and not codex_enabled:
         raise RuntimeError("GEMINI_API_KEY is required for routed builder stages")
+    if antigravity_enabled and not codex_enabled:
+        raise RuntimeError(
+            "KAIGO_CODEX_BRIDGE_ENABLED is required for AntiGravity fallback"
+        )
     hybrid_enabled = bool(getattr(config, "hybrid_routing_enabled", False))
     providers = {}
     input_rate: int | None = None
@@ -265,6 +273,13 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
         providers["codex_bridge"] = CodexBridgeProvider(
             socket_path=config.codex_bridge_socket_path,
             timeout_seconds=config.codex_bridge_timeout_seconds,
+        )
+    if antigravity_enabled:
+        providers["antigravity_text"] = AntigravityTextProvider(
+            api_key=config.antigravity_api_key,
+            base_url=config.antigravity_api_base_url,
+            reasoning_effort=config.antigravity_api_reasoning_effort,
+            timeout_seconds=config.antigravity_api_timeout_seconds,
         )
     hybrid_available = hybrid_enabled and bool(config.agentrouter_api_key)
     if hybrid_enabled and not hybrid_available and not codex_enabled:
@@ -317,6 +332,14 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
         return ProviderTarget(
             "codex_bridge",
             model or config.codex_bridge_model,
+            None,
+            None,
+        )
+
+    def antigravity_target() -> ProviderTarget:
+        return ProviderTarget(
+            "antigravity_text",
+            config.antigravity_api_model,
             None,
             None,
         )
@@ -439,11 +462,18 @@ def make_runtime_model_router(config, factory) -> ModelRouter:
             if hybrid_available
             else gemini_retry_targets(config.direct_model)
         )
-        for role in ("direction_candidate", "direction_judge"):
-            policies[(role, policy.name)] = ModelPolicy(
-                prompt_version="direction-v1",
-                targets=with_codex(direction_targets),
-            )
+        policies[("direction_candidate", policy.name)] = ModelPolicy(
+            prompt_version="direction-v1",
+            targets=(
+                (antigravity_target(), codex_target())
+                if antigravity_enabled
+                else with_codex(direction_targets)
+            ),
+        )
+        policies[("direction_judge", policy.name)] = ModelPolicy(
+            prompt_version="direction-v1",
+            targets=with_codex(direction_targets),
+        )
         repair_targets = (
             glm_targets()
             if hybrid_available

@@ -71,7 +71,27 @@ the `direction_candidate` policy when the feature flag is enabled.
 4. Run:
    `python -m pytest tests/builder_lab_cases/test_worker.py tests/builder_lab_cases/test_directions.py -q`.
 
-## Task 4: Regression and independent review
+## Task 4: Least-privilege production egress
+
+**Files:**
+
+- Modify: `scripts/apply_builder_egress_guard.sh`
+- Modify: `deploy/systemd/kaigo-builder-worker.service`
+- Modify: `tests/builder_lab_cases/test_egress_guard.py`
+- Modify: `tests/deployment_cases/test_saas_production_contract.py`
+- Modify: `docs/SAAS_PRODUCTION_RUNBOOK.md`
+
+1. Add RED tests for a new immutable firewall generation that permits only the
+   fixed builder-worker build-network address to reach the configured NL public
+   `/32` on TCP 443 before the host-input reject.
+2. Add fail-closed validation for the fixed worker address, destination `/32`,
+   and port supplied by a root-owned systemd environment file. Do not permit
+   builder-lab, the database bridge, or a broad HTTPS destination.
+3. Verify atomic removal of the old generation and exact post-state.
+4. Document installation and rollback without putting the bearer key in the
+   egress file.
+
+## Task 5: Regression and independent review
 
 1. Run:
    `python -m pytest tests/saas_cases/test_antigravity_text_provider.py tests/saas_cases/test_model_router.py tests/builder_lab_cases/test_config.py tests/builder_lab_cases/test_worker.py tests/builder_lab_cases/test_directions.py -q`.
@@ -82,19 +102,20 @@ the `direction_candidate` policy when the feature flag is enabled.
 5. Update `docs/product-journal/2026-08.md`, the release packet, and content
    backlog with verified facts only.
 
-## Task 5: Secure production configuration
+## Task 6: Secure production configuration
 
 1. On NL, record current worker image/release identity and readiness without
    printing secrets.
-2. Generate a dedicated high-entropy integration bearer key locally on the
-   server; store plaintext only in the root-owned Kaigo environment and store
-   only its hash in the AntiGravity gateway key list.
+2. Transfer the user-provided service key from its operator-owned secret file
+   into the dedicated root-only builder-worker environment file. Do not place
+   plaintext in the shared Kaigo environment; verify that the existing gateway
+   verifier accepts it without printing either value.
 3. Validate permissions and configuration shapes without echoing values.
 4. Build/pull one pinned worker image, mindful of the NL host's limited disk.
 5. Recreate only the gateway if its hash list changed and the builder worker for
    the new image/config; verify both services and identities.
 
-## Task 6: Real URL-to-widget production acceptance
+## Task 7: Real URL-to-widget production acceptance
 
 1. Perform one authenticated structured AntiGravity turn using the dedicated
    Kaigo key; assert returned model, parsed schema, usage, and
@@ -114,7 +135,7 @@ the `direction_candidate` policy when the feature flag is enabled.
 6. Capture non-secret evidence and exact timings. If any release gate fails,
    disable the feature flag and restart only the builder worker.
 
-## Task 7: Closeout
+## Task 8: Closeout
 
 1. Compare AntiGravity candidate latency, structured-response success, fallback
    rate, and useful output against the existing path.

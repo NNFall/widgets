@@ -59,7 +59,11 @@ Response mapping:
 - `text <- output_text`;
 - `parsed <- json.loads(output_text)` followed by local Draft 2020-12 schema
   validation for structured requests;
-- normalized input/output/thinking/cache usage;
+- normalized input/output/thinking/cache usage. The upstream stream recovery
+  path can legitimately report only `total_tokens`, while the upstream Usage
+  model also permits an empty object and defaults every counter to zero.
+  Missing counters are therefore treated as zero; any supplied aggregate is
+  validated but never used to invent a billing split;
 - `request_id`, returned model, and provider identity
   `actual_provider="antigravity_cli"`;
 - cost remains `unknown`: the target has no invented token price and the adapter
@@ -97,9 +101,18 @@ New builder settings:
 
 When enabled, the base URL must be HTTPS, the key/model/effort must be non-empty,
 and model/effort must match when the model embeds `-low`, `-medium`, or `-high`.
-The key is stored only in the durable root-owned Kaigo environment on NL. A
-dedicated service key is created for this integration; only its hash is added to
-the AntiGravity gateway configuration.
+The user-provided service key is copied from its operator-owned secret file into
+a dedicated root-only builder-worker environment file on NL. It is never placed
+in the shared Kaigo environment or Git; the gateway already stores only the
+corresponding verifier/hash.
+
+The production builder resolves `kaigo.space` to the NL host itself, so the
+existing host-input containment needs one reviewed exception. A new immutable
+egress generation allows only the fixed builder-worker address on
+`br-kaigo-build` to reach the configured public NL `/32` on TCP 443. It does not
+grant the neighbouring builder-lab container or the database bridge this path.
+Host and port come from a root-owned, fail-closed systemd environment file; the
+AntiGravity bearer key remains in a separate root-only environment file.
 
 ## Verification and rollout
 
@@ -110,10 +123,12 @@ the AntiGravity gateway configuration.
 3. Runtime-router tests: only `direction_candidate` receives AntiGravity first;
    direction judge and all image roles remain unchanged; fallback reaches Codex.
 4. Existing router/direction suites and worker configuration tests remain green.
-5. An AntiGravity Worker reviewer independently checks the final diff.
-6. Create a dedicated gateway key, deploy one pinned Kaigo worker image, enable
+5. Egress tests prove the exact fixed-source `/32:443` allow precedes the host
+   reject and that invalid/missing production values stop the worker.
+6. An AntiGravity Worker reviewer independently checks the final diff.
+7. Create a dedicated gateway key, deploy one pinned Kaigo worker image, enable
    the flag, and verify readiness/model-call provenance.
-7. Submit a bare public HTTPS site URL with no custom brief, wait for a verified
+8. Submit a bare public HTTPS site URL with no custom brief, wait for a verified
    widget, publish it through the controlled canary account, and exercise the
    external HTTPS loader, open/close behavior, responsive view, chat reply,
    allowed-origin enforcement, stable link, and rollback path.

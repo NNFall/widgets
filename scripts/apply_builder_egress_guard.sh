@@ -10,13 +10,65 @@ BRIDGE="br-kaigo-build"
 SUBNET="172.30.240.0/28"
 TUNNEL_HOST="172.19.0.1/32"
 TUNNEL_PORT="8787"
-RULESET_GENERATION="G4"
+RULESET_GENERATION="G5"
 FORWARD_CHAIN="KAIGO-BLD-FWD-${RULESET_GENERATION}"
 HOST_CHAIN="KAIGO-BLD-HOST-${RULESET_GENERATION}"
 LEGACY_FORWARD_CHAIN="KAIGO-BUILDER-EGRESS"
 LEGACY_HOST_CHAIN="KAIGO-BUILDER-HOST"
 IPT=(iptables -w 10)
 RESTORE=(iptables-restore --wait 10 --noflush)
+
+validate_ipv4() {
+  local address="$1"
+  local octet
+  local -a octets=()
+  [[ "${address}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+  IFS='.' read -r -a octets <<< "${address}"
+  [[ "${#octets[@]}" -eq 4 ]] || return 1
+  for octet in "${octets[@]}"; do
+    [[ "${octet}" == "0" || "${octet}" != 0* ]] || return 1
+    ((10#${octet} <= 255)) || return 1
+  done
+}
+
+validate_public_https_destination() {
+  : "${KAIGO_WORKER_BUILD_CLIENT_ADDRESS:?worker build client address is required}"
+  : "${KAIGO_WORKER_PUBLIC_HTTPS_HOST:?worker public HTTPS host is required}"
+  : "${KAIGO_WORKER_PUBLIC_HTTPS_PORT:?worker public HTTPS port is required}"
+
+  [[ "${KAIGO_WORKER_PUBLIC_HTTPS_HOST}" =~ /32$ ]] || {
+    echo "worker public HTTPS host must be an exact IPv4 /32" >&2
+    return 1
+  }
+  local public_host_address="${KAIGO_WORKER_PUBLIC_HTTPS_HOST%/32}"
+  validate_ipv4 "${public_host_address}" || {
+    echo "worker public HTTPS host must be an exact IPv4 /32" >&2
+    return 1
+  }
+  validate_ipv4 "${KAIGO_WORKER_BUILD_CLIENT_ADDRESS}" || {
+    echo "worker build client address must be an exact IPv4 address" >&2
+    return 1
+  }
+  [[ "${KAIGO_WORKER_PUBLIC_HTTPS_PORT}" =~ ^[0-9]+$ ]] || {
+    echo "worker public HTTPS port must be numeric" >&2
+    return 1
+  }
+  [[ "${KAIGO_WORKER_PUBLIC_HTTPS_PORT}" =~ ^[1-9][0-9]{0,4}$ ]] || {
+    echo "worker public HTTPS port must be canonical and between 1 and 65535" >&2
+    return 1
+  }
+  local public_https_port=$((10#${KAIGO_WORKER_PUBLIC_HTTPS_PORT}))
+  ((public_https_port >= 1 && public_https_port <= 65535)) || {
+    echo "worker public HTTPS port must be between 1 and 65535" >&2
+    return 1
+  }
+
+  BUILD_CLIENT="${KAIGO_WORKER_BUILD_CLIENT_ADDRESS}"
+  PUBLIC_HTTPS_HOST="${KAIGO_WORKER_PUBLIC_HTTPS_HOST}"
+  PUBLIC_HTTPS_PORT="${public_https_port}"
+}
+
+validate_public_https_destination
 
 PRIVATE_DESTINATIONS=(
   0.0.0.0/8
@@ -59,6 +111,7 @@ expected_host_chain() {
   echo "-N ${HOST_CHAIN}"
   # iptables -S canonicalizes base selectors as source, destination, interface.
   echo "-A ${HOST_CHAIN} -s ${SUBNET} -d ${TUNNEL_HOST} -i ${BRIDGE} -p tcp -m tcp --dport ${TUNNEL_PORT} -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT"
+  echo "-A ${HOST_CHAIN} -s ${BUILD_CLIENT}/32 -d ${PUBLIC_HTTPS_HOST} -i ${BRIDGE} -p tcp -m tcp --dport ${PUBLIC_HTTPS_PORT} -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT"
   echo "-A ${HOST_CHAIN} -s ${SUBNET} -m conntrack --ctstate NEW -j REJECT --reject-with icmp-port-unreachable"
   echo "-A ${HOST_CHAIN} -j RETURN"
 }
@@ -250,6 +303,7 @@ trap 'rm -f "${transaction}"' EXIT
   done
   echo "-A ${FORWARD_CHAIN} -j RETURN"
   echo "-A ${HOST_CHAIN} -i ${BRIDGE} -s ${SUBNET} -d ${TUNNEL_HOST} -p tcp -m tcp --dport ${TUNNEL_PORT} -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT"
+  echo "-A ${HOST_CHAIN} -i ${BRIDGE} -s ${BUILD_CLIENT}/32 -d ${PUBLIC_HTTPS_HOST} -p tcp -m tcp --dport ${PUBLIC_HTTPS_PORT} -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT"
   echo "-A ${HOST_CHAIN} -s ${SUBNET} -m conntrack --ctstate NEW -j REJECT --reject-with icmp-port-unreachable"
   echo "-A ${HOST_CHAIN} -j RETURN"
 

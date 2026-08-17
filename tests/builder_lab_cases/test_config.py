@@ -22,6 +22,12 @@ class BuilderLabConfigTests(unittest.TestCase):
             "KAIGO_CODEX_BRIDGE_TIMEOUT_SECONDS": None,
             "KAIGO_CODEX_BRIDGE_MODEL": None,
             "KAIGO_CODEX_BRIDGE_VISUAL_JUDGE_MODEL": None,
+            "KAIGO_ANTIGRAVITY_API_ENABLED": None,
+            "KAIGO_ANTIGRAVITY_API_KEY": None,
+            "KAIGO_ANTIGRAVITY_API_BASE_URL": None,
+            "KAIGO_ANTIGRAVITY_API_TIMEOUT_SECONDS": None,
+            "KAIGO_ANTIGRAVITY_API_MODEL": None,
+            "KAIGO_ANTIGRAVITY_API_REASONING_EFFORT": None,
             "AGENTROUTER_API_KEY": None,
             "AGENTROUTER_BASE_URL": None,
             "AGENTROUTER_TIMEOUT_SECONDS": None,
@@ -101,6 +107,15 @@ class BuilderLabConfigTests(unittest.TestCase):
         self.assertEqual(config.codex_bridge_timeout_seconds, 900)
         self.assertEqual(config.codex_bridge_model, "gpt-5.6-luna")
         self.assertEqual(config.codex_bridge_visual_judge_model, "gpt-5.6-sol")
+        self.assertFalse(config.antigravity_api_enabled)
+        self.assertIsNone(config.antigravity_api_key)
+        self.assertEqual(
+            config.antigravity_api_base_url,
+            "https://kaigo.space/antigravity-api",
+        )
+        self.assertEqual(config.antigravity_api_timeout_seconds, 180)
+        self.assertEqual(config.antigravity_api_model, "gemini-3.7-flash-high")
+        self.assertEqual(config.antigravity_api_reasoning_effort, "high")
         self.assertIsNone(config.agentrouter_api_key)
         self.assertEqual(config.agentrouter_base_url, "https://co.agentrouter.org/v1")
         self.assertEqual(config.agentrouter_timeout_seconds, 180)
@@ -149,6 +164,12 @@ class BuilderLabConfigTests(unittest.TestCase):
             KAIGO_CODEX_BRIDGE_TIMEOUT_SECONDS="1200",
             KAIGO_CODEX_BRIDGE_MODEL="gpt-5.6-luna-test",
             KAIGO_CODEX_BRIDGE_VISUAL_JUDGE_MODEL="gpt-5.6-sol-test",
+            KAIGO_ANTIGRAVITY_API_ENABLED="true",
+            KAIGO_ANTIGRAVITY_API_KEY="antigravity-secret",
+            KAIGO_ANTIGRAVITY_API_BASE_URL="https://provider.example/antigravity/",
+            KAIGO_ANTIGRAVITY_API_TIMEOUT_SECONDS="321",
+            KAIGO_ANTIGRAVITY_API_MODEL="gemini-3.7-flash-medium",
+            KAIGO_ANTIGRAVITY_API_REASONING_EFFORT="medium",
             AGENTROUTER_API_KEY="router-secret",
             AGENTROUTER_BASE_URL="https://router.example/v1/",
             AGENTROUTER_TIMEOUT_SECONDS="321",
@@ -199,6 +220,15 @@ class BuilderLabConfigTests(unittest.TestCase):
             config.codex_bridge_visual_judge_model,
             "gpt-5.6-sol-test",
         )
+        self.assertTrue(config.antigravity_api_enabled)
+        self.assertEqual(config.antigravity_api_key, "antigravity-secret")
+        self.assertEqual(
+            config.antigravity_api_base_url,
+            "https://provider.example/antigravity",
+        )
+        self.assertEqual(config.antigravity_api_timeout_seconds, 321)
+        self.assertEqual(config.antigravity_api_model, "gemini-3.7-flash-medium")
+        self.assertEqual(config.antigravity_api_reasoning_effort, "medium")
         self.assertEqual(config.agentrouter_api_key, "router-secret")
         self.assertEqual(config.agentrouter_base_url, "https://router.example/v1")
         self.assertEqual(config.agentrouter_timeout_seconds, 321)
@@ -302,6 +332,52 @@ class BuilderLabConfigTests(unittest.TestCase):
                 KAIGO_CODEX_BRIDGE_ENABLED="true",
                 KAIGO_CODEX_BRIDGE_VISUAL_JUDGE_MODEL="   ",
             )
+
+    def test_antigravity_api_requires_complete_secure_configuration_when_enabled(self):
+        with self.assertRaisesRegex(ValueError, "API_KEY"):
+            self.load(KAIGO_ANTIGRAVITY_API_ENABLED="true")
+        with self.assertRaisesRegex(ValueError, "BASE_URL"):
+            self.load(
+                KAIGO_ANTIGRAVITY_API_ENABLED="true",
+                KAIGO_ANTIGRAVITY_API_KEY="secret",
+                KAIGO_ANTIGRAVITY_API_BASE_URL="http://provider.example/api",
+            )
+        with self.assertRaisesRegex(ValueError, "MODEL"):
+            self.load(
+                KAIGO_ANTIGRAVITY_API_ENABLED="true",
+                KAIGO_ANTIGRAVITY_API_KEY="secret",
+                KAIGO_ANTIGRAVITY_API_MODEL="   ",
+            )
+        with self.assertRaisesRegex(ValueError, "REASONING_EFFORT"):
+            self.load(
+                KAIGO_ANTIGRAVITY_API_ENABLED="true",
+                KAIGO_ANTIGRAVITY_API_KEY="secret",
+                KAIGO_ANTIGRAVITY_API_REASONING_EFFORT="max",
+            )
+
+    def test_antigravity_api_model_suffix_must_match_reasoning_effort(self):
+        with self.assertRaisesRegex(ValueError, "must match"):
+            self.load(
+                KAIGO_ANTIGRAVITY_API_ENABLED="true",
+                KAIGO_ANTIGRAVITY_API_KEY="secret",
+                KAIGO_ANTIGRAVITY_API_MODEL="gemini-3.7-flash-high",
+                KAIGO_ANTIGRAVITY_API_REASONING_EFFORT="medium",
+            )
+
+    def test_antigravity_api_requires_codex_fallback(self):
+        with self.assertRaisesRegex(ValueError, "KAIGO_CODEX_BRIDGE_ENABLED"):
+            self.load(
+                KAIGO_ANTIGRAVITY_API_ENABLED="true",
+                KAIGO_ANTIGRAVITY_API_KEY="secret",
+            )
+
+    def test_antigravity_api_timeout_is_bounded(self):
+        for value in ("9", "901"):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ValueError,
+                "KAIGO_ANTIGRAVITY_API_TIMEOUT_SECONDS",
+            ):
+                self.load(KAIGO_ANTIGRAVITY_API_TIMEOUT_SECONDS=value)
 
     def test_existing_google_ai_key_alias_is_supported(self):
         config = self.load(GOOGLE_AI_API_KEY="existing-key")

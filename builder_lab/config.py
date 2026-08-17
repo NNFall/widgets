@@ -5,6 +5,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import PurePosixPath, PureWindowsPath
+from urllib.parse import urlsplit
 
 from .forensics.config import GenerationForensicsConfig
 from .model_config import normalize_thinking_level
@@ -77,6 +78,12 @@ class BuilderLabConfig:
     codex_bridge_timeout_seconds: int
     codex_bridge_model: str
     codex_bridge_visual_judge_model: str
+    antigravity_api_enabled: bool
+    antigravity_api_key: str | None
+    antigravity_api_base_url: str
+    antigravity_api_timeout_seconds: int
+    antigravity_api_model: str
+    antigravity_api_reasoning_effort: str
     agentrouter_api_key: str | None
     agentrouter_base_url: str
     agentrouter_timeout_seconds: int
@@ -150,6 +157,53 @@ class BuilderLabConfig:
             if not self.codex_bridge_visual_judge_model:
                 raise ValueError(
                     "KAIGO_CODEX_BRIDGE_VISUAL_JUDGE_MODEL must be non-empty"
+                )
+        if self.antigravity_api_enabled:
+            if not self.antigravity_api_key:
+                raise ValueError(
+                    "KAIGO_ANTIGRAVITY_API_KEY is required when the API is enabled"
+                )
+            parsed = urlsplit(self.antigravity_api_base_url)
+            if (
+                parsed.scheme != "https"
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(
+                    "KAIGO_ANTIGRAVITY_API_BASE_URL must use HTTPS"
+                )
+            if not self.antigravity_api_model:
+                raise ValueError("KAIGO_ANTIGRAVITY_API_MODEL must be non-empty")
+            if self.antigravity_api_reasoning_effort not in {
+                "low",
+                "medium",
+                "high",
+            }:
+                raise ValueError(
+                    "KAIGO_ANTIGRAVITY_API_REASONING_EFFORT is unsupported"
+                )
+            encoded_effort = next(
+                (
+                    effort
+                    for effort in ("low", "medium", "high")
+                    if self.antigravity_api_model.endswith(f"-{effort}")
+                ),
+                None,
+            )
+            if (
+                encoded_effort is not None
+                and encoded_effort != self.antigravity_api_reasoning_effort
+            ):
+                raise ValueError(
+                    "KAIGO_ANTIGRAVITY_API_REASONING_EFFORT must match the model"
+                )
+            if not self.codex_bridge_enabled:
+                raise ValueError(
+                    "KAIGO_CODEX_BRIDGE_ENABLED must be true when the "
+                    "AntiGravity API experiment is enabled"
                 )
         if self.chat_session_secret is not None and (
             len(self.chat_session_secret.encode("ascii", "ignore")) < 32
@@ -225,6 +279,33 @@ class BuilderLabConfig:
                 "KAIGO_CODEX_BRIDGE_VISUAL_JUDGE_MODEL",
                 "gpt-5.6-sol",
             ).strip(),
+            antigravity_api_enabled=_bool(
+                "KAIGO_ANTIGRAVITY_API_ENABLED",
+                False,
+            ),
+            antigravity_api_key=_first_nonblank("KAIGO_ANTIGRAVITY_API_KEY"),
+            antigravity_api_base_url=os.getenv(
+                "KAIGO_ANTIGRAVITY_API_BASE_URL",
+                "https://kaigo.space/antigravity-api",
+            )
+            .strip()
+            .rstrip("/"),
+            antigravity_api_timeout_seconds=_int(
+                "KAIGO_ANTIGRAVITY_API_TIMEOUT_SECONDS",
+                180,
+                10,
+                900,
+            ),
+            antigravity_api_model=os.getenv(
+                "KAIGO_ANTIGRAVITY_API_MODEL",
+                "gemini-3.7-flash-high",
+            ).strip(),
+            antigravity_api_reasoning_effort=os.getenv(
+                "KAIGO_ANTIGRAVITY_API_REASONING_EFFORT",
+                "high",
+            )
+            .strip()
+            .lower(),
             agentrouter_api_key=_first_nonblank("AGENTROUTER_API_KEY"),
             agentrouter_base_url=os.getenv(
                 "AGENTROUTER_BASE_URL",

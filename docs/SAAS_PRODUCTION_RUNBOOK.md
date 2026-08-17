@@ -60,18 +60,18 @@ is performed by this repository task.
    [[ "$KAIGO_BUILDER_WORKER_IMAGE" =~ ^(.+@sha256:|sha256:)[0-9a-fA-F]{64}$ ]]
    [[ "$KAIGO_DATABASE_OPS_IMAGE" =~ ^(.+@sha256:|sha256:)[0-9a-fA-F]{64}$ ]]
    if [[ "$KAIGO_APP_IMAGE" == *@sha256:* && "$KAIGO_BUILDER_WORKER_IMAGE" == *@sha256:* ]]; then
-     COMPOSE_PROJECT_NAME=kaigo docker compose pull app builder-worker migration
+     COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml pull app builder-worker migration
    else
-     [[ "$KAIGO_APP_IMAGE" == *@sha256:* ]] && COMPOSE_PROJECT_NAME=kaigo docker compose pull app migration
-     [[ "$KAIGO_BUILDER_WORKER_IMAGE" == *@sha256:* ]] && COMPOSE_PROJECT_NAME=kaigo docker compose pull builder-worker
+     [[ "$KAIGO_APP_IMAGE" == *@sha256:* ]] && COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml pull app migration
+     [[ "$KAIGO_BUILDER_WORKER_IMAGE" == *@sha256:* ]] && COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml pull builder-worker
    fi
    if [[ "$KAIGO_DATABASE_OPS_IMAGE" == *@sha256:* ]]; then
-     COMPOSE_PROJECT_NAME=kaigo docker compose --profile operations pull database-ops
+     COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml --profile operations pull database-ops
    fi
    docker image inspect "$KAIGO_APP_IMAGE" "$KAIGO_BUILDER_WORKER_IMAGE" \
      "$KAIGO_DATABASE_OPS_IMAGE" \
      > "/srv/kaigo/releases/$(date -u +%Y%m%dT%H%M%SZ)-images.json"
-   COMPOSE_PROJECT_NAME=kaigo docker compose config --quiet
+   COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml config --quiet
    ```
 
    Copy the same worker reference into
@@ -83,8 +83,8 @@ is performed by this repository task.
    the database hostname is `db`; no host Python or `pg_dump` is used:
 
    ```bash
-   COMPOSE_PROJECT_NAME=kaigo docker compose --profile operations run --rm database-ops pg_dump --format=custom --file=/backups/pre-saas.dump
-   COMPOSE_PROJECT_NAME=kaigo docker compose --profile operations run --rm database-ops psql -Atc 'select version_num from alembic_version'
+   COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml --profile operations run --rm database-ops pg_dump --format=custom --file=/backups/pre-saas.dump
+   COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml --profile operations run --rm database-ops psql -Atc 'select version_num from alembic_version'
    ```
 
 3. Fill the production environment from `.env.example` and set
@@ -123,6 +123,70 @@ is performed by this repository task.
    test "$(cat /proc/sys/net/bridge/bridge-nf-call-iptables)" = 1
    ```
 
+   Install the single reviewed public HTTPS destination for the builder worker
+   in a separate root-owned file. The systemd unit uses the non-optional
+   `EnvironmentFile=/etc/kaigo/builder-worker-egress.env` directive and refuses
+   to start if the file is absent or is not owned by `root:root` with mode 600.
+   The host must be an exact IPv4 `/32`; the port must be a canonical number
+   between 1 and 65535. This release permits only the self-hosted Kaigo HTTPS
+   endpoint and does not open the database bridge or the rest of the build
+   subnet:
+
+   ```bash
+   set -euo pipefail
+   set +x
+   EGRESS_ENV_TMP="$(mktemp)"
+   trap 'rm -f "$EGRESS_ENV_TMP"' EXIT
+   printf '%s\n' \
+     'KAIGO_WORKER_PUBLIC_HTTPS_HOST=5.129.236.90/32' \
+     'KAIGO_WORKER_PUBLIC_HTTPS_PORT=443' \
+     > "$EGRESS_ENV_TMP"
+   install -o root -g root -m 600 "$EGRESS_ENV_TMP" \
+     /etc/kaigo/builder-worker-egress.env
+   rm -f "$EGRESS_ENV_TMP"
+   trap - EXIT
+   test "$(stat -c %u:%g:%a /etc/kaigo/builder-worker-egress.env)" = "0:0:600"
+   ```
+
+   `KAIGO_WORKER_BUILD_CLIENT_ADDRESS=172.30.240.2` remains pinned in the unit
+   and must match the fixed `builder-worker` address on
+   `kaigo_builder_research`. The G5 host rule permits port 443 only from this
+   one source, so `builder-lab` on the same bridge does not inherit the allow.
+
+   Install the AntiGravity builder configuration separately from the shared
+   Kaigo environment. Do not put the AntiGravity bearer key in
+   `/etc/kaigo/kaigo.env`: that file is consumed by services which do not need
+   this credential. The systemd unit passes the dedicated file only to the
+   builder-worker Compose invocation through
+   `EnvironmentFile=/etc/kaigo/builder-worker-antigravity.env` and requires
+   `root:root` mode 600:
+
+   ```bash
+   set -euo pipefail
+   set +x
+   test -f "$ANTIGRAVITY_KEY_FILE"
+   mapfile -t ANTIGRAVITY_KEY_LINES < "$ANTIGRAVITY_KEY_FILE"
+   test "${#ANTIGRAVITY_KEY_LINES[@]}" -eq 1
+   [[ "${ANTIGRAVITY_KEY_LINES[0]}" =~ ^[A-Za-z0-9._~-]{32,256}$ ]]
+   ANTIGRAVITY_ENV_TMP="$(mktemp)"
+   trap 'rm -f "$ANTIGRAVITY_ENV_TMP"' EXIT
+   {
+     printf '%s\n' \
+       'KAIGO_ANTIGRAVITY_API_ENABLED=false' \
+       'KAIGO_ANTIGRAVITY_API_BASE_URL=https://kaigo.space/antigravity-api' \
+       'KAIGO_ANTIGRAVITY_API_TIMEOUT_SECONDS=180' \
+       'KAIGO_ANTIGRAVITY_API_MODEL=gemini-3.7-flash-high' \
+       'KAIGO_ANTIGRAVITY_API_REASONING_EFFORT=high'
+     printf 'KAIGO_ANTIGRAVITY_API_KEY=%s\n' "${ANTIGRAVITY_KEY_LINES[0]}"
+   } > "$ANTIGRAVITY_ENV_TMP"
+   install -o root -g root -m 600 "$ANTIGRAVITY_ENV_TMP" \
+     /etc/kaigo/builder-worker-antigravity.env
+   rm -f "$ANTIGRAVITY_ENV_TMP"
+   unset ANTIGRAVITY_KEY_LINES
+   trap - EXIT
+   test "$(stat -c %u:%g:%a /etc/kaigo/builder-worker-antigravity.env)" = "0:0:600"
+   ```
+
    Then install `deploy/systemd/kaigo-builder-worker.service`, adjusting only
    the immutable checkout path if production uses a different path. Docker
    restart remains disabled for `builder-worker`; systemd is the sole restart
@@ -143,15 +207,15 @@ is performed by this repository task.
    set +a
    : "${KAIGO_APP_IMAGE:?selected current app/migration image is required}"
    : "${KAIGO_DATABASE_OPS_IMAGE:?selected database ops image is required}"
-   APP_CONTAINER="$(COMPOSE_PROJECT_NAME=kaigo docker compose ps -q app)"
-   WORKER_CONTAINER="$(COMPOSE_PROJECT_NAME=kaigo docker compose --profile saas-worker ps -q builder-worker)"
+   APP_CONTAINER="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml ps -q app)"
+   WORKER_CONTAINER="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml --profile saas-worker ps -q builder-worker)"
    test -n "$APP_CONTAINER"
    test -n "$WORKER_CONTAINER"
    ROLLBACK_APP_IMAGE="$(docker inspect --format '{{.Image}}' "$APP_CONTAINER")"
    ROLLBACK_WORKER_IMAGE="$(docker inspect --format '{{.Image}}' "$WORKER_CONTAINER")"
    ROLLBACK_RELEASE_ID="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$APP_CONTAINER" | sed -n 's/^KAIGO_RELEASE_ID=//p')"
    ROLLBACK_WORKER_IMAGE_IDENTITY="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$WORKER_CONTAINER" | sed -n 's/^KAIGO_BUILDER_WORKER_IMAGE_IDENTITY=//p')"
-   ROLLBACK_PREVIOUS_ALEMBIC_REVISION="$(COMPOSE_PROJECT_NAME=kaigo docker compose --profile operations run --rm database-ops psql -Atc 'select version_num from alembic_version')"
+   ROLLBACK_PREVIOUS_ALEMBIC_REVISION="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml --profile operations run --rm database-ops psql -Atc 'select version_num from alembic_version')"
    ROLLBACK_WORKER_BOOT_ID="$(cat /proc/sys/kernel/random/uuid)"
    ROLLBACK_MIGRATION_IMAGE="$KAIGO_APP_IMAGE"
    [[ "$ROLLBACK_APP_IMAGE" =~ ^sha256:[0-9a-fA-F]{64}$ ]]
@@ -189,14 +253,14 @@ known Alembic revision, or the exact five-table legacy schema corresponding to
 indexes stop the release.
 
 ```bash
-COMPOSE_PROJECT_NAME=kaigo docker compose --profile operations run --rm migration python scripts/preflight_saas_schema.py
+COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml --profile operations run --rm migration python scripts/preflight_saas_schema.py
 ```
 
 Review its proposed action and the database backup. Mutation requires the
 explicit mode:
 
 ```bash
-COMPOSE_PROJECT_NAME=kaigo docker compose --profile operations run --rm migration python scripts/preflight_saas_schema.py --apply
+COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml --profile operations run --rm migration python scripts/preflight_saas_schema.py --apply
 ```
 
 For the exact unversioned legacy schema only, `--apply` stamps
@@ -211,7 +275,7 @@ systemd stop timeout and cannot claim new work during the switch:
 
 ```bash
 systemctl stop kaigo-builder-worker
-COMPOSE_PROJECT_NAME=kaigo docker compose up -d --no-build app
+COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml up -d --no-build app
 cp /etc/kaigo/release.env /etc/kaigo/builder-worker-image.env
 systemctl daemon-reload
 systemctl restart kaigo-builder-worker
@@ -226,8 +290,8 @@ Verify the images of the actual running containers, not only the locally
 available image references. Both comparisons must succeed:
 
 ```bash
-APP_CONTAINER="$(COMPOSE_PROJECT_NAME=kaigo docker compose ps -q app)"
-WORKER_CONTAINER="$(COMPOSE_PROJECT_NAME=kaigo docker compose --profile saas-worker ps -q builder-worker)"
+APP_CONTAINER="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml ps -q app)"
+WORKER_CONTAINER="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml --profile saas-worker ps -q builder-worker)"
 test "$(docker inspect --format '{{.Image}}' "$APP_CONTAINER")" = \
   "$(docker image inspect --format '{{.Id}}' "$KAIGO_APP_IMAGE")"
 test "$(docker inspect --format '{{.Image}}' "$WORKER_CONTAINER")" = \
@@ -241,6 +305,85 @@ The application-only checks use the loopback app port and do not request
 ```bash
 curl -fsS http://127.0.0.1:8080/api/health
 curl -fsS http://127.0.0.1:8080/api/auth/session
+```
+
+The worker starts with AntiGravity disabled and therefore retains the reviewed
+Codex fallback. Before changing that flag, prove the provider contract directly.
+Keep the bearer value out of shell tracing, argv, and output by passing it in a
+root-only curl config file; the response is also temporary and root-only:
+
+```bash
+set -euo pipefail
+set +x
+umask 077
+ANTIGRAVITY_PROVIDER_SMOKE_CONFIG="$(mktemp /run/kaigo-antigravity-curl.XXXXXX)"
+ANTIGRAVITY_PROVIDER_SMOKE_RESPONSE="$(mktemp /run/kaigo-antigravity-response.XXXXXX)"
+trap 'rm -f "$ANTIGRAVITY_PROVIDER_SMOKE_CONFIG" "$ANTIGRAVITY_PROVIDER_SMOKE_RESPONSE"' EXIT
+. /etc/kaigo/builder-worker-antigravity.env
+: "${KAIGO_ANTIGRAVITY_API_KEY:?AntiGravity bearer key is required}"
+[[ "$KAIGO_ANTIGRAVITY_API_KEY" =~ ^[A-Za-z0-9._~-]{32,256}$ ]]
+{
+  printf '%s\n' \
+    'silent' \
+    'show-error' \
+    'fail-with-body' \
+    'request = "POST"' \
+    'url = "https://kaigo.space/antigravity-api/v1/respond"' \
+    'header = "Content-Type: application/json"'
+  printf 'header = "Authorization: Bearer %s"\n' "$KAIGO_ANTIGRAVITY_API_KEY"
+} > "$ANTIGRAVITY_PROVIDER_SMOKE_CONFIG"
+chmod 600 "$ANTIGRAVITY_PROVIDER_SMOKE_CONFIG" "$ANTIGRAVITY_PROVIDER_SMOKE_RESPONSE"
+curl --config "$ANTIGRAVITY_PROVIDER_SMOKE_CONFIG" \
+  --data-binary '{"prompt":"Return a JSON object with ready set to true.","model":"gemini-3.7-flash-high","reasoning_effort":"high","native_tools":"none","response_format":{"type":"json_schema","json_schema":{"name":"kaigo_provider_smoke","schema":{"type":"object","properties":{"ready":{"type":"boolean"}},"required":["ready"],"additionalProperties":false},"strict":true}}}' \
+  --output "$ANTIGRAVITY_PROVIDER_SMOKE_RESPONSE"
+jq -e '
+  .conversation_deleted == true
+  and .finish_reason == "stop"
+  and .model == "gemini-3.7-flash-high"
+  and .reasoning_effort == "high"
+  and (.request_id | type == "string" and length > 0)
+  and (.duration_ms | type == "number" and . >= 0 and floor == .)
+  and (.usage | type == "object")
+  and ([
+    .usage.input_tokens,
+    .usage.output_tokens,
+    .usage.thinking_tokens,
+    .usage.cache_read_tokens,
+    .usage.total_tokens
+  ] | all(.[]; type == "number" and . >= 0 and floor == .))
+  and (.output_text | type == "string" and length > 0)
+  and ((.output_text | fromjson) == {"ready":true})
+  and (.tool_calls | length == 0)
+  and (.native_tool_events | length == 0)
+' "$ANTIGRAVITY_PROVIDER_SMOKE_RESPONSE" >/dev/null
+unset KAIGO_ANTIGRAVITY_API_KEY
+rm -f "$ANTIGRAVITY_PROVIDER_SMOKE_CONFIG" "$ANTIGRAVITY_PROVIDER_SMOKE_RESPONSE"
+trap - EXIT
+```
+
+Only after that direct smoke passes, atomically enable AntiGravity and restart
+the worker. The next action after this block is the authenticated canary
+generation; do not leave the provider enabled without running it:
+
+```bash
+set -euo pipefail
+set +x
+ANTIGRAVITY_ENV=/etc/kaigo/builder-worker-antigravity.env
+test "$(stat -c %u:%g:%a "$ANTIGRAVITY_ENV")" = "0:0:600"
+test "$(grep -c '^KAIGO_ANTIGRAVITY_API_ENABLED=false$' "$ANTIGRAVITY_ENV")" = 1
+ANTIGRAVITY_ENABLE_TMP="$(mktemp /etc/kaigo/builder-worker-antigravity.env.tmp.XXXXXX)"
+trap 'rm -f "$ANTIGRAVITY_ENABLE_TMP"' EXIT
+sed 's/^KAIGO_ANTIGRAVITY_API_ENABLED=false$/KAIGO_ANTIGRAVITY_API_ENABLED=true/' \
+  "$ANTIGRAVITY_ENV" > "$ANTIGRAVITY_ENABLE_TMP"
+test "$(grep -c '^KAIGO_ANTIGRAVITY_API_ENABLED=true$' "$ANTIGRAVITY_ENABLE_TMP")" = 1
+test "$(grep -c '^KAIGO_ANTIGRAVITY_API_ENABLED=false$' "$ANTIGRAVITY_ENABLE_TMP" || true)" = 0
+chown root:root "$ANTIGRAVITY_ENABLE_TMP"
+chmod 600 "$ANTIGRAVITY_ENABLE_TMP"
+mv -f "$ANTIGRAVITY_ENABLE_TMP" "$ANTIGRAVITY_ENV"
+trap - EXIT
+test "$(stat -c %u:%g:%a "$ANTIGRAVITY_ENV")" = "0:0:600"
+systemctl restart kaigo-builder-worker
+systemctl is-active --quiet kaigo-builder-worker
 ```
 
 Before the release smoke, use a real browser OAuth session through the public
@@ -425,6 +568,29 @@ Stop new work first:
 systemctl stop kaigo-builder-worker
 ```
 
+Disable AntiGravity atomically before preparing the rollback. This preserves
+the existing bearer key and provider settings without exposing them; the worker
+remains stopped until the schema and route checks below are complete:
+
+```bash
+set -euo pipefail
+set +x
+ANTIGRAVITY_ENV=/etc/kaigo/builder-worker-antigravity.env
+test "$(stat -c %u:%g:%a "$ANTIGRAVITY_ENV")" = "0:0:600"
+test "$(grep -Ec '^KAIGO_ANTIGRAVITY_API_ENABLED=(true|false)$' "$ANTIGRAVITY_ENV")" = 1
+ANTIGRAVITY_DISABLE_TMP="$(mktemp /etc/kaigo/builder-worker-antigravity.env.tmp.XXXXXX)"
+trap 'rm -f "$ANTIGRAVITY_DISABLE_TMP"' EXIT
+sed 's/^KAIGO_ANTIGRAVITY_API_ENABLED=true$/KAIGO_ANTIGRAVITY_API_ENABLED=false/' \
+  "$ANTIGRAVITY_ENV" > "$ANTIGRAVITY_DISABLE_TMP"
+test "$(grep -c '^KAIGO_ANTIGRAVITY_API_ENABLED=false$' "$ANTIGRAVITY_DISABLE_TMP")" = 1
+test "$(grep -c '^KAIGO_ANTIGRAVITY_API_ENABLED=true$' "$ANTIGRAVITY_DISABLE_TMP" || true)" = 0
+chown root:root "$ANTIGRAVITY_DISABLE_TMP"
+chmod 600 "$ANTIGRAVITY_DISABLE_TMP"
+mv -f "$ANTIGRAVITY_DISABLE_TMP" "$ANTIGRAVITY_ENV"
+trap - EXIT
+test "$(stat -c %u:%g:%a "$ANTIGRAVITY_ENV")" = "0:0:600"
+```
+
 Load the snapshot fail-closed: every identity and revision field is mandatory.
 Validate and inspect both prior runtime images and the **current reviewed**
 migration image. The latter must retain the current preflight/Alembic tooling;
@@ -453,10 +619,10 @@ set +a
 [[ "$KAIGO_BUILDER_WORKER_BOOT_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
 [[ "$KAIGO_PREVIOUS_ALEMBIC_REVISION" =~ ^[0-9a-z_]+$ ]]
 if [[ "$KAIGO_APP_IMAGE" == *@sha256:* && "$KAIGO_BUILDER_WORKER_IMAGE" == *@sha256:* ]]; then
-  COMPOSE_PROJECT_NAME=kaigo docker compose pull app builder-worker
+  COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml pull app builder-worker
 else
-  [[ "$KAIGO_APP_IMAGE" == *@sha256:* ]] && COMPOSE_PROJECT_NAME=kaigo docker compose pull app
-  [[ "$KAIGO_BUILDER_WORKER_IMAGE" == *@sha256:* ]] && COMPOSE_PROJECT_NAME=kaigo docker compose pull builder-worker
+  [[ "$KAIGO_APP_IMAGE" == *@sha256:* ]] && COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml pull app
+  [[ "$KAIGO_BUILDER_WORKER_IMAGE" == *@sha256:* ]] && COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml pull builder-worker
 fi
 [[ "$KAIGO_ROLLBACK_MIGRATION_IMAGE" == *@sha256:* ]] && docker pull "$KAIGO_ROLLBACK_MIGRATION_IMAGE"
 docker image inspect "$KAIGO_ROLLBACK_MIGRATION_IMAGE" >/dev/null
@@ -516,8 +682,8 @@ application/public routes. `/api/ready` is intentionally not used here because
 the worker must remain stopped until all schema and route decisions are complete:
 
 ```bash
-COMPOSE_PROJECT_NAME=kaigo docker compose up -d --no-build app
-APP_CONTAINER="$(COMPOSE_PROJECT_NAME=kaigo docker compose ps -q app)"
+COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml up -d --no-build app
+APP_CONTAINER="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml ps -q app)"
 test "$(docker inspect --format '{{.Image}}' "$APP_CONTAINER")" = \
   "$(docker image inspect --format '{{.Id}}' "$KAIGO_APP_IMAGE")"
 nginx -t
@@ -535,7 +701,7 @@ its actual image, wait for token-authenticated readiness and run the edge canary
 ```bash
 systemctl daemon-reload
 systemctl restart kaigo-builder-worker
-WORKER_CONTAINER="$(COMPOSE_PROJECT_NAME=kaigo docker compose --profile saas-worker ps -q builder-worker)"
+WORKER_CONTAINER="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml --profile saas-worker ps -q builder-worker)"
 test "$(docker inspect --format '{{.Image}}' "$WORKER_CONTAINER")" = \
   "$(docker image inspect --format '{{.Id}}' "$KAIGO_BUILDER_WORKER_IMAGE")"
 systemctl is-active --quiet kaigo-builder-worker

@@ -327,6 +327,75 @@ def test_codex_runtime_uses_one_bounded_retry_without_external_fallbacks(
     )
 
 
+def test_antigravity_runtime_routes_only_parallel_direction_candidates_first(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("GEMINI_INPUT_PRICE_MICROUSD_PER_MILLION", raising=False)
+    monkeypatch.delenv("GEMINI_OUTPUT_PRICE_MICROUSD_PER_MILLION", raising=False)
+    config = SimpleNamespace(
+        codex_bridge_enabled=True,
+        codex_bridge_socket_path="/run/kaigo-codex/bridge.sock",
+        codex_bridge_timeout_seconds=900,
+        codex_bridge_model="gpt-5.6-luna",
+        codex_bridge_visual_judge_model="gpt-5.6-sol",
+        antigravity_api_enabled=True,
+        antigravity_api_key="antigravity-secret",
+        antigravity_api_base_url="https://kaigo.space/antigravity-api",
+        antigravity_api_timeout_seconds=180,
+        antigravity_api_model="gemini-3.7-flash-high",
+        antigravity_api_reasoning_effort="high",
+        gemini_api_key=None,
+        gemini_base_url="https://gemini.example",
+        direct_model="gemini-builder",
+        reference_analyzer_model="gemini-reference",
+        visual_critic_model="gemini-vision",
+        hybrid_routing_enabled=False,
+    )
+
+    router = run_builder_worker.make_runtime_model_router(config, None)
+
+    assert set(router._providers) == {"antigravity_text", "codex_bridge"}
+    antigravity = router._providers["antigravity_text"]
+    assert antigravity._base_url == "https://kaigo.space/antigravity-api"
+    assert antigravity._reasoning_effort == "high"
+    assert antigravity._timeout_seconds == 180
+    for mode in ("direct", "express"):
+        candidate_targets = router._policies[("direction_candidate", mode)].targets
+        assert [
+            (
+                target.provider,
+                target.model,
+                target.input_price_microusd_per_million,
+                target.output_price_microusd_per_million,
+            )
+            for target in candidate_targets
+        ] == [
+            ("antigravity_text", "gemini-3.7-flash-high", None, None),
+            ("codex_bridge", "gpt-5.6-luna", None, None),
+        ]
+
+        assert [
+            (target.provider, target.model)
+            for target in router._policies[("direction_judge", mode)].targets
+        ] == [
+            ("codex_bridge", "gpt-5.6-luna"),
+            ("codex_bridge", "gpt-5.6-luna"),
+        ]
+        assert [
+            (target.provider, target.model)
+            for target in router._policies[("widget_generator", mode)].targets
+        ] == [
+            ("codex_bridge", "gpt-5.6-luna"),
+            ("codex_bridge", "gpt-5.6-luna"),
+        ]
+        assert all(
+            target.provider != "antigravity_text"
+            for (role, policy_mode), policy in router._policies.items()
+            if policy_mode == mode and role != "direction_candidate"
+            for target in policy.targets
+        )
+
+
 def test_codex_runtime_keeps_agentrouter_configured_but_out_of_active_route(
     monkeypatch,
 ) -> None:

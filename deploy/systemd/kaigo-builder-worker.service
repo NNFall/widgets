@@ -9,14 +9,19 @@ Type=simple
 WorkingDirectory=/opt/kaigo/current
 Environment=COMPOSE_PROJECT_NAME=kaigo
 EnvironmentFile=/etc/kaigo/builder-worker-image.env
+EnvironmentFile=/etc/kaigo/builder-worker-egress.env
+EnvironmentFile=/etc/kaigo/builder-worker-antigravity.env
 Environment=KAIGO_ENVIRONMENT=production
 Environment=KAIGO_WORKER_BUILD_BRIDGE=br-kaigo-build
+Environment=KAIGO_WORKER_BUILD_CLIENT_ADDRESS=172.30.240.2
 Environment=KAIGO_WORKER_DATABASE_BRIDGE=br-kaigo-wdb
 Environment=KAIGO_WORKER_DATABASE_SUBNET=172.30.242.0/28
 Environment=KAIGO_WORKER_DATABASE_GATEWAY=172.30.242.1
 Environment=KAIGO_WORKER_DATABASE_ADDRESS=172.30.242.2
 Environment=KAIGO_WORKER_DATABASE_CLIENT_ADDRESS=172.30.242.3
 Environment=KAIGO_WORKER_DATABASE_PORT=5432
+ExecStartPre=/bin/bash -ceu 'test "$$(stat -c %u:%g:%a /etc/kaigo/builder-worker-egress.env)" = "0:0:600"'
+ExecStartPre=/bin/bash -ceu 'test "$$(stat -c %u:%g:%a /etc/kaigo/builder-worker-antigravity.env)" = "0:0:600"'
 ExecStartPre=/bin/bash -ceu '[[ "$KAIGO_BUILDER_WORKER_IMAGE" =~ ^(.+@sha256:|sha256:)[0-9a-fA-F]{64}$ ]]; docker image inspect "$KAIGO_BUILDER_WORKER_IMAGE" >/dev/null'
 ExecStartPre=+/bin/bash -ceu '\
 command -v docker >/dev/null; \

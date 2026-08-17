@@ -5,6 +5,7 @@ import os
 import re
 from ipaddress import IPv4Address, IPv4Network, ip_address, ip_network
 from pathlib import Path
+from textwrap import dedent
 from uuid import uuid4
 
 import pytest
@@ -21,6 +22,11 @@ from app.config import AppConfig
 
 ROOT = Path(__file__).resolve().parents[2]
 POSTGRES_URL = os.getenv("KAIGO_TEST_POSTGRES_URL")
+PRODUCTION_COMPOSE = (
+    "COMPOSE_PROJECT_NAME=ai_project docker compose "
+    "--file /opt/kaigo/current/docker-compose.yml "
+    "--file /etc/kaigo/docker-compose.pattern-selection.yml"
+)
 
 
 def _service(compose: str, name: str, next_name: str) -> str:
@@ -39,6 +45,15 @@ def _unit_environment(unit: str) -> dict[str, str]:
         name, value = line.removeprefix("Environment=").split("=", 1)
         values[name] = value
     return values
+
+
+def _bash_block_containing(document: str, marker: str) -> str:
+    marker_index = document.index(marker)
+    block_start = document.rfind("```bash", 0, marker_index)
+    assert block_start >= 0
+    content_start = block_start + len("```bash")
+    block_end = document.index("```", marker_index)
+    return dedent(document[content_start:block_end]).strip()
 
 
 def _worker_db_policy_allows(
@@ -919,6 +934,18 @@ def test_compose_isolates_database_and_delegates_worker_restart_to_systemd() -> 
         in unit
     )
     assert "EnvironmentFile=/etc/kaigo/builder-worker-image.env" in unit
+    assert "EnvironmentFile=/etc/kaigo/builder-worker-egress.env" in unit
+    assert "EnvironmentFile=/etc/kaigo/builder-worker-antigravity.env" in unit
+    assert "EnvironmentFile=-/etc/kaigo/builder-worker-egress.env" not in unit
+    assert "EnvironmentFile=-/etc/kaigo/builder-worker-antigravity.env" not in unit
+    assert (
+        'test "$$(stat -c %u:%g:%a /etc/kaigo/builder-worker-egress.env)" '
+        '= "0:0:600"'
+    ) in unit
+    assert (
+        'test "$$(stat -c %u:%g:%a /etc/kaigo/builder-worker-antigravity.env)" '
+        '= "0:0:600"'
+    ) in unit
     assert (
         '[[ "$KAIGO_BUILDER_WORKER_IMAGE" =~ '
         "^(.+@sha256:|sha256:)[0-9a-fA-F]{64}$ ]]" in unit
@@ -949,7 +976,97 @@ def test_production_entrypoints_pin_exact_environment() -> None:
     assert unit.index("EnvironmentFile=/etc/kaigo/builder-worker-image.env") < unit.index(
         "Environment=KAIGO_ENVIRONMENT=production"
     )
+    assert unit.index("EnvironmentFile=/etc/kaigo/builder-worker-egress.env") < unit.index(
+        "ExecStartPre=+/bin/bash /opt/kaigo/current/scripts/apply_builder_egress_guard.sh"
+    )
     assert "KAIGO_ENVIRONMENT=production" in runbook
+
+
+def test_production_runbook_installs_fail_closed_builder_https_egress_file() -> None:
+    runbook = (ROOT / "docs" / "SAAS_PRODUCTION_RUNBOOK.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "/etc/kaigo/builder-worker-egress.env" in runbook
+    assert "KAIGO_WORKER_PUBLIC_HTTPS_HOST=5.129.236.90/32" in runbook
+    assert "KAIGO_WORKER_PUBLIC_HTTPS_PORT=443" in runbook
+    assert "install -o root -g root -m 600" in runbook
+    assert "EnvironmentFile=/etc/kaigo/builder-worker-egress.env" in runbook
+    assert "EnvironmentFile=-/etc/kaigo/builder-worker-egress.env" not in runbook
+    install_block = _bash_block_containing(
+        runbook, "KAIGO_WORKER_PUBLIC_HTTPS_HOST=5.129.236.90/32"
+    )
+    assert install_block.startswith("set -euo pipefail\nset +x\n")
+
+
+def test_production_runbook_keeps_antigravity_secret_builder_only() -> None:
+    runbook = (ROOT / "docs" / "SAAS_PRODUCTION_RUNBOOK.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "/etc/kaigo/builder-worker-antigravity.env" in runbook
+    assert "EnvironmentFile=/etc/kaigo/builder-worker-antigravity.env" in runbook
+    assert "install -o root -g root -m 600" in runbook
+    assert "Do not put the AntiGravity bearer key in" in runbook
+    assert "`/etc/kaigo/kaigo.env`" in runbook
+    install_block = _bash_block_containing(
+        runbook, "KAIGO_ANTIGRAVITY_API_BASE_URL=https://kaigo.space/antigravity-api"
+    )
+    assert install_block.startswith("set -euo pipefail\nset +x\n")
+    assert "KAIGO_ANTIGRAVITY_API_ENABLED=false" in install_block
+    assert "KAIGO_ANTIGRAVITY_API_ENABLED=true" not in install_block
+
+
+def test_production_runbook_smokes_provider_before_atomic_antigravity_enable() -> None:
+    runbook = (ROOT / "docs" / "SAAS_PRODUCTION_RUNBOOK.md").read_text(
+        encoding="utf-8"
+    )
+
+    provider_smoke = runbook.index("ANTIGRAVITY_PROVIDER_SMOKE_RESPONSE")
+    enable = runbook.index(
+        "s/^KAIGO_ANTIGRAVITY_API_ENABLED=false$/"
+        "KAIGO_ANTIGRAVITY_API_ENABLED=true/"
+    )
+    worker_restart = runbook.index("systemctl restart kaigo-builder-worker", enable)
+    canary = runbook.index("use a real browser OAuth session", enable)
+    enable_block = _bash_block_containing(
+        runbook,
+        "s/^KAIGO_ANTIGRAVITY_API_ENABLED=false$/"
+        "KAIGO_ANTIGRAVITY_API_ENABLED=true/",
+    )
+
+    assert provider_smoke < enable < worker_restart < canary
+    assert enable_block.startswith("set -euo pipefail\nset +x\n")
+    assert "mv -f" in enable_block
+    assert "chown root:root" in enable_block
+    assert "chmod 600" in enable_block
+    assert "Authorization: Bearer" in runbook
+    assert '"response_format":{"type":"json_schema"' in runbook
+    assert 'and .reasoning_effort == "high"' in runbook
+    assert 'and (.request_id | type == "string" and length > 0)' in runbook
+    assert 'all(.[]; type == "number" and . >= 0 and floor == .)' in runbook
+    assert 'and ((.output_text | fromjson) == {"ready":true})' in runbook
+    assert 'jq -e \'\n  .conversation_deleted == true' in runbook
+
+
+def test_production_runbook_has_atomic_antigravity_disable_for_rollback() -> None:
+    runbook = (ROOT / "docs" / "SAAS_PRODUCTION_RUNBOOK.md").read_text(
+        encoding="utf-8"
+    )
+    rollback = runbook.split("## Rollback", 1)[1]
+    disable_marker = (
+        "s/^KAIGO_ANTIGRAVITY_API_ENABLED=true$/"
+        "KAIGO_ANTIGRAVITY_API_ENABLED=false/"
+    )
+    disable_block = _bash_block_containing(rollback, disable_marker)
+
+    assert disable_block.startswith("set -euo pipefail\nset +x\n")
+    assert "mv -f" in disable_block
+    assert "chown root:root" in disable_block
+    assert "chmod 600" in disable_block
+    assert rollback.index(disable_marker) < rollback.index(
+        "systemctl restart kaigo-builder-worker"
+    )
 
 
 def test_production_runbook_enables_bridge_netfilter_before_worker_start() -> None:
@@ -968,7 +1085,7 @@ def test_production_runbook_enables_bridge_netfilter_before_worker_start() -> No
     assert module_load < module_activate < sysctl_config < sysctl_verify < worker_start
 
 
-def test_every_production_compose_command_uses_the_kaigo_project() -> None:
+def test_every_production_compose_command_uses_live_project_and_overlay() -> None:
     runbook = (ROOT / "docs" / "SAAS_PRODUCTION_RUNBOOK.md").read_text(
         encoding="utf-8"
     )
@@ -978,10 +1095,11 @@ def test_every_production_compose_command_uses_the_kaigo_project() -> None:
 
     compose_lines = [line for line in runbook.splitlines() if "docker compose" in line]
     assert compose_lines
-    assert all(
-        "COMPOSE_PROJECT_NAME=kaigo docker compose" in line
-        for line in compose_lines
-    )
+    assert all(PRODUCTION_COMPOSE in line for line in compose_lines)
+    assert "COMPOSE_PROJECT_NAME=kaigo docker compose" not in runbook
+    # The checked-in base unit is intentionally overridden by the production
+    # drop-in; this contract only prevents the operator runbook creating a new
+    # project alongside the live ai_project stack.
     assert "Environment=COMPOSE_PROJECT_NAME=kaigo" in unit
 
 
@@ -1068,6 +1186,8 @@ def test_builder_egress_contract_contains_both_worker_interfaces_and_docker_dns(
     assert "-A KAIGO-WDB-HOST-G1 -m conntrack --ctstate NEW -j REJECT" in unit
     environment = _unit_environment(unit)
     assert environment["KAIGO_WORKER_BUILD_BRIDGE"] == "br-kaigo-build"
+    assert environment["KAIGO_WORKER_BUILD_CLIENT_ADDRESS"] == "172.30.240.2"
+    assert "ipv4_address: 172.30.240.2" in worker
     interface_loop = (
         'for interface in "$${KAIGO_WORKER_BUILD_BRIDGE}" '
         '"$${KAIGO_WORKER_DATABASE_BRIDGE}"'
@@ -1226,24 +1346,21 @@ def test_operations_runbook_orders_preflight_before_services_and_documents_rollb
     )
     local_digest = runbook.index("docker image inspect --format '{{.Id}}'")
     image_pull = runbook.index(
-        "COMPOSE_PROJECT_NAME=kaigo docker compose pull app builder-worker migration"
+        f"{PRODUCTION_COMPOSE} pull app builder-worker migration"
     )
     image_digest = runbook.index('docker image inspect "$KAIGO_APP_IMAGE"')
     backup = runbook.index(
-        "COMPOSE_PROJECT_NAME=kaigo docker compose --profile operations run --rm "
-        "database-ops pg_dump"
+        f"{PRODUCTION_COMPOSE} --profile operations run --rm database-ops pg_dump"
     )
     dry_run = runbook.index(
-        "COMPOSE_PROJECT_NAME=kaigo docker compose --profile operations run --rm "
-        "migration python scripts/preflight_saas_schema.py"
+        f"{PRODUCTION_COMPOSE} --profile operations run --rm migration python "
+        "scripts/preflight_saas_schema.py"
     )
     apply = runbook.index(
-        "COMPOSE_PROJECT_NAME=kaigo docker compose --profile operations run --rm "
-        "migration python scripts/preflight_saas_schema.py --apply"
+        f"{PRODUCTION_COMPOSE} --profile operations run --rm migration python "
+        "scripts/preflight_saas_schema.py --apply"
     )
-    app_start = runbook.index(
-        "COMPOSE_PROJECT_NAME=kaigo docker compose up -d --no-build app"
-    )
+    app_start = runbook.index(f"{PRODUCTION_COMPOSE} up -d --no-build app")
     worker_start = runbook.index("systemctl restart kaigo-builder-worker")
     assert local_build < local_digest < backup
     assert (
@@ -1282,9 +1399,7 @@ def test_rollback_resolves_schema_and_routes_before_starting_worker() -> None:
         'docker run --rm --network kaigo_app_db --env-file .env '
         '"$KAIGO_ROLLBACK_MIGRATION_IMAGE" python scripts/preflight_saas_schema.py'
     )
-    app_start = rollback.index(
-        "COMPOSE_PROJECT_NAME=kaigo docker compose up -d --no-build app"
-    )
+    app_start = rollback.index(f"{PRODUCTION_COMPOSE} up -d --no-build app")
     app_route_check = rollback.index("curl -fsS http://127.0.0.1:8080/api/health")
     edge_route_check = rollback.index("curl -fsS https://kaigo.space/studio/")
     worker_start = rollback.index("systemctl restart kaigo-builder-worker")
@@ -1329,7 +1444,9 @@ def test_rollback_uses_current_trusted_migration_image_and_explicit_decision() -
         "docker image inspect \"$KAIGO_ROLLBACK_MIGRATION_IMAGE\""
         in rollback
     )
-    assert "docker compose --profile operations run --rm migration" not in rollback
+    assert (
+        f"{PRODUCTION_COMPOSE} --profile operations run --rm migration" not in rollback
+    )
 
 
 def test_rollback_requires_complete_tuple_and_installs_root_only_envs_atomically() -> (
