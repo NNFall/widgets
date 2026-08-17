@@ -214,7 +214,7 @@ Frontend содержит отдельные маршруты:
 
 1. Реализовать `GET /api/feedback/session` с CSRF, `feedback-v2` и server
    message limit.
-2. Реализовать `POST /api/feedback` с whitelist/CSRF/rate limit,
+2. Реализовать `POST /api/feedback` с whitelist/CSRF/honeypot/rate limit,
    нормализацией, PostgreSQL `feedback_submissions` и строгим `201 stored`.
 3. Реализовать идемпотентность: тот же ключ + тело возвращает тот же receipt;
    тот же ключ + другое тело даёт `409`.
@@ -248,6 +248,10 @@ production success. Контрактные Playwright-тесты использ�
 - Повтор с тем же ключом и телом идемпотентен; изменение тела получает `409`.
 - `400/422/403/429/5xx` не создают ложный success; `429` содержит
   `Retry-After`.
+- Для public flow пустой `honeypot` создаёт обычную запись; непустой сигнал
+  отвечает правдивым `201 stored` с внутренним `status=spam`, без уведомления,
+  а raw trap value не сохраняется и не попадает в логи. Authenticated Studio
+  может не отправлять `honeypot`.
 - Studio context derived server-side, landing context отсутствует.
 - Операторская история, rate limit, retention и audit trail покрыты тестами или
   отдельным backend evidence.
