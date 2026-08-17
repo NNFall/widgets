@@ -20,8 +20,8 @@ Environment=KAIGO_WORKER_DATABASE_GATEWAY=172.30.242.1
 Environment=KAIGO_WORKER_DATABASE_ADDRESS=172.30.242.2
 Environment=KAIGO_WORKER_DATABASE_CLIENT_ADDRESS=172.30.242.3
 Environment=KAIGO_WORKER_DATABASE_PORT=5432
-ExecStartPre=/bin/bash -ceu 'test "$$(stat -c %u:%g:%a /etc/kaigo/builder-worker-egress.env)" = "0:0:600"'
-ExecStartPre=/bin/bash -ceu 'test "$$(stat -c %u:%g:%a /etc/kaigo/builder-worker-antigravity.env)" = "0:0:600"'
+ExecStartPre=/bin/bash -ceu 'test "$$(stat -c %%u:%%g:%%a /etc/kaigo/builder-worker-egress.env)" = "0:0:600"'
+ExecStartPre=/bin/bash -ceu 'test "$$(stat -c %%u:%%g:%%a /etc/kaigo/builder-worker-antigravity.env)" = "0:0:600"'
 ExecStartPre=/bin/bash -ceu '[[ "$KAIGO_BUILDER_WORKER_IMAGE" =~ ^(.+@sha256:|sha256:)[0-9a-fA-F]{64}$ ]]; docker image inspect "$KAIGO_BUILDER_WORKER_IMAGE" >/dev/null'
 ExecStartPre=+/bin/bash -ceu '\
 command -v docker >/dev/null; \

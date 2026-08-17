@@ -939,13 +939,14 @@ def test_compose_isolates_database_and_delegates_worker_restart_to_systemd() -> 
     assert "EnvironmentFile=-/etc/kaigo/builder-worker-egress.env" not in unit
     assert "EnvironmentFile=-/etc/kaigo/builder-worker-antigravity.env" not in unit
     assert (
-        'test "$$(stat -c %u:%g:%a /etc/kaigo/builder-worker-egress.env)" '
+        'test "$$(stat -c %%u:%%g:%%a /etc/kaigo/builder-worker-egress.env)" '
         '= "0:0:600"'
     ) in unit
     assert (
-        'test "$$(stat -c %u:%g:%a /etc/kaigo/builder-worker-antigravity.env)" '
+        'test "$$(stat -c %%u:%%g:%%a /etc/kaigo/builder-worker-antigravity.env)" '
         '= "0:0:600"'
     ) in unit
+    assert 'stat -c %u:%g:%a /etc/kaigo/builder-worker-' not in unit
     assert (
         '[[ "$KAIGO_BUILDER_WORKER_IMAGE" =~ '
         "^(.+@sha256:|sha256:)[0-9a-fA-F]{64}$ ]]" in unit
