@@ -9,8 +9,10 @@
 
 Kaigo теперь умеет пробовать AntiGravity для трёх параллельных идей будущего
 виджета и автоматически возвращаться к Codex при допустимой ошибке. Транспорт,
-изоляция и публикация проверены на production, но общая квота с AMIX пока не
-даёт считать новый маршрут стабильным для всех пользователей.
+изоляция и публикация проверены на production. После исчерпания дневной квоты
+3.7 worker безопасно переключён на 3.6; новый 37signals-run получил 3 из 3
+AntiGravity-кандидатов без Codex fallback, но широкий rollout всё ещё ждёт
+серии из 10 runs и 30 candidate-вызовов.
 
 ## Что изменилось
 
@@ -39,11 +41,39 @@ Kaigo теперь умеет пробовать AntiGravity для трёх п�
 - Linux state machine egress guard: 17/17 сценариев.
 - Геометрия опубликованного launcher: 47 passed, 2 skipped; независимый review
   дал GO.
+- Существующая Google-авторизация на US работает; новую авторизацию не
+  проводили. `gemini-3.7-flash` видна в model list, но её per-day/per-model
+  generate quota исчерпана. Это quota-событие, а не ошибка авторизации.
+- Worker безопасно переключён на `gemini-3.6-flash-high`; feature flag остаётся
+  `true` для контролируемого canary.
 - Прямой post-restart smoke из worker: HTTP 200,
-  `actual_provider=gemini`, `actual_model=gemini-3.7-flash`,
+  `actual_provider=gemini`, `actual_model=gemini-3.6-flash`,
   `conversation_deleted=true`.
 
-## Два production-прогона
+## Production-прогоны
+
+### 37signals-run `d13db4e4…`: 3 из 3 через AntiGravity
+
+- Все три `direction_candidate` завершились через `antigravity_text`, без
+  Codex fallback.
+- Запрошенная модель: `gemini-3.6-flash-high`; фактическая:
+  `gemini-3.6-flash`; provider `fallback_index=1`.
+- Готовы 6 из 6 captures.
+- Версия `1480945f…` и artifact `8ee4e484…` получили quality status `verified`.
+- Создана отдельная publication/release с `previous_release=NULL`.
+- Публичная ссылка:
+  <https://canary.5-129-236-90.sslip.io/?key=Tn7aThw4ATAEHog8cM906C6b5L_rk1yT>.
+- Desktop: 64 px в закрытом состоянии, 402 × 438 в открытом; геометрия
+  стабильна после повторного открытия.
+- Mobile: 64 px в закрытом состоянии, 340–341 × 438 в открытом; геометрия
+  стабильна после повторного открытия, panel полностью внутри viewport.
+- Chat POST отвечает HTTP 200 примерно за 6 секунд. В базе зафиксирован один
+  завершённый chat call через `gemini-3.5-flash-lite`, `fallback_index=1`.
+- Запрещённый origin блокируется CSP. Предыдущий Basecamp-canary не изменён и
+  продолжает отвечать HTTP 200.
+
+Этот run подтверждает полный путь 3/3 AntiGravity candidates → verified
+artifact → отдельная публикация → внешний responsive runtime → рабочий chat.
 
 ### Run `6704…`: реальное использование Gemini, но без публикации
 
@@ -56,8 +86,8 @@ Kaigo теперь умеет пробовать AntiGravity для трёх п�
 ### Строгий Basecamp-run `61d…`: verified-путь через fallback
 
 - Run завершился, а опубликованная версия имеет quality status `verified`.
-- Все три AntiGravity-вызова упёрлись в общую квоту и были завершены через
-  Codex fallback.
+- Все три AntiGravity-вызова упёрлись в дневную квоту 3.7 и были завершены
+  через Codex fallback.
 - Версия опубликована и проверена снаружи по адресу
   <https://canary.5-129-236-90.sslip.io/?key=zokrD57Pe07T_WaXCEF306LUGEVyzMC->.
 - Launcher стабилен: 378 × 472 на desktop и 270 × 330 на mobile.
@@ -72,6 +102,8 @@ AntiGravity.
 ## Безопасность и rollback
 
 - API-ключи, OAuth-токены и серверные реквизиты в пакет не добавлены.
+- После acceptance-сессии выполнен logout, временные секретные файлы удалены —
+  PASS.
 - Канонический rollback пересобран из `bc27…`.
 - Перед переключением сохранён дамп production-базы.
 - Изменение не требует миграции и откатывается переключением worker release и
@@ -79,7 +111,10 @@ AntiGravity.
 
 ## Ограничения
 
-- Общая с AMIX квота уже вызвала один смешанный run и один полный fallback.
+- Дневная generate quota `gemini-3.7-flash` для этой модели исчерпана, хотя
+  модель остаётся доступной в model list и Google-auth работает.
+- Успешный 3.6-run не доказывает, что quota/fallback rate будет приемлем на
+  серии запусков.
 - Флаг остаётся `true` только для контролируемого canary; широкий rollout
   запрещён до следующего gate.
 - Успешный provider smoke не заменяет серию полных verified-генераций.
@@ -93,17 +128,18 @@ AntiGravity.
 
 ## Возможные темы
 
-- «Два из трёх Gemini-кандидатов сработали — почему виджет всё равно нельзя
-  публиковать без visual gate».
-- «Fallback спас Basecamp-run, но честно показал: общей AI-квоты недостаточно
-  для широкого запуска».
+- «Модель видна, но не генерирует: как дневная квота 3.7 отличается от ошибки
+  авторизации».
+- «3 из 3 AntiGravity-кандидатов и verified 37signals — почему широкий rollout
+  всё равно ждёт 30 вызовов».
 
 ## Визуальные материалы
 
 - Публичный runtime:
-  <https://canary.5-129-236-90.sslip.io/?key=zokrD57Pe07T_WaXCEF306LUGEVyzMC->.
-- Отдельные кадры можно добавлять только после сохранения подтверждённых
-  desktop/mobile screenshots этого canary.
+  <https://canary.5-129-236-90.sslip.io/?key=Tn7aThw4ATAEHog8cM906C6b5L_rk1yT>.
+- [Desktop, открытый виджет](../assets/2026-08-17-antigravity-canary/37signals-desktop-open.png).
+- [Mobile, открытый виджет](../assets/2026-08-17-antigravity-canary/37signals-mobile-open.png).
+- [Desktop, публичный ответ](../assets/2026-08-17-antigravity-canary/37signals-desktop-chat.png).
 
 ## Призыв
 
