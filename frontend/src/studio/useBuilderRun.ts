@@ -688,7 +688,10 @@ function activityFor(status: BuilderRunStatus) {
   return 'Создание остановлено по вашему запросу';
 }
 
-function useSaasProjectRun(projectId: string | null): BuilderRunController {
+function useSaasProjectRun(
+  projectId: string | null,
+  hydrateHomeSession = true,
+): BuilderRunController {
   const [project, setProject] = useState<SaasProject | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<BuilderRunSnapshot | null>(null);
@@ -836,7 +839,7 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     setVersions([]);
     setSelectedVersion(null);
     setVersionArtifact(null);
-    if (!projectId) return () => abort.abort();
+    if (!projectId && !hydrateHomeSession) return () => abort.abort();
 
     const isCurrentProject = () => (
       !abort.signal.aborted && projectEpochRef.current === projectEpoch
@@ -846,6 +849,7 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
         const session = await getAuthSession(abort.signal);
         if (!isCurrentProject()) return;
         if (!session.authenticated || !session.csrf_token) {
+          if (!projectId) return;
           throw new BuilderApiError('authentication_required', {
             status: 401,
             code: 'authentication_required',
@@ -854,6 +858,7 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
         }
         csrfRef.current = session.csrf_token;
         setCsrfToken(session.csrf_token);
+        if (!projectId) return;
         const nextProject = await getProject(projectId, abort.signal);
         if (!isCurrentProject()) return;
         projectRef.current = nextProject;
@@ -878,17 +883,17 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
           }
         }
       } catch (caught) {
-        if (isCurrentProject()) {
+        if (isCurrentProject() && projectId) {
           setError(saasError(caught, 'Не удалось загрузить проект.'));
           setActivityMessage('Проект не загружен');
         }
       } finally {
-        if (isCurrentProject()) setIsHydrating(false);
+        if (isCurrentProject() && projectId) setIsHydrating(false);
       }
     };
     void hydrate();
     return () => abort.abort();
-  }, [applyRun, applyVersionList, disableVersions, projectId]);
+  }, [applyRun, applyVersionList, disableVersions, hydrateHomeSession, projectId]);
 
   useEffect(() => {
     if (!projectId || snapshot?.status !== 'completed') return;
@@ -1321,6 +1326,6 @@ export function useBuilderRun(
   allowLegacyBuilder = true,
 ): BuilderRunController {
   const legacy = useLegacyBuilderRun(allowLegacyBuilder && !projectId);
-  const saas = useSaasProjectRun(projectId);
+  const saas = useSaasProjectRun(projectId, Boolean(projectId) || !allowLegacyBuilder);
   return projectId || !allowLegacyBuilder ? saas : legacy;
 }

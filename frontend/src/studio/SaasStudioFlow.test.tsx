@@ -29,14 +29,6 @@ function sessionResponse() {
   });
 }
 
-function feedbackSessionResponse(csrfToken = 'csrf-feedback') {
-  return jsonResponse({
-    csrf_token: csrfToken,
-    consent_version: 'feedback-v2',
-    message_max_length: 4000,
-  });
-}
-
 function feedbackStoredResponse() {
   return jsonResponse({
     status: 'stored',
@@ -190,7 +182,6 @@ describe('durable SaaS Studio flow', () => {
       if (url === '/api/projects' && !init?.method) return jsonResponse({ projects: [] });
       if (url === '/api/projects' && init?.method === 'POST') return jsonResponse(project(), 201);
       if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project());
-      if (url === '/api/feedback/session') return feedbackSessionResponse('csrf-feedback-home');
       if (url === '/api/feedback' && init?.method === 'POST') return feedbackStoredResponse();
       throw new Error(`unexpected request: ${url}`);
     });
@@ -210,7 +201,8 @@ describe('durable SaaS Studio flow', () => {
     await waitFor(() => expect(within(contactDialog).getByRole('status')).toHaveTextContent(/Сообщение сохранено/i));
     const feedbackRequests = requests.filter(({ url, init }) => url === '/api/feedback' && init?.method === 'POST');
     expect(feedbackRequests).toHaveLength(1);
-    expect(new Headers(feedbackRequests[0].init?.headers).get('X-CSRF-Token')).toBe('csrf-feedback-home');
+    expect(new Headers(feedbackRequests[0].init?.headers).get('X-CSRF-Token')).toBe('csrf-for-studio');
+    expect(requests.filter(({ url }) => url === '/api/feedback/session')).toHaveLength(0);
     const feedbackBody = JSON.parse(String(feedbackRequests[0].init?.body)) as Record<string, unknown>;
     expect(feedbackBody).toEqual({
       topic: 'question',
