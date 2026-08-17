@@ -11,28 +11,24 @@ afterEach(() => {
 });
 
 describe('SiteFooter', () => {
-  it('links contact and all four legal documents while marking operator fields as preview placeholders', () => {
+  it('keeps only the compact contact/legal navigation and honest meta line', () => {
     render(<SiteFooter />);
 
     expect(screen.getByRole('contentinfo')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Связаться с командой' })).toHaveAttribute('href', '/#contact');
-    expect(screen.getByRole('link', { name: 'Политика конфиденциальности' })).toHaveAttribute('href', '/privacy/');
-    expect(screen.getByRole('link', { name: 'Согласие на обработку данных' })).toHaveAttribute(
+    const navigation = screen.getByRole('navigation', { name: 'Ссылки в подвале' });
+    expect(within(navigation).getByRole('link', { name: 'Связаться с командой' })).toHaveAttribute('href', '/#contact');
+    expect(within(navigation).getByRole('link', { name: 'Политика конфиденциальности' })).toHaveAttribute('href', '/privacy/');
+    expect(within(navigation).getByRole('link', { name: 'Согласие на обработку данных' })).toHaveAttribute(
       'href',
       '/personal-data-consent/',
     );
-    expect(screen.getByRole('link', { name: 'Условия использования' })).toHaveAttribute('href', '/terms/');
-    expect(screen.getByRole('link', { name: 'Предварительная оферта' })).toHaveAttribute('href', '/offer/');
-    expect(screen.getByText(/Оператор: уточняется до подтверждения/i)).toBeVisible();
-    expect(screen.getByText(/Статус, указанный владельцем: самозанятый, плательщик НПД/i)).toBeVisible();
-    expect(screen.queryByText(/подтверждено владельцем/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/ФИО: уточняется/i)).toBeVisible();
-    expect(screen.getByText(/ИНН: уточняется/i)).toBeVisible();
-    expect(screen.getByText(/Адрес: уточняется/i)).toBeVisible();
-    expect(screen.getByRole('link', { name: 'support@kaigo.space' })).toHaveAttribute(
-      'href',
-      'mailto:support@kaigo.space',
-    );
+    expect(within(navigation).getByRole('link', { name: 'Условия использования' })).toHaveAttribute('href', '/terms/');
+    expect(within(navigation).getByRole('link', { name: 'Предварительная оферта' })).toHaveAttribute('href', '/offer/');
+    expect(screen.getByText('© 2026 Kaigo · Самозанятый, плательщик НПД · реквизиты уточняются')).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Kaigo — главная' })).toHaveAttribute('href', '/');
+    expect(screen.queryByText(/Продукт|Как это работает|Кейсы|Помощь|Студия/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Оператор:|ФИО:|ИНН:|Адрес:/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/support@kaigo\.space|Telegram|mailto:/i)).not.toBeInTheDocument();
   });
 
   it('keeps new footer destinations inside an isolated archive preview', () => {
@@ -41,43 +37,37 @@ describe('SiteFooter', () => {
 
     expect(screen.getByRole('link', { name: 'Связаться с командой' })).toHaveAttribute('href', '/frontend/v11/#contact');
     expect(screen.getByRole('link', { name: 'Политика конфиденциальности' })).toHaveAttribute('href', '/frontend/v11/privacy/');
-    expect(screen.getByRole('link', { name: 'Студия' })).toHaveAttribute('href', '/frontend/v11/studio');
   });
 
   it('resolves footer hashes from a legal route back to the landing page', () => {
     window.history.replaceState({}, '', '/privacy/');
     render(<SiteFooter />);
 
-    expect(screen.getByRole('link', { name: 'Продукт' })).toHaveAttribute('href', '/#product');
-    expect(screen.getByRole('link', { name: 'Как это работает' })).toHaveAttribute('href', '/#product-tour');
-    expect(screen.getByRole('link', { name: 'Кейсы' })).toHaveAttribute('href', '/#case-study');
-    expect(screen.getByRole('link', { name: 'Помощь' })).toHaveAttribute('href', '/#faq');
     expect(screen.getByRole('link', { name: 'Связаться с командой' })).toHaveAttribute('href', '/#contact');
   });
 
-  it('keeps footer navigation as a grid instead of inheriting the legacy flex rule', () => {
+  it('keeps footer links as a wrapping flex group with compact typography', () => {
     const style = document.createElement('style');
     style.dataset.testFooterStyles = 'true';
     style.textContent = stylesSource;
     document.head.append(style);
     render(<SiteFooter />);
 
-    const navigation = screen.getByRole('navigation', { name: 'Навигация в подвале' });
-    expect(getComputedStyle(navigation).display).toBe('grid');
-    expect(stylesSource).not.toMatch(/\.site-footer nav\s*\{[^}]*display:\s*flex/s);
-    expect(stylesSource).toMatch(/\.landing-page \.site-footer__nav[\s\S]*display:\s*grid/s);
+    const navigation = screen.getByRole('navigation', { name: 'Ссылки в подвале' });
+    expect(getComputedStyle(navigation).display).toBe('flex');
+    expect(stylesSource).toMatch(/\.site-footer__links\s*\{[^}]*display:\s*flex/s);
+    expect(stylesSource).toMatch(/\.site-footer__links a\s*\{[^}]*min-height:\s*44px;[^}]*font-size:\s*12px;/s);
+    expect(stylesSource).not.toMatch(/\.site-footer__operator/);
   });
 
-  it('keeps the standalone operator mail link at a 44px touch target', () => {
+  it('keeps every footer link at a 44px touch target', () => {
     const style = document.createElement('style');
     style.dataset.testFooterStyles = 'true';
     style.textContent = stylesSource;
     document.head.append(style);
     render(<SiteFooter />);
 
-    const mailLink = within(document.querySelector('.site-footer__operator') as HTMLElement).getByRole('link', {
-      name: 'support@kaigo.space',
-    });
-    expect(getComputedStyle(mailLink).minHeight).toBe('44px');
+    const links = within(screen.getByRole('navigation', { name: 'Ссылки в подвале' })).getAllByRole('link');
+    links.forEach((link) => expect(getComputedStyle(link).minHeight).toBe('44px'));
   });
 });

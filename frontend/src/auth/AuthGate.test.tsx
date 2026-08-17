@@ -152,10 +152,8 @@ it('does not invent OAuth buttons when no providers are configured', async () =>
 
   expect(await screen.findByText('Вход временно недоступен')).toBeVisible();
   expect(screen.queryByRole('link', { name: /Продолжить с/ })).not.toBeInTheDocument();
-  expect(screen.getByRole('link', { name: /Подготовить письмо на/i })).toHaveAttribute(
-    'href',
-    'mailto:support@kaigo.space',
-  );
+  expect(screen.getByRole('link', { name: 'Оставить сообщение' })).toHaveAttribute('href', '/#contact');
+  expect(screen.queryByText(/support@kaigo\.space|почтов|ответ лично/i)).not.toBeInTheDocument();
 });
 
 it('renders Studio immediately for an authenticated browser session', async () => {
@@ -197,7 +195,7 @@ it('recovers from a temporary session error without exposing raw failure text', 
   expect(sessionAttempt).toBe(2);
 });
 
-it('offers direct support mail during a temporary authentication error', async () => {
+it('offers the stored feedback form during a temporary authentication error', async () => {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url === '/api/analytics/entry') return new Response(null, { status: 204 });
@@ -208,13 +206,12 @@ it('offers direct support mail during a temporary authentication error', async (
   render(<AuthGate><h1>Студия доступна</h1></AuthGate>);
 
   expect(await screen.findByRole('heading', { name: 'Студия сейчас не открылась' })).toBeVisible();
-  const supportLink = screen.getByRole('link', { name: /Подготовить письмо на/i });
-  expect(supportLink).toHaveAttribute('href', 'mailto:support@kaigo.space');
-  expect(supportLink).toHaveTextContent('support@kaigo.space');
-  expect(screen.getByText(/Адрес предварительный; получение писем пока не подтверждено\./i)).toBeVisible();
+  const supportLink = screen.getByRole('link', { name: 'Оставить сообщение' });
+  expect(supportLink).toHaveAttribute('href', '/#contact');
+  expect(screen.queryByText(/support@kaigo\.space|почтов|ответ лично/i)).not.toBeInTheDocument();
 });
 
-it('describes the support address as a prepared email with an unconfirmed mailbox', async () => {
+it('keeps the auth fallback free of mailto and reply promises', async () => {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url === '/api/analytics/entry') return new Response(null, { status: 204 });
@@ -225,10 +222,7 @@ it('describes the support address as a prepared email with an unconfirmed mailbo
   render(<AuthGate><h1>Студия доступна</h1></AuthGate>);
 
   expect(await screen.findByRole('heading', { name: 'Студия сейчас не открылась' })).toBeVisible();
-  const supportLink = screen.getByRole('link', {
-    name: 'Подготовить письмо на support@kaigo.space',
-  });
-  expect(supportLink).toHaveAttribute('href', 'mailto:support@kaigo.space');
-  expect(screen.getByText(/Адрес предварительный; получение писем пока не подтверждено\./i)).toBeVisible();
-  expect(screen.queryByText(/Написать в поддержку/i)).not.toBeInTheDocument();
+  const supportLink = screen.getByRole('link', { name: 'Оставить сообщение' });
+  expect(supportLink).toHaveAttribute('href', '/#contact');
+  expect(screen.queryByText(/support@kaigo\.space|mailto:|почтов|ответ лично/i)).not.toBeInTheDocument();
 });

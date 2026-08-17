@@ -2,7 +2,7 @@ import { ArrowClockwise, ArrowRight, LockKey, SpinnerGap } from '@phosphor-icons
 import { type ReactNode, useEffect, useState } from 'react';
 
 import { ensureLandingJourney } from '../shared/journey';
-import { CONTACT_CONFIG, supportMailtoHref } from '../shared/contact';
+import { marketingHref } from '../shared/marketing';
 
 type SessionSnapshot = {
   enabled: boolean;
@@ -46,8 +46,7 @@ function safeErrorDetail(message: string) {
 function SupportContact() {
   return (
     <p className="auth-gate__support">
-      Если Studio не открывается, <a href={supportMailtoHref()}>Подготовить письмо на {CONTACT_CONFIG.supportEmail}</a>.
-      {' '}Адрес предварительный; получение писем пока не подтверждено.
+      Если Studio не открывается, <a href={marketingHref('/#contact')}>Оставить сообщение</a>.
     </p>
   );
 }

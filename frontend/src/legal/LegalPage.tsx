@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { ArrowLeft } from '@phosphor-icons/react';
 
-import { CONTACT_CONFIG, supportMailtoHref } from '../shared/contact';
+import { CONTACT_CONFIG } from '../shared/contact';
 import { KaigoLogo } from '../shared/KaigoLogo';
 import { marketingHref } from '../shared/marketing';
 import { SiteFooter } from '../landing/SiteFooter';
@@ -68,8 +68,12 @@ export function LegalPage({ document }: LegalPageProps) {
 
           <section className="legal-contact" id="legal-contact" aria-labelledby="legal-contact-title">
             <h2 id="legal-contact-title">Контакт и статус реквизитов</h2>
-            <p>Почта для вопросов: <a href={supportMailtoHref()}>{CONTACT_CONFIG.supportEmail}</a>. Это предварительный адрес для предпросмотра, его приём должен подтвердить владелец.</p>
-            <p>Оператор: уточняется до подтверждения. Статус, указанный владельцем: {CONTACT_CONFIG.operatorStatus}. ФИО: уточняется. ИНН и адрес: уточняются. Telegram пока не опубликован.</p>
+            <p>
+              Вопросы, сообщения об ошибках, идеи, запросы на удаление или сотрудничество можно отправить через{' '}
+              <a href={marketingHref('/#contact')}>Оставить сообщение</a>. Сообщение сохраняется в Kaigo,
+              контактные данные указывать не нужно. Форма не обещает личный ответ.
+            </p>
+            <p>Оператор: уточняется до подтверждения. Статус, указанный владельцем: {CONTACT_CONFIG.operatorStatus}. ФИО: уточняется. ИНН и адрес: уточняются.</p>
           </section>
         </article>
       </div>

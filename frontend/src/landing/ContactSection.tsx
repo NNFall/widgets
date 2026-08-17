@@ -1,5 +1,4 @@
 import { FeedbackComposer } from '../shared/FeedbackComposer';
-import { CONTACT_CONFIG, supportMailtoHref } from '../shared/contact';
 
 export function ContactSection() {
   return (
@@ -8,20 +7,9 @@ export function ContactSection() {
         <div className="contact-section__copy">
           <p className="section-kicker">Связь с командой</p>
           <h2 id="contact-title">Есть вопрос или идея?</h2>
-          <p>Выберите тему и напишите сообщение. Форма подготовит письмо в вашем почтовом приложении; приём по временному адресу поддержки пока подтверждается.</p>
-          <div className="contact-section__channels" aria-label="Каналы связи">
-            <div className="contact-channel">
-              <span>Поддержка</span>
-              <a href={supportMailtoHref()}>{CONTACT_CONFIG.supportEmail}</a>
-              <small>Адрес временный для предпросмотра, владелец должен подтвердить, что он принимает письма.</small>
-            </div>
-            <div className="contact-channel contact-channel--pending">
-              <span>Telegram</span>
-              <small>Добавим после подтверждения контакта</small>
-            </div>
-          </div>
+          <p>Напишите сообщение. Оно сохранится в Kaigo, контактные данные указывать не нужно.</p>
         </div>
-        <FeedbackComposer page="/contact" />
+        <FeedbackComposer source="landing_contact" />
       </div>
     </section>
   );

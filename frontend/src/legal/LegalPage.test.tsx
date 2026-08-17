@@ -28,7 +28,8 @@ describe('legal information architecture', () => {
     expect(screen.getByRole('link', { name: 'Вернуться на главную' })).toHaveAttribute('href', '/');
     expect(screen.getByRole('navigation', { name: 'Содержание документа' })).toBeInTheDocument();
     expect(screen.getByRole('contentinfo')).toBeInTheDocument();
-    expect(screen.getAllByText(/support@kaigo\.space/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/support@kaigo\.space|mailto:/i)).not.toBeInTheDocument();
+    expect(within(document.getElementById('legal-contact') as HTMLElement).getByRole('link', { name: 'Оставить сообщение' })).toHaveAttribute('href', '/#contact');
   });
 
   it('keeps uncertain operator and backend facts visibly marked instead of inventing requisites', () => {
@@ -42,22 +43,13 @@ describe('legal information architecture', () => {
 
   it('uses the dark coral text color for small interactive links', () => {
     expect(stylesSource).toMatch(
-      /\.contact-channel\s*>\s*a\s*\{[^}]*color:\s*var\(--coral-text,\s*#a83212\);/s,
-    );
-    expect(stylesSource).toMatch(
       /\.feedback-composer__consent a,\s*\.feedback-composer__support a\s*\{[^}]*color:\s*var\(--coral-text,\s*#a83212\);/s,
-    );
-    expect(stylesSource).toMatch(
-      /\.site-footer__operator a\s*\{[^}]*color:\s*var\(--coral-text,\s*#a83212\);/s,
-    );
-    expect(stylesSource).toMatch(
-      /\.site-footer__nav a:hover,\s*\.site-footer__legal a:hover,\s*\.site-footer__operator a:hover\s*\{[^}]*color:\s*var\(--coral-text,\s*#a83212\);/s,
     );
     expect(stylesSource).toMatch(
       /\.studio-contact-panel__channel\s*>\s*span\s*\{[^}]*color:\s*#657681;/s,
     );
     expect(stylesSource).not.toMatch(
-      /\.site-footer__nav a:hover,\s*\.site-footer__legal a:hover,\s*\.site-footer__operator a:hover\s*\{[^}]*color:\s*var\(--landing-accent/s,
+      /\.site-footer__operator|\.contact-channel|href\^=['"]mailto:/,
     );
   });
 
@@ -99,7 +91,7 @@ describe('legal information architecture', () => {
     expect(document.title).toBe('Marketing preview');
   });
 
-  it('keeps the legal support mail link at a 44px touch target', () => {
+  it('routes legal contact requests through the stored feedback form', () => {
     const style = document.createElement('style');
     style.dataset.testLegalStyles = 'true';
     style.textContent = stylesSource;
@@ -107,10 +99,10 @@ describe('legal information architecture', () => {
     render(<LegalPage document={LEGAL_DOCUMENTS.privacy} />);
 
     const contact = document.getElementById('legal-contact') as HTMLElement;
-    const mailLink = within(contact).getByRole('link', { name: 'support@kaigo.space' });
-    expect(getComputedStyle(mailLink).minHeight).toBe('44px');
-    expect(mailLink).toHaveAttribute('href', 'mailto:support@kaigo.space');
-    expect(mailLink).not.toHaveAttribute('href', expect.stringContaining('%40'));
+    const contactLink = within(contact).getByRole('link', { name: 'Оставить сообщение' });
+    expect(getComputedStyle(contactLink).minHeight).toBe('44px');
+    expect(contactLink).toHaveAttribute('href', '/#contact');
+    expect(contact).not.toHaveTextContent(/лично ответит|ответит лично|support@kaigo\.space|mailto:/i);
   });
 
   it('keeps the footer brand link at a 44px touch target without scaling the logo', () => {
@@ -160,16 +152,10 @@ describe('legal information architecture', () => {
       /\.legal-contents\s*>\s*strong\s*\{[^}]*font-size:\s*14px;/s,
     );
     expect(mobileStylesSource).toMatch(
-      /\.landing-page \.site-footer__nav a,\s*\.landing-page \.site-footer__legal a,\s*\.legal-page \.site-footer__nav a,\s*\.legal-page \.site-footer__legal a\s*\{[^}]*font-size:\s*14px;/s,
+      /\.landing-page \.site-footer__links a,\s*\.legal-page \.site-footer__links a\s*\{[^}]*font-size:\s*12px;/s,
     );
     expect(stylesSource).toMatch(
-      /\.site-footer__operator\s*>\s*span\s*\{[^}]*font-size:\s*12px;/s,
-    );
-    expect(stylesSource).toMatch(
-      /\.site-footer__operator p\s*\{[^}]*font-size:\s*14px;/s,
-    );
-    expect(stylesSource).toMatch(
-      /\.site-footer__operator a\s*\{[^}]*font-size:\s*14px;/s,
+      /\.site-footer__meta\s*\{[^}]*font-size:\s*11px;/s,
     );
   });
 
@@ -206,10 +192,10 @@ describe('legal information architecture', () => {
     render(<LegalPage document={LEGAL_DOCUMENTS.privacy} />);
 
     const main = screen.getByRole('main');
-    expect(main).toHaveTextContent(/имя, адрес для ответа и текст сообщения/i);
-    expect(main).toHaveTextContent(/идентификаторы аккаунта, проекта и ссылка на сайт/i);
-    expect(main).toHaveTextContent(/технические и защитные журналы/i);
-    expect(main).toHaveTextContent(/для ответа на обращение.*защиты от злоупотреблений.*улучшения продукта/i);
+    expect(main).toHaveTextContent(/текст сообщения и выбранную тему/i);
+    expect(main).toHaveTextContent(/идентификатор обращения/i);
+    expect(main).toHaveTextContent(/время запроса.*сведения о браузере.*события безопасности/i);
+    expect(main).toHaveTextContent(/сохранить вопрос.*защитить сервис от злоупотреблений.*улучшать продукт/i);
     expect(main).toHaveTextContent(/исправление или удаление.*отозвать согласие/i);
     expect(main).toHaveTextContent(/Оператор: уточняется до подтверждения/i);
     expect(main).toHaveTextContent(/Статус, указанный владельцем: самозанятый, плательщик НПД/i);
@@ -221,13 +207,13 @@ describe('legal information architecture', () => {
     render(<LegalPage document={LEGAL_DOCUMENTS['personal-data-consent']} />);
 
     const main = screen.getByRole('main');
-    expect(main).toHaveTextContent(/имени или контакту.*тексту обращения/i);
+    expect(main).toHaveTextContent(/к тексту сообщения и выбранной теме/i);
     expect(main).toHaveTextContent(/получение, запись, систематизация, использование/i);
     expect(main).toHaveTextContent(/срок действия согласия и срок хранения/i);
     expect(main).toHaveTextContent(/отзыва или запроса на удаление/i);
     expect(main).toHaveTextContent(/не должно использоваться как рабочее согласие/i);
     expect(main).not.toHaveTextContent(/оферта для рабочей версии/i);
-    expect(main).toHaveTextContent(/не записывает согласие на сервере/i);
+    expect(main).toHaveTextContent(/тестовой версии.*требует проверки перед запуском/i);
   });
 
   it('keeps terms preview, account, AI, publication, acceptable-use, IP, availability and support clauses explicit', () => {

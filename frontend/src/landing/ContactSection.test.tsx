@@ -6,21 +6,16 @@ import { ContactSection } from './ContactSection';
 afterEach(cleanup);
 
 describe('ContactSection', () => {
-  it('offers a truthful contact band with provisional support and unconfirmed Telegram', () => {
+  it('offers stored feedback without asking for contact details', () => {
     render(<ContactSection />);
 
     expect(screen.getByRole('region', { name: 'Связаться с командой Kaigo' })).toHaveAttribute('id', 'contact');
     expect(screen.getByRole('heading', { name: 'Есть вопрос или идея?' })).toBeVisible();
-    expect(screen.queryByText('Сообщения читает команда Kaigo.')).not.toBeInTheDocument();
     expect(screen.getByText(
-      'Выберите тему и напишите сообщение. Форма подготовит письмо в вашем почтовом приложении; приём по временному адресу поддержки пока подтверждается.',
+      'Напишите сообщение. Оно сохранится в Kaigo, контактные данные указывать не нужно.',
     )).toBeVisible();
-    expect(screen.getByRole('link', { name: 'support@kaigo.space' })).toHaveAttribute(
-      'href',
-      'mailto:support@kaigo.space',
-    );
-    expect(screen.getByRole('link', { name: 'support@kaigo.space' })).not.toHaveAttribute('href', expect.stringContaining('%40'));
-    expect(screen.getByText('Добавим после подтверждения контакта')).toBeVisible();
-    expect(screen.queryByRole('link', { name: /Telegram/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Отправить' })).toBeVisible();
+    expect(screen.queryByText(/support@kaigo\.space|Telegram|почтовом приложении/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /почт/i })).not.toBeInTheDocument();
   });
 });
