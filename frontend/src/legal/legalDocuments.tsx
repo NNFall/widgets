@@ -21,7 +21,7 @@ export type LegalDocument = {
 const previewReminder = 'Это тестовая редакция для изолированного предпросмотра. Оператор, реквизиты и серверная часть сервиса будут подтверждены до запуска платных функций.';
 
 function feedbackLink(label = 'Оставить сообщение') {
-  return <a href={marketingHref('/#contact')}>{label}</a>;
+  return <a className="legal-feedback-link" href={marketingHref('/#contact')}>{label}</a>;
 }
 
 export const LEGAL_DOCUMENTS: Record<LegalDocumentId, LegalDocument> = {

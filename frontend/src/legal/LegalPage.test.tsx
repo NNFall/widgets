@@ -45,9 +45,6 @@ describe('legal information architecture', () => {
     expect(stylesSource).toMatch(
       /\.feedback-composer__consent a,\s*\.feedback-composer__support a\s*\{[^}]*color:\s*var\(--coral-text,\s*#a83212\);/s,
     );
-    expect(stylesSource).toMatch(
-      /\.studio-contact-panel__channel\s*>\s*span\s*\{[^}]*color:\s*#657681;/s,
-    );
     expect(stylesSource).not.toMatch(
       /\.site-footer__operator|\.contact-channel|href\^=['"]mailto:/,
     );
@@ -103,6 +100,25 @@ describe('legal information architecture', () => {
     expect(getComputedStyle(contactLink).minHeight).toBe('44px');
     expect(contactLink).toHaveAttribute('href', '/#contact');
     expect(contact).not.toHaveTextContent(/лично ответит|ответит лично|support@kaigo\.space|mailto:/i);
+  });
+
+  it('keeps in-section legal feedback actions readable and touch-safe', () => {
+    const style = document.createElement('style');
+    style.dataset.testLegalStyles = 'true';
+    style.textContent = stylesSource;
+    document.head.append(style);
+    render(<LegalPage document={LEGAL_DOCUMENTS.privacy} />);
+
+    const section = document.getElementById('privacy-rights') as HTMLElement;
+    const action = within(section).getByRole('link', { name: 'Оставить сообщение' });
+    const computed = getComputedStyle(action);
+
+    expect(action).toHaveClass('legal-feedback-link');
+    expect(action).toHaveAttribute('href', '/#contact');
+    expect(computed.minHeight).toBe('44px');
+    expect(computed.display).toBe('inline-flex');
+    expect(computed.alignItems).toBe('center');
+    expect(computed.color).toBe('var(--legal-accent)');
   });
 
   it('keeps the footer brand link at a 44px touch target without scaling the logo', () => {

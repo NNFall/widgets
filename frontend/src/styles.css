@@ -5077,10 +5077,11 @@ a {
   font-weight: 700;
 }
 
-.legal-contact a {
+.legal-feedback-link {
   min-height: 44px;
   display: inline-flex;
   align-items: center;
+  color: var(--legal-accent);
 }
 
 @media (max-width: 980px) {

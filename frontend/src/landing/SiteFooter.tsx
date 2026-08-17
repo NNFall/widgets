@@ -3,7 +3,7 @@ import { marketingHref } from '../shared/marketing';
 
 export function SiteFooter() {
   return (
-    <footer className="site-footer">
+    <footer className="site-footer" role="contentinfo">
       <div className="landing-shell site-footer__inner">
         <div className="site-footer__brand">
           <a href={marketingHref('/')} aria-label="Kaigo — главная">

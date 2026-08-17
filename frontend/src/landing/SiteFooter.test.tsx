@@ -2,6 +2,7 @@ import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import stylesSource from '../styles.css?raw';
+import { LandingPage } from './LandingPage';
 import { SiteFooter } from './SiteFooter';
 
 afterEach(() => {
@@ -69,5 +70,14 @@ describe('SiteFooter', () => {
 
     const links = within(screen.getByRole('navigation', { name: 'Ссылки в подвале' })).getAllByRole('link');
     links.forEach((link) => expect(getComputedStyle(link).minHeight).toBe('44px'));
+  });
+
+  it('exposes contentinfo when the footer is nested in the landing main', () => {
+    render(<LandingPage />);
+
+    expect(document.querySelector('main.landing-page')).not.toBeNull();
+    const footer = document.querySelector('main.landing-page > .site-footer');
+    expect(footer).toHaveAttribute('role', 'contentinfo');
+    expect(screen.getByRole('contentinfo')).toBe(footer);
   });
 });
