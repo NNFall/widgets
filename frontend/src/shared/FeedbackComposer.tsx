@@ -58,6 +58,7 @@ function feedbackFingerprint(input: {
   topic: FeedbackTopicId;
   trimmedMessage: string;
   consentVersion: string;
+  honeypot: string;
 }): string {
   return JSON.stringify(input);
 }
@@ -72,6 +73,7 @@ function isAbortError(error: unknown): boolean {
 export function FeedbackComposer({ source, csrfToken = null, className = '' }: FeedbackComposerProps) {
   const [topic, setTopic] = useState<FeedbackTopicId>('question');
   const [message, setMessage] = useState('');
+  const [honeypot, setHoneypot] = useState('');
   const [messageMaxLength, setMessageMaxLength] = useState(MAX_MESSAGE_LENGTH);
   const [status, setStatus] = useState<ComposerStatus>('idle');
   const [errorMessage, setErrorMessage] = useState(ERROR_MESSAGE);
@@ -145,6 +147,7 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
   }, [csrfToken]);
 
   const isSending = status === 'sending';
+  const isAnonymous = csrfToken === null || csrfToken === undefined;
   const rateLimitRemainingSeconds = rateLimitDeadlineMs === null
     ? null
     : Math.max(0, Math.ceil((rateLimitDeadlineMs - rateLimitNowMs) / 1000));
@@ -170,6 +173,7 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
           topic,
           trimmedMessage: normalizedMessage,
           consentVersion: previousAttempt.consentVersion,
+          honeypot: isAnonymous ? honeypot : '',
         })
         : null;
       let attempt: FeedbackAttempt;
@@ -196,12 +200,14 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
           topic,
           trimmedMessage: normalizedMessage,
           consentVersion: session.consentVersion,
+          honeypot: isAnonymous ? honeypot : '',
         });
         const payload: FeedbackSubmission = {
           topic,
           message: normalizedMessage,
           source,
           consent: { version: session.consentVersion, accepted: true },
+          ...(isAnonymous ? { honeypot } : {}),
         };
         attempt = {
           fingerprint,
@@ -237,6 +243,7 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
       if (!mountedRef.current) return;
       attemptRef.current = null;
       setMessage('');
+      setHoneypot('');
       clearRateLimitTimer();
       setRateLimitDeadlineMs(null);
       setRateLimitNowMs(Date.now());
@@ -323,6 +330,20 @@ export function FeedbackComposer({ source, csrfToken = null, className = '' }: F
       onSubmit={handleSubmit}
       aria-busy={isSending}
     >
+      {isAnonymous && (
+        <input
+          className="feedback-composer__honeypot"
+          name="website"
+          type="text"
+          value={honeypot}
+          onChange={(event) => setHoneypot(event.target.value)}
+          aria-hidden="true"
+          tabIndex={-1}
+          autoComplete="off"
+          maxLength={200}
+          data-feedback-honeypot
+        />
+      )}
       <fieldset className="feedback-composer__topics" disabled={isSending}>
         <legend>О чём хотите написать?</legend>
         <div className="feedback-topic-grid">

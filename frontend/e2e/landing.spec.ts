@@ -942,6 +942,7 @@ test('landing feedback stores a consented message through the API contract @mobi
       message,
       source: 'landing_contact',
       consent: { version: 'feedback-v2', accepted: true },
+      honeypot: '',
     });
     for (const forbiddenField of [
       'email', 'contact', 'name', 'page', 'project', 'project_id', 'run', 'run_id', 'domain', 'context',

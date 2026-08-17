@@ -87,7 +87,29 @@ describe('FeedbackComposer', () => {
     expect(screen.getByText(/Нажимая «Отправить», вы подтверждаете согласие/i)).toBeVisible();
   });
 
-  it('loads a landing session before posting the exact consent-only payload', async () => {
+  it('renders one offscreen honeypot for anonymous feedback and none for authenticated Studio', () => {
+    render(
+      <>
+        <FeedbackComposer source="landing_contact" />
+        <FeedbackComposer source="studio_account" csrfToken="studio-csrf" />
+      </>,
+    );
+
+    const honeypots = document.querySelectorAll('input[data-feedback-honeypot]');
+    expect(honeypots).toHaveLength(1);
+    expect(honeypots[0]).toHaveAttribute('name', 'website');
+    expect(honeypots[0]).toHaveAttribute('type', 'text');
+    expect(honeypots[0]).toHaveAttribute('aria-hidden', 'true');
+    expect(honeypots[0]).toHaveAttribute('tabindex', '-1');
+    expect(honeypots[0]).toHaveAttribute('autocomplete', 'off');
+    expect(getComputedStyle(honeypots[0]).display).not.toBe('none');
+    expect(stylesSource).toContain('.feedback-composer__honeypot');
+    expect(stylesSource).toContain('position: absolute;');
+    expect(document.querySelectorAll('form.feedback-composer')[1].querySelector('input[data-feedback-honeypot]'))
+      .not.toBeInTheDocument();
+  });
+
+  it('loads a landing session before posting the exact public payload', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(sessionResponse())
@@ -119,10 +141,64 @@ describe('FeedbackComposer', () => {
       message: 'Хочу улучшить импорт',
       source: 'landing_contact',
       consent: { version: 'feedback-server-v3', accepted: true },
+      honeypot: '',
     });
     for (const forbiddenField of ['email', 'contact', 'name', 'project_id', 'run_id', 'user_id']) {
       expect(postBody(postCall)).not.toHaveProperty(forbiddenField);
     }
+  });
+
+  it('sends a filled public honeypot to the backend and does not claim success after a failed response', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(sessionResponse())
+      .mockResolvedValueOnce(failedResponse(503));
+    vi.stubGlobal('fetch', fetchMock);
+    renderComposer({ source: 'landing_contact' });
+
+    const honeypot = document.querySelector('input[data-feedback-honeypot]') as HTMLInputElement;
+    fireEvent.change(honeypot, { target: { value: 'https://bot.example' } });
+    await user.type(screen.getByRole('textbox', { name: 'Сообщение' }), 'Проверка сигнала');
+    await user.click(screen.getByRole('button', { name: 'Отправить' }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(
+      'Не удалось отправить. Ваш текст остался в форме.',
+    ));
+    expect(screen.queryByText('Спасибо. Сообщение сохранено и поможет улучшать Kaigo.')).not.toBeInTheDocument();
+    expect(postBody(fetchMock.mock.calls[1] as [string, RequestInit])).toMatchObject({
+      honeypot: 'https://bot.example',
+    });
+  });
+
+  it('includes the honeypot in the public fingerprint so changing it creates a new retry key', async () => {
+    const user = userEvent.setup();
+    const randomUUID = vi.fn()
+      .mockReturnValueOnce('uuid-1')
+      .mockReturnValueOnce('uuid-2');
+    vi.stubGlobal('crypto', { randomUUID });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(sessionResponse())
+      .mockResolvedValueOnce(failedResponse())
+      .mockResolvedValueOnce(receiptResponse('honeypot-retry-receipt'));
+    vi.stubGlobal('fetch', fetchMock);
+    renderComposer({ source: 'landing_contact' });
+
+    const honeypot = document.querySelector('input[data-feedback-honeypot]') as HTMLInputElement;
+    fireEvent.change(honeypot, { target: { value: 'bot-a' } });
+    await user.type(screen.getByRole('textbox', { name: 'Сообщение' }), 'Изменить honeypot');
+    await user.click(screen.getByRole('button', { name: 'Отправить' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+
+    fireEvent.change(honeypot, { target: { value: 'bot-b' } });
+    await user.click(screen.getByRole('button', { name: 'Повторить' }));
+    await waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument());
+
+    const firstPost = fetchMock.mock.calls[1] as [string, RequestInit];
+    const changedPost = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(postBody(firstPost)).toMatchObject({ honeypot: 'bot-a' });
+    expect(postBody(changedPost)).toMatchObject({ honeypot: 'bot-b' });
+    expect(postHeaders(firstPost).get('Idempotency-Key')).toBe('feedback-uuid-1');
+    expect(postHeaders(changedPost).get('Idempotency-Key')).toBe('feedback-uuid-2');
   });
 
   it('replays a failed landing attempt without refetching the session', async () => {
@@ -260,6 +336,7 @@ describe('FeedbackComposer', () => {
       source: 'studio_account',
       consent: { version: CONTACT_CONFIG.consentDocumentVersion, accepted: true },
     });
+    expect(postBody(postCall)).not.toHaveProperty('honeypot');
   });
 
   it('marks every form control busy and disabled while a request is in flight', async () => {
@@ -303,6 +380,22 @@ describe('FeedbackComposer', () => {
 
     await user.click(screen.getByRole('button', { name: 'Отправить ещё' }));
     expect(screen.getByRole('button', { name: 'Отправить' })).toBeDisabled();
+  });
+
+  it('clears the public honeypot only after a confirmed stored receipt', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(sessionResponse())
+      .mockResolvedValueOnce(receiptResponse('public-honeypot-clear')));
+    renderComposer({ source: 'landing_contact' });
+
+    const honeypot = document.querySelector('input[data-feedback-honeypot]') as HTMLInputElement;
+    fireEvent.change(honeypot, { target: { value: 'bot signal' } });
+    await user.type(screen.getByRole('textbox', { name: 'Сообщение' }), 'Очистить после записи');
+    await user.click(screen.getByRole('button', { name: 'Отправить' }));
+
+    await waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument());
+    expect(honeypot).toHaveValue('');
   });
 
   it('keeps the message and reuses the idempotency key when retrying unchanged content', async () => {

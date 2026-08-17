@@ -165,6 +165,38 @@ describe('feedback API submission contract', () => {
     });
   });
 
+  it('whitelists the optional public honeypot without accepting any other runtime fields', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      receipt_id: 'fb_receipt-honeypot',
+      status: 'stored',
+      received_at: '2026-08-17T10:00:00Z',
+    }), { status: 201 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const payloadWithHoneypot = {
+      ...input.payload,
+      honeypot: 'bot signal',
+      email: 'person@example.com',
+      metadata: { should_not: 'ship' },
+    } as unknown as FeedbackSubmission;
+
+    await expect(submitFeedback({ ...input, payload: payloadWithHoneypot })).resolves.toMatchObject({
+      receiptId: 'fb_receipt-honeypot',
+      status: 'stored',
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({
+      topic: 'improvement',
+      message: 'Добавьте возможность сохранять черновик.',
+      source: 'landing_contact',
+      consent: { version: 'feedback-v2', accepted: true },
+      honeypot: 'bot signal',
+    });
+    expect(JSON.parse(String(init.body))).not.toHaveProperty('email');
+    expect(JSON.parse(String(init.body))).not.toHaveProperty('metadata');
+  });
+
   it('accepts HTTP 200 as a stored receipt too', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       receipt_id: 'fb_receipt-200',

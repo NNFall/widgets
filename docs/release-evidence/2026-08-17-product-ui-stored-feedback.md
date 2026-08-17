@@ -12,11 +12,15 @@
 - единая форма обратной связи на лендинге и в Studio;
 - четыре понятные темы: вопрос, ошибка, идея по улучшению и сотрудничество;
 - отправка без имени, email, телефона и других контактных полей;
-- consent-only payload с версией документа `feedback-v2`;
+- whitelisted payload с версией документа `feedback-v2` и пустым `honeypot` для
+  public flow (authenticated Studio его не отправляет);
 - `GET /api/feedback/session` для landing и `POST /api/feedback` с CSRF и
   `Idempotency-Key`;
 - успешный UI только для валидного ответа `200/201` со статусом `stored`;
 - сохранение текста и повтор с тем же ключом/телом после временного `500`;
+- offscreen honeypot `website` без визуального места: пустой сигнал уходит как
+  `honeypot: ""`, bot-filled сигнал уходит backend, а после подтверждённого
+  `stored` очищается;
 - компактный footer без неподтверждённого почтового адреса и `mailto:`;
 - мобильная проверка без горизонтального overflow и с touch-safe controls;
 - сохранение фокуса, Escape и focus trap контактного drawer в Studio.
@@ -35,6 +39,10 @@ POST /api/feedback         -> 201 { receipt_id, status: "stored", received_at }
 production нет подтверждённых `GET /api/feedback/session`, `POST /api/feedback`
 и PostgreSQL `feedback_submissions`. Поэтому live success, реальная история,
 email- или Telegram-доставка не заявляются.
+
+Unit-проверки после добавления honeypot: `37` test files, `368` tests passed;
+проверены whitelist транспортного JSON, public empty/bot-filled send, exact
+retry identity, смена fingerprint и отсутствие ловушки в authenticated Studio.
 
 Четыре реальные локальные captures (375×811 для трёх landing-кадров и 390×843
 для Studio, in-app browser, explicit contract mock) сохранены в папке assets и перечислены в

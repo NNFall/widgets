@@ -13,6 +13,7 @@ export type FeedbackSubmission = {
     version: string;
     accepted: true;
   };
+  honeypot?: string;
 };
 
 export class FeedbackApiError extends Error {
@@ -78,7 +79,7 @@ async function readJson(response: Response): Promise<unknown> {
 }
 
 function toFeedbackPayload(payload: FeedbackSubmission): FeedbackSubmission {
-  return {
+  const transportPayload: FeedbackSubmission = {
     topic: payload.topic,
     message: payload.message,
     source: payload.source,
@@ -87,6 +88,12 @@ function toFeedbackPayload(payload: FeedbackSubmission): FeedbackSubmission {
       accepted: true,
     },
   };
+
+  if (typeof payload.honeypot === 'string') {
+    transportPayload.honeypot = payload.honeypot;
+  }
+
+  return transportPayload;
 }
 
 export async function fetchFeedbackSession(signal?: AbortSignal) {

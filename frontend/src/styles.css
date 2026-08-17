@@ -4664,6 +4664,19 @@ a {
   box-shadow: 0 22px 54px color-mix(in oklch, var(--landing-metal-deep, #46525a) 10%, transparent);
 }
 
+.feedback-composer__honeypot {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
 .feedback-composer__topics {
   margin: 0;
   padding: 0;
