@@ -49,6 +49,28 @@ const offer: BillingOffer = {
 };
 
 describe('PublicationOfferDialog', () => {
+  it('explains the access decision in the publication modal', () => {
+    render(
+      <PublicationOfferDialog
+        open
+        offer={offer}
+        busy={false}
+        error={null}
+        onClose={vi.fn()}
+        onFounder={vi.fn()}
+        onCheckout={vi.fn()}
+      />,
+    );
+
+    const dialog = screen.getByRole('dialog', { name: /опубликовать виджет/i });
+    expect(dialog).toHaveAttribute('data-publication-flow', 'modal');
+    expect(screen.getByRole('heading', {
+      name: 'Выберите, как открыть виджет на сайте',
+    })).toBeVisible();
+    expect(screen.getByText(/Founder-пилот или платный тариф/i)).toBeVisible();
+    expect(screen.getAllByRole('article')).toHaveLength(4);
+  });
+
   it('explains the founder grant and exposes all three server-priced offers', () => {
     render(
       <PublicationOfferDialog

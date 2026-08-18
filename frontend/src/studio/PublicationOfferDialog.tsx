@@ -74,7 +74,13 @@ export function PublicationOfferDialog({
     <div className="publication-offer__backdrop" role="presentation" onMouseDown={(event) => {
       if (event.currentTarget === event.target && !busy) onClose();
     }}>
-      <section className="publication-offer" role="dialog" aria-modal="true" aria-labelledby="publication-offer-title">
+      <section
+        className="publication-offer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="publication-offer-title"
+        data-publication-flow="modal"
+      >
         <header className="publication-offer__header">
           <div>
             <span>ПУБЛИКАЦИЯ</span>
@@ -85,6 +91,12 @@ export function PublicationOfferDialog({
             <X aria-hidden size={20} />
           </button>
         </header>
+
+        <section className="publication-offer__access" aria-labelledby="publication-offer-access-title">
+          <span>ДОСТУП К ПУБЛИКАЦИИ</span>
+          <h3 id="publication-offer-access-title">Выберите, как открыть виджет на сайте</h3>
+          <p>Founder-пилот или платный тариф — условия видны заранее, а результат останется в Студии.</p>
+        </section>
 
         {loading && <div className="publication-offer__loading" role="status"><Clock aria-hidden size={18} /> Загружаем доступные условия…</div>}
         {!loading && offer.founder.eligible && (
