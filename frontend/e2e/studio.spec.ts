@@ -242,8 +242,7 @@ test('Studio owner cancels and safely retries a recoverable project run @desktop
   await expect(retryDetails.getByText('Виджет прошёл визуальную проверку')).toBeVisible();
 });
 
-test('active subscription publishes the current verified artifact with a stable embed snippet @desktop', async ({ page, builderApi }) => {
-  await page.setViewportSize({ width: 1920, height: 1080 });
+test('active subscription publishes the current verified artifact with a stable embed snippet @desktop @mobile', async ({ page, builderApi }) => {
   builderApi.seedRun('run-publish');
   builderApi.activateSubscription();
   await page.goto(`/studio?project=${builderApi.projectId}`);
@@ -272,7 +271,12 @@ test('active subscription publishes the current verified artifact with a stable 
   await expect(embedSnippet).toBeVisible();
   const publicationDialog = page.getByRole('dialog', { name: 'Публикация виджета' });
   const modalBox = await publicationDialog.boundingBox();
-  expect(modalBox?.width ?? 0).toBeGreaterThan(900);
+  const viewport = page.viewportSize();
+  if (viewport && viewport.width <= 760) {
+    expect(modalBox?.width ?? 0).toBeLessThanOrEqual(viewport.width);
+  } else {
+    expect(modalBox?.width ?? 0).toBeGreaterThan(900);
+  }
   const drawerOverflow = await publicationDialog.evaluate((element) =>
     element.scrollWidth - element.clientWidth,
   );
