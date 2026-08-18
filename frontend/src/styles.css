@@ -6436,6 +6436,46 @@ a {
 .studio-composer__saved { color: #71818a; line-height: 1.45; }
 .studio-composer__loading { color: #5f6f79; }
 
+.studio-autostart {
+  width: min(620px, 100%);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 20px;
+  padding: clamp(28px, 5vw, 48px);
+  border: 1px solid rgba(7, 27, 47, .12);
+  border-radius: 26px;
+  background: #fffdfa;
+  box-shadow: 0 30px 80px rgba(60, 40, 30, .1);
+}
+.studio-autostart h1 { margin: 8px 0 10px; font-size: clamp(28px, 4vw, 40px); letter-spacing: -.035em; }
+.studio-autostart p:not(.studio-kicker) { margin: 0; color: #5f6f79; line-height: 1.6; }
+.studio-autostart__spinner { color: #c95b36; animation: studio-autostart-spin 1s linear infinite; }
+.studio-autostart__mark {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: #c95b36;
+  font-weight: 800;
+  font-size: 22px;
+}
+.studio-autostart__retry {
+  margin-top: 18px;
+  min-height: 44px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 12px;
+  color: #fff;
+  background: #09253d;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+@keyframes studio-autostart-spin { to { transform: rotate(360deg); } }
+
 @media (max-width: 700px) {
   .studio-home {
     width: min(calc(100% - 28px), 620px);
@@ -6450,6 +6490,8 @@ a {
   .studio-library__new {
     justify-self: start;
   }
+
+  .studio-autostart { grid-template-columns: 1fr; gap: 14px; }
 
   .studio-library__project {
     grid-template-columns: minmax(0, 1fr) auto;

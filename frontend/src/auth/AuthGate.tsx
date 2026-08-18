@@ -86,7 +86,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
             const claimed = await claimResponse.json() as { project?: { id?: unknown } };
             const projectId = claimed.project?.id;
             if (typeof projectId !== 'string' || !projectId) throw new Error('claim:invalid');
-            window.history.replaceState({}, '', `/studio?project=${encodeURIComponent(projectId)}`);
+            window.history.replaceState(
+              {},
+              '',
+              `/studio?project=${encodeURIComponent(projectId)}&autostart=1`,
+            );
           }
           setState({ status: 'open' });
           return;

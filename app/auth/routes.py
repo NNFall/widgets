@@ -656,7 +656,11 @@ async def auth_callback(request: web.Request) -> web.StreamResponse:
     authenticated["csrf_token"] = secrets.token_urlsafe(32)
     if claimed["journey_id"] is not None:
         authenticated[FUNNEL_JOURNEY_SESSION_KEY] = str(claimed["journey_id"])
-    location = f"/studio?project={project.id}" if project else "/studio"
+    location = (
+        f"/studio?project={project.id}&autostart=1"
+        if project
+        else "/studio"
+    )
     raise web.HTTPFound(location)
 
 

@@ -347,6 +347,70 @@ describe('durable SaaS Studio flow', () => {
     expect(await screen.findByText('Готовим проект к запуску')).toBeInTheDocument();
   });
 
+  it('autostarts a claimed draft and skips the duplicate project composer', async () => {
+    window.history.replaceState({}, '', `/studio?project=${PROJECT_ID}&autostart=1`);
+    const queued = run();
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push({ url, init });
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}` && !init?.method) return jsonResponse(project());
+      if (url === `/api/projects/${PROJECT_ID}/versions`) {
+        return jsonResponse({ active_version_id: null, versions: [] });
+      }
+      if (url === `/api/projects/${PROJECT_ID}` && init?.method === 'PATCH') {
+        return jsonResponse(project());
+      }
+      if (url === `/api/projects/${PROJECT_ID}/runs`) return jsonResponse(queued, 202);
+      if (url === `/api/runs/${RUN_ID}/events`) return emptyEventStream();
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(queued);
+      throw new Error(`unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<StudioPage />);
+
+    expect(await screen.findByText('Запускаем создание виджета…')).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'Создайте первый AI-виджет' })).not.toBeInTheDocument();
+    await waitFor(() => expect(requests.some(({ url, init }) => (
+      url === `/api/projects/${PROJECT_ID}/runs` && init?.method === 'POST'
+    ))).toBe(true));
+    expect(new URLSearchParams(window.location.search).get('autostart')).toBeNull();
+    const update = requests.find(({ url, init }) => (
+      url === `/api/projects/${PROJECT_ID}` && init?.method === 'PATCH'
+    ));
+    expect(JSON.parse(String(update?.init?.body))).toMatchObject({
+      url: 'https://example.com',
+      brief: 'Спокойный консультант по услугам',
+    });
+    expect((await screen.findAllByText('Запуск в очереди'))[0]).toBeVisible();
+  });
+
+  it('does not duplicate an active run when an OAuth callback is replayed', async () => {
+    window.history.replaceState({}, '', `/studio?project=${PROJECT_ID}&autostart=1`);
+    const queued = run();
+    const requests: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      requests.push(url);
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) return jsonResponse(project(queued));
+      if (url === `/api/runs/${RUN_ID}`) return jsonResponse(queued);
+      if (url === `/api/runs/${RUN_ID}/events`) return emptyEventStream();
+      if (url === `/api/projects/${PROJECT_ID}/versions`) {
+        return jsonResponse({ active_version_id: null, versions: [] });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+
+    render(<StudioPage />);
+
+    expect((await screen.findAllByText('Запуск в очереди'))[0]).toBeVisible();
+    expect(requests).not.toContain(`/api/projects/${PROJECT_ID}/runs`);
+    expect(screen.queryByRole('heading', { name: 'Создайте первый AI-виджет' })).not.toBeInTheDocument();
+  });
+
   it('lets the project owner request safe cancellation with session CSRF', async () => {
     const running = run({ status: 'running', state: 'running', progress: 37 });
     const requests: Array<{ url: string; init?: RequestInit }> = [];

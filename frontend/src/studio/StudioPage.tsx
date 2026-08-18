@@ -9,6 +9,7 @@ import {
   Eye,
   Link as LinkIcon,
   PaperPlaneTilt,
+  SpinnerGap,
   StopCircle,
 } from '@phosphor-icons/react';
 import { motion, useReducedMotion } from 'motion/react';
@@ -43,6 +44,11 @@ function querySourceUrl() {
 
 function queryProjectId() {
   return new URLSearchParams(window.location.search).get('project');
+}
+
+function queryAutostartProjectId() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('autostart') === '1' ? params.get('project') : null;
 }
 
 function validateSourceUrl(value: string) {
@@ -124,9 +130,47 @@ function ErrorNotice({
   );
 }
 
+function AutostartPanel({
+  domain,
+  error,
+  onRetry,
+}: {
+  domain: string;
+  error: StudioError | null;
+  onRetry: () => void;
+}) {
+  if (error) {
+    return (
+      <div className="studio-autostart" role="alert">
+        <div className="studio-autostart__mark" aria-hidden>!</div>
+        <div>
+          <p className="studio-kicker">Проект сохранён</p>
+          <h1>Не удалось начать создание</h1>
+          <p>{error.message}</p>
+          <button type="button" className="studio-autostart__retry" onClick={onRetry}>
+            Повторить запуск
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="studio-autostart" role="status" aria-live="polite">
+      <SpinnerGap className="studio-autostart__spinner" aria-hidden size={28} />
+      <div>
+        <p className="studio-kicker">Бесплатная экспресс-версия</p>
+        <h1>Запускаем создание виджета…</h1>
+        <p>Подготавливаем первую версию для <strong>{domain}</strong>. Повторно вводить ссылку не нужно.</p>
+      </div>
+    </div>
+  );
+}
+
 export function StudioPage() {
   const reducedMotion = Boolean(useReducedMotion());
   const [projectId, setProjectId] = useState(queryProjectId);
+  const [autostartProjectId, setAutostartProjectId] = useState(queryAutostartProjectId);
   const legacyBuilder = (window.location.pathname.replace(/\/+$/, '') || '/') === '/builder';
   const controller = useBuilderRun(projectId, legacyBuilder);
   const [sourceUrl, setSourceUrl] = useState(querySourceUrl);
@@ -137,7 +181,9 @@ export function StudioPage() {
   const [viewport, setViewport] = useState<PreviewViewport>('desktop');
   const [formError, setFormError] = useState<string | null>(null);
   const [projectPending, setProjectPending] = useState(false);
+  const [autostartConsumedProjectId, setAutostartConsumedProjectId] = useState<string | null>(null);
   const hydratedRun = useRef<string | null>(null);
+  const autostartAttemptProjectRef = useRef<string | null>(null);
   const previewAnchorRef = useRef<HTMLDivElement>(null);
   const newWidgetIntentRef = useRef(false);
   const artifact = controller.selectedArtifact;
@@ -170,6 +216,11 @@ export function StudioPage() {
       && Boolean(artifact)
       && controller.snapshot?.request.engine === 'direct';
 
+  const autostartFlow = Boolean(
+    projectId
+    && (autostartProjectId === projectId || autostartConsumedProjectId === projectId),
+  );
+
   useEffect(() => {
     const next = controller.snapshot;
     if (!next || hydratedRun.current === next.run_id) return;
@@ -187,10 +238,49 @@ export function StudioPage() {
   }, [controller.project, controller.snapshot]);
 
   useEffect(() => {
-    const syncProjectFromLocation = () => setProjectId(queryProjectId());
+    const syncProjectFromLocation = () => {
+      setProjectId(queryProjectId());
+      setAutostartProjectId(queryAutostartProjectId());
+      setAutostartConsumedProjectId(null);
+      autostartAttemptProjectRef.current = null;
+    };
     window.addEventListener('popstate', syncProjectFromLocation);
     return () => window.removeEventListener('popstate', syncProjectFromLocation);
   }, []);
+
+  useEffect(() => {
+    if (
+      !projectId
+      || autostartProjectId !== projectId
+      || !controller.project
+      || controller.runId
+      || controller.snapshot
+      || controller.isHydrating
+      || autostartAttemptProjectRef.current === projectId
+    ) return;
+    autostartAttemptProjectRef.current = projectId;
+    setAutostartConsumedProjectId(projectId);
+    const params = new URLSearchParams(window.location.search);
+    params.delete('autostart');
+    const query = params.toString();
+    window.history.replaceState(
+      {},
+      '',
+      `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`,
+    );
+    void controller.createRun({
+      source_url: controller.project.source_url,
+      brief: controller.project.brief ?? '',
+      engine: 'direct',
+      creativity: 0.9,
+      locale: 'ru',
+      max_repairs: 3,
+    });
+  }, [
+    autostartProjectId,
+    controller,
+    projectId,
+  ]);
 
   useEffect(() => {
     if (projectId || !newWidgetIntentRef.current) return;
@@ -280,6 +370,9 @@ export function StudioPage() {
 
   const openProject = (nextProjectId: string) => {
     window.history.pushState({}, '', `/studio?project=${encodeURIComponent(nextProjectId)}`);
+    setAutostartProjectId(null);
+    setAutostartConsumedProjectId(null);
+    autostartAttemptProjectRef.current = null;
     setProjectId(nextProjectId);
   };
 
@@ -293,7 +386,17 @@ export function StudioPage() {
   const openStudioHome = (focusNewWidget: boolean) => {
     newWidgetIntentRef.current = focusNewWidget;
     window.history.pushState({}, '', focusNewWidget ? '/studio#studio-new-widget' : '/studio');
+    setAutostartProjectId(null);
+    setAutostartConsumedProjectId(null);
+    autostartAttemptProjectRef.current = null;
     setProjectId(null);
+  };
+
+  const retryAutostart = () => {
+    if (!projectId) return;
+    controller.clearError();
+    autostartAttemptProjectRef.current = null;
+    setAutostartConsumedProjectId(projectId);
   };
 
   if (!projectId && !legacyBuilder) {
@@ -348,6 +451,12 @@ export function StudioPage() {
             <ErrorNotice error={controller.error} persistence={persistence} />
           ) : controller.isHydrating || !controller.project ? (
             <p className="studio-composer__loading" role="status">Загружаем проект…</p>
+          ) : autostartFlow ? (
+            <AutostartPanel
+              domain={headerProjectDomain}
+              error={controller.error}
+              onRetry={retryAutostart}
+            />
           ) : (
             <StudioComposer
               sourceUrl={sourceUrl}

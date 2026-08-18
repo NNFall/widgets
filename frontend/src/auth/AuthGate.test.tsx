@@ -195,6 +195,7 @@ it('claims a bound draft for an authenticated user before rendering Studio', asy
   expect(window.location.pathname).toBe('/studio');
   expect(Object.fromEntries(new URLSearchParams(window.location.search))).toEqual({
     project: 'project-from-draft',
+    autostart: '1',
   });
 });
 

@@ -308,7 +308,11 @@ async def test_draft_survives_oauth_round_trip_and_cookie_rotates() -> None:
         allow_redirects=False,
     )
     assert callback_response.status == 302
-    assert callback_response.headers["Location"].startswith("/studio?project=")
+    callback_location = urlsplit(callback_response.headers["Location"])
+    callback_query = parse_qs(callback_location.query)
+    assert callback_location.path == "/studio"
+    assert callback_query["project"]
+    assert callback_query["autostart"] == ["1"]
     authenticated_cookie = client.session.cookie_jar.filter_cookies(
         client.make_url("/")
     )["kaigo_session"].value
@@ -839,7 +843,11 @@ async def test_oauth_callback_is_bound_to_the_browser_that_started_login() -> No
             allow_redirects=False,
         )
         assert legitimate.status == 302
-        assert legitimate.headers["Location"].startswith("/studio?project=")
+        legitimate_location = urlsplit(legitimate.headers["Location"])
+        legitimate_query = parse_qs(legitimate_location.query)
+        assert legitimate_location.path == "/studio"
+        assert legitimate_query["project"]
+        assert legitimate_query["autostart"] == ["1"]
         async with factory() as database:
             authenticated_session = (
                 await database.execute(
