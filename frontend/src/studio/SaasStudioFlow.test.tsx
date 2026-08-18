@@ -1487,6 +1487,7 @@ describe('durable SaaS Studio flow', () => {
     expect(requests.some(({ url }) => url === '/api/artifacts/artifact-version-1')).toBe(true);
     await user.click(screen.getByRole('button', { name: 'Открыть публикацию' }));
     const domains = await screen.findByLabelText('На каких сайтах разрешить виджет');
+    await user.clear(domains);
     await user.type(domains, 'https://example.com');
     const publishButton = await screen.findByRole('button', { name: 'Опубликовать виджет' });
     await waitFor(() => expect(publishButton).toBeEnabled());

@@ -243,6 +243,7 @@ test('Studio owner cancels and safely retries a recoverable project run @desktop
 });
 
 test('active subscription publishes the current verified artifact with a stable embed snippet @desktop', async ({ page, builderApi }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
   builderApi.seedRun('run-publish');
   builderApi.activateSubscription();
   await page.goto(`/studio?project=${builderApi.projectId}`);
@@ -269,8 +270,10 @@ test('active subscription publishes the current verified artifact with a stable 
   await expect(embedSnippet).not.toBeVisible();
   await page.getByText('Код для разработчика').click();
   await expect(embedSnippet).toBeVisible();
-  const publicationDrawer = page.getByRole('dialog', { name: 'Публикация виджета' });
-  const drawerOverflow = await publicationDrawer.evaluate((element) =>
+  const publicationDialog = page.getByRole('dialog', { name: 'Публикация виджета' });
+  const modalBox = await publicationDialog.boundingBox();
+  expect(modalBox?.width ?? 0).toBeGreaterThan(900);
+  const drawerOverflow = await publicationDialog.evaluate((element) =>
     element.scrollWidth - element.clientWidth,
   );
   expect(drawerOverflow).toBeLessThanOrEqual(1);
@@ -293,6 +296,72 @@ test('active subscription publishes the current verified artifact with a stable 
   await expect(page.getByLabel('На каких сайтах разрешить виджет')).toHaveValue(
     'https://example.com\nhttps://shop.example.com',
   );
+});
+
+test('publication access offer stays readable in the publication modal @desktop @mobile', async ({ page, builderApi }) => {
+  await page.route('**/api/billing/offer**', (route) => route.fulfill({
+    status: 200,
+    json: {
+      founder: {
+        eligible: true,
+        reason: null,
+        remaining: 14,
+        capacity: 20,
+        period_days: 14,
+        generation_tokens: 1_500_000,
+      },
+      plans: [
+        {
+          code: 'starter_intro_15d',
+          title: 'Kaigo Starter, первые 15 дней',
+          amount_minor: 50_000,
+          currency: 'RUB',
+          period_days: 15,
+          generation_tokens: 500_000,
+          renewal: null,
+        },
+        {
+          code: 'starter_monthly',
+          title: 'Kaigo Starter, 1 месяц',
+          amount_minor: 200_000,
+          currency: 'RUB',
+          period_days: 30,
+          generation_tokens: 1_000_000,
+          renewal: null,
+        },
+        {
+          code: 'starter_quarterly',
+          title: 'Kaigo Starter, 3 месяца',
+          amount_minor: 500_000,
+          currency: 'RUB',
+          period_days: 90,
+          generation_tokens: 3_000_000,
+          renewal: null,
+        },
+      ],
+    },
+  }));
+  builderApi.seedRun('run-publication-offer');
+  await page.goto(`/studio?project=${builderApi.projectId}`);
+
+  await page.getByRole('button', { name: 'Открыть публикацию' }).click();
+  const publicationDialog = page.getByRole('dialog', { name: 'Публикация виджета' });
+  await publicationDialog.getByRole('button', { name: 'Выбрать условия публикации' }).click();
+
+  const offer = page.getByRole('dialog', { name: 'Опубликовать виджет' });
+  await expect(offer.getByText(/14 дней бесплатно/i)).toBeVisible();
+  await expect(offer.getByRole('heading', { name: '500 ₽' })).toBeVisible();
+  await expect(offer.getByRole('heading', { name: '2 000 ₽' })).toBeVisible();
+  await expect(offer.getByRole('heading', { name: '5 000 ₽' })).toBeVisible();
+  expect(await offer.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+  expect(await offer.locator('.publication-offer__plan').count()).toBe(3);
+  const viewport = page.viewportSize();
+  const modalBox = await publicationDialog.boundingBox();
+  if (viewport && viewport.width <= 760) {
+    expect(modalBox?.width ?? 0).toBeLessThanOrEqual(viewport.width);
+  } else {
+    expect(modalBox?.width ?? 0).toBeGreaterThan(900);
+  }
 });
 
 test('Studio scales the 390 x 844 mobile reference viewport inside a narrow host @mobile', async ({ page, builderApi }) => {
