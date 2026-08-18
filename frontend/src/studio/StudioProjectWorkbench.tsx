@@ -381,6 +381,7 @@ export function StudioProjectWorkbench({
           <UpgradeGate
             csrfToken={controller.csrfToken}
             projectId={projectId}
+            sourceUrl={sourceUrl}
             versionsEnabled={controller.versionsAvailable}
             projectVersionId={selectedVersion?.id}
             projectVersionOrdinal={selectedVersion?.ordinal}

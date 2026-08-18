@@ -773,6 +773,48 @@ describe('UpgradeGate', () => {
     expect(screen.getByText('Всё готово к публикации')).toBeVisible();
   });
 
+  it('prefills the publication domain from the project source origin', async () => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({
+      subscription: activeSubscription,
+    });
+
+    render(
+      <UpgradeGate
+        {...gateProps}
+        sourceUrl="https://Example.COM/products/widget?campaign=private"
+      />,
+    );
+
+    expect(await screen.findByLabelText('На каких сайтах разрешить виджет')).toHaveValue(
+      'https://example.com',
+    );
+  });
+
+  it('shows the safe server validation message for a rejected publication', async () => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({
+      subscription: activeSubscription,
+    });
+    vi.mocked(api.publishProject).mockRejectedValue(new api.BuilderApiError(
+      'allowed domain must use HTTPS',
+      {
+        status: 422,
+        code: 'publication_invalid',
+        raw: 'allowed domain must use HTTPS',
+      },
+    ));
+
+    render(<UpgradeGate {...gateProps} />);
+    await screen.findByLabelText('На каких сайтах разрешить виджет');
+    fireEvent.click(await screen.findByRole('button', { name: 'Опубликовать виджет' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Не удалось опубликовать: allowed domain must use HTTPS.',
+    );
+    expect(screen.queryByText(/проверьте домены/i)).not.toBeInTheDocument();
+  });
+
   it('publishes the selected accepted artifact, shows a stable embed snippet, and rolls back a known prior release', async () => {
     vi.mocked(api.getBillingSubscription).mockResolvedValue({
       subscription: activeSubscription,

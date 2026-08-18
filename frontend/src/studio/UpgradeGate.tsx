@@ -51,6 +51,7 @@ type CopyState = 'idle' | 'copied' | 'error';
 interface UpgradeGateProps {
   csrfToken: string | null;
   projectId?: string;
+  sourceUrl?: string;
   versionsEnabled?: boolean;
   projectVersionId?: string;
   projectVersionOrdinal?: number;
@@ -77,6 +78,16 @@ function safeCheckoutUrl(value: string) {
   }
 }
 
+function sourceOrigin(value: string | undefined) {
+  if (!value) return '';
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' ? parsed.origin : '';
+  } catch {
+    return '';
+  }
+}
+
 function createIdempotencyKey() {
   return crypto.randomUUID();
 }
@@ -99,6 +110,7 @@ function rubles(amountMinor: number) {
 export function UpgradeGate({
   csrfToken,
   projectId = '',
+  sourceUrl,
   versionsEnabled = false,
   projectVersionId = '',
   projectVersionOrdinal,
@@ -108,6 +120,7 @@ export function UpgradeGate({
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
   maxPollAttempts = DEFAULT_MAX_POLL_ATTEMPTS,
 }: UpgradeGateProps) {
+  const defaultAllowedDomain = sourceOrigin(sourceUrl);
   const [state, setState] = useState<UpgradeState>(csrfToken ? 'checking' : 'idle');
   const [paymentId, setPaymentId] = useState<string | null>(null);
   const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
@@ -116,7 +129,7 @@ export function UpgradeGate({
   const [autoRenewError, setAutoRenewError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recoveryAttempt, setRecoveryAttempt] = useState(0);
-  const [allowedDomains, setAllowedDomains] = useState('');
+  const [allowedDomains, setAllowedDomains] = useState(defaultAllowedDomain);
   const [publication, setPublication] = useState<PublicationRelease | null>(null);
   const [priorReleases, setPriorReleases] = useState<RollbackRelease[]>([]);
   const [publicationPending, setPublicationPending] = useState(false);
@@ -142,6 +155,7 @@ export function UpgradeGate({
     if (restored === null) {
       setPublication(null);
       setPriorReleases([]);
+      setAllowedDomains(defaultAllowedDomain);
       return;
     }
     const activeRelease = restored.active_release;
@@ -168,7 +182,7 @@ export function UpgradeGate({
       )),
       ...(directPrevious ? [directPrevious] : []),
     ]);
-  }, []);
+  }, [defaultAllowedDomain]);
 
   const reloadPublicationAfterConflict = useCallback(async () => {
     if (!projectId) return false;
@@ -539,7 +553,14 @@ export function UpgradeGate({
           ? 'Публикация изменилась в другой сессии. Данные обновлены — проверьте их и повторите действие.'
           : 'Публикация изменилась в другой сессии, но не удалось обновить её состояние. Повторите проверку.');
       } else {
-        setPublicationError('Не удалось опубликовать виджет. Проверьте домены и попробуйте ещё раз.');
+        const actionable = caught instanceof BuilderApiError
+          && caught.status >= 400
+          && caught.status < 500
+          && caught.code === 'publication_invalid'
+          && caught.message.trim();
+        setPublicationError(actionable
+          ? `Не удалось опубликовать: ${caught.message.trim()}.`
+          : 'Не удалось опубликовать виджет. Проверьте домены и попробуйте ещё раз.');
       }
     } finally {
       setPublicationPending(false);
@@ -548,6 +569,7 @@ export function UpgradeGate({
     allowedDomains,
     artifactId,
     csrfToken,
+    defaultAllowedDomain,
     projectId,
     projectVersionId,
     publication,
