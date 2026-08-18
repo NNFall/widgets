@@ -660,7 +660,7 @@ export function UpgradeGate({
   const launchSteps = [
     {
       title: 'Доступ',
-      copy: active ? 'Подключён и готов к работе' : 'Founder-пилот или подходящий тариф',
+      copy: active ? 'Подключён и готов к работе' : 'Выберите Founder-пилот или платный тариф',
       state: active ? 'completed' : 'current',
     },
     {

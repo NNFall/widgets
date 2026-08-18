@@ -1073,6 +1073,7 @@ describe('durable SaaS Studio flow', () => {
     expect(within(publicationDialog).getByText('Подключите виджет к сайту')).toBeVisible();
     expect(within(publicationDialog).getByRole('list', { name: 'Путь до запуска виджета' })).toBeVisible();
     expect(within(publicationDialog).getByText('Доступ')).toBeVisible();
+    expect(within(publicationDialog).getByText('Выберите Founder-пилот или платный тариф')).toBeVisible();
     expect(within(publicationDialog).getByText('Публикация')).toBeVisible();
     expect(within(publicationDialog).getByText('Установка')).toBeVisible();
     expect(within(publicationDialog).getByRole('button', { name: 'Выбрать условия публикации' })).toBeEnabled();
