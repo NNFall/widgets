@@ -7612,6 +7612,26 @@ a {
   animation: studio-drawer-panel 220ms cubic-bezier(.16, 1, .3, 1) both;
 }
 
+.studio-drawer--modal {
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.studio-drawer__panel--modal {
+  width: min(1240px, 100%);
+  height: min(900px, calc(100dvh - 48px));
+  max-height: calc(100dvh - 48px);
+  border: 1px solid rgba(7, 27, 47, .12);
+  border-radius: 28px;
+  box-shadow: 0 28px 90px rgba(7, 27, 47, .22);
+  animation: studio-modal-panel 220ms cubic-bezier(.16, 1, .3, 1) both;
+}
+
+.studio-drawer--modal .studio-drawer__body {
+  padding: clamp(24px, 3vw, 44px);
+}
+
 .studio-drawer__header {
   min-height: 88px;
   padding: 18px 20px;
@@ -7773,6 +7793,76 @@ a {
   width: 100%;
   min-width: 0;
   white-space: normal;
+}
+
+.studio-drawer--modal .studio-upgrade {
+  grid-template-columns: auto minmax(0, 1fr);
+  margin: 0;
+  padding: clamp(24px, 3vw, 36px);
+  border-radius: 22px;
+}
+
+.studio-drawer--modal .studio-upgrade > svg {
+  display: block;
+}
+
+.studio-drawer--modal .studio-upgrade > button,
+.studio-drawer--modal .studio-upgrade > .studio-upgrade__actions {
+  grid-column: 2;
+  justify-self: start;
+}
+
+.studio-drawer--modal .studio-upgrade__actions {
+  width: auto;
+  display: flex;
+}
+
+.studio-drawer--modal .studio-upgrade__actions button {
+  width: auto;
+  min-width: 180px;
+}
+
+@keyframes studio-modal-panel {
+  from { opacity: 0; transform: translateY(12px) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (max-width: 760px) {
+  .studio-drawer--modal {
+    align-items: stretch;
+    padding: 0;
+  }
+
+  .studio-drawer__panel--modal {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .studio-drawer--modal .studio-upgrade {
+    grid-template-columns: 1fr;
+    padding: 20px 16px;
+  }
+
+  .studio-drawer--modal .studio-upgrade > svg {
+    display: none;
+  }
+
+  .studio-drawer--modal .studio-upgrade > button,
+  .studio-drawer--modal .studio-upgrade > .studio-upgrade__actions {
+    grid-column: 1;
+    width: 100%;
+  }
+
+  .studio-drawer--modal .studio-upgrade__actions {
+    display: grid;
+  }
+
+  .studio-drawer--modal .studio-upgrade__actions button {
+    width: 100%;
+  }
 }
 
 .presentation-studio { min-height: 100dvh; color: var(--ink); background: #f2f0ea; }

@@ -5,6 +5,7 @@ type StudioDrawerProps = {
   open: boolean;
   title: string;
   description?: string;
+  variant?: 'drawer' | 'modal';
   children: ReactNode;
   onClose: () => void;
 };
@@ -13,6 +14,7 @@ export function StudioDrawer({
   open,
   title,
   description,
+  variant = 'drawer',
   children,
   onClose,
 }: StudioDrawerProps) {
@@ -40,13 +42,13 @@ export function StudioDrawer({
 
   return (
     <div
-      className="studio-drawer"
+      className={`studio-drawer${variant === 'modal' ? ' studio-drawer--modal' : ''}`}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
       <section
-        className="studio-drawer__panel"
+        className={`studio-drawer__panel${variant === 'modal' ? ' studio-drawer__panel--modal' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

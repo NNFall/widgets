@@ -373,6 +373,7 @@ export function StudioProjectWorkbench({
 
       <StudioDrawer
         open={drawer === 'publication'}
+        variant="modal"
         title="Публикация виджета"
         description="Подключение, тариф и код установки находятся в одном месте."
         onClose={closeDrawer}

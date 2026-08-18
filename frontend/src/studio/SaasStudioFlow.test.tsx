@@ -1049,6 +1049,8 @@ describe('durable SaaS Studio flow', () => {
 
     await user.click(screen.getByRole('button', { name: 'Открыть тариф и лимиты' }));
     const accountDialog = screen.getByRole('dialog', { name: 'Тариф и лимиты' });
+    expect(accountDialog).not.toHaveClass('studio-drawer__panel--modal');
+    expect(accountDialog.parentElement).not.toHaveClass('studio-drawer--modal');
     expect(within(accountDialog).getByText('Бесплатный режим')).toBeVisible();
     expect(within(accountDialog).getByText('Первая экспресс-версия — бесплатно')).toBeVisible();
     expect(within(accountDialog).getByText('Для продолжения нужен тариф')).toBeVisible();
@@ -1066,6 +1068,8 @@ describe('durable SaaS Studio flow', () => {
 
     await user.click(screen.getByRole('button', { name: 'Открыть публикацию' }));
     const publicationDialog = screen.getByRole('dialog', { name: 'Публикация виджета' });
+    expect(publicationDialog).toHaveClass('studio-drawer__panel--modal');
+    expect(publicationDialog.parentElement).toHaveClass('studio-drawer--modal');
     expect(within(publicationDialog).getByText('Подключите виджет к сайту')).toBeVisible();
     expect(within(publicationDialog).getByRole('list', { name: 'Путь до запуска виджета' })).toBeVisible();
     expect(within(publicationDialog).getByText('Доступ')).toBeVisible();
