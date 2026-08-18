@@ -466,7 +466,6 @@ async def publish_project(request: web.Request) -> web.Response:
                     {
                         "project_version_id",
                         "expected_active_release_id",
-                        "allowed_domains",
                     }
                 ),
             )

@@ -2483,6 +2483,33 @@ async def test_versioned_publish_route_enforces_exact_bounded_request_contract(
 
 
 @pytest.mark.asyncio
+async def test_versioned_publish_omitted_domains_uses_project_source_origin(tmp_path) -> None:
+    config = SimpleNamespace(
+        public_auth_enabled=True,
+        public_base_url="https://kaigo.example",
+        environment="production",
+        publication_allow_insecure_origins=False,
+        project_versions_enabled=True,
+    )
+    engine, _factory, client, ids = await _publication_app(tmp_path, config=config)
+    try:
+        await client.post("/test/login/10")
+        response = await client.post(
+            f"/api/projects/{ids['project']}/publish",
+            json={
+                "project_version_id": str(ids["first_version"]),
+                "expected_active_release_id": None,
+            },
+            headers={"X-CSRF-Token": "csrf"},
+        )
+        assert response.status == 201
+        assert (await response.json())["allowed_domains"] == ["https://example.com"]
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_versioned_rollback_route_requires_expected_pointer(tmp_path) -> None:
     config = SimpleNamespace(
         public_auth_enabled=True,
