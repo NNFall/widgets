@@ -86,8 +86,11 @@ describe('PublicationOfferDialog', () => {
 
     expect(screen.getByRole('dialog', { name: /опубликовать виджет/i })).toBeVisible();
     expect(screen.getByText(/14 дней бесплатно/i)).toBeVisible();
+    expect(screen.getByText(/Founder-пилот: опубликуем виджет бесплатно на 14 дней/i)).toBeVisible();
+    expect(screen.getByText(/обратную связь о работе, недостатках и нужных доработках/i)).toBeVisible();
     expect(screen.getByText(/без карты и автосписаний/i)).toBeVisible();
     expect(screen.getByRole('button', { name: /активировать 14 дней/i })).toBeEnabled();
+    expect(screen.getByRole('heading', { name: 'Или выберите платный тариф' })).toBeVisible();
     expect(screen.getByText('500 ₽')).toBeVisible();
     expect(screen.getByText('2 000 ₽')).toBeVisible();
     expect(screen.getByText('5 000 ₽')).toBeVisible();

@@ -105,7 +105,7 @@ export function PublicationOfferDialog({
             <div>
               <span>ДЛЯ ПЕРВЫХ КЛИЕНТОВ · ОСТАЛОСЬ {offer.founder.remaining} МЕСТ</span>
               <h3>{offer.founder.period_days} {daysWord(offer.founder.period_days)} бесплатно</h3>
-              <p>Опубликуем виджет без карты и автосписаний. Внутри — до трёх стандартных доработок. Взамен попросим честную обратную связь.</p>
+              <p>Founder-пилот: опубликуем виджет бесплатно на {offer.founder.period_days} {daysWord(offer.founder.period_days)}. Взамен попросим честную обратную связь о работе, недостатках и нужных доработках. Без карты и автосписаний.</p>
               <ul>
                 <li><Check aria-hidden /> Публикация на вашем домене</li>
                 <li><Check aria-hidden /> {new Intl.NumberFormat('ru-RU').format(offer.founder.generation_tokens)} токенов</li>
@@ -118,36 +118,45 @@ export function PublicationOfferDialog({
           </article>
         )}
 
-        {!loading && <div className="publication-offer__plans">
-          {offer.plans.map((plan) => {
-            const isIntro = plan.code === 'starter_intro_15d';
-            return (
-              <article key={plan.code} className={isIntro ? 'publication-offer__plan publication-offer__plan--accent' : 'publication-offer__plan'}>
-                <div>
-                  <span>{isIntro ? 'ПОПРОБОВАТЬ НА САЙТЕ' : plan.period_days === 90 ? 'ВЫГОДНЕЕ НА 3 МЕСЯЦА' : 'БЕЗ АВТОПРОДЛЕНИЯ'}</span>
-                  <h3>{rubles(plan.amount_minor)}</h3>
-                  <p>за {plan.period_days} {daysWord(plan.period_days)} · {new Intl.NumberFormat('ru-RU').format(plan.generation_tokens)} токенов</p>
-                </div>
-                {isIntro && plan.renewal && plan.renewal.following && (
-                  <label className="publication-offer__consent">
-                    <input
-                      type="checkbox"
-                      checked={introConsent}
-                      onChange={(event) => setIntroConsent(event.target.checked)}
-                      disabled={busy}
-                    />
-                    <span>
-                      Включить автопродление: после оплаченных {plan.period_days} {daysWord(plan.period_days)} — {rubles(plan.renewal.amount_minor)} за следующие {plan.renewal.period_days} {daysWord(plan.renewal.period_days)}, затем {rubles(plan.renewal.following.amount_minor)} каждые {plan.renewal.following.period_days} {daysWord(plan.renewal.following.period_days)}. Можно отключить до следующего списания.
-                    </span>
-                  </label>
-                )}
-                <button type="button" onClick={() => choose(plan.code)} disabled={busy}>
-                  {BUTTON_LABELS[plan.code] ?? 'Выбрать тариф'}
-                </button>
-              </article>
-            );
-          })}
-        </div>}
+        {!loading && <>
+          <section className="publication-offer__paid-intro" aria-labelledby="publication-offer-paid-title">
+            <div>
+              <span>ЕСЛИ НУЖНО СРАЗУ</span>
+              <h3 id="publication-offer-paid-title">Или выберите платный тариф</h3>
+            </div>
+            <p>Публикация включится сразу после оплаты — без ожидания Founder-слота.</p>
+          </section>
+          <div className="publication-offer__plans">
+            {offer.plans.map((plan) => {
+              const isIntro = plan.code === 'starter_intro_15d';
+              return (
+                <article key={plan.code} className={isIntro ? 'publication-offer__plan publication-offer__plan--accent' : 'publication-offer__plan'}>
+                  <div>
+                    <span>{isIntro ? 'ПОПРОБОВАТЬ НА САЙТЕ' : plan.period_days === 90 ? 'ВЫГОДНЕЕ НА 3 МЕСЯЦА' : 'БЕЗ АВТОПРОДЛЕНИЯ'}</span>
+                    <h3>{rubles(plan.amount_minor)}</h3>
+                    <p>за {plan.period_days} {daysWord(plan.period_days)} · {new Intl.NumberFormat('ru-RU').format(plan.generation_tokens)} токенов</p>
+                  </div>
+                  {isIntro && plan.renewal && plan.renewal.following && (
+                    <label className="publication-offer__consent">
+                      <input
+                        type="checkbox"
+                        checked={introConsent}
+                        onChange={(event) => setIntroConsent(event.target.checked)}
+                        disabled={busy}
+                      />
+                      <span>
+                        Включить автопродление: после оплаченных {plan.period_days} {daysWord(plan.period_days)} — {rubles(plan.renewal.amount_minor)} за следующие {plan.renewal.period_days} {daysWord(plan.renewal.period_days)}, затем {rubles(plan.renewal.following.amount_minor)} каждые {plan.renewal.following.period_days} {daysWord(plan.renewal.following.period_days)}. Можно отключить до следующего списания.
+                      </span>
+                    </label>
+                  )}
+                  <button type="button" onClick={() => choose(plan.code)} disabled={busy}>
+                    {BUTTON_LABELS[plan.code] ?? 'Выбрать тариф'}
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+        </>}
         {error && <p className="publication-offer__error" role="alert">{error}</p>}
         <p className="publication-offer__footnote">{footnote}</p>
       </section>

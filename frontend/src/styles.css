@@ -6705,6 +6705,10 @@ a {
 .publication-offer__plan p { margin: 0; color: #52636e; line-height: 1.48; }
 .publication-offer__founder ul { display: flex; flex-wrap: wrap; gap: 8px 15px; margin: 13px 0 0; padding: 0; list-style: none; color: #31584c; font-size: 13px; font-weight: 700; }
 .publication-offer__founder li { display: inline-flex; gap: 5px; align-items: center; }
+.publication-offer__paid-intro { display: flex; align-items: end; justify-content: space-between; gap: 18px; margin-top: 24px; }
+.publication-offer__paid-intro > div > span { color: #67808c; font-size: 10px; font-weight: 800; letter-spacing: .1em; }
+.publication-offer__paid-intro h3 { margin: 4px 0 0; color: var(--ink); font-size: 19px; letter-spacing: -.025em; }
+.publication-offer__paid-intro p { max-width: 42ch; margin: 0; color: #52636e; font-size: 13px; line-height: 1.45; text-align: right; }
 .publication-offer__founder button,
 .publication-offer__plan button,
 .support-dialog > button {
@@ -6750,6 +6754,8 @@ a {
   .publication-offer { padding: 20px 16px; }
   .publication-offer__founder { grid-template-columns: auto minmax(0, 1fr); }
   .publication-offer__founder button { grid-column: 1 / -1; width: 100%; }
+  .publication-offer__paid-intro { display: block; }
+  .publication-offer__paid-intro p { margin-top: 5px; text-align: left; }
   .publication-offer__plans { grid-template-columns: 1fr; }
   .publication-offer__plan { min-height: 0; }
 }
