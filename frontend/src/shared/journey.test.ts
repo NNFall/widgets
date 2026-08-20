@@ -52,7 +52,8 @@ describe('ensureLandingJourney', () => {
     await vi.advanceTimersByTimeAsync(751);
     await expect(request).resolves.toBeUndefined();
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchMock.mock.calls[0]?.[1]).not.toHaveProperty('signal');
+    const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(requestInit).not.toHaveProperty('signal');
   });
 
   it('keeps one slow entry request authoritative after the UI deadline', async () => {
