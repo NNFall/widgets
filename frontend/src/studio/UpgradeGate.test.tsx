@@ -1252,9 +1252,18 @@ describe('UpgradeGate', () => {
     expect(firstSnippet).not.toBeVisible();
     fireEvent.click(screen.getByText('Код для разработчика'));
     expect(firstSnippet).toBeVisible();
-    expect(screen.getByText(
-      'Виджет опубликован. Скопируйте код установки или постоянную ссылку ниже.',
-    )).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+    const firstHandoff = screen.getByRole('region', { name: 'Установите виджет на сайт' });
+    expect(within(firstHandoff).getByRole('button', {
+      name: 'Скопировать код установки',
+    })).toBeEnabled();
+    expect(within(firstHandoff).getByRole('button', {
+      name: 'Скопировать ссылку загрузчика',
+    })).toBeEnabled();
+    expect(within(firstHandoff).getByRole('link', {
+      name: 'Открыть инструкцию по установке',
+    })).toHaveAttribute('href', '/install');
+    expect(screen.queryByRole('list', { name: 'Путь до запуска виджета' })).not.toBeInTheDocument();
     expect(screen.queryByText(/дорабат/i)).not.toBeInTheDocument();
 
     view.rerender(
@@ -1421,12 +1430,21 @@ describe('UpgradeGate', () => {
 
     expect(await screen.findByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
     expect(screen.queryByLabelText('На каких сайтах разрешить виджет')).not.toBeInTheDocument();
-    expect(screen.getByRole('list', { name: 'Путь до запуска виджета' })).toBeVisible();
-    expect(screen.getByText('Остался один шаг')).toBeVisible();
-    expect(screen.getByText(/передайте код человеку, который управляет сайтом/i)).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Скопировать код установки' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Скопировать ссылку загрузчика' })).toBeVisible();
-    expect(screen.getByRole('link', { name: 'Открыть инструкцию по установке' })).toHaveAttribute(
+    expect(screen.queryByRole('list', { name: 'Путь до запуска виджета' })).not.toBeInTheDocument();
+    const handoff = screen.getByRole('region', { name: 'Установите виджет на сайт' });
+    expect(within(handoff).getByText('Остался один шаг')).toBeVisible();
+    expect(within(handoff).getByText(
+      /передайте его человеку, который управляет сайтом/i,
+    )).toBeVisible();
+    expect(within(handoff).getByRole('button', {
+      name: 'Скопировать код установки',
+    })).toBeVisible();
+    expect(within(handoff).getByRole('button', {
+      name: 'Скопировать ссылку загрузчика',
+    })).toBeVisible();
+    expect(within(handoff).getByRole('link', {
+      name: 'Открыть инструкцию по установке',
+    })).toHaveAttribute(
       'href',
       '/install',
     );
@@ -1658,6 +1676,7 @@ describe('UpgradeGate', () => {
   });
 
   it('fails closed when initial billing recovery fails and retries the check explicitly', async () => {
+    vi.useRealTimers();
     vi.mocked(api.getBillingSubscription)
       .mockRejectedValueOnce(new api.BuilderApiError('Unavailable', {
         status: 503,
