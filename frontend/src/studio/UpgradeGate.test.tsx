@@ -891,17 +891,51 @@ describe('UpgradeGate', () => {
     ));
   });
 
-  it('shows a customer-safe generic message for a rejected publication', async () => {
+  it.each([
+    [
+      'project source URL has no safe HTTPS origin',
+      'Не удалось определить адрес сайта проекта. Проверьте, что в проекте указана публичная HTTPS-ссылка.',
+    ],
+    [
+      'artifact is not publishable',
+      'Эта версия виджета пока не готова к публикации. Выберите проверенную версию или пересоздайте виджет.',
+    ],
+  ])('explains a permanent publication rejection without exposing backend text: %s', async (raw, expected) => {
     vi.useRealTimers();
     vi.mocked(api.getBillingSubscription).mockResolvedValue({
       subscription: activeSubscription,
     });
     vi.mocked(api.publishProject).mockRejectedValue(new api.BuilderApiError(
-      'allowed domain must use HTTPS',
+      raw,
       {
         status: 422,
         code: 'publication_invalid',
-        raw: 'allowed domain must use HTTPS',
+        raw,
+      },
+    ));
+
+    render(<UpgradeGate {...gateProps} />);
+    const publishAction = await screen.findByRole('button', { name: /опубликовать/i });
+    await waitFor(() => expect(publishAction).toBeEnabled());
+    fireEvent.click(publishAction);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(expected);
+    expect(alert).not.toHaveTextContent(raw);
+  });
+
+  it('keeps the retry message for an unknown temporary publication failure', async () => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({
+      subscription: activeSubscription,
+    });
+    vi.mocked(api.publishProject).mockRejectedValue(new api.BuilderApiError(
+      'upstream unavailable',
+      {
+        status: 503,
+        code: 'provider_unavailable',
+        raw: 'upstream unavailable',
+        retryable: true,
       },
     ));
 
@@ -912,8 +946,7 @@ describe('UpgradeGate', () => {
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Не удалось опубликовать виджет. Попробуйте ещё раз.');
-    expect(alert).not.toHaveTextContent(/allowed domain/i);
-    expect(alert).not.toHaveTextContent(/домен/i);
+    expect(alert).not.toHaveTextContent('upstream unavailable');
   });
 
   it('publishes the selected accepted artifact, shows a stable embed snippet, and rolls back a known prior release', async () => {

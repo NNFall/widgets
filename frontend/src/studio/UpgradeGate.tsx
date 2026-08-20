@@ -97,6 +97,36 @@ function rubles(amountMinor: number) {
   return `${new Intl.NumberFormat('ru-RU').format(amountMinor / 100)} ₽`;
 }
 
+function publicationFailureMessage(error: unknown) {
+  const fallback = 'Не удалось опубликовать виджет. Попробуйте ещё раз.';
+  if (!(error instanceof BuilderApiError)) return fallback;
+
+  if (error.code === 'upgrade_required') {
+    return 'Для публикации нужен активный тариф. Обновите статус тарифа и повторите действие.';
+  }
+  if (error.code === 'verified_oauth_required') {
+    return 'Для публикации войдите через подтверждённый аккаунт и повторите действие.';
+  }
+  if (error.code !== 'publication_invalid') return fallback;
+
+  const reason = error.raw.toLowerCase();
+  if (
+    reason.includes('source url')
+    || reason.includes('allowed domain')
+    || reason.includes('origin')
+  ) {
+    return 'Не удалось определить адрес сайта проекта. Проверьте, что в проекте указана публичная HTTPS-ссылка.';
+  }
+  if (
+    reason.includes('artifact')
+    || reason.includes('active run')
+    || reason.includes('publication validation')
+  ) {
+    return 'Эта версия виджета пока не готова к публикации. Выберите проверенную версию или пересоздайте виджет.';
+  }
+  return 'Эта версия или адрес сайта не прошли проверку публикации. Обновите данные проекта и повторите действие.';
+}
+
 export function UpgradeGate({
   csrfToken,
   projectId = '',
@@ -538,7 +568,7 @@ export function UpgradeGate({
           ? 'Публикация изменилась в другой сессии. Данные обновлены — проверьте их и повторите действие.'
           : 'Публикация изменилась в другой сессии, но не удалось обновить её состояние. Повторите проверку.');
       } else {
-        setPublicationError('Не удалось опубликовать виджет. Попробуйте ещё раз.');
+        setPublicationError(publicationFailureMessage(caught));
       }
     } finally {
       setPublicationPending(false);
