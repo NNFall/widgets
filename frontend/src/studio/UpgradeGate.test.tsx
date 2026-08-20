@@ -400,8 +400,7 @@ describe('UpgradeGate', () => {
 
     render(
       <UpgradeGate
-        csrfToken="csrf-billing"
-        projectId="project-123"
+        {...gateProps}
         pollIntervalMs={100}
       />,
     );
@@ -428,6 +427,16 @@ describe('UpgradeGate', () => {
       await Promise.resolve();
     });
     expect(api.getBillingSubscription).toHaveBeenCalledTimes(2);
+    expect(api.publishProject).toHaveBeenCalledTimes(1);
+    expect(api.publishProject).toHaveBeenCalledWith(
+      'project-123',
+      {
+        project_version_id: 'version-4',
+        expected_active_release_id: null,
+      },
+      'csrf-billing',
+    );
+    expect(screen.getByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
     expect(screen.queryByText(/всё готово к публикации/i)).not.toBeInTheDocument();
     expect(screen.getByText('Доработки доступны в рамках тарифа.')).toBeVisible();
     expect(screen.queryByText(/750[\s ]000|токен/i)).not.toBeInTheDocument();
@@ -1012,6 +1021,64 @@ describe('UpgradeGate', () => {
     await act(async () => Promise.resolve());
 
     expect(api.publishProject).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for null publication recovery before auto-publishing active access once', async () => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
+    type PublicationRecovery = Awaited<ReturnType<typeof api.getProjectPublication>>;
+    let resolvePublicationRecovery!: (value: PublicationRecovery) => void;
+    vi.mocked(api.getProjectPublication).mockImplementation(() => new Promise<PublicationRecovery>(
+      (resolve) => {
+        resolvePublicationRecovery = resolve;
+      },
+    ));
+
+    const view = render(<UpgradeGate {...gateProps} />);
+
+    await waitFor(() => expect(api.getProjectPublication).toHaveBeenCalledOnce());
+    expect(api.publishProject).not.toHaveBeenCalled();
+    view.rerender(<UpgradeGate {...gateProps} sourceUrl="https://example.com/while-recovering" />);
+    await act(async () => Promise.resolve());
+    expect(api.publishProject).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolvePublicationRecovery({ publication: null });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(api.publishProject).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+    view.rerender(<UpgradeGate {...gateProps} sourceUrl="https://example.com/after-recovery" />);
+    await act(async () => Promise.resolve());
+    expect(api.publishProject).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for restored publication recovery and never auto-publishes it', async () => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
+    type PublicationRecovery = Awaited<ReturnType<typeof api.getProjectPublication>>;
+    let resolvePublicationRecovery!: (value: PublicationRecovery) => void;
+    vi.mocked(api.getProjectPublication).mockImplementation(() => new Promise<PublicationRecovery>(
+      (resolve) => {
+        resolvePublicationRecovery = resolve;
+      },
+    ));
+
+    const view = render(<UpgradeGate {...gateProps} />);
+
+    await waitFor(() => expect(api.getProjectPublication).toHaveBeenCalledOnce());
+    expect(api.publishProject).not.toHaveBeenCalled();
+    await act(async () => {
+      resolvePublicationRecovery(restoredPublication(['https://example.com']));
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+    expect(api.publishProject).not.toHaveBeenCalled();
+    view.rerender(<UpgradeGate {...gateProps} projectVersionId="version-5" />);
+    await act(async () => Promise.resolve());
+    expect(api.publishProject).not.toHaveBeenCalled();
   });
 
   it('omits allowed domains from the first publication payload', async () => {

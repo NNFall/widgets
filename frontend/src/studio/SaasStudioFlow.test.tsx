@@ -1545,15 +1545,13 @@ describe('durable SaaS Studio flow', () => {
     expect(requests.some(({ url }) => url === '/api/artifacts/artifact-version-1')).toBe(true);
     await user.click(screen.getByRole('button', { name: 'Открыть публикацию' }));
     expect(screen.queryByLabelText('На каких сайтах разрешить виджет')).not.toBeInTheDocument();
-    const publishButton = await screen.findByRole('button', {
-      name: 'Опубликовать и получить код',
-    });
-    await waitFor(() => expect(publishButton).toBeEnabled());
-    await user.click(publishButton);
-
     await waitFor(() => expect(requests.some(
       ({ url, init }) => url === `/api/projects/${PROJECT_ID}/publish` && init?.method === 'POST',
     )).toBe(true));
+    expect(await screen.findByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+    expect(screen.queryByRole('button', {
+      name: 'Опубликовать и получить код',
+    })).not.toBeInTheDocument();
     const publish = requests.find(
       ({ url, init }) => url === `/api/projects/${PROJECT_ID}/publish` && init?.method === 'POST',
     )!;

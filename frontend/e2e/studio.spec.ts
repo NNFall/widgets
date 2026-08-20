@@ -317,8 +317,7 @@ test('active subscription publishes the current verified artifact with a stable 
 });
 
 test('publication goes directly from the Founder offer to installation @desktop @mobile', async ({ page, builderApi }) => {
-  let founderClaimBody: unknown = null;
-  let founderClaimCsrf: string | undefined;
+  const founderClaimRequests: Array<{ body: unknown; csrfToken: string | undefined }> = [];
   await page.route('**/api/billing/offer**', (route) => route.fulfill({
     status: 200,
     json: {
@@ -362,8 +361,10 @@ test('publication goes directly from the Founder offer to installation @desktop 
     },
   }));
   await page.route('**/api/billing/founder/claim', async (route) => {
-    founderClaimBody = route.request().postDataJSON();
-    founderClaimCsrf = route.request().headers()['x-csrf-token'];
+    founderClaimRequests.push({
+      body: route.request().postDataJSON(),
+      csrfToken: route.request().headers()['x-csrf-token'],
+    });
     await route.fulfill({
       status: 201,
       json: {
@@ -390,11 +391,11 @@ test('publication goes directly from the Founder offer to installation @desktop 
 
   await page.getByRole('button', { name: 'Открыть публикацию' }).click();
   const publicationDialog = page.getByRole('dialog', { name: 'Публикация виджета' });
-  await expect(page.getByRole('dialog')).toHaveCount(1);
-  await expect(page.locator('.publication-offer__backdrop')).toHaveCount(0);
   await expect(publicationDialog.getByRole('heading', {
     name: '14 дней полностью бесплатно',
   })).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await expect(page.locator('.publication-offer__backdrop')).toHaveCount(0);
   await expect(publicationDialog.getByText(/без карты и автосписаний/i)).toBeVisible();
   await expect(publicationDialog.getByText(/честно рассказать/i)).toBeVisible();
   await expect(publicationDialog.getByRole('heading', { name: '500 ₽' })).toBeVisible();
@@ -429,11 +430,15 @@ test('publication goes directly from the Founder offer to installation @desktop 
   await expect(publicationDialog.getByRole('button', { name: 'Скопировать код установки' })).toBeVisible();
   await expect(publicationDialog.getByRole('button', { name: 'Скопировать ссылку загрузчика' })).toBeVisible();
   await expect(publicationDialog.locator('a[href="/install"]')).toBeVisible();
-  expect(founderClaimBody).toEqual({ project_id: builderApi.projectId });
-  expect(founderClaimCsrf).toBe(builderApi.csrfToken);
-  const publish = builderApi.requests.find(({ method, pathname }) =>
+  await expect(page.locator('.publication-offer__backdrop')).toHaveCount(0);
+  expect(founderClaimRequests).toHaveLength(1);
+  expect(founderClaimRequests[0]?.body).toEqual({ project_id: builderApi.projectId });
+  expect(founderClaimRequests[0]?.csrfToken).toBe(builderApi.csrfToken);
+  const publishRequests = builderApi.requests.filter(({ method, pathname }) =>
     method === 'POST' && pathname === `/api/projects/${builderApi.projectId}/publish`,
   );
+  expect(publishRequests).toHaveLength(1);
+  const [publish] = publishRequests;
   expect(publish?.body).toEqual({
     project_version_id: 'version-playwright-2',
     expected_active_release_id: null,
