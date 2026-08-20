@@ -104,6 +104,54 @@ const activeSubscription = {
   generation_tokens_remaining: 750_000,
 };
 
+function restoredPublication(allowedDomains: string[]) {
+  return {
+    publication: {
+      publication_id: 'publication-123',
+      stable_key: 'stable-widget',
+      state: 'published' as const,
+      allowed_domains: allowedDomains,
+      embed_url: 'https://widgets.kaigo.space/embed/stable-widget.js',
+      runtime_url: 'https://widgets.kaigo.space/runtime/stable-widget',
+      active_release: {
+        release_id: 'release-4',
+        artifact_id: 'artifact-123',
+        project_version_id: 'version-4',
+        previous_release_id: null,
+        revision: 4,
+        checksum: 'checksum-4',
+        created_at: '2026-07-28T13:00:00Z',
+      },
+      releases: [],
+    },
+  };
+}
+
+function updatedPublication(allowedDomains: string[]) {
+  return {
+    publication_id: 'publication-123',
+    release_id: 'release-5',
+    artifact_id: 'artifact-123',
+    project_version_id: 'version-4',
+    stable_key: 'stable-widget',
+    revision: 4,
+    allowed_domains: allowedDomains,
+    checksum: 'checksum-5',
+    embed_url: 'https://widgets.kaigo.space/embed/stable-widget.js',
+    runtime_url: 'https://widgets.kaigo.space/runtime/stable-widget',
+  };
+}
+
+function expectManualCopyValueVisible(value: string) {
+  const visibleValue = screen.getAllByText(value, { exact: true }).find(
+    (candidate) => !candidate.closest('details:not([open])'),
+  );
+  if (!visibleValue) {
+    throw new Error(`Manual-copy value is still hidden: ${value}`);
+  }
+  expect(visibleValue).toBeVisible();
+}
+
 async function chooseMonthlyPlan() {
   fireEvent.click(screen.getByRole('button', { name: /выбрать условия публикации/i }));
   await act(async () => {
@@ -773,7 +821,7 @@ describe('UpgradeGate', () => {
     expect(screen.getByText('Всё готово к публикации')).toBeVisible();
   });
 
-  it('prefills the publication domain from the project source origin', async () => {
+  it('keeps domain configuration out of the customer publication flow', async () => {
     vi.useRealTimers();
     vi.mocked(api.getBillingSubscription).mockResolvedValue({
       subscription: activeSubscription,
@@ -786,12 +834,64 @@ describe('UpgradeGate', () => {
       />,
     );
 
-    expect(await screen.findByLabelText('На каких сайтах разрешить виджет')).toHaveValue(
-      'https://example.com',
-    );
+    expect(await screen.findByRole('heading', { name: 'Всё готово к публикации' })).toBeVisible();
+    expect(screen.queryByLabelText('На каких сайтах разрешить виджет')).not.toBeInTheDocument();
   });
 
-  it('shows the safe server validation message for a rejected publication', async () => {
+  it('labels the first primary action as publishing and receiving the code', async () => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({
+      subscription: activeSubscription,
+    });
+
+    render(<UpgradeGate {...gateProps} />);
+
+    const publishAction = await screen.findByRole('button', {
+      name: 'Опубликовать и получить код',
+    });
+    await waitFor(() => expect(publishAction).toBeEnabled());
+  });
+
+  it('omits allowed domains from the first publication payload', async () => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({
+      subscription: activeSubscription,
+    });
+    vi.mocked(api.publishProject).mockResolvedValue({
+      publication_id: 'publication-123',
+      release_id: 'release-4',
+      artifact_id: 'artifact-123',
+      project_version_id: 'version-4',
+      stable_key: 'stable-widget',
+      revision: 4,
+      allowed_domains: ['https://example.com'],
+      checksum: 'checksum-4',
+      embed_url: 'https://widgets.kaigo.space/embed/stable-widget.js',
+      runtime_url: 'https://widgets.kaigo.space/runtime/stable-widget',
+    });
+
+    render(
+      <UpgradeGate
+        {...gateProps}
+        sourceUrl="https://Example.COM/products/widget?campaign=private"
+      />,
+    );
+
+    const publishAction = await screen.findByRole('button', { name: /опубликовать/i });
+    await waitFor(() => expect(publishAction).toBeEnabled());
+    fireEvent.click(publishAction);
+
+    await waitFor(() => expect(api.publishProject).toHaveBeenCalledWith(
+      'project-123',
+      {
+        project_version_id: 'version-4',
+        expected_active_release_id: null,
+      },
+      'csrf-billing',
+    ));
+  });
+
+  it('shows a customer-safe generic message for a rejected publication', async () => {
     vi.useRealTimers();
     vi.mocked(api.getBillingSubscription).mockResolvedValue({
       subscription: activeSubscription,
@@ -806,16 +906,18 @@ describe('UpgradeGate', () => {
     ));
 
     render(<UpgradeGate {...gateProps} />);
-    await screen.findByLabelText('На каких сайтах разрешить виджет');
-    fireEvent.click(await screen.findByRole('button', { name: 'Опубликовать виджет' }));
+    const publishAction = await screen.findByRole('button', { name: /опубликовать/i });
+    await waitFor(() => expect(publishAction).toBeEnabled());
+    fireEvent.click(publishAction);
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Не удалось опубликовать: allowed domain must use HTTPS.',
-    );
-    expect(screen.queryByText(/проверьте домены/i)).not.toBeInTheDocument();
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Не удалось опубликовать виджет. Попробуйте ещё раз.');
+    expect(alert).not.toHaveTextContent(/allowed domain/i);
+    expect(alert).not.toHaveTextContent(/домен/i);
   });
 
   it('publishes the selected accepted artifact, shows a stable embed snippet, and rolls back a known prior release', async () => {
+    vi.useRealTimers();
     vi.mocked(api.getBillingSubscription).mockResolvedValue({
       subscription: activeSubscription,
     });
@@ -839,7 +941,7 @@ describe('UpgradeGate', () => {
         project_version_id: 'version-5',
         stable_key: 'stable-widget',
         revision: 5,
-        allowed_domains: ['https://example.com', 'https://shop.example.com'],
+        allowed_domains: ['https://example.com'],
         checksum: 'checksum-5',
         embed_url: 'https://widgets.kaigo.space/embed/stable-widget.js',
         runtime_url: 'https://widgets.kaigo.space/runtime/stable-widget',
@@ -851,7 +953,7 @@ describe('UpgradeGate', () => {
       project_version_id: 'version-4',
       stable_key: 'stable-widget',
       revision: 4,
-      allowed_domains: ['https://example.com', 'https://shop.example.com'],
+      allowed_domains: ['https://example.com'],
       checksum: 'checksum-4',
       embed_url: 'https://widgets.kaigo.space/embed/stable-widget.js',
       runtime_url: 'https://widgets.kaigo.space/runtime/stable-widget',
@@ -861,10 +963,9 @@ describe('UpgradeGate', () => {
     await act(async () => {
       await Promise.resolve();
     });
-    fireEvent.change(screen.getByLabelText('На каких сайтах разрешить виджет'), {
-      target: { value: 'https://example.com' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Опубликовать виджет' }));
+    const publishAction = screen.getByRole('button', { name: 'Опубликовать и получить код' });
+    await waitFor(() => expect(publishAction).toBeEnabled());
+    fireEvent.click(publishAction);
     await act(async () => {
       await Promise.resolve();
     });
@@ -875,7 +976,6 @@ describe('UpgradeGate', () => {
       {
         project_version_id: 'version-4',
         expected_active_release_id: null,
-        allowed_domains: ['https://example.com'],
       },
       'csrf-billing',
     );
@@ -886,7 +986,7 @@ describe('UpgradeGate', () => {
     fireEvent.click(screen.getByText('Код для разработчика'));
     expect(firstSnippet).toBeVisible();
     expect(screen.getByText(
-      'Виджет уже доступен на разрешённых сайтах. Новую версию можно опубликовать здесь же.',
+      'Виджет опубликован. Скопируйте код установки или постоянную ссылку ниже.',
     )).toBeVisible();
     expect(screen.queryByText(/дорабат/i)).not.toBeInTheDocument();
 
@@ -899,9 +999,6 @@ describe('UpgradeGate', () => {
         revision={5}
       />,
     );
-    fireEvent.change(screen.getByLabelText('На каких сайтах разрешить виджет'), {
-      target: { value: 'https://example.com\nhttps://shop.example.com' },
-    });
     fireEvent.click(screen.getByRole('button', { name: 'Обновить публикацию' }));
     await act(async () => {
       await Promise.resolve();
@@ -912,7 +1009,7 @@ describe('UpgradeGate', () => {
       {
         project_version_id: 'version-5',
         expected_active_release_id: 'release-4',
-        allowed_domains: ['https://example.com', 'https://shop.example.com'],
+        allowed_domains: ['https://example.com'],
       },
       'csrf-billing',
     );
@@ -1001,9 +1098,7 @@ describe('UpgradeGate', () => {
     expect(hydratedSnippet).not.toBeVisible();
     fireEvent.click(screen.getByText('Код для разработчика'));
     expect(hydratedSnippet).toBeVisible();
-    expect(screen.getByLabelText('На каких сайтах разрешить виджет')).toHaveValue(
-      'https://example.com\nhttps://shop.example.com',
-    );
+    expect(screen.queryByLabelText('На каких сайтах разрешить виджет')).not.toBeInTheDocument();
 
     expect(screen.getByRole('status')).toHaveTextContent(
       'Версия 5 опубликована и доступна на разрешённых сайтах.',
@@ -1022,7 +1117,7 @@ describe('UpgradeGate', () => {
     );
   });
 
-  it('keeps developer publication details collapsed for a business owner', async () => {
+  it('shows the installation handoff while keeping developer details collapsed', async () => {
     vi.useRealTimers();
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal('navigator', { clipboard: { writeText } });
@@ -1058,11 +1153,16 @@ describe('UpgradeGate', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
-    expect(screen.getByLabelText('На каких сайтах разрешить виджет')).toBeVisible();
+    expect(screen.queryByLabelText('На каких сайтах разрешить виджет')).not.toBeInTheDocument();
     expect(screen.getByRole('list', { name: 'Путь до запуска виджета' })).toBeVisible();
     expect(screen.getByText('Остался один шаг')).toBeVisible();
     expect(screen.getByText(/передайте код человеку, который управляет сайтом/i)).toBeVisible();
     expect(screen.getByRole('button', { name: 'Скопировать код установки' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Скопировать ссылку загрузчика' })).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Открыть инструкцию по установке' })).toHaveAttribute(
+      'href',
+      '/install',
+    );
     expect(screen.queryByText(/Stable embed URL/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/HTTPS origin/i)).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent('starter_monthly');
@@ -1080,8 +1180,107 @@ describe('UpgradeGate', () => {
     ));
     expect(await screen.findByText('Код скопирован. Его можно отправить разработчику.')).toBeVisible();
 
+    fireEvent.click(screen.getByRole('button', { name: 'Скопировать ссылку загрузчика' }));
+    await waitFor(() => expect(writeText).toHaveBeenNthCalledWith(
+      2,
+      'https://widgets.kaigo.space/embed/stable-widget.js',
+    ));
+    expect(await screen.findByText(
+      /ссылка(?: загрузчика)? скопирована/i,
+      { selector: '[role="status"]' },
+    )).toBeVisible();
+    expect(screen.queryByText('Код скопирован. Его можно отправить разработчику.')).not.toBeInTheDocument();
+
     fireEvent.click(screen.getByText('Код для разработчика'));
     expect(snippet).toBeVisible();
+  });
+
+  it('reveals both manual-copy values when Clipboard access is rejected', async () => {
+    vi.useRealTimers();
+    const writeText = vi.fn().mockRejectedValue(new Error('clipboard denied'));
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
+    vi.mocked(api.getProjectPublication).mockResolvedValue(
+      restoredPublication(['https://example.com']),
+    );
+
+    render(<UpgradeGate {...gateProps} />);
+
+    expect(await screen.findByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Скопировать ссылку загрузчика' }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(
+      'https://widgets.kaigo.space/embed/stable-widget.js',
+    ));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/скопируйте вручную/i);
+    expectManualCopyValueVisible(
+      '<script src="https://widgets.kaigo.space/embed/stable-widget.js" async></script>',
+    );
+    expectManualCopyValueVisible(
+      'https://widgets.kaigo.space/embed/stable-widget.js',
+    );
+  });
+
+  it('reveals both manual-copy values when Clipboard access is unavailable', async () => {
+    vi.useRealTimers();
+    vi.stubGlobal('navigator', {});
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
+    vi.mocked(api.getProjectPublication).mockResolvedValue(
+      restoredPublication(['https://example.com']),
+    );
+
+    render(<UpgradeGate {...gateProps} />);
+
+    expect(await screen.findByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Скопировать код установки' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/скопируйте вручную/i);
+    expectManualCopyValueVisible(
+      '<script src="https://widgets.kaigo.space/embed/stable-widget.js" async></script>',
+    );
+    expectManualCopyValueVisible(
+      'https://widgets.kaigo.space/embed/stable-widget.js',
+    );
+  });
+
+  it.each([
+    ['the exact restored allowlist', ['https://example.com', 'https://shop.example.com']],
+    ['an empty restored deny-all allowlist', []],
+  ])('preserves %s when updating a publication', async (_label, allowedDomains) => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
+    vi.mocked(api.getProjectPublication).mockResolvedValue(restoredPublication(allowedDomains));
+    vi.mocked(api.publishProject).mockResolvedValue(updatedPublication(allowedDomains));
+
+    render(<UpgradeGate {...gateProps} />);
+
+    const updateAction = await screen.findByRole('button', { name: 'Обновить публикацию' });
+    await waitFor(() => expect(updateAction).toBeEnabled());
+    fireEvent.click(updateAction);
+
+    await waitFor(() => expect(api.publishProject).toHaveBeenCalledWith(
+      'project-123',
+      {
+        project_version_id: 'version-4',
+        expected_active_release_id: 'release-4',
+        allowed_domains: allowedDomains,
+      },
+      'csrf-billing',
+    ));
+  });
+
+  it('fails closed when publication restoration fails', async () => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
+    vi.mocked(api.getProjectPublication).mockRejectedValue(new Error('publication state unavailable'));
+
+    render(<UpgradeGate {...gateProps} />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/обновите страницу/i);
+    expect(alert).not.toHaveTextContent(/повторная публикация остаётся доступна/i);
+    expect(screen.getByRole('button', { name: /опубликовать/i })).toBeDisabled();
+    expect(api.publishProject).not.toHaveBeenCalled();
   });
 
   it('reloads authoritative publication state after a CAS conflict without retrying', async () => {
@@ -1119,11 +1318,11 @@ describe('UpgradeGate', () => {
     ));
 
     render(<UpgradeGate {...gateProps} />);
-    const domains = await screen.findByLabelText('На каких сайтах разрешить виджет');
     await waitFor(() => expect(api.getProjectPublication).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Опубликовать виджет' })).toBeEnabled());
-    fireEvent.change(domains, { target: { value: 'https://example.com' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Опубликовать виджет' }));
+    await waitFor(() => expect(screen.getByRole('button', {
+      name: 'Опубликовать и получить код',
+    })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Опубликовать и получить код' }));
 
     await waitFor(() => expect(api.getProjectPublication).toHaveBeenCalledTimes(2));
     expect(api.publishProject).toHaveBeenCalledTimes(1);
@@ -1133,7 +1332,7 @@ describe('UpgradeGate', () => {
     expect(screen.getByText(
       '<script src="https://widgets.kaigo.space/embed/stable-widget.js" async></script>',
     )).not.toBeVisible();
-    expect(domains).toHaveValue('https://other.example.com');
+    expect(screen.queryByLabelText('На каких сайтах разрешить виджет')).not.toBeInTheDocument();
   });
 
   it('keeps the artifact publication contract only when project versions are unavailable', async () => {
@@ -1160,17 +1359,16 @@ describe('UpgradeGate', () => {
         projectVersionOrdinal={undefined}
       />,
     );
-    const domains = await screen.findByLabelText('На каких сайтах разрешить виджет');
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Опубликовать виджет' })).toBeEnabled());
-    fireEvent.change(domains, { target: { value: 'https://example.com' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Опубликовать виджет' }));
+    await waitFor(() => expect(screen.getByRole('button', {
+      name: 'Опубликовать и получить код',
+    })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Опубликовать и получить код' }));
 
     await waitFor(() => expect(api.publishProject).toHaveBeenCalledWith(
       'project-123',
       {
         artifact_id: 'artifact-123',
         revision: 4,
-        allowed_domains: ['https://example.com'],
       },
       'csrf-billing',
     ));

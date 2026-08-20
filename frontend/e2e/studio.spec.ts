@@ -257,12 +257,18 @@ test('active subscription publishes the current verified artifact with a stable 
 
   await page.getByRole('button', { name: 'Открыть публикацию' }).click();
   await expect(page.getByRole('heading', { name: 'Всё готово к публикации' })).toBeVisible();
-  await page.getByLabel('На каких сайтах разрешить виджет').fill(
-    'https://example.com\nhttps://shop.example.com',
-  );
-  await page.getByRole('button', { name: 'Опубликовать виджет' }).click();
+  await expect(page.getByLabel('На каких сайтах разрешить виджет')).toHaveCount(0);
+  const firstPublish = page.getByRole('button', { name: 'Опубликовать и получить код' });
+  await expect(firstPublish).toBeEnabled();
+  await firstPublish.click();
 
   await expect(page.getByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Скопировать код установки' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Скопировать ссылку загрузчика' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Открыть инструкцию по установке' })).toHaveAttribute(
+    'href',
+    '/install',
+  );
   const embedSnippet = page.getByText(
     '<script src="https://widgets.kaigo.space/embed/stable-playwright-widget.js" async></script>',
   );
@@ -288,7 +294,6 @@ test('active subscription publishes the current verified artifact with a stable 
   expect(request?.body).toEqual({
     project_version_id: 'version-playwright-2',
     expected_active_release_id: null,
-    allowed_domains: ['https://example.com', 'https://shop.example.com'],
   });
 
   await page.reload();
@@ -297,9 +302,19 @@ test('active subscription publishes the current verified artifact with a stable 
   );
   await expect(restoredSnippet).not.toBeVisible();
   await page.getByRole('button', { name: 'Открыть публикацию' }).click();
-  await expect(page.getByLabel('На каких сайтах разрешить виджет')).toHaveValue(
-    'https://example.com\nhttps://shop.example.com',
-  );
+  await expect(page.getByLabel('На каких сайтах разрешить виджет')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Обновить публикацию' }).click();
+  await expect.poll(() => builderApi.requests.filter(({ method, pathname }) =>
+    method === 'POST' && pathname === `/api/projects/${builderApi.projectId}/publish`,
+  ).length).toBe(2);
+  const updateRequest = builderApi.requests.filter(({ method, pathname }) =>
+    method === 'POST' && pathname === `/api/projects/${builderApi.projectId}/publish`,
+  ).at(-1);
+  expect(updateRequest?.body).toEqual({
+    project_version_id: 'version-playwright-2',
+    expected_active_release_id: 'release-playwright-1',
+    allowed_domains: ['https://example.com'],
+  });
 });
 
 test('publication access offer stays readable in the publication modal @desktop @mobile', async ({ page, builderApi }) => {
