@@ -13,10 +13,20 @@ is performed by this repository task.
    KAIGO_APP_IMAGE=registry.example/kaigo/app@sha256:<app-digest>
    KAIGO_BUILDER_WORKER_IMAGE=registry.example/kaigo/builder-worker@sha256:<worker-digest>
    KAIGO_BUILDER_WORKER_IMAGE_IDENTITY=registry.example/kaigo/builder-worker@sha256:<worker-digest>
-   KAIGO_RELEASE_ID=<reviewed-commit-sha>
+   KAIGO_RELEASE_ID=<40-character-reviewed-commit-sha>
+   KAIGO_MARKETING_RELEASE_SHA=<same-40-character-reviewed-commit-sha>
+   KAIGO_MARKETING_ARCHIVE=/srv/kaigo/releases/kaigo-marketing-<same-40-character-reviewed-commit-sha>.tar.gz
+   KAIGO_MARKETING_ARCHIVE_SHA256=<static-archive-sha256>
    KAIGO_BUILDER_WORKER_BOOT_ID=<new-random-uuid-for-this-rollout>
    KAIGO_DATABASE_OPS_IMAGE=postgres@sha256:<postgres-15-alpine-digest>
    ```
+
+   A release that changes the publication request or response contract is one
+   indivisible app/migration/static release. CI must build the app image and
+   marketing archive from the same clean full commit SHA, put that SHA in
+   `.kaigo-release-sha` inside the archive, and publish the archive digest with
+   the image references. Never combine a newer Studio archive with an older API
+   image, even as a temporary hotfix.
 
    The current server may instead use immutable local Docker image IDs when no
    registry is available. Build exactly once from the pinned, clean commit,
@@ -24,16 +34,40 @@ is performed by this repository task.
    same release file:
 
    ```bash
-   RELEASE_COMMIT="$(git rev-parse HEAD)"
+   set -euo pipefail
+   set +x
+   umask 077
+   REVIEWED_RELEASE_SHA='<40-character-reviewed-commit-sha>'
+   RELEASE_COMMIT="$(git rev-parse --verify HEAD^{commit})"
    test -z "$(git status --porcelain)"
-   test "$RELEASE_COMMIT" = '<reviewed-commit-sha>'
+   [[ "$REVIEWED_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+   [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+   test "$RELEASE_COMMIT" = "$REVIEWED_RELEASE_SHA"
    docker build --pull --tag "kaigo-app-build:$RELEASE_COMMIT" .
    docker build --pull --file Dockerfile.builder-lab --tag "kaigo-worker-build:$RELEASE_COMMIT" .
+   npm --prefix frontend ci
+   npm --prefix frontend run build
+   test -f frontend/dist/index.html
+   test -d frontend/dist/assets
+   install -d -m 0755 /srv/kaigo/releases
+   STATIC_ARCHIVE_STAGING="$(mktemp -d /srv/kaigo/releases/.kaigo-marketing-build.XXXXXX)"
+   trap 'rm -rf -- "$STATIC_ARCHIVE_STAGING"' EXIT
+   cp -a -- frontend/dist/. "$STATIC_ARCHIVE_STAGING/"
+   printf '%s\n' "$RELEASE_COMMIT" > "$STATIC_ARCHIVE_STAGING/.kaigo-release-sha"
+   KAIGO_MARKETING_ARCHIVE="/srv/kaigo/releases/kaigo-marketing-$RELEASE_COMMIT.tar.gz"
+   test ! -e "$KAIGO_MARKETING_ARCHIVE"
+   tar --directory "$STATIC_ARCHIVE_STAGING" --create --gzip \
+     --file "$KAIGO_MARKETING_ARCHIVE" .
+   KAIGO_MARKETING_ARCHIVE_SHA256="$(sha256sum "$KAIGO_MARKETING_ARCHIVE" | awk '{print $1}')"
+   [[ "$KAIGO_MARKETING_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+   rm -rf -- "$STATIC_ARCHIVE_STAGING"
+   trap - EXIT
    docker pull postgres:15-alpine
    KAIGO_APP_IMAGE="$(docker image inspect --format '{{.Id}}' "kaigo-app-build:$RELEASE_COMMIT")"
    KAIGO_BUILDER_WORKER_IMAGE="$(docker image inspect --format '{{.Id}}' "kaigo-worker-build:$RELEASE_COMMIT")"
    KAIGO_BUILDER_WORKER_IMAGE_IDENTITY="$KAIGO_BUILDER_WORKER_IMAGE"
    KAIGO_RELEASE_ID="$RELEASE_COMMIT"
+   KAIGO_MARKETING_RELEASE_SHA="$RELEASE_COMMIT"
    KAIGO_BUILDER_WORKER_BOOT_ID="$(cat /proc/sys/kernel/random/uuid)"
    KAIGO_DATABASE_OPS_IMAGE="$(docker image inspect --format '{{.Id}}' postgres:15-alpine)"
    printf '%s\n' \
@@ -41,6 +75,9 @@ is performed by this repository task.
      "KAIGO_BUILDER_WORKER_IMAGE=$KAIGO_BUILDER_WORKER_IMAGE" \
      "KAIGO_BUILDER_WORKER_IMAGE_IDENTITY=$KAIGO_BUILDER_WORKER_IMAGE_IDENTITY" \
      "KAIGO_RELEASE_ID=$KAIGO_RELEASE_ID" \
+     "KAIGO_MARKETING_RELEASE_SHA=$KAIGO_MARKETING_RELEASE_SHA" \
+     "KAIGO_MARKETING_ARCHIVE=$KAIGO_MARKETING_ARCHIVE" \
+     "KAIGO_MARKETING_ARCHIVE_SHA256=$KAIGO_MARKETING_ARCHIVE_SHA256" \
      "KAIGO_BUILDER_WORKER_BOOT_ID=$KAIGO_BUILDER_WORKER_BOOT_ID" \
      "KAIGO_DATABASE_OPS_IMAGE=$KAIGO_DATABASE_OPS_IMAGE" \
      > /etc/kaigo/release.env
@@ -271,29 +308,85 @@ unknown schema.
 
 Schema migration and the atomic rollback snapshot finish before either runtime
 is switched. Stop the old worker first so it drains its current claim under the
-systemd stop timeout and cannot claim new work during the switch:
+systemd stop timeout and cannot claim new work during the switch. Start the app
+first, but do not start the new worker or activate the Studio archive yet:
 
 ```bash
 systemctl stop kaigo-builder-worker
 COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml up -d --no-build app
+```
+
+For every release that changes the publication contract, run the following
+identity gate before switching `/var/www/kaigo-marketing/current`. It also
+applies to ordinary combined app/static releases, so the stricter path can be
+used consistently. The gate verifies the selected app and migration services
+resolve to the same immutable image, verifies the archive digest and embedded
+full SHA, and reads only the single `KAIGO_RELEASE_ID` value from the live app.
+Shell tracing stays disabled; the command never dumps the container environment
+or `/etc/kaigo/release.env`.
+
+Every equality check occurs before the deploy script can change the static
+symlink. A missing, malformed, or mismatched identity exits nonzero and leaves
+the previous static release active. Do not bypass the gate: stop and roll back
+the just-started app before reopening the release if it fails.
+
+```bash
+set -euo pipefail
+set +x
+umask 077
+set -a
+. /etc/kaigo/release.env
+set +a
+: "${KAIGO_APP_IMAGE:?selected app/migration image is required}"
+: "${KAIGO_RELEASE_ID:?selected app release SHA is required}"
+: "${KAIGO_MARKETING_RELEASE_SHA:?selected static release SHA is required}"
+: "${KAIGO_MARKETING_ARCHIVE:?selected static archive is required}"
+: "${KAIGO_MARKETING_ARCHIVE_SHA256:?selected static archive digest is required}"
+[[ "$KAIGO_RELEASE_ID" =~ ^[0-9a-f]{40}$ ]]
+[[ "$KAIGO_MARKETING_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+[[ "$KAIGO_MARKETING_ARCHIVE" =~ ^/srv/kaigo/releases/kaigo-marketing-[0-9a-f]{40}\.tar\.gz$ ]]
+[[ "$KAIGO_MARKETING_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+test "$KAIGO_MARKETING_RELEASE_SHA" = "$KAIGO_RELEASE_ID"
+PUBLICATION_CONTRACT_ARCHIVE_SHA256="$(sha256sum "$KAIGO_MARKETING_ARCHIVE" | awk '{print $1}')"
+test "$PUBLICATION_CONTRACT_ARCHIVE_SHA256" = "$KAIGO_MARKETING_ARCHIVE_SHA256"
+APP_CONFIG_IMAGE="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml config --format json | jq -er '.services.app.image')"
+MIGRATION_CONFIG_IMAGE="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml config --format json | jq -er '.services.migration.image')"
+test "$APP_CONFIG_IMAGE" = "$KAIGO_APP_IMAGE"
+test "$MIGRATION_CONFIG_IMAGE" = "$KAIGO_APP_IMAGE"
+APP_CONTAINER="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml ps -q app)"
+test -n "$APP_CONTAINER"
+test "$(docker inspect --format '{{.Image}}' "$APP_CONTAINER")" = \
+  "$(docker image inspect --format '{{.Id}}' "$KAIGO_APP_IMAGE")"
+PUBLICATION_CONTRACT_LIVE_APP_SHA="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$APP_CONTAINER" | sed -n 's/^KAIGO_RELEASE_ID=//p')"
+PUBLICATION_CONTRACT_STATIC_SHA="$(tar -xOf "$KAIGO_MARKETING_ARCHIVE" ./.kaigo-release-sha)"
+[[ "$PUBLICATION_CONTRACT_LIVE_APP_SHA" =~ ^[0-9a-f]{40}$ ]]
+[[ "$PUBLICATION_CONTRACT_STATIC_SHA" =~ ^[0-9a-f]{40}$ ]]
+test "$PUBLICATION_CONTRACT_LIVE_APP_SHA" = "$KAIGO_RELEASE_ID"
+test "$PUBLICATION_CONTRACT_STATIC_SHA" = "$KAIGO_MARKETING_RELEASE_SHA"
+test "$PUBLICATION_CONTRACT_STATIC_SHA" = "$KAIGO_RELEASE_ID"
+test "$PUBLICATION_CONTRACT_LIVE_APP_SHA" = "$PUBLICATION_CONTRACT_STATIC_SHA"
+PUBLICATION_CONTRACT_STATIC_DIR="$(mktemp -d /srv/kaigo/releases/.kaigo-marketing-deploy.XXXXXX)"
+trap 'rm -rf -- "$PUBLICATION_CONTRACT_STATIC_DIR"' EXIT
+tar --extract --gzip --file "$KAIGO_MARKETING_ARCHIVE" \
+  --directory "$PUBLICATION_CONTRACT_STATIC_DIR" --no-same-owner --no-same-permissions
+test -f "$PUBLICATION_CONTRACT_STATIC_DIR/index.html"
+test -d "$PUBLICATION_CONTRACT_STATIC_DIR/assets"
+KAIGO_MARKETING_DIST_DIR="$PUBLICATION_CONTRACT_STATIC_DIR" KAIGO_MARKETING_SKIP_BUILD=1 ./scripts/deploy_marketing_site.sh "$PUBLICATION_CONTRACT_STATIC_SHA"
+rm -rf -- "$PUBLICATION_CONTRACT_STATIC_DIR"
+trap - EXIT
+```
+
+Only after the matching static release is active may the worker start. Do not
+replace the restart with a plain `systemctl start kaigo-builder-worker`: an
+already-running unit could otherwise keep the previous worker container.
+Verify the image of the actual running worker, not only the locally available
+image reference:
+
+```bash
 cp /etc/kaigo/release.env /etc/kaigo/builder-worker-image.env
 systemctl daemon-reload
 systemctl restart kaigo-builder-worker
-nginx -t
-systemctl reload nginx
-```
-
-Do not replace the restart with a plain `systemctl start kaigo-builder-worker`:
-an already-running unit could otherwise keep the previous worker container.
-
-Verify the images of the actual running containers, not only the locally
-available image references. Both comparisons must succeed:
-
-```bash
-APP_CONTAINER="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml ps -q app)"
 WORKER_CONTAINER="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml --profile saas-worker ps -q builder-worker)"
-test "$(docker inspect --format '{{.Image}}' "$APP_CONTAINER")" = \
-  "$(docker image inspect --format '{{.Id}}' "$KAIGO_APP_IMAGE")"
 test "$(docker inspect --format '{{.Image}}' "$WORKER_CONTAINER")" = \
   "$(docker image inspect --format '{{.Id}}' "$KAIGO_BUILDER_WORKER_IMAGE")"
 systemctl is-active --quiet kaigo-builder-worker

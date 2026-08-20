@@ -1388,6 +1388,66 @@ def test_operations_runbook_orders_preflight_before_services_and_documents_rollb
     assert "No live rollout" in runbook
 
 
+def test_publication_contract_release_builds_runtime_and_static_from_one_full_sha() -> (
+    None
+):
+    runbook = (ROOT / "docs" / "SAAS_PRODUCTION_RUNBOOK.md").read_text(
+        encoding="utf-8"
+    )
+    build = _bash_block_containing(runbook, "STATIC_ARCHIVE_STAGING=")
+
+    assert build.startswith("set -euo pipefail\nset +x\n")
+    assert 'RELEASE_COMMIT="$(git rev-parse --verify HEAD^{commit})"' in build
+    assert '[[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]' in build
+    assert 'test "$RELEASE_COMMIT" = "$REVIEWED_RELEASE_SHA"' in build
+    assert 'docker build --pull --tag "kaigo-app-build:$RELEASE_COMMIT" .' in build
+    assert 'npm --prefix frontend ci' in build
+    assert 'npm --prefix frontend run build' in build
+    assert (
+        'printf \'%s\\n\' "$RELEASE_COMMIT" > '
+        '"$STATIC_ARCHIVE_STAGING/.kaigo-release-sha"'
+    ) in build
+    assert 'KAIGO_MARKETING_RELEASE_SHA="$RELEASE_COMMIT"' in build
+    assert 'KAIGO_MARKETING_ARCHIVE_SHA256=' in build
+    assert build.index('npm --prefix frontend run build') < build.index(
+        'KAIGO_MARKETING_ARCHIVE_SHA256='
+    )
+    assert 'set -x' not in build
+
+
+def test_publication_contract_static_activation_fails_closed_on_release_mismatch() -> (
+    None
+):
+    runbook = (ROOT / "docs" / "SAAS_PRODUCTION_RUNBOOK.md").read_text(
+        encoding="utf-8"
+    )
+    gate = _bash_block_containing(runbook, "PUBLICATION_CONTRACT_STATIC_SHA=")
+
+    assert gate.startswith("set -euo pipefail\nset +x\n")
+    assert '[[ "$KAIGO_RELEASE_ID" =~ ^[0-9a-f]{40}$ ]]' in gate
+    assert '[[ "$KAIGO_MARKETING_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]' in gate
+    assert '[[ "$PUBLICATION_CONTRACT_LIVE_APP_SHA" =~ ^[0-9a-f]{40}$ ]]' in gate
+    assert '[[ "$PUBLICATION_CONTRACT_STATIC_SHA" =~ ^[0-9a-f]{40}$ ]]' in gate
+    assert 'test "$PUBLICATION_CONTRACT_LIVE_APP_SHA" = "$KAIGO_RELEASE_ID"' in gate
+    assert 'test "$PUBLICATION_CONTRACT_STATIC_SHA" = "$KAIGO_RELEASE_ID"' in gate
+    assert (
+        'test "$PUBLICATION_CONTRACT_LIVE_APP_SHA" = '
+        '"$PUBLICATION_CONTRACT_STATIC_SHA"'
+    ) in gate
+    assert 'test "$APP_CONFIG_IMAGE" = "$KAIGO_APP_IMAGE"' in gate
+    assert 'test "$MIGRATION_CONFIG_IMAGE" = "$KAIGO_APP_IMAGE"' in gate
+    activate = (
+        'KAIGO_MARKETING_SKIP_BUILD=1 '
+        './scripts/deploy_marketing_site.sh "$PUBLICATION_CONTRACT_STATIC_SHA"'
+    )
+    assert activate in gate
+    assert gate.index('test "$PUBLICATION_CONTRACT_STATIC_SHA" = "$KAIGO_RELEASE_ID"') < (
+        gate.index(activate)
+    )
+    for unsafe_output in ("printenv", "set -x", "cat /etc/kaigo", "docker inspect $APP_CONTAINER"):
+        assert unsafe_output not in gate
+
+
 def test_rollback_resolves_schema_and_routes_before_starting_worker() -> None:
     runbook = (ROOT / "docs" / "SAAS_PRODUCTION_RUNBOOK.md").read_text(
         encoding="utf-8"
