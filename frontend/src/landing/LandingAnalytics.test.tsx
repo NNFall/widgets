@@ -54,6 +54,7 @@ describe('landing funnel milestones', () => {
     const scrollEnd = document.getElementById('landing-scroll-end');
     expect(scrollEnd).not.toBeNull();
     expect(observedTarget).toBe(scrollEnd);
+    expect(scrollEnd?.nextElementSibling).toHaveClass('site-footer');
     if (!scrollEnd) throw new Error('missing landing scroll-end marker');
     const rectangle = scrollEnd.getBoundingClientRect();
     const visibleEntry: IntersectionObserverEntry = {

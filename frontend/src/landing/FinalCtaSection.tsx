@@ -109,6 +109,7 @@ export function FinalCtaSection() {
           ))}
         </motion.div>
       </motion.div>
+      <span id="landing-scroll-end" className="landing-scroll-end" aria-hidden="true" />
       <footer className="site-footer">
         <div className="landing-shell site-footer__inner">
           <div><KaigoLogo tone="coral" /><p>Персональные AI-виджеты<br />для бизнеса.</p></div>
@@ -118,7 +119,6 @@ export function FinalCtaSection() {
           <div className="site-footer__legal"><span>Политика конфиденциальности</span><span>Условия использования</span></div>
         </div>
       </footer>
-      <span id="landing-scroll-end" className="landing-scroll-end" aria-hidden="true" />
     </section>
   );
 }
