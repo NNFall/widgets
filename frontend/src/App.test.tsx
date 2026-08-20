@@ -217,12 +217,28 @@ describe('App', () => {
     expect(screen.queryByRole('heading', { name: /Через 10 минут.*наш бизнес.*использует AI/i })).not.toBeInTheDocument();
   });
 
-  it('renders the landing page for paths that only start with /studio', () => {
-    window.history.replaceState({}, '', '/studio-preview');
+  it.each(['/install', '/install/'])('renders the public widget installation guide at %s', (pathname) => {
+    window.history.replaceState({}, '', pathname);
 
     render(<App />);
 
-    expect(screen.getByRole('heading', { name: /Через 10 минут.*наш бизнес.*использует AI/i })).toBeInTheDocument();
-    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(9);
+    expect(screen.getByRole('heading', { name: 'Как установить виджет Kaigo' })).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Вернуться в студию' })).toHaveAttribute(
+      'href',
+      '/studio',
+    );
+    expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(0);
   });
+
+  it.each(['/studio-preview', '/installation-preview'])(
+    'renders the landing page for a non-exact application path: %s',
+    (pathname) => {
+      window.history.replaceState({}, '', pathname);
+
+      render(<App />);
+
+      expect(screen.getByRole('heading', { name: /Через 10 минут.*наш бизнес.*использует AI/i })).toBeInTheDocument();
+      expect(document.querySelectorAll('section[data-landing-section]')).toHaveLength(9);
+    },
+  );
 });
