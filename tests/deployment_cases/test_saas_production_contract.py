@@ -1701,6 +1701,15 @@ def test_publication_contract_gate_collects_only_narrow_release_identity() -> No
     assert all(PRODUCTION_COMPOSE in line for line in compose_lines)
     assert "PUBLICATION_CONTRACT_APP_CONFIG_IMAGE=" in gate
     assert "PUBLICATION_CONTRACT_MIGRATION_CONFIG_IMAGE=" in gate
+    migration_config_line = next(
+        line
+        for line in gate.splitlines()
+        if line.startswith("PUBLICATION_CONTRACT_MIGRATION_CONFIG_IMAGE=")
+    )
+    assert (
+        f"{PRODUCTION_COMPOSE} --profile operations config --format json"
+        in migration_config_line
+    )
     assert "PUBLICATION_CONTRACT_SELECTED_APP_IMAGE_ID=" in gate
     assert "PUBLICATION_CONTRACT_LIVE_APP_IMAGE_ID=" in gate
     assert "PUBLICATION_CONTRACT_LIVE_APP_SHA=" in gate

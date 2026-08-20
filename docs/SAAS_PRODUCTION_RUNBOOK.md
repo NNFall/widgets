@@ -424,7 +424,7 @@ systemctl stop kaigo-builder-worker
 COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml up -d --no-build app
 PUBLICATION_CONTRACT_COMPOSE_PROJECT=ai_project
 PUBLICATION_CONTRACT_APP_CONFIG_IMAGE="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml config --format json | jq -er '.services.app.image')"
-PUBLICATION_CONTRACT_MIGRATION_CONFIG_IMAGE="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml config --format json | jq -er '.services.migration.image')"
+PUBLICATION_CONTRACT_MIGRATION_CONFIG_IMAGE="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml --profile operations config --format json | jq -er '.services.migration.image')"
 PUBLICATION_CONTRACT_SELECTED_APP_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$KAIGO_APP_IMAGE")"
 APP_CONTAINER="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml ps -q app)"
 test -n "$APP_CONTAINER"
