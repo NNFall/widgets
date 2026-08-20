@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import { LandingPage } from './landing/LandingPage';
 import { ProductTourPage } from './landing/ProductTourPage';
 import { WidgetInstallationPage } from './landing/WidgetInstallationPage';
+import { recordJourneyEvent } from './shared/journey';
 
 const StudioRoute = lazy(async () => {
   const module = await import('./studio/StudioRoute');
@@ -21,6 +22,10 @@ export function App() {
     window.addEventListener('popstate', syncPathname);
     return () => window.removeEventListener('popstate', syncPathname);
   }, []);
+
+  useEffect(() => {
+    if (pathname === '/studio') void recordJourneyEvent('studio_entered');
+  }, [pathname]);
 
   if (pathname === '/tour') {
     return <ProductTourPage />;

@@ -13,9 +13,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.saas.models import FunnelEvent, FunnelJourney
 
 
+CLIENT_FUNNEL_EVENT_TYPES = frozenset(
+    {
+        "landing_scrolled_end",
+        "studio_cta_clicked",
+        "studio_entered",
+    }
+)
+
 FUNNEL_EVENT_TYPES = frozenset(
     {
         "landing_entered",
+        *CLIENT_FUNNEL_EVENT_TYPES,
         "authenticated_project",
         "composer_submitted",
         "auth_started",
@@ -147,10 +156,7 @@ def sanitize_campaign(campaign: Mapping[str, object] | None) -> dict[str, str]:
 
 def _canonical_campaign_label(value: str) -> str | None:
     normalized = unicodedata.normalize("NFKC", value).strip()
-    if (
-        not normalized
-        or len(normalized) > _MAX_CAMPAIGN_VALUE_LENGTH
-    ):
+    if not normalized or len(normalized) > _MAX_CAMPAIGN_VALUE_LENGTH:
         return None
     canonical = re.sub(r"\s+", "-", normalized.casefold())
     if not all(
@@ -271,6 +277,7 @@ def _reject_conflicting_journey(
 
 
 __all__ = [
+    "CLIENT_FUNNEL_EVENT_TYPES",
     "COMMERCIAL_FUNNEL_STAGES",
     "CORE_FUNNEL_STAGES",
     "FUNNEL_EVENT_TYPES",

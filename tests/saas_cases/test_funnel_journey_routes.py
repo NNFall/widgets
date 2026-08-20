@@ -65,6 +65,77 @@ async def test_landing_entry_replay_freezes_campaign_and_records_one_event() -> 
         await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_client_funnel_events_are_allowlisted_private_and_idempotent() -> None:
+    engine, factory, client = await _client()
+    try:
+        assert (
+            await client.post(
+                "/api/analytics/entry",
+                json={"campaign": {"utm_source": "yandex", "utm_medium": "cpc"}},
+            )
+        ).status == 204
+
+        for event_type in (
+            "landing_scrolled_end",
+            "studio_cta_clicked",
+            "studio_entered",
+        ):
+            first = await client.post(
+                "/api/analytics/event",
+                json={"event_type": event_type},
+            )
+            replay = await client.post(
+                "/api/analytics/event",
+                json={"event_type": event_type},
+            )
+            assert first.status == replay.status == 204
+            assert await first.read() == await replay.read() == b""
+
+        for payload in (
+            {"event_type": "published"},
+            {"event_type": "landing_scrolled_end", "ip": "203.0.113.42"},
+            {
+                "event_type": "landing_scrolled_end",
+                "metadata": {"email": "private@example.com"},
+            },
+        ):
+            rejected = await client.post("/api/analytics/event", json=payload)
+            assert rejected.status == 400
+
+        async with factory() as database:
+            journeys = list((await database.scalars(select(FunnelJourney))).all())
+            events = list(
+                (
+                    await database.scalars(
+                        select(FunnelEvent).order_by(FunnelEvent.occurred_at)
+                    )
+                ).all()
+            )
+
+        assert len(journeys) == 1
+        assert [event.event_type for event in events] == [
+            "landing_entered",
+            "landing_scrolled_end",
+            "studio_cta_clicked",
+            "studio_entered",
+        ]
+        assert {event.journey_id for event in events} == {journeys[0].id}
+        assert all(event.campaign_source == "yandex" for event in events)
+        assert all(event.campaign_medium == "cpc" for event in events)
+        stored = " ".join(
+            str(value)
+            for event in events
+            for value in event.__dict__.values()
+            if value is not None
+        )
+        assert "203.0.113.42" not in stored
+        assert "private@example.com" not in stored
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
 @pytest.mark.parametrize("field", ["journey_id", "url", "email", "ip"])
 @pytest.mark.asyncio
 async def test_landing_entry_rejects_client_identity_fields(field: str) -> None:
@@ -73,7 +144,10 @@ async def test_landing_entry_rejects_client_identity_fields(field: str) -> None:
         response = await client.post("/api/analytics/entry", json={field: "private"})
         assert response.status == 400
         async with factory() as database:
-            assert await database.scalar(select(func.count()).select_from(FunnelJourney)) == 0
+            assert (
+                await database.scalar(select(func.count()).select_from(FunnelJourney))
+                == 0
+            )
     finally:
         await client.close()
         await engine.dispose()
@@ -87,8 +161,14 @@ async def test_landing_entry_rate_limit_precedes_database_write() -> None:
         rejected = await client.post("/api/analytics/entry", json={})
         assert rejected.status == 429
         async with factory() as database:
-            assert await database.scalar(select(func.count()).select_from(FunnelJourney)) == 1
-            assert await database.scalar(select(func.count()).select_from(FunnelEvent)) == 1
+            assert (
+                await database.scalar(select(func.count()).select_from(FunnelJourney))
+                == 1
+            )
+            assert (
+                await database.scalar(select(func.count()).select_from(FunnelEvent))
+                == 1
+            )
     finally:
         await client.close()
         await engine.dispose()

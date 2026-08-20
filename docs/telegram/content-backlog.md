@@ -40,6 +40,7 @@
 | TG-029 | 1 | ready | Почему третья кнопка входа — это не просто синяя плашка | VK ID выглядит одной короткой строкой, а под ней остаются PKCE, одноразовый state, server callback и сохранённый сайт | [Release packet](release-packets/2026-08-15-vk-id-one-tap.md) |
 | TG-030 | 1 | hold | Почему 3 из 3 AI-кандидатов — ещё не широкий rollout | После исчерпания дневной квоты 3.7 модель 3.6 дала verified 37signals без Codex fallback; теперь стабильность нужно подтвердить на 30 candidate-вызовах | [Release packet](release-packets/2026-08-17-antigravity-text-provider.md) |
 | TG-031 | 1 | ready | Почему мы убрали поле домена из публикации виджета | Пользователь нажимает одну кнопку, получает код, ссылку загрузчика и инструкцию, а точный HTTPS-адрес проекта сохраняется автоматически | [Release packet](release-packets/2026-08-20-simple-widget-publication.md) |
+| TG-032 | 1 | hold | Где теряются первые посетители Kaigo | Своя анонимная воронка показывает путь от рекламного перехода и дочитывания лендинга до бесплатного результата и публикации | [Release packet](release-packets/2026-08-20-first-party-funnel-analytics.md) |
 
 ## Как добавлять тему
 

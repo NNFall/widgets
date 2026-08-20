@@ -70,7 +70,9 @@ async def _report(request: web.Request) -> tuple[int, dict[str, object]]:
 
 async def operator_funnel_json(request: web.Request) -> web.Response:
     operator_id, report = await _report(request)
-    LOGGER.info("operator_funnel_report_viewed", extra={"operator_user_id": operator_id})
+    LOGGER.info(
+        "operator_funnel_report_viewed", extra={"operator_user_id": operator_id}
+    )
     return web.json_response(report, headers=_NO_STORE)
 
 
@@ -86,6 +88,22 @@ th,td{{padding:10px;border-bottom:1px solid #333;text-align:left}}.muted{{color:
 </style></head><body><main>{body}</main></body></html>"""
 
 
+def _engagement_table(rows: list[dict[str, object]]) -> str:
+    body = "".join(
+        "<tr>"
+        f"<td>{escape(str(row['label']))}</td>"
+        f"<td>{int(row['journeys'])}</td>"
+        f"<td>{float(row['from_entry_percent']):.2f}%</td>"
+        "</tr>"
+        for row in rows
+    )
+    return (
+        "<h2>Ключевые действия</h2>"
+        "<table><thead><tr><th>Действие</th><th>Уникальные пути</th>"
+        f"<th>От визитов</th></tr></thead><tbody>{body}</tbody></table>"
+    )
+
+
 async def operator_funnel_page(request: web.Request) -> web.Response:
     operator_id, report = await _report(request)
     period = report["period"]
@@ -94,8 +112,8 @@ async def operator_funnel_page(request: web.Request) -> web.Response:
     source_options = ["", "telegram", "google", "yandex", "vk", "unattributed"]
     options = "".join(
         f'<option value="{escape(value)}"'
-        f'{" selected" if value == selected_source else ""}>'
-        f'{escape(value or "все источники")}</option>'
+        f"{' selected' if value == selected_source else ''}>"
+        f"{escape(value or 'все источники')}</option>"
         for value in source_options
     )
     stage_rows = "".join(
@@ -120,8 +138,9 @@ async def operator_funnel_page(request: web.Request) -> web.Response:
         f"<label>До, не включая дату <input type='date' name='to' value='{escape(str(period['to'])[:10])}'></label>"
         f"<label>Первый источник <select name='source'>{options}</select></label>"
         "<button type='submit'>Показать</button></form>"
-        "<h2>Конверсия</h2><table><thead><tr><th>Этап</th><th>Пути</th><th>От прошлого этапа</th><th>От заявки</th></tr></thead>"
+        "<h2>Основной путь</h2><table><thead><tr><th>Этап</th><th>Пути</th><th>От прошлого этапа</th><th>От визитов</th></tr></thead>"
         f"<tbody>{stage_rows}</tbody></table>"
+        f"{_engagement_table(report['engagement'])}"
         "<h2>Первый источник</h2><table><thead><tr><th>Источник</th><th>Пути</th></tr></thead>"
         f"<tbody>{source_rows}</tbody></table>"
     )

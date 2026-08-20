@@ -80,6 +80,12 @@ main {
   background: linear-gradient(180deg, #f7f7f4, #fff);
 }
 
+.landing-scroll-end {
+  display: block;
+  width: 1px;
+  height: 1px;
+}
+
 [data-landing-section] {
   min-height: 18rem;
   padding-block: 5rem;

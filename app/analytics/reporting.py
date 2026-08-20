@@ -19,9 +19,19 @@ FUNNEL_REPORT_STAGES = (
     ("authenticated_project", "Создан проект после авторизации"),
     ("run_queued", "Генерация запущена"),
     ("free_result", "Получен бесплатный результат"),
-    ("upgrade_started", "Начато оформление тарифа"),
-    ("payment_completed", "Оплата подтверждена"),
     ("published", "Виджет опубликован"),
+)
+
+FUNNEL_ENGAGEMENT_STAGES = (
+    ("landing_scrolled_end", "Долистали до финального предложения"),
+    ("studio_cta_clicked", "Нажали переход в Studio"),
+    ("studio_entered", "Перешли в Studio"),
+    ("composer_submitted", "Отправили ссылку на сайт"),
+    ("auth_started", "Начали авторизацию"),
+    ("auth_completed", "Завершили авторизацию"),
+    ("founder_claimed", "Активировали Founder Pilot"),
+    ("upgrade_started", "Начали оформление платного тарифа"),
+    ("payment_completed", "Подтвердили оплату"),
 )
 
 
@@ -141,18 +151,23 @@ async def build_funnel_report(
     campaigns.sort(
         key=lambda item: (
             -item.counts.get("landing_entered", 0),
-            *(value or "" for value in (
-                item.source, item.medium, item.campaign, item.term, item.content
-            )),
+            *(
+                value or ""
+                for value in (
+                    item.source,
+                    item.medium,
+                    item.campaign,
+                    item.term,
+                    item.content,
+                )
+            ),
         )
     )
     return FunnelReport(
         start=start,
         end=end,
         core=_stage_aggregates(CORE_FUNNEL_STAGES, counts, entry_count),
-        commercial=_stage_aggregates(
-            COMMERCIAL_FUNNEL_STAGES, counts, entry_count
-        ),
+        commercial=_stage_aggregates(COMMERCIAL_FUNNEL_STAGES, counts, entry_count),
         campaigns=tuple(campaigns),
     )
 
@@ -243,6 +258,9 @@ async def load_funnel_report(
     elif normalized_source is not None:
         cohort_filters.append(FunnelJourney.campaign_source == normalized_source)
 
+    report_event_types = [
+        stage for stage, _label in (*FUNNEL_REPORT_STAGES, *FUNNEL_ENGAGEMENT_STAGES)
+    ]
     stage_rows = await database.execute(
         select(
             FunnelEvent.event_type,
@@ -251,7 +269,9 @@ async def load_funnel_report(
         .join(FunnelJourney, FunnelJourney.id == FunnelEvent.journey_id)
         .where(
             *cohort_filters,
-            FunnelEvent.event_type.in_([stage for stage, _label in FUNNEL_REPORT_STAGES]),
+            FunnelEvent.occurred_at >= FunnelJourney.started_at,
+            FunnelEvent.occurred_at < end,
+            FunnelEvent.event_type.in_(report_event_types),
         )
         .group_by(FunnelEvent.event_type)
     )
@@ -268,7 +288,9 @@ async def load_funnel_report(
                 "label": label,
                 "journeys": count,
                 "step_conversion_percent": (
-                    100.0 if index == 0 and count > 0 else _percent(count, previous_count)
+                    100.0
+                    if index == 0 and count > 0
+                    else _percent(count, previous_count)
                 ),
                 "cumulative_conversion_percent": (
                     100.0 if index == 0 and count > 0 else _percent(count, entry_count)
@@ -285,10 +307,24 @@ async def load_funnel_report(
         .order_by(func.count(FunnelJourney.id).desc(), source_label.asc())
     )
 
+    engagement = [
+        {
+            "event_type": event_type,
+            "label": label,
+            "journeys": counts.get(event_type, 0),
+            "from_entry_percent": _percent(
+                counts.get(event_type, 0),
+                entry_count,
+            ),
+        }
+        for event_type, label in FUNNEL_ENGAGEMENT_STAGES
+    ]
+
     return {
         "period": {"from": _iso(start), "to": _iso(end)},
         "filters": {"source": normalized_source},
         "stages": stages,
+        "engagement": engagement,
         "sources": [
             {"source": str(row_source), "journeys": int(count)}
             for row_source, count in source_rows
@@ -297,6 +333,7 @@ async def load_funnel_report(
 
 
 __all__ = [
+    "FUNNEL_ENGAGEMENT_STAGES",
     "FUNNEL_REPORT_STAGES",
     "FunnelCampaignAggregate",
     "FunnelReport",

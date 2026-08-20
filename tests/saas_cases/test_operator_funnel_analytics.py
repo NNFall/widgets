@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -21,7 +21,9 @@ from builder_lab.forensics.config import GenerationForensicsConfig
 async def test_operator_funnel_report_is_allowlisted_aggregate_only_and_no_store(
     tmp_path,
 ) -> None:
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'operator-funnel.db'}")
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'operator-funnel.db'}"
+    )
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -75,10 +77,76 @@ async def test_operator_funnel_report_is_allowlisted_aggregate_only_and_no_store
                     occurred_at=datetime(2026, 7, 15, tzinfo=UTC),
                 ),
                 FunnelEvent(
+                    event_key="scroll-end:private-event-key",
+                    event_type="landing_scrolled_end",
+                    journey_id=journey.id,
+                    occurred_at=datetime(2026, 7, 15, tzinfo=UTC),
+                ),
+                FunnelEvent(
+                    event_key="studio-click:private-event-key",
+                    event_type="studio_cta_clicked",
+                    journey_id=journey.id,
+                    occurred_at=datetime(2026, 7, 15, tzinfo=UTC),
+                ),
+                FunnelEvent(
+                    event_key="studio-entered:private-event-key",
+                    event_type="studio_entered",
+                    journey_id=journey.id,
+                    occurred_at=datetime(2026, 7, 15, tzinfo=UTC),
+                ),
+                FunnelEvent(
+                    event_key="auth-started:private-event-key",
+                    event_type="auth_started",
+                    journey_id=journey.id,
+                    occurred_at=datetime(2026, 7, 15, tzinfo=UTC),
+                ),
+                FunnelEvent(
+                    event_key="auth-completed:private-event-key",
+                    event_type="auth_completed",
+                    journey_id=journey.id,
+                    occurred_at=datetime(2026, 7, 15, tzinfo=UTC),
+                ),
+                FunnelEvent(
+                    event_key="composer:private-event-key",
+                    event_type="composer_submitted",
+                    journey_id=journey.id,
+                    occurred_at=datetime(2026, 7, 15, tzinfo=UTC),
+                ),
+                FunnelEvent(
+                    event_key="run-queued:private-event-key",
+                    event_type="run_queued",
+                    journey_id=journey.id,
+                    occurred_at=datetime(2026, 7, 15, tzinfo=UTC),
+                ),
+                FunnelEvent(
                     event_key="free-result:private-event-key",
                     event_type="free_result",
                     journey_id=journey.id,
                     occurred_at=datetime(2026, 7, 16, tzinfo=UTC),
+                ),
+                FunnelEvent(
+                    event_key="founder-claimed:private-event-key",
+                    event_type="founder_claimed",
+                    journey_id=journey.id,
+                    occurred_at=datetime(2026, 7, 16, tzinfo=UTC),
+                ),
+                FunnelEvent(
+                    event_key="upgrade-started:private-event-key",
+                    event_type="upgrade_started",
+                    journey_id=journey.id,
+                    occurred_at=datetime(2026, 7, 16, tzinfo=UTC),
+                ),
+                FunnelEvent(
+                    event_key="payment-completed:private-event-key",
+                    event_type="payment_completed",
+                    journey_id=journey.id,
+                    occurred_at=datetime(2026, 7, 16, tzinfo=UTC),
+                ),
+                FunnelEvent(
+                    event_key="future-published:private-event-key",
+                    event_type="published",
+                    journey_id=journey.id,
+                    occurred_at=datetime(2026, 8, 1, tzinfo=UTC) + timedelta(seconds=1),
                 ),
             ]
         )
@@ -124,15 +192,32 @@ async def test_operator_funnel_report_is_allowlisted_aggregate_only_and_no_store
             "authenticated_project",
             "run_queued",
             "free_result",
-            "upgrade_started",
-            "payment_completed",
             "published",
         ]
         assert payload["stages"][0]["journeys"] == 1
         assert payload["stages"][1]["journeys"] == 1
-        assert payload["stages"][3]["journeys"] == 1
+        assert payload["stages"][2]["journeys"] == 1
+        assert payload["stages"][-1]["journeys"] == 0
+        assert [row["event_type"] for row in payload["engagement"]] == [
+            "landing_scrolled_end",
+            "studio_cta_clicked",
+            "studio_entered",
+            "composer_submitted",
+            "auth_started",
+            "auth_completed",
+            "founder_claimed",
+            "upgrade_started",
+            "payment_completed",
+        ]
+        assert all(row["journeys"] == 1 for row in payload["engagement"])
+        assert all(row["from_entry_percent"] == 100.0 for row in payload["engagement"])
         assert payload["filters"] == {"source": "telegram"}
-        text = f"{payload} {await page.text()}"
+        page_text = await page.text()
+        assert "Ключевые действия" in page_text
+        assert "Долистали до финального предложения" in page_text
+        assert "Перешли в Studio" in page_text
+        assert "Активировали Founder Pilot" in page_text
+        text = f"{payload} {page_text}"
         assert "private-event-key" not in text
         assert str(journey.id) not in text
         assert "operator@example.com" not in text

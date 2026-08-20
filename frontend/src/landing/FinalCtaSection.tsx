@@ -118,6 +118,7 @@ export function FinalCtaSection() {
           <div className="site-footer__legal"><span>Политика конфиденциальности</span><span>Условия использования</span></div>
         </div>
       </footer>
+      <span id="landing-scroll-end" className="landing-scroll-end" aria-hidden="true" />
     </section>
   );
 }
