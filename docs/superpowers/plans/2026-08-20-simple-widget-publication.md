@@ -63,6 +63,12 @@ expect(publishProject).toHaveBeenCalledWith(
 );
 ```
 
+Repeat the assertion with `allowed_domains: []`: explicit empty is a persisted
+deny-all policy, while omission means reset to the project source origin.
+Add a restoration-failure test proving the publish action remains disabled and
+the UI asks the user to reload instead of offering a potentially destructive
+legacy publish.
+
 - [ ] **Step 2: Run the focused tests and record RED**
 
 Run:
@@ -103,12 +109,12 @@ from the API response as the only source of restored domains.
 
 - [ ] **Step 2: Build the publish payload with exact compatibility behavior**
 
-Use the existing publication only for an update:
+Use the existing publication only for an update, including an explicit empty
+list:
 
 ```ts
-const preservedDomains = publication?.allowed_domains ?? [];
-const domainPayload = publication && preservedDomains.length > 0
-  ? { allowed_domains: preservedDomains }
+const domainPayload = publication
+  ? { allowed_domains: publication.allowed_domains }
   : {};
 ```
 
