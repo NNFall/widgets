@@ -19,7 +19,7 @@ import {
   type PublicationRelease,
   type ProjectPublicationState,
 } from './api';
-import { PublicationOfferDialog } from './PublicationOfferDialog';
+import { PublicationAccessView } from './PublicationAccessView';
 import { SupportDialog } from './SupportDialog';
 import type { BillingOffer, BillingSubscription, SaasProjectVersion } from './types';
 
@@ -882,16 +882,16 @@ export function UpgradeGate({
         </button>
       )}
     </aside>
-    <PublicationOfferDialog
-      open={offerOpen}
-      offer={offer ?? EMPTY_OFFER}
-      loading={offerLoading}
-      busy={working}
-      error={offerError}
-      onClose={() => setOfferOpen(false)}
-      onFounder={() => void claimFounder()}
-      onCheckout={(planCode, autoRenew) => void startCheckout(planCode, autoRenew)}
-    />
+    {offerOpen && (
+      <PublicationAccessView
+        offer={offer ?? EMPTY_OFFER}
+        loading={offerLoading}
+        busy={working}
+        error={offerError}
+        onFounder={() => void claimFounder()}
+        onCheckout={(planCode, autoRenew) => void startCheckout(planCode, autoRenew)}
+      />
+    )}
     <SupportDialog
       open={supportOpen}
       founder={subscription?.access_kind === 'founder'}

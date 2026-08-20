@@ -7,7 +7,7 @@ import {
 } from '@phosphor-icons/react';
 
 import { KaigoLogo } from '../shared/KaigoLogo';
-import { PublicationOfferDialog } from './PublicationOfferDialog';
+import { PublicationAccessView } from './PublicationAccessView';
 import { SupportDialog } from './SupportDialog';
 import type { BillingOffer } from './types';
 
@@ -209,14 +209,12 @@ export function StudioPresentation({ scenario }: { scenario: PresentationScenari
     const plans = scenario.startsWith('intro-') ? [INTRO_PLAN] : ALL_PLANS;
     return (
       <PresentationShell>
-        <UpgradeCard mode="start" />
-        <PublicationOfferDialog
-          open
+        <PublicationAccessView
           offer={offer(founder, plans)}
           busy={false}
+          loading={false}
           error={null}
           initialIntroConsent={scenario === 'intro-auto-renew'}
-          onClose={() => undefined}
           onFounder={() => undefined}
           onCheckout={() => undefined}
         />
