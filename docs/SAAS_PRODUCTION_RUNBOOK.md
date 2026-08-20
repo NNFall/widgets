@@ -319,12 +319,8 @@ unknown schema.
 Schema migration and the atomic rollback snapshot finish before either runtime
 is switched. Stop the old worker first so it drains its current claim under the
 systemd stop timeout and cannot claim new work during the switch. Start the app
-first, but do not start the new worker or activate the Studio archive yet:
-
-```bash
-systemctl stop kaigo-builder-worker
-COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml up -d --no-build app
-```
+inside the locked identity gate below; do not start the new worker or activate
+the Studio archive separately.
 
 For every release that changes the publication contract, run the following
 identity gate before switching `/var/www/kaigo-marketing/current`. It also
@@ -334,6 +330,11 @@ resolve to the same immutable image, verifies the archive digest and embedded
 full SHA, and reads only the single `KAIGO_RELEASE_ID` value from the live app.
 Shell tracing stays disabled; the command never dumps the container environment
 or `/etc/kaigo/release.env`.
+
+The same shell acquires `/run/kaigo-publication-release.lock` before starting
+the app and holds it until static activation completes. Every app/static release
+operator must use this gate; a second rollout fails before it can replace the
+container sampled by the identity and loopback health checks.
 
 Every equality check occurs before the deploy script can change the static
 symlink. A missing, malformed, or mismatched identity exits nonzero and leaves
@@ -347,6 +348,11 @@ umask 077
 set -a
 . /etc/kaigo/release.env
 set +a
+PUBLICATION_RELEASE_LOCK="/run/kaigo-publication-release.lock"
+exec {PUBLICATION_RELEASE_LOCK_FD}> "$PUBLICATION_RELEASE_LOCK"
+flock -n "$PUBLICATION_RELEASE_LOCK_FD"
+systemctl stop kaigo-builder-worker
+COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml up -d --no-build app
 PUBLICATION_CONTRACT_COMPOSE_PROJECT=ai_project
 PUBLICATION_CONTRACT_APP_CONFIG_IMAGE="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml config --format json | jq -er '.services.app.image')"
 PUBLICATION_CONTRACT_MIGRATION_CONFIG_IMAGE="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml config --format json | jq -er '.services.migration.image')"
@@ -355,6 +361,8 @@ APP_CONTAINER="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaig
 test -n "$APP_CONTAINER"
 PUBLICATION_CONTRACT_LIVE_APP_IMAGE_ID="$(docker inspect --format '{{.Image}}' "$APP_CONTAINER")"
 PUBLICATION_CONTRACT_LIVE_APP_SHA="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$APP_CONTAINER" | sed -n 's/^KAIGO_RELEASE_ID=//p')"
+PUBLICATION_CONTRACT_HEALTH_URL=http://127.0.0.1:8080/api/health
+PUBLICATION_CONTRACT_AUTH_SESSION_URL=http://127.0.0.1:8080/api/auth/session
 KAIGO_MARKETING_RELEASES_ROOT=/srv/kaigo/releases
 KAIGO_MARKETING_DEPLOY_INTERPRETER=/bin/bash
 KAIGO_MARKETING_DEPLOY_SCRIPT=/opt/kaigo/current/scripts/deploy_marketing_site.sh
@@ -364,6 +372,8 @@ export PUBLICATION_CONTRACT_MIGRATION_CONFIG_IMAGE
 export PUBLICATION_CONTRACT_SELECTED_APP_IMAGE_ID
 export PUBLICATION_CONTRACT_LIVE_APP_IMAGE_ID
 export PUBLICATION_CONTRACT_LIVE_APP_SHA
+export PUBLICATION_CONTRACT_HEALTH_URL
+export PUBLICATION_CONTRACT_AUTH_SESSION_URL
 export KAIGO_MARKETING_RELEASES_ROOT
 export KAIGO_MARKETING_DEPLOY_INTERPRETER
 export KAIGO_MARKETING_DEPLOY_SCRIPT
@@ -373,6 +383,7 @@ cat > "$PUBLICATION_CONTRACT_GATE" <<'PY'
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -381,6 +392,8 @@ import sys
 import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -399,6 +412,45 @@ def required(name: str) -> str:
     if not value:
         reject()
     return value
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        return None
+
+
+def probe_json(kind: str) -> dict[str, object]:
+    variable = (
+        "PUBLICATION_CONTRACT_HEALTH_URL"
+        if kind == "health"
+        else "PUBLICATION_CONTRACT_AUTH_SESSION_URL"
+    )
+    expected_path = "/api/health" if kind == "health" else "/api/auth/session"
+    url = required(variable)
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname != "127.0.0.1"
+        or parsed.port is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path != expected_path
+        or parsed.query
+        or parsed.fragment
+    ):
+        reject()
+    opener = build_opener(NoRedirect())
+    request = Request(url, headers={"Accept": "application/json"})
+    with opener.open(request, timeout=5) as response:
+        if response.status != 200 or response.headers.get_content_type() != "application/json":
+            reject()
+        body = response.read(65_537)
+    if len(body) > 65_536:
+        reject()
+    payload = json.loads(body)
+    if not isinstance(payload, dict):
+        reject()
+    return payload
 
 
 staging: Path | None = None
@@ -454,6 +506,10 @@ try:
         members: dict[str, tarfile.TarInfo] = {}
         total_size = 0
         for member in archive.getmembers():
+            if member.name in (".", "./"):
+                if not member.isdir():
+                    reject()
+                continue
             path = PurePosixPath(member.name)
             parts = tuple(part for part in path.parts if part not in ("", "."))
             if path.is_absolute() or not parts or ".." in parts:
@@ -478,6 +534,20 @@ try:
         ):
             reject()
 
+        health_payload = probe_json("health")
+        if health_payload != {"status": "ok"}:
+            reject()
+        auth_payload = probe_json("auth")
+        providers = auth_payload.get("providers")
+        if (
+            auth_payload.get("enabled") is not True
+            or auth_payload.get("authenticated") is not False
+            or not isinstance(providers, list)
+            or not providers
+            or not all(isinstance(provider, str) and provider for provider in providers)
+        ):
+            reject()
+
         staging = Path(
             tempfile.mkdtemp(prefix=".kaigo-marketing-deploy.", dir=releases_root)
         )
@@ -495,9 +565,20 @@ try:
 
     if not (staging / "index.html").is_file() or not (staging / "assets").is_dir():
         reject()
-    deploy_environment = os.environ.copy()
-    deploy_environment["KAIGO_MARKETING_DIST_DIR"] = str(staging)
-    deploy_environment["KAIGO_MARKETING_SKIP_BUILD"] = "1"
+    deploy_environment = {
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "KAIGO_MARKETING_DIST_DIR": str(staging),
+        "KAIGO_MARKETING_SKIP_BUILD": "1",
+        "KAIGO_MARKETING_DEPLOY_ROOT": "/var/www/kaigo-marketing",
+        "KAIGO_NGINX_BIN": "/usr/sbin/nginx",
+        "KAIGO_SYSTEMCTL_BIN": "/usr/bin/systemctl",
+    }
+    for system_name in ("SYSTEMROOT", "WINDIR"):
+        system_value = os.environ.get(system_name)
+        if system_value:
+            deploy_environment[system_name] = system_value
     subprocess.run(
         [str(deploy_interpreter), str(deploy_script), release_sha],
         env=deploy_environment,
@@ -532,8 +613,10 @@ test "$(docker inspect --format '{{.Image}}' "$WORKER_CONTAINER")" = \
 systemctl is-active --quiet kaigo-builder-worker
 ```
 
-The application-only checks use the loopback app port and do not request
-`/studio/`, because nginx owns that static route:
+The release gate has already required the loopback health and unauthenticated
+session contracts before static activation. Repeat them after worker startup as
+a diagnostic; do not request `/studio/` on the app port because nginx owns that
+static route:
 
 ```bash
 curl -fsS http://127.0.0.1:8080/api/health

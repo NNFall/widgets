@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import json
 import os
 import re
 import subprocess
 import sys
 import tarfile
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import IPv4Address, IPv4Network, ip_address, ip_network
 from pathlib import Path
 from textwrap import dedent
@@ -81,6 +84,9 @@ def _write_publication_static_archive(
         "assets/app-12345678.js": b"console.log('fixture')",
     }
     with tarfile.open(archive_path, "w:gz") as archive:
+        root = tarfile.TarInfo(".")
+        root.type = tarfile.DIRTYPE
+        archive.addfile(root)
         for name, content in files.items():
             info = tarfile.TarInfo(name)
             info.size = len(content)
@@ -94,6 +100,8 @@ def _run_publication_contract_gate(
     *,
     overrides: dict[str, str] | None = None,
     marker_sha: str | None = None,
+    health_status: int = 200,
+    auth_status: int = 200,
 ) -> tuple[subprocess.CompletedProcess[str], Path, str]:
     release_sha = "1" * 40
     image = f"sha256:{'a' * 64}"
@@ -109,11 +117,44 @@ def _run_publication_contract_gate(
     activation_script = tmp_path / "activate.py"
     activation_script.write_text(
         "from pathlib import Path\n"
-        "import os, sys\n"
-        "Path(os.environ['KAIGO_TEST_ACTIVATION_SENTINEL']).write_text("
-        "sys.argv[1], encoding='utf-8')\n",
+        "import json, os, sys\n"
+        f"Path({str(activation_sentinel)!r}).write_text(json.dumps({{"
+        "'release_sha': sys.argv[1], "
+        "'deploy_root': os.environ.get('KAIGO_MARKETING_DEPLOY_ROOT'), "
+        "'nginx_bin': os.environ.get('KAIGO_NGINX_BIN'), "
+        "'systemctl_bin': os.environ.get('KAIGO_SYSTEMCTL_BIN'), "
+        "'secret_present': 'KAIGO_TEST_SECRET' in os.environ"
+        "}), encoding='utf-8')\n",
         encoding="utf-8",
     )
+
+    class ProbeHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path == "/api/health":
+                status = health_status
+                body = b'{"status":"ok"}'
+            elif self.path == "/api/auth/session":
+                status = auth_status
+                body = (
+                    b'{"enabled":true,"authenticated":false,'
+                    b'"providers":["google"]}'
+                )
+            else:
+                status = 404
+                body = b'{}'
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    probe_server = ThreadingHTTPServer(("127.0.0.1", 0), ProbeHandler)
+    probe_thread = threading.Thread(target=probe_server.serve_forever, daemon=True)
+    probe_thread.start()
+    probe_origin = f"http://127.0.0.1:{probe_server.server_port}"
     secret = "fixture-secret-must-never-be-printed"
     environment = {
         **os.environ,
@@ -131,18 +172,27 @@ def _run_publication_contract_gate(
         "PUBLICATION_CONTRACT_SELECTED_APP_IMAGE_ID": image,
         "PUBLICATION_CONTRACT_LIVE_APP_IMAGE_ID": image,
         "PUBLICATION_CONTRACT_LIVE_APP_SHA": release_sha,
-        "KAIGO_TEST_ACTIVATION_SENTINEL": str(activation_sentinel),
+        "PUBLICATION_CONTRACT_HEALTH_URL": f"{probe_origin}/api/health",
+        "PUBLICATION_CONTRACT_AUTH_SESSION_URL": f"{probe_origin}/api/auth/session",
+        "KAIGO_MARKETING_DEPLOY_ROOT": str(tmp_path / "poison-deploy-root"),
+        "KAIGO_NGINX_BIN": "poison-nginx",
+        "KAIGO_SYSTEMCTL_BIN": "poison-systemctl",
         "KAIGO_TEST_SECRET": secret,
     }
     environment.update(overrides or {})
-    result = subprocess.run(
-        [sys.executable, "-c", _publication_contract_gate_script(runbook)],
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", _publication_contract_gate_script(runbook)],
+            cwd=ROOT,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        probe_server.shutdown()
+        probe_server.server_close()
+        probe_thread.join(timeout=5)
     return result, activation_sentinel, secret
 
 
@@ -1512,6 +1562,17 @@ def test_publication_contract_gate_collects_only_narrow_release_identity() -> No
     gate = _bash_block_containing(runbook, "PUBLICATION_CONTRACT_GATE=")
 
     assert gate.startswith("set -euo pipefail\nset +x\n")
+    release_lock = gate.index(
+        'PUBLICATION_RELEASE_LOCK="/run/kaigo-publication-release.lock"'
+    )
+    lock_acquired = gate.index(
+        'flock -n "$PUBLICATION_RELEASE_LOCK_FD"',
+        release_lock,
+    )
+    app_start = gate.index(f"{PRODUCTION_COMPOSE} up -d --no-build app")
+    live_identity = gate.index("PUBLICATION_CONTRACT_LIVE_APP_SHA=")
+    gate_execute = gate.index('python "$PUBLICATION_CONTRACT_GATE"')
+    assert release_lock < lock_acquired < app_start < live_identity < gate_execute
     assert "PUBLICATION_CONTRACT_COMPOSE_PROJECT=ai_project" in gate
     compose_lines = [line for line in gate.splitlines() if "docker compose" in line]
     assert compose_lines
@@ -1521,7 +1582,20 @@ def test_publication_contract_gate_collects_only_narrow_release_identity() -> No
     assert "PUBLICATION_CONTRACT_SELECTED_APP_IMAGE_ID=" in gate
     assert "PUBLICATION_CONTRACT_LIVE_APP_IMAGE_ID=" in gate
     assert "PUBLICATION_CONTRACT_LIVE_APP_SHA=" in gate
+    assert "PUBLICATION_CONTRACT_HEALTH_URL=http://127.0.0.1:8080/api/health" in gate
+    assert (
+        "PUBLICATION_CONTRACT_AUTH_SESSION_URL="
+        "http://127.0.0.1:8080/api/auth/session"
+    ) in gate
     assert 'python "$PUBLICATION_CONTRACT_GATE"' in gate
+    gate_script = _publication_contract_gate_script(runbook)
+    assert "deploy_environment = os.environ.copy()" not in gate_script
+    assert gate_script.index('health_payload = probe_json("health")') < (
+        gate_script.index("subprocess.run(")
+    )
+    assert gate_script.index('auth_payload = probe_json("auth")') < (
+        gate_script.index("subprocess.run(")
+    )
     for unsafe_output in (
         "printenv",
         "set -x",
@@ -1549,7 +1623,41 @@ def test_publication_contract_gate_activates_only_a_matching_release(
     )
 
     assert result.returncode == 0, result.stderr
-    assert activation_sentinel.read_text(encoding="utf-8") == "1" * 40
+    activation = json.loads(activation_sentinel.read_text(encoding="utf-8"))
+    assert activation == {
+        "release_sha": "1" * 40,
+        "deploy_root": "/var/www/kaigo-marketing",
+        "nginx_bin": "/usr/sbin/nginx",
+        "systemctl_bin": "/usr/bin/systemctl",
+        "secret_present": False,
+    }
+    assert secret not in result.stdout
+    assert secret not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("health_status", "auth_status"),
+    [(503, 200), (200, 503)],
+    ids=("health-not-ready", "auth-session-not-ready"),
+)
+def test_publication_contract_gate_requires_loopback_app_smoke_before_activation(
+    tmp_path: Path,
+    health_status: int,
+    auth_status: int,
+) -> None:
+    runbook = (ROOT / "docs" / "SAAS_PRODUCTION_RUNBOOK.md").read_text(
+        encoding="utf-8"
+    )
+
+    result, activation_sentinel, secret = _run_publication_contract_gate(
+        runbook,
+        tmp_path,
+        health_status=health_status,
+        auth_status=auth_status,
+    )
+
+    assert result.returncode != 0
+    assert not activation_sentinel.exists()
     assert secret not in result.stdout
     assert secret not in result.stderr
 
