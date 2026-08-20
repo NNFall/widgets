@@ -125,9 +125,9 @@ function UpgradeCard({ mode }: { mode: 'start' | 'pending' | 'founder' | 'paid' 
       <div>
         <h2 id="presentation-upgrade-title">{published ? 'Виджет опубликован' : active ? 'Всё готово к публикации' : 'Подключите виджет к сайту'}</h2>
         <p>{published
-          ? 'Виджет уже доступен на разрешённых сайтах. Новую версию можно опубликовать здесь же.'
+          ? 'Виджет опубликован. Скопируйте код установки или постоянную ссылку ниже.'
           : active
-            ? 'Укажите сайты, проверьте виджет и опубликуйте его. Код подключения появится после публикации.'
+            ? 'Ничего настраивать не нужно: сайт проекта будет разрешён автоматически. После публикации появится готовый код.'
             : 'Первая версия сохранена. Выберите бесплатный founder-пилот или подходящий тариф — условия будут показаны до перехода к оплате.'}</p>
         <LaunchSteps active={active} published={published} />
         {!active && <p className="studio-upgrade__safety-note">Founder-пилот не требует карты. Автопродление платного варианта включается только после отдельного согласия.</p>}
@@ -138,17 +138,20 @@ function UpgradeCard({ mode }: { mode: 'start' | 'pending' | 'founder' | 'paid' 
               ? 'Бесплатный период действует 14 дней. Автопродление выключено.'
               : 'Следующее списание — 1 500 ₽ 29 августа 2026 года. Автопродление включено.'}</p>
             <p className="studio-upgrade__renewal-status">{limits ? 'Лимит доработок на тарифе исчерпан.' : 'Доработки доступны в рамках тарифа.'}</p>
-            <label htmlFor="presentation-domain">На каких сайтах разрешить виджет</label>
-            <textarea id="presentation-domain" value="https://example.ru" readOnly />
-            <p>Если поле пустое, будет использован сайт проекта.</p>
             {published && (
               <>
                 <p role="status">Виджет опубликован и доступен на разрешённых сайтах.</p>
                 <section className="studio-upgrade__handoff" aria-labelledby="presentation-handoff-title">
                   <span>Остался один шаг</span>
                   <h3 id="presentation-handoff-title">Установите виджет на сайт</h3>
-                  <p>Скопируйте код установки или передайте его человеку, который управляет сайтом.</p>
-                  <button type="button"><Copy aria-hidden size={18} weight="bold" /> Скопировать код установки</button>
+                  <p>Скопируйте код установки или передайте код человеку, который управляет сайтом. Последующие обновления будут приходить по тому же адресу.</p>
+                  <div className="studio-upgrade__handoff-actions">
+                    <button type="button"><Copy aria-hidden size={18} weight="bold" /> Скопировать код установки</button>
+                    <button type="button"><Copy aria-hidden size={18} weight="bold" /> Скопировать ссылку загрузчика</button>
+                  </div>
+                  <a className="studio-upgrade__install-guide" href="/install">
+                    Открыть инструкцию по установке
+                  </a>
                 </section>
                 <details className="studio-upgrade__developer" open>
                   <summary>Код для разработчика</summary>
@@ -163,7 +166,7 @@ function UpgradeCard({ mode }: { mode: 'start' | 'pending' | 'founder' | 'paid' 
         <button type="button">{mode === 'pending' ? <Clock aria-hidden size={18} /> : <ArrowRight aria-hidden size={18} />}{mode === 'pending' ? 'Проверяем оплату' : 'Выбрать условия публикации'}</button>
       ) : (
         <div className="studio-upgrade__actions">
-          <button type="button"><ArrowRight aria-hidden size={18} />{published ? 'Обновить публикацию' : 'Опубликовать виджет'}</button>
+          <button type="button"><ArrowRight aria-hidden size={18} />{published ? 'Обновить публикацию' : 'Опубликовать и получить код'}</button>
           {!founder && <button type="button">Отключить автопродление</button>}
           <button type="button">Связаться с Kaigo</button>
         </div>

@@ -39,8 +39,21 @@ test('operator presentation links render real publication components @compact', 
     contentType: 'image/png',
   });
 
+  await page.goto('/studio?presentation=founder-active');
+  await expect(page.getByLabel('На каких сайтах разрешить виджет')).toHaveCount(0);
+  await expect(page.getByRole('button', {
+    name: 'Опубликовать и получить код',
+  })).toBeVisible();
+
   await page.goto('/studio?presentation=published');
   await expect(page.getByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+  await expect(page.getByLabel('На каких сайтах разрешить виджет')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Скопировать код установки' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Скопировать ссылку загрузчика' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Открыть инструкцию по установке' })).toHaveAttribute(
+    'href',
+    '/install',
+  );
   await expect(page.getByText(/script src="https:\/\/kaigo\.space\/embed\/demo\.js/i)).toBeVisible();
   await testInfo.attach('published-widget', {
     body: await page.screenshot({ fullPage: true }),
