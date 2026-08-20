@@ -6,6 +6,8 @@ import io
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -69,6 +71,21 @@ def _publication_contract_gate_script(runbook: str) -> str:
     start = runbook.index(marker) + len(marker)
     end = runbook.index("\nPY\n", start)
     return runbook[start:end]
+
+
+def _release_session_block(runbook: str) -> str:
+    return _bash_block_containing(runbook, "release_session_cleanup()")
+
+
+def _bash_executable() -> str:
+    if os.name == "nt":
+        git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+        if git_bash.is_file():
+            return str(git_bash)
+    executable = shutil.which("bash")
+    if executable is None:
+        pytest.skip("bash is required for the release-session cleanup contract")
+    return executable
 
 
 def _write_publication_static_archive(
@@ -1534,7 +1551,10 @@ def test_publication_contract_release_builds_runtime_and_static_from_one_full_sh
     runbook = (ROOT / "docs" / "SAAS_PRODUCTION_RUNBOOK.md").read_text(
         encoding="utf-8"
     )
-    build = _bash_block_containing(runbook, "STATIC_ARCHIVE_STAGING=")
+    build = _bash_block_containing(
+        runbook,
+        'STATIC_ARCHIVE_STAGING="$(mktemp -d ',
+    )
 
     assert build.startswith("set -euo pipefail\nset +x\n")
     assert 'RELEASE_COMMIT="$(git rev-parse --verify HEAD^{commit})"' in build
@@ -1555,24 +1575,126 @@ def test_publication_contract_release_builds_runtime_and_static_from_one_full_sh
     assert 'set -x' not in build
 
 
+def test_publication_release_lock_covers_shared_state_migrations_and_activation() -> (
+    None
+):
+    runbook = (ROOT / "docs" / "SAAS_PRODUCTION_RUNBOOK.md").read_text(
+        encoding="utf-8"
+    )
+    session = _release_session_block(runbook)
+    lock_declared = runbook.index(
+        'PUBLICATION_RELEASE_LOCK="/run/kaigo-publication-release.lock"'
+    )
+    cleanup_registered = runbook.index("trap release_session_cleanup EXIT")
+    lock_acquired = runbook.index(
+        'flock -n "$PUBLICATION_RELEASE_LOCK_FD"',
+        lock_declared,
+    )
+    release_env_replaced = runbook.index("> /etc/kaigo/release.env")
+    rollback_snapshot_replaced = runbook.index(
+        'mv -f "$ROLLBACK_TMP" /srv/kaigo/releases/rollback.env'
+    )
+    schema_dry_run = runbook.index(
+        f"{PRODUCTION_COMPOSE} --profile operations run --rm migration python "
+        "scripts/preflight_saas_schema.py"
+    )
+    schema_apply = runbook.index(
+        f"{PRODUCTION_COMPOSE} --profile operations run --rm migration python "
+        "scripts/preflight_saas_schema.py --apply"
+    )
+    app_start = runbook.index(f"{PRODUCTION_COMPOSE} up -d --no-build app")
+    gate_execute = runbook.index('python "$PUBLICATION_CONTRACT_GATE"')
+    finish = runbook.index("release_session_finish", gate_execute)
+
+    assert (
+        cleanup_registered
+        < lock_acquired
+        < release_env_replaced
+        < rollback_snapshot_replaced
+        < schema_dry_run
+        < schema_apply
+        < app_start
+        < gate_execute
+        < finish
+    )
+    assert "same root Bash release session" in runbook
+    assert re.search(
+        r"(?m)^trap\b.*\bEXIT\b",
+        runbook[lock_acquired:gate_execute],
+    ) is None
+    assert 'flock -u "$PUBLICATION_RELEASE_LOCK_FD"' in session
+    assert 'PUBLICATION_RELEASE_LOCK_FD=9' in session
+    assert 'exec 9>&-' in session
+    assert "trap - EXIT HUP INT TERM" in session
+    assert "|| true" not in session
+    assert session.index('flock -u "$PUBLICATION_RELEASE_LOCK_FD"') < (
+        session.index('exec 9>&-')
+    )
+
+
+@pytest.mark.parametrize("fail_after_lock", [False, True], ids=("success", "failure"))
+def test_publication_release_session_always_unlocks_and_closes(
+    tmp_path: Path,
+    fail_after_lock: bool,
+) -> None:
+    runbook = (ROOT / "docs" / "SAAS_PRODUCTION_RUNBOOK.md").read_text(
+        encoding="utf-8"
+    )
+    session = _release_session_block(runbook)
+    lock_path = tmp_path / "publication-release.lock"
+    lock_log = tmp_path / "flock.log"
+    temp_file = tmp_path / "release-session.tmp"
+    temp_file.write_text("temporary", encoding="utf-8")
+    session = session.replace(
+        'PUBLICATION_RELEASE_LOCK="/run/kaigo-publication-release.lock"',
+        f"PUBLICATION_RELEASE_LOCK={shlex.quote(lock_path.as_posix())}",
+    )
+    action = (
+        "false"
+        if fail_after_lock
+        else (
+            "release_session_finish\n"
+            'if { : >&"$PUBLICATION_RELEASE_LOCK_FD"; } 2>/dev/null; '
+            "then exit 91; fi"
+        )
+    )
+    script = (
+        "flock() { printf '%s\\n' \"$*\" >> \"$LOCK_LOG\"; }\n"
+        f"LOCK_LOG={shlex.quote(lock_log.as_posix())}\n"
+        f"{session}\n"
+        f"PUBLICATION_CONTRACT_GATE={shlex.quote(temp_file.as_posix())}\n"
+        f"{action}\n"
+    )
+
+    result = subprocess.run(
+        [_bash_executable(), "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == (1 if fail_after_lock else 0), result.stderr
+    assert not temp_file.exists()
+    lock_calls = lock_log.read_text(encoding="utf-8").splitlines()
+    assert len(lock_calls) == 2
+    assert lock_calls[0].startswith("-n ")
+    assert lock_calls[1].startswith("-u ")
+
+
 def test_publication_contract_gate_collects_only_narrow_release_identity() -> None:
     runbook = (ROOT / "docs" / "SAAS_PRODUCTION_RUNBOOK.md").read_text(
         encoding="utf-8"
     )
-    gate = _bash_block_containing(runbook, "PUBLICATION_CONTRACT_GATE=")
+    gate = _bash_block_containing(
+        runbook,
+        'PUBLICATION_CONTRACT_GATE="$(mktemp ',
+    )
 
     assert gate.startswith("set -euo pipefail\nset +x\n")
-    release_lock = gate.index(
-        'PUBLICATION_RELEASE_LOCK="/run/kaigo-publication-release.lock"'
-    )
-    lock_acquired = gate.index(
-        'flock -n "$PUBLICATION_RELEASE_LOCK_FD"',
-        release_lock,
-    )
     app_start = gate.index(f"{PRODUCTION_COMPOSE} up -d --no-build app")
     live_identity = gate.index("PUBLICATION_CONTRACT_LIVE_APP_SHA=")
     gate_execute = gate.index('python "$PUBLICATION_CONTRACT_GATE"')
-    assert release_lock < lock_acquired < app_start < live_identity < gate_execute
+    assert app_start < live_identity < gate_execute
     assert "PUBLICATION_CONTRACT_COMPOSE_PROJECT=ai_project" in gate
     compose_lines = [line for line in gate.splitlines() if "docker compose" in line]
     assert compose_lines

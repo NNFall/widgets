@@ -5,6 +5,78 @@ is performed by this repository task.
 
 ## Before the maintenance window
 
+Open one dedicated root Bash release session before preparing either the CI
+references or the local fallback artifacts. Run every numbered preparation
+step, both schema-preflight commands, and the app/static identity gate in that
+same root Bash release session. Do not copy the later blocks into fresh shells:
+the session owns the rollout lock until static activation has succeeded.
+
+Acquire the lock before the first shared release file or database mutation.
+The single cleanup trap removes any in-progress temporary artifact and releases
+the descriptor on every failure or signal. `release_session_finish` is called
+explicitly by the identity gate only after the deploy command has returned
+successfully:
+
+```bash
+set -euo pipefail
+set +x
+umask 077
+PUBLICATION_RELEASE_LOCK="/run/kaigo-publication-release.lock"
+PUBLICATION_RELEASE_LOCK_FD=9
+PUBLICATION_RELEASE_LOCK_HELD=0
+STATIC_ARCHIVE_STAGING=""
+EGRESS_ENV_TMP=""
+ANTIGRAVITY_ENV_TMP=""
+ROLLBACK_TMP=""
+PUBLICATION_CONTRACT_GATE=""
+
+release_session_remove_temps() {
+  if [[ -n "$STATIC_ARCHIVE_STAGING" ]]; then
+    rm -rf -- "$STATIC_ARCHIVE_STAGING"
+  fi
+  for release_temp in \
+    "$EGRESS_ENV_TMP" \
+    "$ANTIGRAVITY_ENV_TMP" \
+    "$ROLLBACK_TMP" \
+    "$PUBLICATION_CONTRACT_GATE"
+  do
+    if [[ -n "$release_temp" ]]; then
+      rm -f -- "$release_temp"
+    fi
+  done
+}
+
+release_session_cleanup() {
+  release_status=$?
+  trap - EXIT HUP INT TERM
+  set +e
+  release_session_remove_temps
+  if [[ "$PUBLICATION_RELEASE_LOCK_HELD" = 1 ]]; then
+    flock -u "$PUBLICATION_RELEASE_LOCK_FD"
+    exec 9>&-
+    PUBLICATION_RELEASE_LOCK_HELD=0
+  fi
+  exit "$release_status"
+}
+
+release_session_finish() {
+  test "$PUBLICATION_RELEASE_LOCK_HELD" = 1
+  release_session_remove_temps
+  flock -u "$PUBLICATION_RELEASE_LOCK_FD"
+  exec 9>&-
+  PUBLICATION_RELEASE_LOCK_HELD=0
+  trap - EXIT HUP INT TERM
+}
+
+trap release_session_cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+exec 9> "$PUBLICATION_RELEASE_LOCK"
+flock -n "$PUBLICATION_RELEASE_LOCK_FD"
+PUBLICATION_RELEASE_LOCK_HELD=1
+```
+
 1. Prefer images built and pushed by CI from the reviewed repository revision.
    On the production host, write their immutable registry references (never
    mutable tags) to `/etc/kaigo/release.env`:
@@ -51,7 +123,6 @@ is performed by this repository task.
    test -d frontend/dist/assets
    install -d -m 0755 /srv/kaigo/releases
    STATIC_ARCHIVE_STAGING="$(mktemp -d /srv/kaigo/releases/.kaigo-marketing-build.XXXXXX)"
-   trap 'rm -rf -- "$STATIC_ARCHIVE_STAGING"' EXIT
    cp -a -- frontend/dist/. "$STATIC_ARCHIVE_STAGING/"
    printf '%s\n' "$RELEASE_COMMIT" > "$STATIC_ARCHIVE_STAGING/.kaigo-release-sha"
    KAIGO_MARKETING_ARCHIVE="/srv/kaigo/releases/kaigo-marketing-$RELEASE_COMMIT.tar.gz"
@@ -61,7 +132,7 @@ is performed by this repository task.
    KAIGO_MARKETING_ARCHIVE_SHA256="$(sha256sum "$KAIGO_MARKETING_ARCHIVE" | awk '{print $1}')"
    [[ "$KAIGO_MARKETING_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
    rm -rf -- "$STATIC_ARCHIVE_STAGING"
-   trap - EXIT
+   STATIC_ARCHIVE_STAGING=""
    docker pull postgres:15-alpine
    KAIGO_APP_IMAGE="$(docker image inspect --format '{{.Id}}' "kaigo-app-build:$RELEASE_COMMIT")"
    KAIGO_BUILDER_WORKER_IMAGE="$(docker image inspect --format '{{.Id}}' "kaigo-worker-build:$RELEASE_COMMIT")"
@@ -173,7 +244,6 @@ is performed by this repository task.
    set -euo pipefail
    set +x
    EGRESS_ENV_TMP="$(mktemp)"
-   trap 'rm -f "$EGRESS_ENV_TMP"' EXIT
    printf '%s\n' \
      'KAIGO_WORKER_PUBLIC_HTTPS_HOST=5.129.236.90/32' \
      'KAIGO_WORKER_PUBLIC_HTTPS_PORT=443' \
@@ -181,7 +251,7 @@ is performed by this repository task.
    install -o root -g root -m 600 "$EGRESS_ENV_TMP" \
      /etc/kaigo/builder-worker-egress.env
    rm -f "$EGRESS_ENV_TMP"
-   trap - EXIT
+   EGRESS_ENV_TMP=""
    test "$(stat -c %u:%g:%a /etc/kaigo/builder-worker-egress.env)" = "0:0:600"
    ```
 
@@ -206,7 +276,6 @@ is performed by this repository task.
    test "${#ANTIGRAVITY_KEY_LINES[@]}" -eq 1
    [[ "${ANTIGRAVITY_KEY_LINES[0]}" =~ ^[A-Za-z0-9._~-]{32,256}$ ]]
    ANTIGRAVITY_ENV_TMP="$(mktemp)"
-   trap 'rm -f "$ANTIGRAVITY_ENV_TMP"' EXIT
    {
      printf '%s\n' \
        'KAIGO_ANTIGRAVITY_API_ENABLED=false' \
@@ -219,8 +288,8 @@ is performed by this repository task.
    install -o root -g root -m 600 "$ANTIGRAVITY_ENV_TMP" \
      /etc/kaigo/builder-worker-antigravity.env
    rm -f "$ANTIGRAVITY_ENV_TMP"
+   ANTIGRAVITY_ENV_TMP=""
    unset ANTIGRAVITY_KEY_LINES
-   trap - EXIT
    test "$(stat -c %u:%g:%a /etc/kaigo/builder-worker-antigravity.env)" = "0:0:600"
    ```
 
@@ -274,7 +343,6 @@ is performed by this repository task.
    docker image inspect "$ROLLBACK_APP_IMAGE" "$ROLLBACK_WORKER_IMAGE" \
      "$ROLLBACK_MIGRATION_IMAGE" "$KAIGO_DATABASE_OPS_IMAGE" >/dev/null
    ROLLBACK_TMP="$(mktemp /srv/kaigo/releases/rollback.env.tmp.XXXXXX)"
-   trap 'rm -f "$ROLLBACK_TMP"' EXIT
    printf '%s\n' \
      "KAIGO_APP_IMAGE=$ROLLBACK_APP_IMAGE" \
      "KAIGO_BUILDER_WORKER_IMAGE=$ROLLBACK_WORKER_IMAGE" \
@@ -289,7 +357,7 @@ is performed by this repository task.
      > "$ROLLBACK_TMP"
    chmod 600 "$ROLLBACK_TMP"
    mv -f "$ROLLBACK_TMP" /srv/kaigo/releases/rollback.env
-   trap - EXIT
+   ROLLBACK_TMP=""
    ```
 
 ## Fail-closed schema preflight
@@ -331,10 +399,13 @@ full SHA, and reads only the single `KAIGO_RELEASE_ID` value from the live app.
 Shell tracing stays disabled; the command never dumps the container environment
 or `/etc/kaigo/release.env`.
 
-The same shell acquires `/run/kaigo-publication-release.lock` before starting
-the app and holds it until static activation completes. Every app/static release
-operator must use this gate; a second rollout fails before it can replace the
-container sampled by the identity and loopback health checks.
+The dedicated release shell already holds
+`/run/kaigo-publication-release.lock`, acquired before release-file changes,
+the rollback snapshot, and schema preflight. It retains that descriptor across
+the app identity and loopback checks and releases it only after static
+activation completes. Every app/static release operator must use the full
+session; a second rollout therefore fails before either rollout can mutate
+shared release state or the database.
 
 Every equality check occurs before the deploy script can change the static
 symlink. A missing, malformed, or mismatched identity exits nonzero and leaves
@@ -348,9 +419,7 @@ umask 077
 set -a
 . /etc/kaigo/release.env
 set +a
-PUBLICATION_RELEASE_LOCK="/run/kaigo-publication-release.lock"
-exec {PUBLICATION_RELEASE_LOCK_FD}> "$PUBLICATION_RELEASE_LOCK"
-flock -n "$PUBLICATION_RELEASE_LOCK_FD"
+test "${PUBLICATION_RELEASE_LOCK_HELD:-0}" = 1
 systemctl stop kaigo-builder-worker
 COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml up -d --no-build app
 PUBLICATION_CONTRACT_COMPOSE_PROJECT=ai_project
@@ -378,7 +447,6 @@ export KAIGO_MARKETING_RELEASES_ROOT
 export KAIGO_MARKETING_DEPLOY_INTERPRETER
 export KAIGO_MARKETING_DEPLOY_SCRIPT
 PUBLICATION_CONTRACT_GATE="$(mktemp /run/kaigo-publication-contract-gate.XXXXXX.py)"
-trap 'rm -f -- "$PUBLICATION_CONTRACT_GATE"' EXIT
 cat > "$PUBLICATION_CONTRACT_GATE" <<'PY'
 from __future__ import annotations
 
@@ -594,7 +662,8 @@ finally:
 PY
 python "$PUBLICATION_CONTRACT_GATE"
 rm -f -- "$PUBLICATION_CONTRACT_GATE"
-trap - EXIT
+PUBLICATION_CONTRACT_GATE=""
+release_session_finish
 ```
 
 Only after the matching static release is active may the worker start. Do not
