@@ -294,6 +294,35 @@ class MarketingSitePackageTests(unittest.TestCase):
         self.assertIn("proxy_pass http://127.0.0.1:8080;", fallback)
         self.assertIn("proxy_set_header Host $host;", fallback)
 
+    def test_install_routes_are_exact_public_marketing_entrypoints(self):
+        config = NGINX_CONFIG.read_text(encoding="utf-8")
+        root = config.split("location = / {", 1)[1].split("}", 1)[0]
+        root_headers = {
+            line.strip()
+            for line in root.splitlines()
+            if line.strip().startswith("add_header ")
+        }
+
+        self.assertEqual(config.count("location = /install {"), 1)
+        self.assertEqual(config.count("location = /install/ {"), 1)
+        self.assertNotRegex(config, r"location\s+(?:\^~\s+)?/install(?:/|\s)\s*\{")
+        for exact_location in ("/install", "/install/"):
+            block = config.split(f"location = {exact_location} {{", 1)[1].split(
+                "}", 1
+            )[0]
+            self.assertIn("root /var/www/kaigo-marketing/current;", block)
+            self.assertIn("try_files /index.html =404;", block)
+            self.assertNotIn("auth_basic", block)
+            self.assertNotIn("proxy_pass", block)
+            self.assertEqual(
+                {
+                    line.strip()
+                    for line in block.splitlines()
+                    if line.strip().startswith("add_header ")
+                },
+                root_headers,
+            )
+
     def test_only_legacy_builder_uses_basic_auth(self):
         config = NGINX_CONFIG.read_text(encoding="utf-8")
         auth_file = "/etc/nginx/.htpasswd-kaigo-builder"
@@ -450,12 +479,37 @@ class MarketingSitePackageTests(unittest.TestCase):
             with self._open_with_retry(f"{base_url}/") as root_response:
                 self.assertEqual(root_response.status, 200)
                 self.assertEqual(root_response.headers["Cache-Control"], "no-store")
+                root_security_headers = {
+                    name: root_response.headers[name]
+                    for name in (
+                        "Content-Security-Policy",
+                        "Referrer-Policy",
+                        "X-Content-Type-Options",
+                        "X-Frame-Options",
+                    )
+                }
+
+            index = (DIST / "index.html").read_bytes()
+            for install_path in ("/install", "/install/"):
+                with urllib.request.urlopen(
+                    f"{base_url}{install_path}", timeout=2
+                ) as install_response:
+                    self.assertEqual(install_response.status, 200)
+                    self.assertEqual(install_response.read(), index)
+                    self.assertEqual(
+                        install_response.headers["Cache-Control"], "no-store"
+                    )
+                    self.assertIsNone(
+                        install_response.headers.get("WWW-Authenticate")
+                    )
+                    for name, value in root_security_headers.items():
+                        self.assertEqual(install_response.headers[name], value)
 
             for studio_path in ("/studio", "/studio/"):
                 with urllib.request.urlopen(f"{base_url}{studio_path}", timeout=2) as accepted:
                     self.assertEqual(accepted.status, 200)
 
-            index = (DIST / "index.html").read_text(encoding="utf-8")
+            index = index.decode("utf-8")
             hashed_asset = re.search(
                 r"""(?:src|href)=["'](/assets/[^"']+\.(?:js|css))["']""",
                 index,
