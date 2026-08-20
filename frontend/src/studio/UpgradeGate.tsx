@@ -46,7 +46,7 @@ type UpgradeState =
   | 'checkout_error'
   | 'recovery_error';
 
-type CopyState = 'idle' | 'copied' | 'error';
+type CopyTarget = 'code' | 'link' | null;
 
 interface UpgradeGateProps {
   csrfToken: string | null;
@@ -78,16 +78,6 @@ function safeCheckoutUrl(value: string) {
   }
 }
 
-function sourceOrigin(value: string | undefined) {
-  if (!value) return '';
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === 'https:' ? parsed.origin : '';
-  } catch {
-    return '';
-  }
-}
-
 function createIdempotencyKey() {
   return crypto.randomUUID();
 }
@@ -110,7 +100,6 @@ function rubles(amountMinor: number) {
 export function UpgradeGate({
   csrfToken,
   projectId = '',
-  sourceUrl,
   versionsEnabled = false,
   projectVersionId = '',
   projectVersionOrdinal,
@@ -120,7 +109,6 @@ export function UpgradeGate({
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
   maxPollAttempts = DEFAULT_MAX_POLL_ATTEMPTS,
 }: UpgradeGateProps) {
-  const defaultAllowedDomain = sourceOrigin(sourceUrl);
   const [state, setState] = useState<UpgradeState>(csrfToken ? 'checking' : 'idle');
   const [paymentId, setPaymentId] = useState<string | null>(null);
   const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
@@ -129,12 +117,12 @@ export function UpgradeGate({
   const [autoRenewError, setAutoRenewError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recoveryAttempt, setRecoveryAttempt] = useState(0);
-  const [allowedDomains, setAllowedDomains] = useState(defaultAllowedDomain);
   const [publication, setPublication] = useState<PublicationRelease | null>(null);
   const [priorReleases, setPriorReleases] = useState<RollbackRelease[]>([]);
   const [publicationPending, setPublicationPending] = useState(false);
   const [publicationError, setPublicationError] = useState<string | null>(null);
-  const [copyState, setCopyState] = useState<CopyState>('idle');
+  const [copiedTarget, setCopiedTarget] = useState<CopyTarget>(null);
+  const [copyError, setCopyError] = useState(false);
   const [offerOpen, setOfferOpen] = useState(false);
   const [offer, setOffer] = useState<BillingOffer | null>(null);
   const [offerLoading, setOfferLoading] = useState(false);
@@ -155,7 +143,6 @@ export function UpgradeGate({
     if (restored === null) {
       setPublication(null);
       setPriorReleases([]);
-      setAllowedDomains(defaultAllowedDomain);
       return;
     }
     const activeRelease = restored.active_release;
@@ -171,7 +158,6 @@ export function UpgradeGate({
       embed_url: restored.embed_url,
       runtime_url: restored.runtime_url,
     });
-    setAllowedDomains(restored.allowed_domains.join('\n'));
     const directPrevious = restored.releases.find(
       ({ release_id }) => release_id === activeRelease.previous_release_id,
     );
@@ -182,7 +168,7 @@ export function UpgradeGate({
       )),
       ...(directPrevious ? [directPrevious] : []),
     ]);
-  }, [defaultAllowedDomain]);
+  }, []);
 
   const reloadPublicationAfterConflict = useCallback(async () => {
     if (!projectId) return false;
@@ -330,16 +316,13 @@ export function UpgradeGate({
       .then(({ publication: restored }) => {
         if (abort.signal.aborted) return;
         applyPublicationState(restored);
+        setPublicationRestored(true);
+        setPublicationPending(false);
       })
       .catch(() => {
         if (!abort.signal.aborted) {
-          setPublicationError('Не удалось восстановить историю публикации. Повторная публикация остаётся доступна.');
-        }
-      })
-      .finally(() => {
-        if (!abort.signal.aborted) {
+          setPublicationError('Не удалось восстановить историю публикации. Обновите страницу перед публикацией.');
           setPublicationPending(false);
-          setPublicationRestored(true);
         }
       });
     return () => abort.abort();
@@ -509,13 +492,16 @@ export function UpgradeGate({
     const targetAvailable = versionsEnabled
       ? Boolean(projectVersionId)
       : Boolean(artifactId) && revision >= 1;
-    if (!csrfToken || !projectId || !targetAvailable || publicationPending) return;
-    const domains = [...new Set(
-      allowedDomains
-        .split(/[\s,]+/)
-        .map((domain) => domain.trim())
-        .filter(Boolean),
-    )];
+    if (
+      !csrfToken
+      || !projectId
+      || !targetAvailable
+      || publicationPending
+      || !publicationRestored
+    ) return;
+    const domainPayload = publication
+      ? { allowed_domains: publication.allowed_domains }
+      : {};
     setPublicationPending(true);
     setPublicationError(null);
     try {
@@ -525,12 +511,12 @@ export function UpgradeGate({
           ? {
               project_version_id: projectVersionId,
               expected_active_release_id: publication?.release_id ?? null,
-              ...(domains.length > 0 ? { allowed_domains: domains } : {}),
+              ...domainPayload,
             }
           : {
               artifact_id: artifactId,
               revision,
-              ...(domains.length > 0 ? { allowed_domains: domains } : {}),
+              ...domainPayload,
             },
         csrfToken,
       );
@@ -541,7 +527,6 @@ export function UpgradeGate({
         ]);
       }
       setPublication(next);
-      setAllowedDomains(next.allowed_domains.join('\n'));
     } catch (caught) {
       if (
         caught instanceof BuilderApiError
@@ -553,27 +538,19 @@ export function UpgradeGate({
           ? 'Публикация изменилась в другой сессии. Данные обновлены — проверьте их и повторите действие.'
           : 'Публикация изменилась в другой сессии, но не удалось обновить её состояние. Повторите проверку.');
       } else {
-        const actionable = caught instanceof BuilderApiError
-          && caught.status >= 400
-          && caught.status < 500
-          && caught.code === 'publication_invalid'
-          && caught.message.trim();
-        setPublicationError(actionable
-          ? `Не удалось опубликовать: ${caught.message.trim()}.`
-          : 'Не удалось опубликовать виджет. Проверьте домены и попробуйте ещё раз.');
+        setPublicationError('Не удалось опубликовать виджет. Попробуйте ещё раз.');
       }
     } finally {
       setPublicationPending(false);
     }
   }, [
-    allowedDomains,
     artifactId,
     csrfToken,
-    defaultAllowedDomain,
     projectId,
     projectVersionId,
     publication,
     publicationPending,
+    publicationRestored,
     reloadPublicationAfterConflict,
     revision,
     versionsEnabled,
@@ -627,7 +604,6 @@ export function UpgradeGate({
         current,
       ]);
       setPublication(restored);
-      setAllowedDomains(restored.allowed_domains.join('\n'));
     } catch (caught) {
       if (
         caught instanceof BuilderApiError
@@ -654,8 +630,8 @@ export function UpgradeGate({
     : 'Подключите виджет к сайту';
   const description = active
     ? publication
-      ? 'Виджет уже доступен на разрешённых сайтах. Новую версию можно опубликовать здесь же.'
-      : 'Укажите сайты, проверьте виджет и опубликуйте его. Код подключения появится после публикации.'
+      ? 'Виджет опубликован. Скопируйте код установки или постоянную ссылку ниже.'
+      : 'Ничего настраивать не нужно: сайт проекта будет разрешён автоматически. После публикации появится готовый код.'
     : 'Первая версия сохранена. Выберите бесплатный founder-пилот или подходящий тариф — условия будут показаны до перехода к оплате.';
   const launchSteps = [
     {
@@ -675,16 +651,18 @@ export function UpgradeGate({
     },
   ] as const;
 
-  const copyEmbedCode = async () => {
-    if (!embedSnippet || !navigator.clipboard?.writeText) {
-      setCopyState('error');
+  const copyText = async (value: string, target: Exclude<CopyTarget, null>) => {
+    setCopiedTarget(null);
+    setCopyError(false);
+    if (!navigator.clipboard?.writeText) {
+      setCopyError(true);
       return;
     }
     try {
-      await navigator.clipboard.writeText(embedSnippet);
-      setCopyState('copied');
+      await navigator.clipboard.writeText(value);
+      setCopiedTarget(target);
     } catch {
-      setCopyState('error');
+      setCopyError(true);
     }
   };
 
@@ -752,15 +730,6 @@ export function UpgradeGate({
                   : 'Лимит доработок на тарифе исчерпан.'}
               </p>
             )}
-            <label htmlFor="studio-publication-domains">На каких сайтах разрешить виджет</label>
-            <textarea
-              id="studio-publication-domains"
-              value={allowedDomains}
-              onChange={(event) => setAllowedDomains(event.target.value)}
-              placeholder="https://example.com"
-              disabled={publicationPending}
-            />
-            <p>Укажите каждый адрес с новой строки, например https://example.com. Если поле пустое, будет использован сайт проекта.</p>
             {publicationError && <p className="studio-upgrade__error" role="alert">{publicationError}</p>}
             {embedSnippet && publication && (
               <>
@@ -773,11 +742,34 @@ export function UpgradeGate({
                   <span>Остался один шаг</span>
                   <h3 id="studio-upgrade-handoff-title">Установите виджет на сайт</h3>
                   <p>Скопируйте код установки или передайте код человеку, который управляет сайтом. Последующие обновления будут приходить по тому же адресу.</p>
-                  <button type="button" onClick={() => void copyEmbedCode()}>
-                    <Copy aria-hidden size={18} weight="bold" /> Скопировать код установки
-                  </button>
-                  {copyState === 'copied' && <p className="studio-upgrade__copy-status" role="status">Код скопирован. Его можно отправить разработчику.</p>}
-                  {copyState === 'error' && <p className="studio-upgrade__copy-status studio-upgrade__copy-status--error" role="alert">Не получилось скопировать автоматически. Откройте код ниже и скопируйте вручную.</p>}
+                  <div className="studio-upgrade__handoff-actions">
+                    <button type="button" onClick={() => void copyText(embedSnippet, 'code')}>
+                      <Copy aria-hidden size={18} weight="bold" /> Скопировать код установки
+                    </button>
+                    <button type="button" onClick={() => void copyText(publication.embed_url, 'link')}>
+                      <Copy aria-hidden size={18} weight="bold" /> Скопировать ссылку загрузчика
+                    </button>
+                  </div>
+                  <a className="studio-upgrade__install-guide" href="/install">
+                    Открыть инструкцию по установке
+                  </a>
+                  {copiedTarget === 'code' && <p className="studio-upgrade__copy-status" role="status">Код скопирован. Его можно отправить разработчику.</p>}
+                  {copiedTarget === 'link' && <p className="studio-upgrade__copy-status" role="status">Ссылка загрузчика скопирована.</p>}
+                  {copyError && (
+                    <div className="studio-upgrade__manual-copy">
+                      <p className="studio-upgrade__copy-status studio-upgrade__copy-status--error" role="alert">
+                        Не получилось скопировать автоматически. Скопируйте вручную оба значения ниже.
+                      </p>
+                      <div>
+                        <strong>Код установки</strong>
+                        <code tabIndex={0}>{embedSnippet}</code>
+                      </div>
+                      <div>
+                        <strong>Ссылка загрузчика</strong>
+                        <code tabIndex={0}>{publication.embed_url}</code>
+                      </div>
+                    </div>
+                  )}
                 </section>
                 <details className="studio-upgrade__developer">
                   <summary>Код для разработчика</summary>
@@ -811,9 +803,13 @@ export function UpgradeGate({
       </div>
       {active ? (
         <div className="studio-upgrade__actions">
-          <button type="button" onClick={() => void publish()} disabled={publicationPending}>
+          <button
+            type="button"
+            onClick={() => void publish()}
+            disabled={publicationPending || !publicationRestored}
+          >
             {publicationPending ? <Clock aria-hidden size={18} /> : <ArrowRight aria-hidden size={18} />}
-            {publication ? 'Обновить публикацию' : 'Опубликовать виджет'}
+            {publication ? 'Обновить публикацию' : 'Опубликовать и получить код'}
           </button>
           {rollbackTarget && (
             <button type="button" onClick={() => void rollback()} disabled={publicationPending}>
