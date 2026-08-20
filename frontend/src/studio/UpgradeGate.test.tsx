@@ -216,6 +216,32 @@ describe('UpgradeGate', () => {
     expect(api.getBillingOffer).toHaveBeenCalledWith('project-123');
   });
 
+  it('keeps initial billing recovery visible instead of claiming that payment is pending', async () => {
+    vi.useRealTimers();
+    type SubscriptionRecovery = Awaited<ReturnType<typeof api.getBillingSubscription>>;
+    let resolveSubscription!: (value: SubscriptionRecovery) => void;
+    vi.mocked(api.getBillingSubscription).mockImplementation(() => new Promise<SubscriptionRecovery>(
+      (resolve) => {
+        resolveSubscription = resolve;
+      },
+    ));
+
+    render(<UpgradeGate {...gateProps} />);
+
+    expect(screen.getByRole('heading', { name: 'Проверяем доступ' })).toBeVisible();
+    expect(screen.queryByText('Ожидаем подтверждение оплаты…')).not.toBeInTheDocument();
+    expect(api.getBillingOffer).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveSubscription({ subscription: null });
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByRole('heading', {
+      name: '14 дней полностью бесплатно',
+    })).toBeVisible();
+  });
+
   it('opens checkout safely and reuses one idempotency key for the attempt', async () => {
     const replace = vi.fn();
     const close = vi.fn();
@@ -382,6 +408,7 @@ describe('UpgradeGate', () => {
   });
 
   it('polls single-flight and stops after the subscription becomes active', async () => {
+    vi.useRealTimers();
     vi.spyOn(window, 'open').mockReturnValue(null);
     vi.mocked(api.createBillingCheckout).mockResolvedValue({
       payment,
@@ -397,6 +424,13 @@ describe('UpgradeGate', () => {
       .mockResolvedValueOnce({
         subscription: activeSubscription,
       });
+    type PublicationRecovery = Awaited<ReturnType<typeof api.getProjectPublication>>;
+    let resolvePublicationRecovery!: (value: PublicationRecovery) => void;
+    vi.mocked(api.getProjectPublication).mockImplementation(() => new Promise<PublicationRecovery>(
+      (resolve) => {
+        resolvePublicationRecovery = resolve;
+      },
+    ));
 
     render(
       <UpgradeGate
@@ -409,13 +443,10 @@ describe('UpgradeGate', () => {
     });
     await chooseMonthlyPlan();
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(100);
-    });
-    expect(api.getBillingPayment).toHaveBeenCalledOnce();
+    await waitFor(() => expect(api.getBillingPayment).toHaveBeenCalledOnce());
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(500);
+      await new Promise((resolve) => setTimeout(resolve, 250));
     });
     expect(api.getBillingPayment).toHaveBeenCalledOnce();
 
@@ -427,6 +458,17 @@ describe('UpgradeGate', () => {
       await Promise.resolve();
     });
     expect(api.getBillingSubscription).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole('heading', {
+      name: 'Восстанавливаем публикацию',
+    })).toBeVisible();
+    expect(api.publishProject).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolvePublicationRecovery({ publication: null });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(api.publishProject).toHaveBeenCalledTimes(1));
     expect(api.publishProject).toHaveBeenCalledTimes(1);
     expect(api.publishProject).toHaveBeenCalledWith(
       'project-123',
@@ -442,7 +484,7 @@ describe('UpgradeGate', () => {
     expect(screen.queryByText(/750[\s ]000|токен/i)).not.toBeInTheDocument();
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_000);
+      await new Promise((resolve) => setTimeout(resolve, 250));
     });
     expect(api.getBillingPayment).toHaveBeenCalledOnce();
   });
@@ -711,13 +753,24 @@ describe('UpgradeGate', () => {
       name: 'Расскажите, как прошёл пилот',
     })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', {
+    const supportAction = screen.getByRole('button', {
       name: 'Нужна помощь? Связаться с Kaigo',
-    }));
-    expect(screen.getByRole('dialog', { name: 'Связаться с Kaigo' })).toBeVisible();
+    });
+    supportAction.focus();
+    fireEvent.click(supportAction);
+    const supportDialog = screen.getByRole('dialog', { name: 'Связаться с Kaigo' });
+    expect(supportDialog).toBeVisible();
+    await waitFor(() => expect(supportDialog.contains(document.activeElement)).toBe(true));
+    expect(document.getElementById('studio-publication')).toHaveAttribute('aria-hidden', 'true');
     expect(screen.queryByRole('dialog', {
       name: 'Расскажите, как прошёл пилот',
     })).not.toBeInTheDocument();
+    fireEvent.keyDown(supportDialog, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Связаться с Kaigo' })).not.toBeInTheDocument();
+    expect(supportAction).toHaveFocus();
+
+    fireEvent.click(supportAction);
+    const reopenedSupportDialog = screen.getByRole('dialog', { name: 'Связаться с Kaigo' });
     fireEvent.change(screen.getByRole('textbox', { name: 'Сообщение' }), {
       target: { value: 'Публикация не завершилась, помогите проверить запуск.' },
     });
@@ -736,6 +789,10 @@ describe('UpgradeGate', () => {
     expect(vi.mocked(api.createCustomerContact).mock.calls[0]?.[4]?.kind).not.toBe(
       'founder_feedback',
     );
+    expect(await screen.findByText(
+      'Сообщение сохранено. Мы свяжемся с вами по адресу аккаунта.',
+    )).toBeVisible();
+    await waitFor(() => expect(reopenedSupportDialog.contains(document.activeElement)).toBe(true));
     fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Повторить публикацию' }));
@@ -757,14 +814,17 @@ describe('UpgradeGate', () => {
 
   it('sends founder feedback with rating and testimonial consent from Studio', async () => {
     vi.useRealTimers();
-    vi.mocked(api.getBillingSubscription).mockResolvedValue({
-      subscription: {
-        ...activeSubscription,
-        plan_code: 'founder_14d',
-        access_kind: 'founder',
-        auto_renew: false,
-        next_renewal_at: null,
-      },
+    const founderSubscription = {
+      ...activeSubscription,
+      plan_code: 'founder_14d',
+      access_kind: 'founder' as const,
+      auto_renew: false,
+      next_renewal_at: null,
+    };
+    vi.mocked(api.claimFounderAccess).mockResolvedValue({
+      created: true,
+      founder: { position: 1, ends_at: '2026-08-27T12:00:00Z' },
+      subscription: founderSubscription,
     });
     vi.mocked(api.createCustomerContact).mockResolvedValue({
       request_id: 'contact-1',
@@ -778,6 +838,9 @@ describe('UpgradeGate', () => {
     }));
 
     render(<UpgradeGate {...gateProps} />);
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Активировать бесплатно и продолжить',
+    }));
     await waitFor(() => expect(api.publishProject).toHaveBeenCalledOnce());
     expect(screen.queryByRole('button', { name: 'Связаться с Kaigo' })).not.toBeInTheDocument();
     expect(screen.queryByRole('dialog', {
@@ -812,6 +875,49 @@ describe('UpgradeGate', () => {
       },
     ));
     expect(within(dialog).getByRole('status')).toHaveTextContent(/сообщение сохранено/i);
+  });
+
+  it('uses regular support for an account-wide Founder subscription without a current-project claim', async () => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({
+      subscription: {
+        ...activeSubscription,
+        plan_code: 'founder_14d',
+        access_kind: 'founder',
+        auto_renew: false,
+        next_renewal_at: null,
+      },
+    });
+    vi.mocked(api.getProjectPublication).mockResolvedValue(
+      restoredPublication(['https://example.com']),
+    );
+    vi.mocked(api.createCustomerContact).mockResolvedValue({
+      request_id: 'support-other-project',
+      accepted: true,
+    });
+
+    render(<UpgradeGate {...gateProps} projectId="project-without-founder-grant" />);
+
+    expect(await screen.findByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Связаться с Kaigo' }));
+    expect(screen.getByRole('dialog', { name: 'Связаться с Kaigo' })).toBeVisible();
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Сообщение' }), {
+      target: { value: 'Нужна помощь с публикацией другого проекта.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+
+    await waitFor(() => expect(api.createCustomerContact).toHaveBeenCalledWith(
+      'project-without-founder-grant',
+      'Нужна помощь с публикацией другого проекта.',
+      'csrf-billing',
+      'checkout-request-123',
+      {
+        kind: 'support',
+        rating: undefined,
+        testimonialAllowed: false,
+      },
+    ));
   });
 
   it('keeps one contact key across close and reopen, then resets it after success', async () => {
@@ -1023,6 +1129,212 @@ describe('UpgradeGate', () => {
     expect(api.publishProject).toHaveBeenCalledTimes(1);
   });
 
+  it('waits for billing recovery for the current project before auto-publishing after a project switch', async () => {
+    vi.useRealTimers();
+    type BillingSnapshot = Awaited<ReturnType<typeof api.getBillingSubscription>>;
+    let resolveSecondBilling!: (value: BillingSnapshot) => void;
+    vi.mocked(api.getBillingSubscription)
+      .mockResolvedValueOnce({ subscription: activeSubscription })
+      .mockImplementationOnce(() => new Promise<BillingSnapshot>((resolve) => {
+        resolveSecondBilling = resolve;
+      }));
+
+    const view = render(<UpgradeGate {...gateProps} projectId="project-a" />);
+    await waitFor(() => expect(api.publishProject).toHaveBeenCalledWith(
+      'project-a',
+      expect.anything(),
+      'csrf-billing',
+    ));
+    vi.mocked(api.publishProject).mockClear();
+
+    view.rerender(<UpgradeGate {...gateProps} projectId="project-b" />);
+    await waitFor(() => expect(api.getBillingSubscription).toHaveBeenCalledTimes(2));
+    await act(async () => Promise.resolve());
+    expect(api.publishProject).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveSecondBilling({ subscription: null });
+      await Promise.resolve();
+    });
+    expect(await screen.findByRole('heading', {
+      name: '14 дней полностью бесплатно',
+    })).toBeVisible();
+    expect(api.publishProject).not.toHaveBeenCalled();
+  });
+
+  it('recovers an existing publication when revisiting a project in the same mounted gate', async () => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
+    vi.mocked(api.getProjectPublication).mockReset()
+      .mockResolvedValueOnce({ publication: null })
+      .mockResolvedValueOnce({ publication: null })
+      .mockResolvedValueOnce(restoredPublication(['https://example.com']));
+
+    const view = render(<UpgradeGate {...gateProps} projectId="project-a" />);
+    await waitFor(() => expect(api.publishProject).toHaveBeenCalledTimes(1));
+
+    view.rerender(<UpgradeGate {...gateProps} projectId="project-b" />);
+    await waitFor(() => expect(api.publishProject).toHaveBeenCalledTimes(2));
+
+    view.rerender(<UpgradeGate {...gateProps} projectId="project-a" />);
+    await waitFor(() => expect(api.getProjectPublication).toHaveBeenCalledTimes(3));
+    expect(await screen.findByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+    expect(api.publishProject).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a late A recovery after an A to B to A project cycle', async () => {
+    vi.useRealTimers();
+    type PublicationRecovery = Awaited<ReturnType<typeof api.getProjectPublication>>;
+    let resolveFirstA!: (value: PublicationRecovery) => void;
+    let resolveSecondA!: (value: PublicationRecovery) => void;
+    let aRequests = 0;
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
+    vi.mocked(api.getProjectPublication).mockReset().mockImplementation((requestedProjectId) => {
+      if (requestedProjectId === 'project-b') return Promise.resolve({ publication: null });
+      aRequests += 1;
+      return new Promise<PublicationRecovery>((resolve) => {
+        if (aRequests === 1) resolveFirstA = resolve;
+        else resolveSecondA = resolve;
+      });
+    });
+
+    const view = render(<UpgradeGate {...gateProps} projectId="project-a" />);
+    await waitFor(() => expect(api.getProjectPublication).toHaveBeenCalledWith('project-a'));
+
+    view.rerender(<UpgradeGate {...gateProps} projectId="project-b" />);
+    await waitFor(() => expect(api.publishProject).toHaveBeenCalledWith(
+      'project-b',
+      expect.anything(),
+      'csrf-billing',
+    ));
+
+    view.rerender(<UpgradeGate {...gateProps} projectId="project-a" />);
+    await waitFor(() => expect(aRequests).toBe(2));
+    vi.mocked(api.publishProject).mockClear();
+
+    await act(async () => {
+      resolveFirstA({ publication: null });
+      await Promise.resolve();
+    });
+    expect(api.publishProject).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveSecondA(restoredPublication(['https://a.example']));
+      await Promise.resolve();
+    });
+    expect(await screen.findByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+    expect(api.publishProject).not.toHaveBeenCalled();
+  });
+
+  it('ignores a checkout created for a project that is no longer active', async () => {
+    vi.useRealTimers();
+    vi.mocked(crypto.randomUUID)
+      .mockReturnValueOnce('11111111-1111-4111-8111-111111111111')
+      .mockReturnValueOnce('22222222-2222-4222-8222-222222222222');
+    type CheckoutResult = Awaited<ReturnType<typeof api.createBillingCheckout>>;
+    let resolveCheckout!: (value: CheckoutResult) => void;
+    const replace = vi.fn();
+    const close = vi.fn();
+    const paymentWindow = {
+      location: { replace },
+      close,
+      closed: false,
+      opener: window,
+    } as unknown as Window;
+    vi.spyOn(window, 'open').mockReturnValue(paymentWindow);
+    vi.mocked(api.createBillingCheckout).mockImplementation(() => new Promise<CheckoutResult>(
+      (resolve) => {
+        resolveCheckout = resolve;
+      },
+    ));
+
+    const view = render(<UpgradeGate {...gateProps} projectId="project-a" />);
+    expect(await screen.findByRole('button', { name: /выбрать месяц/i })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: /выбрать месяц/i }));
+    await waitFor(() => expect(api.createBillingCheckout).toHaveBeenCalledWith(
+      'starter_monthly',
+      'csrf-billing',
+      '11111111-1111-4111-8111-111111111111',
+      'project-a',
+      false,
+    ));
+
+    view.rerender(<UpgradeGate {...gateProps} projectId="project-b" />);
+    expect(await screen.findByRole('heading', {
+      name: '14 дней полностью бесплатно',
+    })).toBeVisible();
+
+    await act(async () => {
+      resolveCheckout({
+        payment,
+        checkout_url: 'https://yoomoney.ru/checkout/payment-123',
+        created: true,
+      });
+      await Promise.resolve();
+    });
+
+    expect(replace).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+    expect(screen.getByRole('heading', {
+      name: '14 дней полностью бесплатно',
+    })).toBeVisible();
+
+    vi.mocked(api.createBillingCheckout).mockResolvedValue({
+      payment: { ...payment, id: 'payment-b' },
+      checkout_url: 'https://yoomoney.ru/checkout/payment-b',
+      created: true,
+    });
+    fireEvent.click(screen.getByRole('button', { name: /выбрать месяц/i }));
+    await waitFor(() => expect(api.createBillingCheckout).toHaveBeenNthCalledWith(
+      2,
+      'starter_monthly',
+      'csrf-billing',
+      '22222222-2222-4222-8222-222222222222',
+      'project-b',
+      false,
+    ));
+  });
+
+  it('ignores a stale publication-conflict reload after switching projects', async () => {
+    vi.useRealTimers();
+    type PublicationRecovery = Awaited<ReturnType<typeof api.getProjectPublication>>;
+    let resolveConflictReload!: (value: PublicationRecovery) => void;
+    vi.mocked(api.getBillingSubscription)
+      .mockResolvedValueOnce({ subscription: activeSubscription })
+      .mockResolvedValueOnce({ subscription: null });
+    vi.mocked(api.getProjectPublication).mockReset()
+      .mockResolvedValueOnce({ publication: null })
+      .mockImplementationOnce(() => new Promise<PublicationRecovery>((resolve) => {
+        resolveConflictReload = resolve;
+      }));
+    vi.mocked(api.publishProject).mockRejectedValue(new api.BuilderApiError(
+      'Publication changed; reload before retrying',
+      {
+        status: 409,
+        code: 'publication_conflict',
+        raw: 'Publication changed; reload before retrying',
+      },
+    ));
+
+    const view = render(<UpgradeGate {...gateProps} projectId="project-a" />);
+    await waitFor(() => expect(api.getProjectPublication).toHaveBeenCalledTimes(2));
+
+    view.rerender(<UpgradeGate {...gateProps} projectId="project-b" />);
+    expect(await screen.findByRole('heading', {
+      name: '14 дней полностью бесплатно',
+    })).toBeVisible();
+
+    await act(async () => {
+      resolveConflictReload(restoredPublication(['https://example.com']));
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText(/публикация изменилась в другой сессии/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', {
+      name: '14 дней полностью бесплатно',
+    })).toBeVisible();
+  });
+
   it('waits for null publication recovery before auto-publishing active access once', async () => {
     vi.useRealTimers();
     vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
@@ -1037,6 +1349,9 @@ describe('UpgradeGate', () => {
     const view = render(<UpgradeGate {...gateProps} />);
 
     await waitFor(() => expect(api.getProjectPublication).toHaveBeenCalledOnce());
+    expect(screen.getByRole('heading', {
+      name: 'Восстанавливаем публикацию',
+    })).toBeVisible();
     expect(api.publishProject).not.toHaveBeenCalled();
     view.rerender(<UpgradeGate {...gateProps} sourceUrl="https://example.com/while-recovering" />);
     await act(async () => Promise.resolve());
@@ -1393,6 +1708,94 @@ describe('UpgradeGate', () => {
     );
   });
 
+  it('ignores a rollback result from a project that is no longer active', async () => {
+    vi.useRealTimers();
+    type PublicationRecovery = Awaited<ReturnType<typeof api.getProjectPublication>>;
+    type RollbackResult = Awaited<ReturnType<typeof api.rollbackPublication>>;
+    let resolveRollback!: (value: RollbackResult) => void;
+    const baseA = restoredPublication(['https://a.example']);
+    const projectA: PublicationRecovery = {
+      publication: {
+        ...baseA.publication,
+        active_release: {
+          ...baseA.publication.active_release,
+          previous_release_id: 'release-a-3',
+        },
+        releases: [
+          {
+            release_id: 'release-a-3',
+            artifact_id: 'artifact-a-3',
+            project_version_id: 'version-a-3',
+            previous_release_id: null,
+            revision: 3,
+            checksum: 'checksum-a-3',
+            created_at: '2026-07-27T13:00:00Z',
+          },
+        ],
+      },
+    };
+    const baseB = restoredPublication(['https://b.example']);
+    const projectB: PublicationRecovery = {
+      publication: {
+        ...baseB.publication,
+        publication_id: 'publication-b',
+        stable_key: 'stable-widget-b',
+        embed_url: 'https://widgets.kaigo.space/embed/stable-widget-b.js',
+        runtime_url: 'https://widgets.kaigo.space/runtime/stable-widget-b',
+        active_release: {
+          ...baseB.publication.active_release,
+          release_id: 'release-b-4',
+          artifact_id: 'artifact-b-4',
+          project_version_id: 'version-b-4',
+          checksum: 'checksum-b-4',
+        },
+      },
+    };
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
+    vi.mocked(api.getProjectPublication).mockReset()
+      .mockResolvedValueOnce(projectA)
+      .mockResolvedValueOnce(projectB);
+    vi.mocked(api.rollbackPublication).mockImplementation(() => new Promise<RollbackResult>(
+      (resolve) => {
+        resolveRollback = resolve;
+      },
+    ));
+
+    const view = render(<UpgradeGate {...gateProps} projectId="project-a" />);
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Вернуть предыдущую публикацию',
+    }));
+    await waitFor(() => expect(api.rollbackPublication).toHaveBeenCalledOnce());
+
+    view.rerender(<UpgradeGate {...gateProps} projectId="project-b" />);
+    expect(await screen.findByText(
+      '<script src="https://widgets.kaigo.space/embed/stable-widget-b.js" async></script>',
+    )).not.toBeVisible();
+
+    await act(async () => {
+      resolveRollback({
+        publication_id: 'publication-123',
+        release_id: 'release-a-3',
+        artifact_id: 'artifact-a-3',
+        project_version_id: 'version-a-3',
+        stable_key: 'stable-widget',
+        revision: 3,
+        allowed_domains: ['https://a.example'],
+        checksum: 'checksum-a-3',
+        embed_url: 'https://widgets.kaigo.space/embed/stable-widget.js',
+        runtime_url: 'https://widgets.kaigo.space/runtime/stable-widget',
+      });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(
+      '<script src="https://widgets.kaigo.space/embed/stable-widget-b.js" async></script>',
+    )).not.toBeVisible();
+    expect(screen.queryByText(
+      '<script src="https://widgets.kaigo.space/embed/stable-widget.js" async></script>',
+    )).not.toBeInTheDocument();
+  });
+
   it('shows the installation handoff while keeping developer details collapsed', async () => {
     vi.useRealTimers();
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -1504,6 +1907,43 @@ describe('UpgradeGate', () => {
     expectManualCopyValueVisible(
       'https://widgets.kaigo.space/embed/stable-widget.js',
     );
+  });
+
+  it('keeps the latest copy action authoritative when Clipboard promises finish out of order', async () => {
+    vi.useRealTimers();
+    let rejectCode!: (reason?: unknown) => void;
+    let resolveLink!: () => void;
+    const writeText = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>((_resolve, reject) => {
+        rejectCode = reject;
+      }))
+      .mockImplementationOnce(() => new Promise<void>((resolve) => {
+        resolveLink = resolve;
+      }));
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
+    vi.mocked(api.getProjectPublication).mockResolvedValue(
+      restoredPublication(['https://example.com']),
+    );
+
+    render(<UpgradeGate {...gateProps} />);
+
+    expect(await screen.findByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Скопировать код установки' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Скопировать ссылку загрузчика' }));
+
+    await act(async () => {
+      resolveLink();
+      await Promise.resolve();
+    });
+    expect(screen.getByText('Ссылка загрузчика скопирована.')).toBeVisible();
+
+    await act(async () => {
+      rejectCode(new Error('older clipboard request failed'));
+      await Promise.resolve();
+    });
+    expect(screen.getByText('Ссылка загрузчика скопирована.')).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('reveals both manual-copy values when Clipboard access is unavailable', async () => {
@@ -1639,6 +2079,94 @@ describe('UpgradeGate', () => {
       '<script src="https://widgets.kaigo.space/embed/stable-widget.js" async></script>',
     )).not.toBeVisible();
     expect(screen.queryByLabelText('На каких сайтах разрешить виджет')).not.toBeInTheDocument();
+  });
+
+  it('fails closed when a CAS conflict cannot reload authoritative publication state', async () => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
+    vi.mocked(api.getProjectPublication)
+      .mockResolvedValueOnce({ publication: null })
+      .mockRejectedValueOnce(new Error('publication reload unavailable'));
+    vi.mocked(api.publishProject).mockRejectedValue(new api.BuilderApiError(
+      'Publication changed; reload before retrying',
+      {
+        status: 409,
+        code: 'publication_conflict',
+        raw: 'Publication changed; reload before retrying',
+      },
+    ));
+
+    render(<UpgradeGate {...gateProps} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Публикация изменилась в другой сессии, но не удалось обновить её состояние.',
+    );
+    const retry = screen.getByRole('button', {
+      name: /(?:повторить публикацию|опубликовать виджет после восстановления данных)/i,
+    });
+    expect(retry).toBeDisabled();
+    fireEvent.click(retry);
+    expect(api.publishProject).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks rollback when an existing publication conflict cannot be reloaded', async () => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
+    vi.mocked(api.getProjectPublication)
+      .mockResolvedValueOnce({
+        publication: {
+          publication_id: 'publication-123',
+          stable_key: 'stable-widget',
+          state: 'published',
+          allowed_domains: ['https://example.com'],
+          embed_url: 'https://widgets.kaigo.space/embed/stable-widget.js',
+          runtime_url: 'https://widgets.kaigo.space/runtime/stable-widget',
+          active_release: {
+            release_id: 'release-5',
+            artifact_id: 'artifact-456',
+            project_version_id: 'version-5',
+            previous_release_id: 'release-4',
+            revision: 7,
+            checksum: 'checksum-5',
+            created_at: '2026-07-28T13:00:00Z',
+          },
+          releases: [
+            {
+              release_id: 'release-4',
+              artifact_id: 'artifact-123',
+              project_version_id: 'version-4',
+              previous_release_id: null,
+              revision: 7,
+              checksum: 'checksum-4',
+              created_at: '2026-07-28T12:00:00Z',
+            },
+          ],
+        },
+      })
+      .mockRejectedValueOnce(new Error('publication reload unavailable'));
+    vi.mocked(api.publishProject).mockRejectedValue(new api.BuilderApiError(
+      'Publication changed; reload before retrying',
+      {
+        status: 409,
+        code: 'publication_conflict',
+        raw: 'Publication changed; reload before retrying',
+      },
+    ));
+
+    render(<UpgradeGate {...gateProps} />);
+
+    expect(await screen.findByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Обновить публикацию' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Публикация изменилась в другой сессии, но не удалось обновить её состояние.',
+    );
+    expect(screen.getByRole('button', { name: 'Обновить публикацию' })).toBeDisabled();
+    const rollback = screen.getByRole('button', {
+      name: /вернуть (?:предыдущую публикацию|версию)/i,
+    });
+    expect(rollback).toBeDisabled();
+    fireEvent.click(rollback);
+    expect(api.rollbackPublication).not.toHaveBeenCalled();
   });
 
   it('keeps the artifact publication contract only when project versions are unavailable', async () => {

@@ -1,4 +1,4 @@
-import { ArrowRight, CheckCircle, Clock, Copy, Sparkle } from '@phosphor-icons/react';
+import { ArrowRight, CheckCircle, Clock, Sparkle } from '@phosphor-icons/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
@@ -20,6 +20,7 @@ import {
   type ProjectPublicationState,
 } from './api';
 import { PublicationAccessView } from './PublicationAccessView';
+import { PublicationInstallView } from './PublicationInstallView';
 import { SupportDialog } from './SupportDialog';
 import type { BillingOffer, BillingSubscription, SaasProjectVersion } from './types';
 
@@ -45,6 +46,14 @@ type UpgradeState =
   | 'active'
   | 'checkout_error'
   | 'recovery_error';
+
+type PublicationPhase =
+  | 'checking'
+  | 'access'
+  | 'activating'
+  | 'publishing'
+  | 'publish_error'
+  | 'install';
 
 type CopyTarget = 'code' | 'link' | null;
 
@@ -153,30 +162,67 @@ export function UpgradeGate({
   const [publicationError, setPublicationError] = useState<string | null>(null);
   const [copiedTarget, setCopiedTarget] = useState<CopyTarget>(null);
   const [copyError, setCopyError] = useState(false);
-  const [offerOpen, setOfferOpen] = useState(false);
+  const [publicationPhase, setPublicationPhase] = useState<PublicationPhase>('checking');
   const [offer, setOffer] = useState<BillingOffer | null>(null);
   const [offerLoading, setOfferLoading] = useState(false);
   const [offerError, setOfferError] = useState<string | null>(null);
+  const [offerAttempt, setOfferAttempt] = useState(0);
   const [supportOpen, setSupportOpen] = useState(false);
   const [supportPending, setSupportPending] = useState(false);
   const [supportError, setSupportError] = useState<string | null>(null);
   const [supportSent, setSupportSent] = useState(false);
-  const [publishAfterActivation, setPublishAfterActivation] = useState(false);
   const [publicationRestored, setPublicationRestored] = useState(false);
+  const [founderFeedbackProjectId, setFounderFeedbackProjectId] = useState<string | null>(null);
   const idempotencyKeyRef = useRef<string | null>(null);
   const autoRenewIntentRef = useRef<boolean | null>(null);
   const planCodeIntentRef = useRef<string | null>(null);
   const contactIdempotencyKeyRef = useRef<string | null>(null);
   const contactIntentRef = useRef<string | null>(null);
+  const activeProjectIdRef = useRef(projectId);
+  const mountedRef = useRef(true);
+  const previousProjectIdRef = useRef(projectId);
+  const projectGenerationRef = useRef(0);
+  const offerRequestRef = useRef<string | null>(null);
+  const publicationRecoveryRef = useRef<{
+    projectId: string;
+    resolved: boolean;
+    promise: Promise<PublicationRelease | null>;
+  } | null>(null);
+  const publishInFlightRef = useRef<Promise<boolean> | null>(null);
+  const firstPublishAttemptedRef = useRef(new Set<string>());
+  const billingValidatedProjectRef = useRef<string | null>(null);
+  const copyRequestSequenceRef = useRef(0);
+
+  if (previousProjectIdRef.current !== projectId) {
+    previousProjectIdRef.current = projectId;
+    projectGenerationRef.current += 1;
+  }
+  activeProjectIdRef.current = projectId;
+
+  const isCurrentProject = useCallback((
+    expectedProjectId: string | null,
+    expectedGeneration: number,
+  ) => (
+    mountedRef.current
+    && activeProjectIdRef.current === expectedProjectId
+    && projectGenerationRef.current === expectedGeneration
+  ), []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const applyPublicationState = useCallback((restored: ProjectPublicationState | null) => {
     if (restored === null) {
       setPublication(null);
       setPriorReleases([]);
-      return;
+      return null;
     }
     const activeRelease = restored.active_release;
-    setPublication({
+    const nextPublication: PublicationRelease = {
       publication_id: restored.publication_id,
       release_id: activeRelease.release_id,
       artifact_id: activeRelease.artifact_id,
@@ -187,7 +233,8 @@ export function UpgradeGate({
       checksum: activeRelease.checksum,
       embed_url: restored.embed_url,
       runtime_url: restored.runtime_url,
-    });
+    };
+    setPublication(nextPublication);
     const directPrevious = restored.releases.find(
       ({ release_id }) => release_id === activeRelease.previous_release_id,
     );
@@ -198,26 +245,108 @@ export function UpgradeGate({
       )),
       ...(directPrevious ? [directPrevious] : []),
     ]);
+    return nextPublication;
   }, []);
 
-  const reloadPublicationAfterConflict = useCallback(async () => {
-    if (!projectId) return false;
+  const reloadPublicationAfterConflict = useCallback(async (expectedGeneration: number) => {
+    if (!projectId) return undefined;
     try {
       const { publication: restored } = await getProjectPublication(projectId);
-      applyPublicationState(restored);
-      return true;
+      if (!isCurrentProject(projectId, expectedGeneration)) return undefined;
+      const nextPublication = applyPublicationState(restored);
+      publicationRecoveryRef.current = {
+        projectId,
+        resolved: true,
+        promise: Promise.resolve(nextPublication),
+      };
+      setPublicationRestored(true);
+      return nextPublication;
     } catch {
-      return false;
+      if (isCurrentProject(projectId, expectedGeneration)) {
+        publicationRecoveryRef.current = null;
+        setPublicationRestored(false);
+      }
+      return undefined;
     }
-  }, [applyPublicationState, projectId]);
+  }, [applyPublicationState, isCurrentProject, projectId]);
 
   useEffect(() => {
+    billingValidatedProjectRef.current = null;
+    if (projectId) firstPublishAttemptedRef.current.delete(projectId);
+    publicationRecoveryRef.current = null;
+    publishInFlightRef.current = null;
+    offerRequestRef.current = null;
+    idempotencyKeyRef.current = null;
+    autoRenewIntentRef.current = null;
+    planCodeIntentRef.current = null;
+    setPublication(null);
+    setPriorReleases([]);
+    setPublicationRestored(false);
+    setPublicationPending(false);
+    setPublicationError(null);
+    setCopiedTarget(null);
+    setCopyError(false);
+    setOffer(null);
+    setOfferError(null);
+    setSupportOpen(false);
+    setSupportPending(false);
+    setSupportError(null);
+    setSupportSent(false);
+    contactIdempotencyKeyRef.current = null;
+    contactIntentRef.current = null;
+    copyRequestSequenceRef.current += 1;
+    setFounderFeedbackProjectId(null);
+    setPublicationPhase('checking');
+  }, [projectId]);
+
+  const ensurePublicationRecovered = useCallback((): Promise<PublicationRelease | null> => {
+    if (!projectId) return Promise.reject(new Error('publication_project_required'));
+    if (publicationRecoveryRef.current?.projectId === projectId) {
+      return publicationRecoveryRef.current.promise;
+    }
+
+    setPublicationPending(true);
+    setPublicationRestored(false);
+    setPublicationError(null);
+    const requestGeneration = projectGenerationRef.current;
+    const recovery = getProjectPublication(projectId)
+      .then(({ publication: restored }) => {
+        if (!isCurrentProject(projectId, requestGeneration)) {
+          throw new Error('stale_publication_recovery');
+        }
+        const nextPublication = applyPublicationState(restored);
+        if (publicationRecoveryRef.current?.projectId === projectId) {
+          publicationRecoveryRef.current.resolved = true;
+        }
+        setPublicationRestored(true);
+        return nextPublication;
+      })
+      .catch((caught) => {
+        if (isCurrentProject(projectId, requestGeneration)) {
+          setPublicationRestored(false);
+          setPublicationError('Не удалось восстановить историю публикации. Обновите страницу перед публикацией.');
+          setPublicationPhase('publish_error');
+        }
+        throw caught;
+      })
+      .finally(() => {
+        if (isCurrentProject(projectId, requestGeneration)) {
+          setPublicationPending(false);
+        }
+      });
+    publicationRecoveryRef.current = { projectId, resolved: false, promise: recovery };
+    return recovery;
+  }, [applyPublicationState, isCurrentProject, projectId]);
+
+  useEffect(() => {
+    billingValidatedProjectRef.current = null;
     if (!csrfToken) {
       setState('idle');
       return undefined;
     }
     const abort = new AbortController();
     setState('checking');
+    setPublicationPhase('checking');
     setError(null);
     void (async () => {
       try {
@@ -225,7 +354,9 @@ export function UpgradeGate({
         if (abort.signal.aborted) return;
         if (subscription?.status === 'active') {
           setSubscription(subscription);
+          billingValidatedProjectRef.current = projectId;
           setState('active');
+          setPublicationPhase('checking');
           return;
         }
         setSubscription(null);
@@ -235,6 +366,29 @@ export function UpgradeGate({
           setPaymentId(null);
           setCheckoutUrl(null);
           setState('idle');
+          setPublicationPhase('access');
+          if (projectId) {
+            const requestKey = `${projectId}:${offerAttempt}`;
+            if (offerRequestRef.current !== requestKey) {
+              offerRequestRef.current = requestKey;
+              setOfferLoading(true);
+              setOfferError(null);
+              try {
+                const nextOffer = await getBillingOffer(projectId);
+                if (!abort.signal.aborted && activeProjectIdRef.current === projectId) {
+                  setOffer(nextOffer);
+                }
+              } catch {
+                if (!abort.signal.aborted && activeProjectIdRef.current === projectId) {
+                  setOfferError('Не удалось загрузить условия публикации. Попробуйте ещё раз.');
+                }
+              } finally {
+                if (!abort.signal.aborted && activeProjectIdRef.current === projectId) {
+                  setOfferLoading(false);
+                }
+              }
+            }
+          }
           return;
         }
         let recoveredPayment = pending.payment;
@@ -263,14 +417,16 @@ export function UpgradeGate({
         setPaymentId(recoveredPayment.id);
         setCheckoutUrl(safeUrl);
         setState('pending');
+        setPublicationPhase('access');
       } catch {
         if (abort.signal.aborted) return;
         setState('recovery_error');
+        setPublicationPhase('checking');
         setError('Не удалось проверить тариф и незавершённую оплату. Повторите проверку.');
       }
     })();
     return () => abort.abort();
-  }, [csrfToken, recoveryAttempt]);
+  }, [csrfToken, offerAttempt, projectId, recoveryAttempt]);
 
   useEffect(() => {
     if (!paymentId || state !== 'pending') return undefined;
@@ -309,6 +465,7 @@ export function UpgradeGate({
           if (abort.signal.aborted) return;
           if (subscription?.status === 'active') {
             setSubscription(subscription);
+            billingValidatedProjectRef.current = projectId;
             setState('active');
             setError(null);
             return;
@@ -334,32 +491,11 @@ export function UpgradeGate({
       abort.abort();
       if (timer) clearTimeout(timer);
     };
-  }, [maxPollAttempts, paymentId, pollIntervalMs, state]);
-
-  useEffect(() => {
-    if (state !== 'active' || !projectId) return undefined;
-    const abort = new AbortController();
-    setPublicationPending(true);
-    setPublicationRestored(false);
-    setPublicationError(null);
-    void getProjectPublication(projectId, abort.signal)
-      .then(({ publication: restored }) => {
-        if (abort.signal.aborted) return;
-        applyPublicationState(restored);
-        setPublicationRestored(true);
-        setPublicationPending(false);
-      })
-      .catch(() => {
-        if (!abort.signal.aborted) {
-          setPublicationError('Не удалось восстановить историю публикации. Обновите страницу перед публикацией.');
-          setPublicationPending(false);
-        }
-      });
-    return () => abort.abort();
-  }, [applyPublicationState, projectId, state]);
+  }, [maxPollAttempts, paymentId, pollIntervalMs, projectId, state]);
 
   const startCheckout = async (planCode: string, autoRenew: boolean) => {
     if (!csrfToken || state === 'creating' || state === 'pending' || state === 'active') return;
+    const requestGeneration = projectGenerationRef.current;
     const paymentWindow = window.open('about:blank', '_blank');
     if (paymentWindow) paymentWindow.opener = null;
     setState('creating');
@@ -380,6 +516,15 @@ export function UpgradeGate({
         projectId,
         autoRenewIntent,
       );
+      if (!isCurrentProject(projectId, requestGeneration)) {
+        if (idempotencyKeyRef.current === idempotencyKey) {
+          idempotencyKeyRef.current = null;
+          autoRenewIntentRef.current = null;
+          planCodeIntentRef.current = null;
+        }
+        paymentWindow?.close();
+        return;
+      }
       const safeUrl = safeCheckoutUrl(checkout.checkout_url);
       if (!safeUrl) throw new Error('invalid_checkout_url');
       if (paymentWindow && !paymentWindow.closed) {
@@ -389,9 +534,17 @@ export function UpgradeGate({
       }
       setPaymentId(checkout.payment.id);
       setState('pending');
-      setOfferOpen(false);
+      setPublicationPhase('access');
     } catch (caught) {
       paymentWindow?.close();
+      if (!isCurrentProject(projectId, requestGeneration)) {
+        if (idempotencyKeyRef.current === idempotencyKey) {
+          idempotencyKeyRef.current = null;
+          autoRenewIntentRef.current = null;
+          planCodeIntentRef.current = null;
+        }
+        return;
+      }
       if (
         caught instanceof BuilderApiError
         && caught.code === 'intro_offer_unavailable'
@@ -407,7 +560,7 @@ export function UpgradeGate({
           }
           : currentOffer);
         setOfferError('Вводный тариф уже использован. Выберите обычный тариф.');
-        setOfferOpen(true);
+        setPublicationPhase('access');
         return;
       }
       setState('checkout_error');
@@ -418,52 +571,76 @@ export function UpgradeGate({
   const working = state === 'checking' || state === 'creating' || state === 'pending';
   const active = state === 'active';
   const recoveryFailed = state === 'recovery_error';
-
+  const founderFeedback = (
+    publication !== null
+    && subscription?.access_kind === 'founder'
+    && founderFeedbackProjectId === projectId
+  );
   const retryRecovery = () => {
+    if (csrfToken && projectId && !offer) {
+      const requestGeneration = projectGenerationRef.current;
+      const requestKey = `${projectId}:${offerAttempt}`;
+      offerRequestRef.current = requestKey;
+      setOfferLoading(true);
+      setOfferError(null);
+      void getBillingOffer(projectId)
+        .then((nextOffer) => {
+          if (isCurrentProject(projectId, requestGeneration)) {
+            setOffer(nextOffer);
+          }
+        })
+        .catch(() => {
+          if (isCurrentProject(projectId, requestGeneration)) {
+            offerRequestRef.current = null;
+            setOfferError('Не удалось загрузить условия публикации. Попробуйте ещё раз.');
+          }
+        })
+        .finally(() => {
+          if (isCurrentProject(projectId, requestGeneration)) {
+            setOfferLoading(false);
+          }
+        });
+    }
     setState('checking');
+    setPublicationPhase('checking');
     setRecoveryAttempt((attempt) => attempt + 1);
   };
 
-  const openOffer = async () => {
-    if (!csrfToken || !projectId || working) return;
+  useEffect(() => {
     if (
-      state === 'checkout_error'
-      && idempotencyKeyRef.current
-      && planCodeIntentRef.current
-    ) {
-      await startCheckout(
-        planCodeIntentRef.current,
-        autoRenewIntentRef.current ?? false,
-      );
-      return;
-    }
-    setOfferOpen(true);
-    setOfferError(null);
-    if (offer) return;
+      !csrfToken
+      || !projectId
+      || state === 'checking'
+      || state === 'active'
+      || offer
+    ) return;
+    const requestKey = `${projectId}:${offerAttempt}`;
+    if (offerRequestRef.current === requestKey) return;
+    offerRequestRef.current = requestKey;
+    setPublicationPhase('access');
     setOfferLoading(true);
-    try {
-      setOffer(await getBillingOffer(projectId));
-    } catch {
-      setOfferError('Не удалось загрузить условия публикации. Попробуйте ещё раз.');
-    } finally {
-      setOfferLoading(false);
-    }
-  };
-
-  const claimFounder = async () => {
-    if (!csrfToken || !projectId || working) return;
-    setState('creating');
     setOfferError(null);
-    try {
-      const result = await claimFounderAccess(projectId, csrfToken);
-      setSubscription(result.subscription);
-      setState('active');
-      setOfferOpen(false);
-      setPublishAfterActivation(true);
-    } catch {
-      setState('idle');
-      setOfferError('Founder-доступ уже занят или сейчас недоступен. Выберите тариф или повторите позже.');
-    }
+    const requestGeneration = projectGenerationRef.current;
+    void getBillingOffer(projectId)
+      .then((nextOffer) => {
+        if (!isCurrentProject(projectId, requestGeneration)) return;
+        setOffer(nextOffer);
+      })
+      .catch(() => {
+        if (!isCurrentProject(projectId, requestGeneration)) return;
+        setOfferError('Не удалось загрузить условия публикации. Попробуйте ещё раз.');
+      })
+      .finally(() => {
+        if (isCurrentProject(projectId, requestGeneration)) {
+          setOfferLoading(false);
+        }
+      });
+  }, [csrfToken, isCurrentProject, offer, offerAttempt, projectId, state]);
+
+  const retryOffer = () => {
+    offerRequestRef.current = null;
+    setOfferError(null);
+    setOfferAttempt((attempt) => attempt + 1);
   };
 
   const sendSupport = async (input: {
@@ -472,7 +649,10 @@ export function UpgradeGate({
     testimonialAllowed: boolean;
   }) => {
     if (!csrfToken || !projectId || supportPending) return;
-    const kind = subscription?.access_kind === 'founder' ? 'founder_feedback' : 'support';
+    const requestGeneration = projectGenerationRef.current;
+    const kind = founderFeedback
+      ? 'founder_feedback'
+      : 'support';
     const normalizedMessage = input.message.trim();
     const intent = JSON.stringify({
       projectId,
@@ -494,13 +674,17 @@ export function UpgradeGate({
         rating: input.rating,
         testimonialAllowed: input.testimonialAllowed,
       });
+      if (!isCurrentProject(projectId, requestGeneration)) return;
       contactIdempotencyKeyRef.current = null;
       contactIntentRef.current = null;
       setSupportSent(true);
     } catch {
+      if (!isCurrentProject(projectId, requestGeneration)) return;
       setSupportError('Не удалось отправить сообщение. Текст сохранён в форме — попробуйте ещё раз.');
     } finally {
-      setSupportPending(false);
+      if (isCurrentProject(projectId, requestGeneration)) {
+        setSupportPending(false);
+      }
     }
   };
 
@@ -518,7 +702,9 @@ export function UpgradeGate({
     }
   };
 
-  const publish = useCallback(async () => {
+  const publish = useCallback((existingPublication: PublicationRelease | null): Promise<boolean> => {
+    if (publishInFlightRef.current) return publishInFlightRef.current;
+    const requestGeneration = projectGenerationRef.current;
     const targetAvailable = versionsEnabled
       ? Boolean(projectVersionId)
       : Boolean(artifactId) && revision >= 1;
@@ -526,82 +712,143 @@ export function UpgradeGate({
       !csrfToken
       || !projectId
       || !targetAvailable
-      || publicationPending
-      || !publicationRestored
-    ) return;
-    const domainPayload = publication
-      ? { allowed_domains: publication.allowed_domains }
+      || publicationRecoveryRef.current?.projectId !== projectId
+      || !publicationRecoveryRef.current.resolved
+    ) return Promise.resolve(false);
+    const domainPayload = existingPublication
+      ? { allowed_domains: existingPublication.allowed_domains }
       : {};
     setPublicationPending(true);
     setPublicationError(null);
-    try {
-      const next = await publishProject(
-        projectId,
-        versionsEnabled
-          ? {
-              project_version_id: projectVersionId,
-              expected_active_release_id: publication?.release_id ?? null,
-              ...domainPayload,
-            }
-          : {
-              artifact_id: artifactId,
-              revision,
-              ...domainPayload,
-            },
-        csrfToken,
-      );
-      if (publication && publication.release_id !== next.release_id) {
-        setPriorReleases((current) => [
-          ...current.filter(({ release_id }) => release_id !== publication.release_id),
-          publication,
-        ]);
+    setPublicationPhase('publishing');
+
+    const inFlight = (async () => {
+      try {
+        const next = await publishProject(
+          projectId,
+          versionsEnabled
+            ? {
+                project_version_id: projectVersionId,
+                expected_active_release_id: existingPublication?.release_id ?? null,
+                ...domainPayload,
+              }
+            : {
+                artifact_id: artifactId,
+                revision,
+                ...domainPayload,
+              },
+          csrfToken,
+        );
+        if (!isCurrentProject(projectId, requestGeneration)) return false;
+        if (existingPublication && existingPublication.release_id !== next.release_id) {
+          setPriorReleases((current) => [
+            ...current.filter(({ release_id }) => release_id !== existingPublication.release_id),
+            existingPublication,
+          ]);
+        }
+        setPublication(next);
+        publicationRecoveryRef.current = {
+          projectId,
+          resolved: true,
+          promise: Promise.resolve(next),
+        };
+        setPublicationPhase('install');
+        return true;
+      } catch (caught) {
+        if (!isCurrentProject(projectId, requestGeneration)) return false;
+        if (
+          caught instanceof BuilderApiError
+          && caught.status === 409
+          && caught.code === 'publication_conflict'
+        ) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          if (!isCurrentProject(projectId, requestGeneration)) return false;
+          const reloaded = await reloadPublicationAfterConflict(requestGeneration);
+          if (!isCurrentProject(projectId, requestGeneration)) return false;
+          if (reloaded !== undefined) {
+            setPublicationError(
+              'Публикация изменилась в другой сессии. Данные обновлены — проверьте их и повторите действие.',
+            );
+            setPublicationPhase(reloaded ? 'install' : 'publish_error');
+          } else {
+            setPublicationError(
+              'Публикация изменилась в другой сессии, но не удалось обновить её состояние. Обновите страницу перед повторной публикацией.',
+            );
+            setPublicationPhase(existingPublication ? 'install' : 'publish_error');
+          }
+        } else {
+          setPublicationError(publicationFailureMessage(caught));
+          setPublicationPhase(existingPublication ? 'install' : 'publish_error');
+        }
+        return false;
+      } finally {
+        if (isCurrentProject(projectId, requestGeneration)) {
+          setPublicationPending(false);
+        }
       }
-      setPublication(next);
-    } catch (caught) {
-      if (
-        caught instanceof BuilderApiError
-        && caught.status === 409
-        && caught.code === 'publication_conflict'
-      ) {
-        const reloaded = await reloadPublicationAfterConflict();
-        setPublicationError(reloaded
-          ? 'Публикация изменилась в другой сессии. Данные обновлены — проверьте их и повторите действие.'
-          : 'Публикация изменилась в другой сессии, но не удалось обновить её состояние. Повторите проверку.');
-      } else {
-        setPublicationError(publicationFailureMessage(caught));
-      }
-    } finally {
-      setPublicationPending(false);
-    }
+    })();
+    publishInFlightRef.current = inFlight;
+    void inFlight.finally(() => {
+      if (publishInFlightRef.current === inFlight) publishInFlightRef.current = null;
+    });
+    return inFlight;
   }, [
     artifactId,
     csrfToken,
+    isCurrentProject,
     projectId,
     projectVersionId,
-    publication,
-    publicationPending,
-    publicationRestored,
     reloadPublicationAfterConflict,
     revision,
     versionsEnabled,
   ]);
 
+  const continueToFirstPublication = useCallback(async () => {
+    if (!projectId || firstPublishAttemptedRef.current.has(projectId)) return false;
+    firstPublishAttemptedRef.current.add(projectId);
+    setPublicationPhase('checking');
+    try {
+      const restored = await ensurePublicationRecovered();
+      if (restored) {
+        setPublicationPhase('install');
+        return true;
+      }
+      return await publish(null);
+    } catch {
+      return false;
+    }
+  }, [ensurePublicationRecovered, projectId, publish]);
+
+  const claimFounder = async () => {
+    if (!csrfToken || !projectId || working || publishInFlightRef.current) return;
+    const requestGeneration = projectGenerationRef.current;
+    setState('creating');
+    setPublicationPhase('activating');
+    setOfferError(null);
+    try {
+      const result = await claimFounderAccess(projectId, csrfToken);
+      if (!isCurrentProject(projectId, requestGeneration)) return;
+      setSubscription(result.subscription);
+      billingValidatedProjectRef.current = projectId;
+      setFounderFeedbackProjectId(projectId);
+      setState('active');
+      await continueToFirstPublication();
+    } catch {
+      if (!isCurrentProject(projectId, requestGeneration)) return;
+      setState('idle');
+      setPublicationPhase('access');
+      setOfferError('Founder-доступ уже занят или сейчас недоступен. Выберите тариф или повторите позже.');
+    }
+  };
+
   useEffect(() => {
     if (
-      !publishAfterActivation
-      || state !== 'active'
-      || !publicationRestored
-      || publicationPending
+      state !== 'active'
+      || !projectId
+      || billingValidatedProjectRef.current !== projectId
     ) return;
-    setPublishAfterActivation(false);
-    void publish();
-  }, [
-    publicationPending,
-    publicationRestored,
-    publish,
-    publishAfterActivation,
-    state,
-  ]);
+    void continueToFirstPublication();
+  }, [continueToFirstPublication, projectId, state]);
 
   const rollbackTarget = priorReleases.at(-1) ?? null;
   const versionOrdinal = (versionId: string | null | undefined) => {
@@ -612,7 +859,14 @@ export function UpgradeGate({
   const publishedVersionOrdinal = versionOrdinal(publication?.project_version_id);
   const rollbackVersionOrdinal = versionOrdinal(rollbackTarget?.project_version_id);
   const rollback = async () => {
-    if (!csrfToken || !publication || !rollbackTarget || publicationPending) return;
+    if (
+      !csrfToken
+      || !publication
+      || !rollbackTarget
+      || publicationPending
+      || !publicationRestored
+    ) return;
+    const requestGeneration = projectGenerationRef.current;
     setPublicationPending(true);
     setPublicationError(null);
     try {
@@ -629,18 +883,21 @@ export function UpgradeGate({
             rollbackTarget.release_id,
             csrfToken,
           );
+      if (!isCurrentProject(projectId, requestGeneration)) return;
       setPriorReleases((known) => [
         ...known.filter(({ release_id }) => release_id !== rollbackTarget.release_id),
         current,
       ]);
       setPublication(restored);
     } catch (caught) {
+      if (!isCurrentProject(projectId, requestGeneration)) return;
       if (
         caught instanceof BuilderApiError
         && caught.status === 409
         && caught.code === 'publication_conflict'
       ) {
-        const reloaded = await reloadPublicationAfterConflict();
+        const reloaded = await reloadPublicationAfterConflict(requestGeneration);
+        if (!isCurrentProject(projectId, requestGeneration)) return;
         setPublicationError(reloaded
           ? 'Публикация изменилась в другой сессии. Данные обновлены — проверьте их и повторите действие.'
           : 'Публикация изменилась в другой сессии. Обновите страницу перед повтором.');
@@ -648,40 +905,30 @@ export function UpgradeGate({
         setPublicationError('Не удалось откатить публикацию. Попробуйте ещё раз.');
       }
     } finally {
-      setPublicationPending(false);
+      if (isCurrentProject(projectId, requestGeneration)) {
+        setPublicationPending(false);
+      }
     }
   };
 
   const embedSnippet = publication
     ? `<script src="${publication.embed_url}" async></script>`
     : null;
-  const heading = active
-    ? publication ? 'Виджет опубликован' : 'Всё готово к публикации'
-    : 'Подключите виджет к сайту';
-  const description = active
-    ? publication
-      ? 'Виджет опубликован. Скопируйте код установки или постоянную ссылку ниже.'
-      : 'Ничего настраивать не нужно: сайт проекта будет разрешён автоматически. После публикации появится готовый код.'
-    : 'Первая версия сохранена. Выберите бесплатный founder-пилот или подходящий тариф — условия будут показаны до перехода к оплате.';
-  const launchSteps = [
-    {
-      title: 'Доступ',
-      copy: active ? 'Подключён и готов к работе' : 'Выберите Founder-пилот или платный тариф',
-      state: active ? 'completed' : 'current',
-    },
-    {
-      title: 'Публикация',
-      copy: publication ? 'Выбранная версия уже доступна' : 'Вы сами выбираете момент запуска',
-      state: publication ? 'completed' : active ? 'current' : 'upcoming',
-    },
-    {
-      title: 'Установка',
-      copy: publication ? 'Осталось добавить код на сайт' : 'Код появится после публикации',
-      state: publication ? 'current' : 'upcoming',
-    },
-  ] as const;
+  const renewalStatus = subscription?.next_charge
+    ? `Следующее списание — ${rubles(subscription.next_charge.amount_minor)} ${subscriptionEndLabel(subscription.next_charge.at)}. Автопродление включено.`
+    : subscription?.auto_renew
+      ? `Следующее продление — ${subscriptionEndLabel(subscription.next_renewal_at ?? subscription.current_period_end)}. Автопродление включено.`
+      : `Тариф действует до ${subscriptionEndLabel(subscription?.current_period_end)}. Автопродление выключено.`;
+
+  const openSupport = () => {
+    setSupportError(null);
+    setSupportSent(false);
+    setSupportOpen(true);
+  };
 
   const copyText = async (value: string, target: Exclude<CopyTarget, null>) => {
+    const requestGeneration = projectGenerationRef.current;
+    const requestSequence = ++copyRequestSequenceRef.current;
     setCopiedTarget(null);
     setCopyError(false);
     if (!navigator.clipboard?.writeText) {
@@ -690,211 +937,224 @@ export function UpgradeGate({
     }
     try {
       await navigator.clipboard.writeText(value);
+      if (
+        !isCurrentProject(projectId, requestGeneration)
+        || copyRequestSequenceRef.current !== requestSequence
+      ) return;
       setCopiedTarget(target);
     } catch {
+      if (
+        !isCurrentProject(projectId, requestGeneration)
+        || copyRequestSequenceRef.current !== requestSequence
+      ) return;
       setCopyError(true);
     }
   };
 
   return (
     <>
-    <aside id="studio-publication" className="studio-upgrade" aria-labelledby="studio-upgrade-title">
-      {active
-        ? <CheckCircle aria-hidden size={22} weight="fill" />
-        : <Sparkle aria-hidden size={22} weight="fill" />}
-      <div>
-        <h2 id="studio-upgrade-title">{heading}</h2>
-        <p>{description}</p>
-        <ol className="studio-upgrade__launch-steps" aria-label="Путь до запуска виджета">
-          {launchSteps.map((step, index) => (
-            <li key={step.title} data-state={step.state} aria-current={step.state === 'current' ? 'step' : undefined}>
-              <span aria-hidden>{step.state === 'completed' ? <CheckCircle size={16} weight="fill" /> : index + 1}</span>
-              <div>
-                <strong>{step.title}</strong>
-                <small>{step.copy}</small>
-              </div>
-            </li>
-          ))}
-        </ol>
-        {!active && (
-          <p className="studio-upgrade__safety-note">
-            Founder-пилот не требует карты. Для платного варианта ЮKassa откроется в защищённом окне, а автопродление включится только после отдельного согласия.
-          </p>
-        )}
-        {working && (
-          <p className="studio-upgrade__status" role="status">
-            {state === 'checking'
-              ? 'Проверяем тариф…'
-              : state === 'creating'
+      {!csrfToken && (
+        <aside id="studio-publication" className="studio-upgrade" aria-labelledby="studio-upgrade-title">
+          <Sparkle aria-hidden size={22} weight="fill" />
+          <div>
+            <h2 id="studio-upgrade-title">Подключите виджет к сайту</h2>
+            <p>Войдите в аккаунт, чтобы выбрать доступ и опубликовать проверенную версию.</p>
+          </div>
+        </aside>
+      )}
+
+      {csrfToken && recoveryFailed && (
+        <aside id="studio-publication" className="studio-upgrade" aria-labelledby="studio-upgrade-title">
+          <Sparkle aria-hidden size={22} weight="fill" />
+          <div>
+            <h2 id="studio-upgrade-title">Не удалось проверить доступ</h2>
+            {error && <p className="studio-upgrade__error" role="alert">{error}</p>}
+            <button type="button" onClick={retryRecovery}>
+              <ArrowRight aria-hidden size={18} /> Повторить проверку
+            </button>
+          </div>
+        </aside>
+      )}
+
+      {csrfToken && !recoveryFailed && !active && publicationPhase === 'checking' && (
+        <section className="studio-upgrade__progress" role="status" aria-labelledby="publication-progress-title">
+          <Clock aria-hidden size={22} />
+          <div>
+            <h2 id="publication-progress-title">Проверяем доступ</h2>
+            <p>Восстанавливаем тариф и незавершённую оплату.</p>
+          </div>
+        </section>
+      )}
+
+      {csrfToken && !recoveryFailed && active && projectId && publicationPhase === 'checking' && (
+        <section className="studio-upgrade__progress" role="status" aria-labelledby="publication-progress-title">
+          <Clock aria-hidden size={22} />
+          <div>
+            <h2 id="publication-progress-title">Восстанавливаем публикацию</h2>
+            <p>Проверяем, есть ли уже опубликованная версия, прежде чем создавать новую.</p>
+          </div>
+        </section>
+      )}
+
+      {csrfToken && !recoveryFailed && !active && publicationPhase === 'access' && (
+        <div id="studio-publication" className="studio-upgrade__access-flow">
+          {offer?.founder.eligible && (
+            <p className="studio-upgrade__access-intro">
+              Founder-пилот даёт ранний доступ в обмен на честную обратную связь о работе виджета и нужных доработках.
+            </p>
+          )}
+          <PublicationAccessView
+            offer={offer ?? EMPTY_OFFER}
+            loading={offerLoading || (!offer && !offerError)}
+            busy={working}
+            error={offerError ?? error}
+            onFounder={() => void claimFounder()}
+            onCheckout={(planCode, autoRenew) => void startCheckout(planCode, autoRenew)}
+          />
+          {offerError && !offerLoading && !offer && (
+            <button type="button" onClick={retryOffer}>
+              <ArrowRight aria-hidden size={18} /> Повторить загрузку условий
+            </button>
+          )}
+          {working && (
+            <p className="studio-upgrade__status" role="status">
+              {state === 'creating'
                 ? 'Создаём безопасную платёжную ссылку…'
                 : 'Ожидаем подтверждение оплаты…'}
-          </p>
-        )}
-        {error && <p className="studio-upgrade__error" role="alert">{error}</p>}
-        {autoRenewError && (
-          <p className="studio-upgrade__error" role="alert">{autoRenewError}</p>
-        )}
-        {checkoutUrl && state !== 'active' && (
-          <a
-            className="studio-upgrade__checkout"
-            href={checkoutUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Перейти к оплате <ArrowRight aria-hidden size={18} />
-          </a>
-        )}
-        {active && (
-          <div className="studio-upgrade__publication">
-            <p className="studio-upgrade__renewal-status">
-              {subscription?.next_charge
-                ? `Следующее списание — ${rubles(subscription.next_charge.amount_minor)} ${subscriptionEndLabel(subscription.next_charge.at)}. Автопродление включено.`
-                : subscription?.auto_renew
-                  ? `Следующее продление — ${subscriptionEndLabel(subscription.next_renewal_at ?? subscription.current_period_end)}. Автопродление включено.`
-                : `Тариф действует до ${subscriptionEndLabel(subscription?.current_period_end)}. Автопродление выключено.`}
             </p>
-            {typeof subscription?.generation_tokens_remaining === 'number' && (
-              <p className="studio-upgrade__renewal-status">
-                {subscription.generation_tokens_remaining > 0
-                  ? 'Доработки доступны в рамках тарифа.'
-                  : 'Лимит доработок на тарифе исчерпан.'}
-              </p>
-            )}
-            {publicationError && <p className="studio-upgrade__error" role="alert">{publicationError}</p>}
-            {embedSnippet && publication && (
-              <>
-                <p role="status">
-                  {versionsEnabled && publishedVersionOrdinal
-                    ? `Версия ${publishedVersionOrdinal} опубликована и доступна на разрешённых сайтах.`
-                    : 'Виджет опубликован и доступен на разрешённых сайтах.'}
-                </p>
-                <section className="studio-upgrade__handoff" aria-labelledby="studio-upgrade-handoff-title">
-                  <span>Остался один шаг</span>
-                  <h3 id="studio-upgrade-handoff-title">Установите виджет на сайт</h3>
-                  <p>Скопируйте код установки или передайте код человеку, который управляет сайтом. Последующие обновления будут приходить по тому же адресу.</p>
-                  <div className="studio-upgrade__handoff-actions">
-                    <button type="button" onClick={() => void copyText(embedSnippet, 'code')}>
-                      <Copy aria-hidden size={18} weight="bold" /> Скопировать код установки
-                    </button>
-                    <button type="button" onClick={() => void copyText(publication.embed_url, 'link')}>
-                      <Copy aria-hidden size={18} weight="bold" /> Скопировать ссылку загрузчика
-                    </button>
-                  </div>
-                  <a className="studio-upgrade__install-guide" href="/install">
-                    Открыть инструкцию по установке
-                  </a>
-                  {copiedTarget === 'code' && <p className="studio-upgrade__copy-status" role="status">Код скопирован. Его можно отправить разработчику.</p>}
-                  {copiedTarget === 'link' && <p className="studio-upgrade__copy-status" role="status">Ссылка загрузчика скопирована.</p>}
-                  {copyError && (
-                    <div className="studio-upgrade__manual-copy">
-                      <p className="studio-upgrade__copy-status studio-upgrade__copy-status--error" role="alert">
-                        Не получилось скопировать автоматически. Скопируйте вручную оба значения ниже.
-                      </p>
-                      <div>
-                        <strong>Код установки</strong>
-                        <code tabIndex={0}>{embedSnippet}</code>
-                      </div>
-                      <div>
-                        <strong>Ссылка загрузчика</strong>
-                        <code tabIndex={0}>{publication.embed_url}</code>
-                      </div>
-                    </div>
-                  )}
-                </section>
-                <details className="studio-upgrade__developer">
-                  <summary>Код для разработчика</summary>
-                  <div>
-                    <p>Передайте этот код человеку, который управляет сайтом.</p>
-                    <code>{embedSnippet}</code>
-                    <dl>
-                      <div>
-                        <dt>Постоянный адрес подключения</dt>
-                        <dd>{publication.embed_url}</dd>
-                      </div>
-                      <div>
-                        <dt>Версия файла</dt>
-                        <dd>{publication.revision}</dd>
-                      </div>
-                      <div>
-                        <dt>Публикация</dt>
-                        <dd>{publication.release_id}</dd>
-                      </div>
-                      <div>
-                        <dt>Сборка</dt>
-                        <dd>{publication.artifact_id}</dd>
-                      </div>
-                    </dl>
-                  </div>
-                </details>
-              </>
+          )}
+          {checkoutUrl && (
+            <a
+              className="studio-upgrade__checkout"
+              href={checkoutUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Перейти к оплате <ArrowRight aria-hidden size={18} />
+            </a>
+          )}
+        </div>
+      )}
+
+      {csrfToken && (publicationPhase === 'activating' || publicationPhase === 'publishing') && (
+        <section className="studio-upgrade__progress" role="status" aria-labelledby="publication-progress-title">
+          <Clock aria-hidden size={22} />
+          <div>
+            <span>ПУБЛИКАЦИЯ В ОДНОМ ОКНЕ</span>
+            <h2 id="publication-progress-title">
+              {publicationPhase === 'activating'
+                ? 'Активируем доступ'
+                : 'Публикуем проверенную версию'}
+            </h2>
+            <p>
+              {publicationPhase === 'activating'
+                ? 'Подключаем выбранные условия без карты и дополнительных шагов.'
+                : 'Создаём постоянную ссылку и готовим код установки.'}
+            </p>
+          </div>
+        </section>
+      )}
+
+      {csrfToken && active && !projectId && (
+        <aside id="studio-publication" className="studio-upgrade" aria-labelledby="studio-upgrade-title">
+          <CheckCircle aria-hidden size={22} weight="fill" />
+          <div>
+            <h2 id="studio-upgrade-title">Доступ подключён</h2>
+            <p className="studio-upgrade__renewal-status">{renewalStatus}</p>
+            {autoRenewError && <p className="studio-upgrade__error" role="alert">{autoRenewError}</p>}
+            {subscription?.auto_renew && (
+              <button type="button" onClick={() => void disableAutoRenew()} disabled={autoRenewPending}>
+                {autoRenewPending ? <Clock aria-hidden size={18} /> : null}
+                Отключить автопродление
+              </button>
             )}
           </div>
-        )}
-      </div>
-      {active ? (
-        <div className="studio-upgrade__actions">
-          <button
-            type="button"
-            onClick={() => void publish()}
-            disabled={publicationPending || !publicationRestored}
-          >
-            {publicationPending ? <Clock aria-hidden size={18} /> : <ArrowRight aria-hidden size={18} />}
-            {publication ? 'Обновить публикацию' : 'Опубликовать и получить код'}
-          </button>
-          {rollbackTarget && (
-            <button type="button" onClick={() => void rollback()} disabled={publicationPending}>
-              {versionsEnabled && rollbackVersionOrdinal
-                ? `Вернуть версию ${rollbackVersionOrdinal}`
-                : 'Вернуть предыдущую публикацию'}
-            </button>
-          )}
-          {subscription?.auto_renew && (
+        </aside>
+      )}
+
+      {csrfToken && active && projectId && publicationPhase === 'publish_error' && (
+        <section
+          id="studio-publication"
+          className="studio-upgrade__publish-error"
+          aria-labelledby="publication-error-title"
+          aria-hidden={supportOpen || undefined}
+        >
+          <span>ДОСТУП УЖЕ ПОДКЛЮЧЁН</span>
+          <h2 id="publication-error-title">Доступ подключён, публикация не завершена</h2>
+          <p>Тариф сохранён. Повторная попытка не активирует доступ ещё раз и не создаст новую оплату.</p>
+          <p className="studio-upgrade__renewal-status">{renewalStatus}</p>
+          {publicationError && <p className="studio-upgrade__error" role="alert">{publicationError}</p>}
+          <div className="studio-upgrade__actions">
             <button
               type="button"
-              onClick={() => void disableAutoRenew()}
-              disabled={autoRenewPending}
+              onClick={() => void publish(publication)}
+              disabled={publicationPending || !publicationRestored}
+              aria-label={publicationRestored
+                ? undefined
+                : 'Опубликовать виджет после восстановления данных'}
             >
-              {autoRenewPending ? <Clock aria-hidden size={18} /> : null}
-              Отключить автопродление
+              {publicationPending ? <Clock aria-hidden size={18} /> : <ArrowRight aria-hidden size={18} />}
+              Повторить публикацию
             </button>
-          )}
-          <button type="button" onClick={() => {
-            setSupportError(null);
-            setSupportSent(false);
-            setSupportOpen(true);
-          }}>
-            Связаться с Kaigo
-          </button>
-        </div>
-      ) : recoveryFailed ? (
-        <button type="button" onClick={retryRecovery}>
-          <ArrowRight aria-hidden size={18} /> Повторить проверку
-        </button>
-      ) : (
-        <button
-          type="button"
-          onClick={() => void openOffer()}
-          disabled={!csrfToken || working}
-          aria-describedby="studio-upgrade-title"
-        >
-          {working ? <Clock aria-hidden size={18} /> : <ArrowRight aria-hidden size={18} />}
-          {state === 'checking' ? 'Проверяем доступ' : working ? 'Проверяем оплату' : 'Выбрать условия публикации'}
-        </button>
+            <button type="button" onClick={openSupport}>
+              Нужна помощь? Связаться с Kaigo
+            </button>
+            {subscription?.auto_renew && (
+              <button type="button" onClick={() => void disableAutoRenew()} disabled={autoRenewPending}>
+                {autoRenewPending ? <Clock aria-hidden size={18} /> : null}
+                Отключить автопродление
+              </button>
+            )}
+          </div>
+        </section>
       )}
-    </aside>
-    {offerOpen && (
-      <PublicationAccessView
-        offer={offer ?? EMPTY_OFFER}
-        loading={offerLoading}
-        busy={working}
-        error={offerError}
-        onFounder={() => void claimFounder()}
-        onCheckout={(planCode, autoRenew) => void startCheckout(planCode, autoRenew)}
-      />
-    )}
+
+      {csrfToken && active && publication && publicationPhase === 'install' && embedSnippet && (
+        <div id="studio-publication" aria-hidden={supportOpen || undefined}>
+          {publicationError && <p className="studio-upgrade__error" role="alert">{publicationError}</p>}
+          <PublicationInstallView
+            publication={publication}
+            versionOrdinal={versionsEnabled ? publishedVersionOrdinal : undefined}
+            subscription={subscription}
+            copiedTarget={copiedTarget}
+            copyError={copyError}
+            onCopyCode={() => void copyText(embedSnippet, 'code')}
+            onCopyLink={() => void copyText(publication.embed_url, 'link')}
+          />
+          <div className="studio-upgrade__actions">
+            <button
+              type="button"
+              onClick={() => void publish(publication)}
+              disabled={publicationPending || !publicationRestored}
+            >
+              {publicationPending ? <Clock aria-hidden size={18} /> : <ArrowRight aria-hidden size={18} />}
+              Обновить публикацию
+            </button>
+            {rollbackTarget && (
+              <button
+                type="button"
+                onClick={() => void rollback()}
+                disabled={publicationPending || !publicationRestored}
+              >
+                {versionsEnabled && rollbackVersionOrdinal
+                  ? `Вернуть версию ${rollbackVersionOrdinal}`
+                  : 'Вернуть предыдущую публикацию'}
+              </button>
+            )}
+            {subscription?.auto_renew && (
+              <button type="button" onClick={() => void disableAutoRenew()} disabled={autoRenewPending}>
+                {autoRenewPending ? <Clock aria-hidden size={18} /> : null}
+                Отключить автопродление
+              </button>
+            )}
+            <button type="button" onClick={openSupport}>Связаться с Kaigo</button>
+          </div>
+        </div>
+      )}
+
     <SupportDialog
       open={supportOpen}
-      founder={subscription?.access_kind === 'founder'}
+      founder={founderFeedback}
       busy={supportPending}
       error={supportError}
       sent={supportSent}
