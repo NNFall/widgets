@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import io
 import os
 import re
+import subprocess
+import sys
+import tarfile
 from ipaddress import IPv4Address, IPv4Network, ip_address, ip_network
 from pathlib import Path
 from textwrap import dedent
@@ -54,6 +59,91 @@ def _bash_block_containing(document: str, marker: str) -> str:
     content_start = block_start + len("```bash")
     block_end = document.index("```", marker_index)
     return dedent(document[content_start:block_end]).strip()
+
+
+def _publication_contract_gate_script(runbook: str) -> str:
+    marker = 'cat > "$PUBLICATION_CONTRACT_GATE" <<\'PY\'\n'
+    start = runbook.index(marker) + len(marker)
+    end = runbook.index("\nPY\n", start)
+    return runbook[start:end]
+
+
+def _write_publication_static_archive(
+    releases_root: Path,
+    release_sha: str,
+    *,
+    marker_sha: str,
+) -> Path:
+    archive_path = releases_root / f"kaigo-marketing-{release_sha}.tar.gz"
+    files = {
+        ".kaigo-release-sha": f"{marker_sha}\n".encode(),
+        "index.html": b"<!doctype html><title>Kaigo</title>",
+        "assets/app-12345678.js": b"console.log('fixture')",
+    }
+    with tarfile.open(archive_path, "w:gz") as archive:
+        for name, content in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            archive.addfile(info, fileobj=io.BytesIO(content))
+    return archive_path
+
+
+def _run_publication_contract_gate(
+    runbook: str,
+    tmp_path: Path,
+    *,
+    overrides: dict[str, str] | None = None,
+    marker_sha: str | None = None,
+) -> tuple[subprocess.CompletedProcess[str], Path, str]:
+    release_sha = "1" * 40
+    image = f"sha256:{'a' * 64}"
+    releases_root = tmp_path / "releases"
+    releases_root.mkdir()
+    archive_path = _write_publication_static_archive(
+        releases_root,
+        release_sha,
+        marker_sha=marker_sha or release_sha,
+    )
+    archive_digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+    activation_sentinel = tmp_path / "activated.txt"
+    activation_script = tmp_path / "activate.py"
+    activation_script.write_text(
+        "from pathlib import Path\n"
+        "import os, sys\n"
+        "Path(os.environ['KAIGO_TEST_ACTIVATION_SENTINEL']).write_text("
+        "sys.argv[1], encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    secret = "fixture-secret-must-never-be-printed"
+    environment = {
+        **os.environ,
+        "KAIGO_APP_IMAGE": image,
+        "KAIGO_RELEASE_ID": release_sha,
+        "KAIGO_MARKETING_RELEASE_SHA": release_sha,
+        "KAIGO_MARKETING_ARCHIVE": str(archive_path),
+        "KAIGO_MARKETING_ARCHIVE_SHA256": archive_digest,
+        "KAIGO_MARKETING_RELEASES_ROOT": str(releases_root),
+        "KAIGO_MARKETING_DEPLOY_INTERPRETER": sys.executable,
+        "KAIGO_MARKETING_DEPLOY_SCRIPT": str(activation_script),
+        "PUBLICATION_CONTRACT_COMPOSE_PROJECT": "ai_project",
+        "PUBLICATION_CONTRACT_APP_CONFIG_IMAGE": image,
+        "PUBLICATION_CONTRACT_MIGRATION_CONFIG_IMAGE": image,
+        "PUBLICATION_CONTRACT_SELECTED_APP_IMAGE_ID": image,
+        "PUBLICATION_CONTRACT_LIVE_APP_IMAGE_ID": image,
+        "PUBLICATION_CONTRACT_LIVE_APP_SHA": release_sha,
+        "KAIGO_TEST_ACTIVATION_SENTINEL": str(activation_sentinel),
+        "KAIGO_TEST_SECRET": secret,
+    }
+    environment.update(overrides or {})
+    result = subprocess.run(
+        [sys.executable, "-c", _publication_contract_gate_script(runbook)],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result, activation_sentinel, secret
 
 
 def _worker_db_policy_allows(
@@ -1415,37 +1505,130 @@ def test_publication_contract_release_builds_runtime_and_static_from_one_full_sh
     assert 'set -x' not in build
 
 
-def test_publication_contract_static_activation_fails_closed_on_release_mismatch() -> (
-    None
-):
+def test_publication_contract_gate_collects_only_narrow_release_identity() -> None:
     runbook = (ROOT / "docs" / "SAAS_PRODUCTION_RUNBOOK.md").read_text(
         encoding="utf-8"
     )
-    gate = _bash_block_containing(runbook, "PUBLICATION_CONTRACT_STATIC_SHA=")
+    gate = _bash_block_containing(runbook, "PUBLICATION_CONTRACT_GATE=")
 
     assert gate.startswith("set -euo pipefail\nset +x\n")
-    assert '[[ "$KAIGO_RELEASE_ID" =~ ^[0-9a-f]{40}$ ]]' in gate
-    assert '[[ "$KAIGO_MARKETING_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]' in gate
-    assert '[[ "$PUBLICATION_CONTRACT_LIVE_APP_SHA" =~ ^[0-9a-f]{40}$ ]]' in gate
-    assert '[[ "$PUBLICATION_CONTRACT_STATIC_SHA" =~ ^[0-9a-f]{40}$ ]]' in gate
-    assert 'test "$PUBLICATION_CONTRACT_LIVE_APP_SHA" = "$KAIGO_RELEASE_ID"' in gate
-    assert 'test "$PUBLICATION_CONTRACT_STATIC_SHA" = "$KAIGO_RELEASE_ID"' in gate
-    assert (
-        'test "$PUBLICATION_CONTRACT_LIVE_APP_SHA" = '
-        '"$PUBLICATION_CONTRACT_STATIC_SHA"'
-    ) in gate
-    assert 'test "$APP_CONFIG_IMAGE" = "$KAIGO_APP_IMAGE"' in gate
-    assert 'test "$MIGRATION_CONFIG_IMAGE" = "$KAIGO_APP_IMAGE"' in gate
-    activate = (
-        'KAIGO_MARKETING_SKIP_BUILD=1 '
-        './scripts/deploy_marketing_site.sh "$PUBLICATION_CONTRACT_STATIC_SHA"'
-    )
-    assert activate in gate
-    assert gate.index('test "$PUBLICATION_CONTRACT_STATIC_SHA" = "$KAIGO_RELEASE_ID"') < (
-        gate.index(activate)
-    )
-    for unsafe_output in ("printenv", "set -x", "cat /etc/kaigo", "docker inspect $APP_CONTAINER"):
+    assert "PUBLICATION_CONTRACT_COMPOSE_PROJECT=ai_project" in gate
+    compose_lines = [line for line in gate.splitlines() if "docker compose" in line]
+    assert compose_lines
+    assert all(PRODUCTION_COMPOSE in line for line in compose_lines)
+    assert "PUBLICATION_CONTRACT_APP_CONFIG_IMAGE=" in gate
+    assert "PUBLICATION_CONTRACT_MIGRATION_CONFIG_IMAGE=" in gate
+    assert "PUBLICATION_CONTRACT_SELECTED_APP_IMAGE_ID=" in gate
+    assert "PUBLICATION_CONTRACT_LIVE_APP_IMAGE_ID=" in gate
+    assert "PUBLICATION_CONTRACT_LIVE_APP_SHA=" in gate
+    assert 'python "$PUBLICATION_CONTRACT_GATE"' in gate
+    for unsafe_output in (
+        "printenv",
+        "set -x",
+        "cat /etc/kaigo",
+        "docker inspect $APP_CONTAINER",
+        "|| true",
+    ):
         assert unsafe_output not in gate
+    assert re.search(
+        r"(?m)^(?:echo|printf|env|export -p|declare -p|typeset -p)\b",
+        gate,
+    ) is None
+
+
+def test_publication_contract_gate_activates_only_a_matching_release(
+    tmp_path: Path,
+) -> None:
+    runbook = (ROOT / "docs" / "SAAS_PRODUCTION_RUNBOOK.md").read_text(
+        encoding="utf-8"
+    )
+
+    result, activation_sentinel, secret = _run_publication_contract_gate(
+        runbook,
+        tmp_path,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert activation_sentinel.read_text(encoding="utf-8") == "1" * 40
+    assert secret not in result.stdout
+    assert secret not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("overrides", "marker_sha"),
+    [
+        ({"KAIGO_RELEASE_ID": "not-a-full-sha"}, None),
+        ({"KAIGO_MARKETING_RELEASE_SHA": "2" * 40}, None),
+        ({"PUBLICATION_CONTRACT_LIVE_APP_SHA": "2" * 40}, None),
+        ({"PUBLICATION_CONTRACT_COMPOSE_PROJECT": "kaigo"}, None),
+        (
+            {"PUBLICATION_CONTRACT_APP_CONFIG_IMAGE": f"sha256:{'b' * 64}"},
+            None,
+        ),
+        (
+            {"PUBLICATION_CONTRACT_MIGRATION_CONFIG_IMAGE": f"sha256:{'b' * 64}"},
+            None,
+        ),
+        (
+            {"PUBLICATION_CONTRACT_LIVE_APP_IMAGE_ID": f"sha256:{'b' * 64}"},
+            None,
+        ),
+        ({"KAIGO_MARKETING_ARCHIVE_SHA256": "0" * 64}, None),
+        ({}, "2" * 40),
+    ],
+    ids=(
+        "invalid-full-sha",
+        "selected-release-mismatch",
+        "live-app-mismatch",
+        "wrong-compose-project",
+        "app-config-image-mismatch",
+        "app-migration-image-mismatch",
+        "live-app-image-id-mismatch",
+        "archive-digest-mismatch",
+        "archive-marker-mismatch",
+    ),
+)
+def test_publication_contract_gate_rejects_mismatch_without_activation_or_secret_output(
+    tmp_path: Path,
+    overrides: dict[str, str],
+    marker_sha: str | None,
+) -> None:
+    runbook = (ROOT / "docs" / "SAAS_PRODUCTION_RUNBOOK.md").read_text(
+        encoding="utf-8"
+    )
+
+    result, activation_sentinel, secret = _run_publication_contract_gate(
+        runbook,
+        tmp_path,
+        overrides=overrides,
+        marker_sha=marker_sha,
+    )
+
+    assert result.returncode != 0
+    assert not activation_sentinel.exists()
+    assert secret not in result.stdout
+    assert secret not in result.stderr
+
+
+def test_rollback_snapshot_captures_validated_marketing_release_target() -> None:
+    runbook = (ROOT / "docs" / "SAAS_PRODUCTION_RUNBOOK.md").read_text(
+        encoding="utf-8"
+    )
+    snapshot = _bash_block_containing(
+        runbook,
+        "ROLLBACK_MARKETING_RELEASE_DIR=",
+    )
+
+    assert 'ROLLBACK_MARKETING_CURRENT_LINK="/var/www/kaigo-marketing/current"' in snapshot
+    assert 'test -L "$ROLLBACK_MARKETING_CURRENT_LINK"' in snapshot
+    assert 'readlink -f -- "$ROLLBACK_MARKETING_CURRENT_LINK"' in snapshot
+    assert (
+        'test "$ROLLBACK_MARKETING_RELEASE_DIR" = '
+        '"/var/www/kaigo-marketing/releases/$ROLLBACK_MARKETING_RELEASE_ID"'
+    ) in snapshot
+    assert 'test -d "$ROLLBACK_MARKETING_RELEASE_DIR"' in snapshot
+    assert '"KAIGO_ROLLBACK_MARKETING_RELEASE_ID=$ROLLBACK_MARKETING_RELEASE_ID"' in snapshot
+    assert '"KAIGO_ROLLBACK_MARKETING_RELEASE_DIR=$ROLLBACK_MARKETING_RELEASE_DIR"' in snapshot
 
 
 def test_rollback_resolves_schema_and_routes_before_starting_worker() -> None:
@@ -1463,6 +1646,13 @@ def test_rollback_resolves_schema_and_routes_before_starting_worker() -> None:
         '"$KAIGO_ROLLBACK_MIGRATION_IMAGE" python scripts/preflight_saas_schema.py'
     )
     app_start = rollback.index(f"{PRODUCTION_COMPOSE} up -d --no-build app")
+    marketing_switch = rollback.index("ROLLBACK_MARKETING_NEXT_LINK=")
+    marketing_activate = rollback.index(
+        'mv -Tf -- "$ROLLBACK_MARKETING_NEXT_LINK" '
+        '"/var/www/kaigo-marketing/current"'
+    )
+    nginx_check = rollback.index("nginx -t", marketing_activate)
+    nginx_reload = rollback.index("systemctl reload nginx", nginx_check)
     app_route_check = rollback.index("curl -fsS http://127.0.0.1:8080/api/health")
     edge_route_check = rollback.index("curl -fsS https://kaigo.space/studio/")
     worker_start = rollback.index("systemctl restart kaigo-builder-worker")
@@ -1479,6 +1669,10 @@ def test_rollback_resolves_schema_and_routes_before_starting_worker() -> None:
         < downgrade
         < final_preflight
         < app_start
+        < marketing_switch
+        < marketing_activate
+        < nginx_check
+        < nginx_reload
         < app_route_check
         < edge_route_check
         < worker_start
@@ -1528,8 +1722,14 @@ def test_rollback_requires_complete_tuple_and_installs_root_only_envs_atomically
         "KAIGO_BUILDER_WORKER_BOOT_ID",
         "KAIGO_PREVIOUS_ALEMBIC_REVISION",
         "KAIGO_ROLLBACK_MIGRATION_IMAGE",
+        "KAIGO_ROLLBACK_MARKETING_RELEASE_ID",
+        "KAIGO_ROLLBACK_MARKETING_RELEASE_DIR",
     ):
         assert f': "${{{name}:?' in rollback
+    assert (
+        'test "$KAIGO_ROLLBACK_MARKETING_RELEASE_DIR" = '
+        '"/var/www/kaigo-marketing/releases/$KAIGO_ROLLBACK_MARKETING_RELEASE_ID"'
+    ) in rollback
     assert "release.env.tmp" in rollback
     assert "builder-worker-image.env.tmp" in rollback
     assert rollback.count("chmod 600") >= 2

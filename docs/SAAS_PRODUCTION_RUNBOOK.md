@@ -232,9 +232,10 @@ is performed by this repository task.
 5. Before any runtime switch, atomically capture the complete prior release
    identity. The rollback tuple contains the images actually running now, the
    prior app release and worker-image identities, the exact current Alembic
-   revision, a fresh boot ID reserved for a rollback worker, and the selected
-   current release image that is trusted to run rollback migrations. The
-   snapshot is renamed only after every required value and image is verified:
+   revision, the validated current marketing symlink target, a fresh boot ID
+   reserved for a rollback worker, and the selected current release image that
+   is trusted to run rollback migrations. The snapshot is renamed only after
+   every required value, image, and static directory is verified:
 
    ```bash
    set -euo pipefail
@@ -248,6 +249,13 @@ is performed by this repository task.
    WORKER_CONTAINER="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml --profile saas-worker ps -q builder-worker)"
    test -n "$APP_CONTAINER"
    test -n "$WORKER_CONTAINER"
+   ROLLBACK_MARKETING_CURRENT_LINK="/var/www/kaigo-marketing/current"
+   test -L "$ROLLBACK_MARKETING_CURRENT_LINK"
+   ROLLBACK_MARKETING_RELEASE_DIR="$(readlink -f -- "$ROLLBACK_MARKETING_CURRENT_LINK")"
+   test -d "$ROLLBACK_MARKETING_RELEASE_DIR"
+   ROLLBACK_MARKETING_RELEASE_ID="$(basename -- "$ROLLBACK_MARKETING_RELEASE_DIR")"
+   [[ "$ROLLBACK_MARKETING_RELEASE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]
+   test "$ROLLBACK_MARKETING_RELEASE_DIR" = "/var/www/kaigo-marketing/releases/$ROLLBACK_MARKETING_RELEASE_ID"
    ROLLBACK_APP_IMAGE="$(docker inspect --format '{{.Image}}' "$APP_CONTAINER")"
    ROLLBACK_WORKER_IMAGE="$(docker inspect --format '{{.Image}}' "$WORKER_CONTAINER")"
    ROLLBACK_RELEASE_ID="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$APP_CONTAINER" | sed -n 's/^KAIGO_RELEASE_ID=//p')"
@@ -275,6 +283,8 @@ is performed by this repository task.
      "KAIGO_BUILDER_WORKER_BOOT_ID=$ROLLBACK_WORKER_BOOT_ID" \
      "KAIGO_PREVIOUS_ALEMBIC_REVISION=$ROLLBACK_PREVIOUS_ALEMBIC_REVISION" \
      "KAIGO_ROLLBACK_MIGRATION_IMAGE=$ROLLBACK_MIGRATION_IMAGE" \
+     "KAIGO_ROLLBACK_MARKETING_RELEASE_ID=$ROLLBACK_MARKETING_RELEASE_ID" \
+     "KAIGO_ROLLBACK_MARKETING_RELEASE_DIR=$ROLLBACK_MARKETING_RELEASE_DIR" \
      "KAIGO_DATABASE_OPS_IMAGE=$KAIGO_DATABASE_OPS_IMAGE" \
      > "$ROLLBACK_TMP"
    chmod 600 "$ROLLBACK_TMP"
@@ -337,42 +347,172 @@ umask 077
 set -a
 . /etc/kaigo/release.env
 set +a
-: "${KAIGO_APP_IMAGE:?selected app/migration image is required}"
-: "${KAIGO_RELEASE_ID:?selected app release SHA is required}"
-: "${KAIGO_MARKETING_RELEASE_SHA:?selected static release SHA is required}"
-: "${KAIGO_MARKETING_ARCHIVE:?selected static archive is required}"
-: "${KAIGO_MARKETING_ARCHIVE_SHA256:?selected static archive digest is required}"
-[[ "$KAIGO_RELEASE_ID" =~ ^[0-9a-f]{40}$ ]]
-[[ "$KAIGO_MARKETING_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
-[[ "$KAIGO_MARKETING_ARCHIVE" =~ ^/srv/kaigo/releases/kaigo-marketing-[0-9a-f]{40}\.tar\.gz$ ]]
-[[ "$KAIGO_MARKETING_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
-test "$KAIGO_MARKETING_RELEASE_SHA" = "$KAIGO_RELEASE_ID"
-PUBLICATION_CONTRACT_ARCHIVE_SHA256="$(sha256sum "$KAIGO_MARKETING_ARCHIVE" | awk '{print $1}')"
-test "$PUBLICATION_CONTRACT_ARCHIVE_SHA256" = "$KAIGO_MARKETING_ARCHIVE_SHA256"
-APP_CONFIG_IMAGE="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml config --format json | jq -er '.services.app.image')"
-MIGRATION_CONFIG_IMAGE="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml config --format json | jq -er '.services.migration.image')"
-test "$APP_CONFIG_IMAGE" = "$KAIGO_APP_IMAGE"
-test "$MIGRATION_CONFIG_IMAGE" = "$KAIGO_APP_IMAGE"
+PUBLICATION_CONTRACT_COMPOSE_PROJECT=ai_project
+PUBLICATION_CONTRACT_APP_CONFIG_IMAGE="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml config --format json | jq -er '.services.app.image')"
+PUBLICATION_CONTRACT_MIGRATION_CONFIG_IMAGE="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml config --format json | jq -er '.services.migration.image')"
+PUBLICATION_CONTRACT_SELECTED_APP_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$KAIGO_APP_IMAGE")"
 APP_CONTAINER="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml ps -q app)"
 test -n "$APP_CONTAINER"
-test "$(docker inspect --format '{{.Image}}' "$APP_CONTAINER")" = \
-  "$(docker image inspect --format '{{.Id}}' "$KAIGO_APP_IMAGE")"
+PUBLICATION_CONTRACT_LIVE_APP_IMAGE_ID="$(docker inspect --format '{{.Image}}' "$APP_CONTAINER")"
 PUBLICATION_CONTRACT_LIVE_APP_SHA="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$APP_CONTAINER" | sed -n 's/^KAIGO_RELEASE_ID=//p')"
-PUBLICATION_CONTRACT_STATIC_SHA="$(tar -xOf "$KAIGO_MARKETING_ARCHIVE" ./.kaigo-release-sha)"
-[[ "$PUBLICATION_CONTRACT_LIVE_APP_SHA" =~ ^[0-9a-f]{40}$ ]]
-[[ "$PUBLICATION_CONTRACT_STATIC_SHA" =~ ^[0-9a-f]{40}$ ]]
-test "$PUBLICATION_CONTRACT_LIVE_APP_SHA" = "$KAIGO_RELEASE_ID"
-test "$PUBLICATION_CONTRACT_STATIC_SHA" = "$KAIGO_MARKETING_RELEASE_SHA"
-test "$PUBLICATION_CONTRACT_STATIC_SHA" = "$KAIGO_RELEASE_ID"
-test "$PUBLICATION_CONTRACT_LIVE_APP_SHA" = "$PUBLICATION_CONTRACT_STATIC_SHA"
-PUBLICATION_CONTRACT_STATIC_DIR="$(mktemp -d /srv/kaigo/releases/.kaigo-marketing-deploy.XXXXXX)"
-trap 'rm -rf -- "$PUBLICATION_CONTRACT_STATIC_DIR"' EXIT
-tar --extract --gzip --file "$KAIGO_MARKETING_ARCHIVE" \
-  --directory "$PUBLICATION_CONTRACT_STATIC_DIR" --no-same-owner --no-same-permissions
-test -f "$PUBLICATION_CONTRACT_STATIC_DIR/index.html"
-test -d "$PUBLICATION_CONTRACT_STATIC_DIR/assets"
-KAIGO_MARKETING_DIST_DIR="$PUBLICATION_CONTRACT_STATIC_DIR" KAIGO_MARKETING_SKIP_BUILD=1 ./scripts/deploy_marketing_site.sh "$PUBLICATION_CONTRACT_STATIC_SHA"
-rm -rf -- "$PUBLICATION_CONTRACT_STATIC_DIR"
+KAIGO_MARKETING_RELEASES_ROOT=/srv/kaigo/releases
+KAIGO_MARKETING_DEPLOY_INTERPRETER=/bin/bash
+KAIGO_MARKETING_DEPLOY_SCRIPT=/opt/kaigo/current/scripts/deploy_marketing_site.sh
+export PUBLICATION_CONTRACT_COMPOSE_PROJECT
+export PUBLICATION_CONTRACT_APP_CONFIG_IMAGE
+export PUBLICATION_CONTRACT_MIGRATION_CONFIG_IMAGE
+export PUBLICATION_CONTRACT_SELECTED_APP_IMAGE_ID
+export PUBLICATION_CONTRACT_LIVE_APP_IMAGE_ID
+export PUBLICATION_CONTRACT_LIVE_APP_SHA
+export KAIGO_MARKETING_RELEASES_ROOT
+export KAIGO_MARKETING_DEPLOY_INTERPRETER
+export KAIGO_MARKETING_DEPLOY_SCRIPT
+PUBLICATION_CONTRACT_GATE="$(mktemp /run/kaigo-publication-contract-gate.XXXXXX.py)"
+trap 'rm -f -- "$PUBLICATION_CONTRACT_GATE"' EXIT
+cat > "$PUBLICATION_CONTRACT_GATE" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+from pathlib import Path, PurePosixPath
+
+
+FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
+DIGEST = re.compile(r"^[0-9a-f]{64}$")
+IMAGE = re.compile(r"^(?:[^\s]+@sha256:|sha256:)[0-9a-fA-F]{64}$")
+IMAGE_ID = re.compile(r"^sha256:[0-9a-fA-F]{64}$")
+
+
+def reject() -> None:
+    print("publication release identity gate failed", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def required(name: str) -> str:
+    value = os.environ.get(name, "")
+    if not value:
+        reject()
+    return value
+
+
+staging: Path | None = None
+try:
+    app_image = required("KAIGO_APP_IMAGE")
+    release_sha = required("KAIGO_RELEASE_ID")
+    static_sha = required("KAIGO_MARKETING_RELEASE_SHA")
+    archive_digest = required("KAIGO_MARKETING_ARCHIVE_SHA256")
+    compose_project = required("PUBLICATION_CONTRACT_COMPOSE_PROJECT")
+    app_config_image = required("PUBLICATION_CONTRACT_APP_CONFIG_IMAGE")
+    migration_config_image = required("PUBLICATION_CONTRACT_MIGRATION_CONFIG_IMAGE")
+    selected_app_image_id = required("PUBLICATION_CONTRACT_SELECTED_APP_IMAGE_ID")
+    live_app_image_id = required("PUBLICATION_CONTRACT_LIVE_APP_IMAGE_ID")
+    live_app_sha = required("PUBLICATION_CONTRACT_LIVE_APP_SHA")
+    releases_root = Path(required("KAIGO_MARKETING_RELEASES_ROOT")).resolve()
+    archive_path = Path(required("KAIGO_MARKETING_ARCHIVE")).resolve()
+    deploy_interpreter = Path(required("KAIGO_MARKETING_DEPLOY_INTERPRETER"))
+    deploy_script = Path(required("KAIGO_MARKETING_DEPLOY_SCRIPT"))
+
+    if (
+        compose_project != "ai_project"
+        or not IMAGE.fullmatch(app_image)
+        or not FULL_SHA.fullmatch(release_sha)
+        or not FULL_SHA.fullmatch(static_sha)
+        or not DIGEST.fullmatch(archive_digest)
+        or not IMAGE_ID.fullmatch(selected_app_image_id)
+        or not IMAGE_ID.fullmatch(live_app_image_id)
+        or not FULL_SHA.fullmatch(live_app_sha)
+        or app_config_image != app_image
+        or migration_config_image != app_image
+        or selected_app_image_id != live_app_image_id
+        or release_sha != static_sha
+        or release_sha != live_app_sha
+        or not deploy_interpreter.is_file()
+        or not deploy_script.is_file()
+    ):
+        reject()
+    if (
+        archive_path.parent != releases_root
+        or archive_path.name != f"kaigo-marketing-{release_sha}.tar.gz"
+        or not archive_path.is_file()
+    ):
+        reject()
+
+    digest = hashlib.sha256()
+    with archive_path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != archive_digest:
+        reject()
+
+    with tarfile.open(archive_path, "r:gz") as archive:
+        members: dict[str, tarfile.TarInfo] = {}
+        total_size = 0
+        for member in archive.getmembers():
+            path = PurePosixPath(member.name)
+            parts = tuple(part for part in path.parts if part not in ("", "."))
+            if path.is_absolute() or not parts or ".." in parts:
+                reject()
+            name = "/".join(parts)
+            if name in members or not (member.isfile() or member.isdir()):
+                reject()
+            total_size += member.size
+            if len(members) >= 10_000 or total_size > 512 * 1024 * 1024:
+                reject()
+            members[name] = member
+
+        marker_member = members.get(".kaigo-release-sha")
+        marker_stream = archive.extractfile(marker_member) if marker_member else None
+        if marker_member is None or not marker_member.isfile() or marker_stream is None:
+            reject()
+        marker = marker_stream.read(128).decode("ascii", errors="strict").strip()
+        if marker != release_sha or not FULL_SHA.fullmatch(marker):
+            reject()
+        if "index.html" not in members or not any(
+            name.startswith("assets/") for name in members
+        ):
+            reject()
+
+        staging = Path(
+            tempfile.mkdtemp(prefix=".kaigo-marketing-deploy.", dir=releases_root)
+        )
+        for name, member in members.items():
+            target = staging / name
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            source = archive.extractfile(member)
+            if source is None:
+                reject()
+            with source, target.open("wb") as destination:
+                shutil.copyfileobj(source, destination)
+
+    if not (staging / "index.html").is_file() or not (staging / "assets").is_dir():
+        reject()
+    deploy_environment = os.environ.copy()
+    deploy_environment["KAIGO_MARKETING_DIST_DIR"] = str(staging)
+    deploy_environment["KAIGO_MARKETING_SKIP_BUILD"] = "1"
+    subprocess.run(
+        [str(deploy_interpreter), str(deploy_script), release_sha],
+        env=deploy_environment,
+        check=True,
+    )
+except SystemExit:
+    raise
+except Exception:
+    reject()
+finally:
+    if staging is not None:
+        shutil.rmtree(staging, ignore_errors=True)
+PY
+python "$PUBLICATION_CONTRACT_GATE"
+rm -f -- "$PUBLICATION_CONTRACT_GATE"
 trap - EXIT
 ```
 
@@ -704,6 +844,8 @@ set +a
 : "${KAIGO_BUILDER_WORKER_BOOT_ID:?fresh rollback boot ID is missing}"
 : "${KAIGO_PREVIOUS_ALEMBIC_REVISION:?previous Alembic revision is missing}"
 : "${KAIGO_ROLLBACK_MIGRATION_IMAGE:?trusted rollback migration image is missing}"
+: "${KAIGO_ROLLBACK_MARKETING_RELEASE_ID:?rollback marketing release ID is missing}"
+: "${KAIGO_ROLLBACK_MARKETING_RELEASE_DIR:?rollback marketing release directory is missing}"
 : "${KAIGO_DATABASE_OPS_IMAGE:?database ops image is missing}"
 [[ "$KAIGO_APP_IMAGE" =~ ^(.+@sha256:|sha256:)[0-9a-fA-F]{64}$ ]]
 [[ "$KAIGO_BUILDER_WORKER_IMAGE" =~ ^(.+@sha256:|sha256:)[0-9a-fA-F]{64}$ ]]
@@ -713,6 +855,9 @@ set +a
 [[ "$KAIGO_RELEASE_ID" =~ ^[A-Za-z0-9._:-]+$ ]]
 [[ "$KAIGO_BUILDER_WORKER_BOOT_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
 [[ "$KAIGO_PREVIOUS_ALEMBIC_REVISION" =~ ^[0-9a-z_]+$ ]]
+[[ "$KAIGO_ROLLBACK_MARKETING_RELEASE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]
+test "$KAIGO_ROLLBACK_MARKETING_RELEASE_DIR" = "/var/www/kaigo-marketing/releases/$KAIGO_ROLLBACK_MARKETING_RELEASE_ID"
+test -d "$KAIGO_ROLLBACK_MARKETING_RELEASE_DIR"
 if [[ "$KAIGO_APP_IMAGE" == *@sha256:* && "$KAIGO_BUILDER_WORKER_IMAGE" == *@sha256:* ]]; then
   COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml pull app builder-worker
 else
@@ -772,15 +917,24 @@ started:
 docker run --rm --network kaigo_app_db --env-file .env "$KAIGO_ROLLBACK_MIGRATION_IMAGE" python scripts/preflight_saas_schema.py
 ```
 
-Start and verify only the application, then validate nginx and the critical
-application/public routes. `/api/ready` is intentionally not used here because
-the worker must remain stopped until all schema and route decisions are complete:
+Start and verify only the application, restore the captured marketing release
+with an atomic symlink replacement, then validate nginx and the critical
+application/public routes. This prevents a later worker or smoke failure from
+leaving the rolled-back app behind the newer publication UI. `/api/ready` is
+intentionally not used here because the worker must remain stopped until all
+schema and route decisions are complete:
 
 ```bash
 COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml up -d --no-build app
 APP_CONTAINER="$(COMPOSE_PROJECT_NAME=ai_project docker compose --file /opt/kaigo/current/docker-compose.yml --file /etc/kaigo/docker-compose.pattern-selection.yml ps -q app)"
 test "$(docker inspect --format '{{.Image}}' "$APP_CONTAINER")" = \
   "$(docker image inspect --format '{{.Id}}' "$KAIGO_APP_IMAGE")"
+ROLLBACK_MARKETING_NEXT_LINK="/var/www/kaigo-marketing/.current.rollback.$$"
+trap 'rm -f -- "$ROLLBACK_MARKETING_NEXT_LINK"' EXIT
+test ! -e "$ROLLBACK_MARKETING_NEXT_LINK"
+ln -s -- "$KAIGO_ROLLBACK_MARKETING_RELEASE_DIR" "$ROLLBACK_MARKETING_NEXT_LINK"
+mv -Tf -- "$ROLLBACK_MARKETING_NEXT_LINK" "/var/www/kaigo-marketing/current"
+trap - EXIT
 nginx -t
 systemctl reload nginx
 curl -fsS http://127.0.0.1:8080/api/health
