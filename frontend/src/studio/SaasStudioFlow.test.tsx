@@ -1487,10 +1487,10 @@ describe('durable SaaS Studio flow', () => {
     expect(screen.queryByText('Точная историческая концепция')).not.toBeInTheDocument();
     expect(requests.some(({ url }) => url === '/api/artifacts/artifact-version-1')).toBe(true);
     await user.click(screen.getByRole('button', { name: 'Открыть публикацию' }));
-    const domains = await screen.findByLabelText('На каких сайтах разрешить виджет');
-    await user.clear(domains);
-    await user.type(domains, 'https://example.com');
-    const publishButton = await screen.findByRole('button', { name: 'Опубликовать виджет' });
+    expect(screen.queryByLabelText('На каких сайтах разрешить виджет')).not.toBeInTheDocument();
+    const publishButton = await screen.findByRole('button', {
+      name: 'Опубликовать и получить код',
+    });
     await waitFor(() => expect(publishButton).toBeEnabled());
     await user.click(publishButton);
 
@@ -1503,7 +1503,6 @@ describe('durable SaaS Studio flow', () => {
     expect(JSON.parse(String(publish.init?.body))).toEqual({
       project_version_id: 'version-1',
       expected_active_release_id: null,
-      allowed_domains: ['https://example.com'],
     });
     expect(requests.some(({ url }) => url.endsWith('/versions/version-1/restore'))).toBe(false);
   });
