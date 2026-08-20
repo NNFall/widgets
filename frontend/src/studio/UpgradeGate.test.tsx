@@ -153,21 +153,24 @@ function expectManualCopyValueVisible(value: string) {
 }
 
 async function chooseMonthlyPlan() {
-  fireEvent.click(screen.getByRole('button', { name: /выбрать условия публикации/i }));
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-  fireEvent.click(screen.getByRole('button', { name: /выбрать месяц/i }));
+  await openPublicationOffer();
+  const monthlyPlan = screen.getByRole('button', { name: /выбрать месяц/i });
+  fireEvent.click(monthlyPlan);
   await act(async () => Promise.resolve());
 }
 
 async function openPublicationOffer() {
-  fireEvent.click(screen.getByRole('button', { name: /выбрать условия публикации/i }));
+  const legacyAction = screen.queryByRole('button', {
+    name: /выбрать условия публикации/i,
+  });
+  if (legacyAction) {
+    fireEvent.click(legacyAction);
+  }
   await act(async () => {
     await Promise.resolve();
     await Promise.resolve();
   });
+  expect(screen.getByRole('button', { name: /выбрать месяц/i })).toBeEnabled();
 }
 
 describe('UpgradeGate', () => {
@@ -182,6 +185,7 @@ describe('UpgradeGate', () => {
       checkout_url: null,
     });
     vi.mocked(api.getProjectPublication).mockResolvedValue({ publication: null });
+    vi.mocked(api.publishProject).mockResolvedValue(updatedPublication(['https://example.com']));
   });
 
   afterEach(() => {
@@ -189,6 +193,27 @@ describe('UpgradeGate', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it('shows the eligible Founder offer inline as soon as publication opens', async () => {
+    vi.useRealTimers();
+
+    render(<UpgradeGate {...gateProps} />);
+
+    expect(await screen.findByRole('heading', {
+      name: '14 дней полностью бесплатно',
+    })).toBeVisible();
+    expect(screen.getByText(/честную обратную связь/i)).toBeVisible();
+    expect(screen.getByText(/без карты и автосписаний/i)).toBeVisible();
+    expect(screen.getByRole('button', {
+      name: 'Активировать бесплатно и продолжить',
+    })).toBeEnabled();
+    expect(screen.queryByRole('button', {
+      name: /выбрать условия публикации/i,
+    })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(document.querySelector('.publication-offer__backdrop')).not.toBeInTheDocument();
+    expect(api.getBillingOffer).toHaveBeenCalledWith('project-123');
   });
 
   it('opens checkout safely and reuses one idempotency key for the attempt', async () => {
@@ -289,13 +314,13 @@ describe('UpgradeGate', () => {
     await act(async () => Promise.resolve());
 
     expect(close).toHaveBeenCalledOnce();
-    expect(screen.getByRole('dialog', { name: /опубликовать виджет/i })).toBeVisible();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent(
       'Вводный тариф уже использован. Выберите обычный тариф.',
     );
     expect(screen.queryByRole('button', { name: /выбрать 15 дней/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /выбрать месяц/i })).toBeVisible();
-    expect(screen.getByRole('button', { name: /выбрать условия публикации/i })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: /выбрать условия публикации/i })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /выбрать месяц/i }));
     await act(async () => Promise.resolve());
@@ -333,7 +358,8 @@ describe('UpgradeGate', () => {
       await Promise.resolve();
     });
     await chooseMonthlyPlan();
-    expect(screen.getByRole('dialog', { name: /опубликовать виджет/i })).toBeVisible();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /выбрать месяц/i })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: /выбрать месяц/i }));
     await act(async () => Promise.resolve());
 
@@ -402,7 +428,7 @@ describe('UpgradeGate', () => {
       await Promise.resolve();
     });
     expect(api.getBillingSubscription).toHaveBeenCalledTimes(2);
-    expect(screen.getByText(/всё готово к публикации/i)).toBeVisible();
+    expect(screen.queryByText(/всё готово к публикации/i)).not.toBeInTheDocument();
     expect(screen.getByText('Доработки доступны в рамках тарифа.')).toBeVisible();
     expect(screen.queryByText(/750[\s ]000|токен/i)).not.toBeInTheDocument();
 
@@ -542,12 +568,83 @@ describe('UpgradeGate', () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByText('Всё готово к публикации')).toBeVisible();
+    expect(screen.queryByText('Всё готово к публикации')).not.toBeInTheDocument();
+    expect(screen.getByText(/тариф действует до|следующее продление/i)).toBeVisible();
     expect(screen.queryByRole('button', { name: /выбрать условия публикации/i })).not.toBeInTheDocument();
     expect(api.createBillingCheckout).not.toHaveBeenCalled();
   });
 
-  it('claims founder access and publishes the selected version without a card', async () => {
+  it('claims Founder access and immediately publishes the selected version without a card', async () => {
+    vi.useRealTimers();
+    const founderSubscription = {
+      ...activeSubscription,
+      id: 'founder-subscription-1',
+      plan_code: 'founder_14d',
+      plan_title: 'Kaigo Founder, 14 дней',
+      access_kind: 'founder' as const,
+      auto_renew: false,
+      next_renewal_at: null,
+      next_charge: null,
+      current_period_end: '2026-08-27T12:00:00Z',
+      generation_tokens_remaining: 1_500_000,
+    };
+    const founderClaim: Awaited<ReturnType<typeof api.claimFounderAccess>> = {
+      created: true,
+      founder: { position: 1, ends_at: '2026-08-27T12:00:00Z' },
+      subscription: founderSubscription,
+    };
+    let resolveFounderClaim!: (value: typeof founderClaim) => void;
+    vi.mocked(api.claimFounderAccess).mockImplementation(() => new Promise<typeof founderClaim>((resolve) => {
+      resolveFounderClaim = resolve;
+    }));
+    vi.mocked(api.publishProject).mockResolvedValue({
+      publication_id: 'publication-founder',
+      release_id: 'release-founder',
+      artifact_id: 'artifact-123',
+      project_version_id: 'version-4',
+      stable_key: 'founder-widget',
+      revision: 4,
+      allowed_domains: ['https://example.com'],
+      checksum: 'founder-checksum',
+      embed_url: 'https://widgets.kaigo.space/embed/founder-widget.js',
+      runtime_url: 'https://widgets.kaigo.space/runtime/founder-widget',
+    });
+
+    render(<UpgradeGate {...gateProps} />);
+    const founderAction = await screen.findByRole('button', {
+      name: 'Активировать бесплатно и продолжить',
+    });
+    fireEvent.click(founderAction);
+
+    await waitFor(() => expect(api.claimFounderAccess).toHaveBeenCalledWith(
+      'project-123',
+      'csrf-billing',
+    ));
+    expect(api.publishProject).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveFounderClaim(founderClaim);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(api.publishProject).toHaveBeenCalledWith(
+      'project-123',
+      {
+        project_version_id: 'version-4',
+        expected_active_release_id: null,
+      },
+      'csrf-billing',
+    ));
+    expect(screen.getByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Скопировать код установки' })).toBeVisible();
+    expect(screen.queryByText('Всё готово к публикации')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', {
+      name: 'Опубликовать и получить код',
+    })).not.toBeInTheDocument();
+    expect(screen.getByText(/версия 4 опубликована и доступна/i)).toBeVisible();
+    expect(screen.getByText(/автопродление выключено/i)).toBeVisible();
+  });
+
+  it('keeps access active after a rejected Founder publication and retries only publication', async () => {
     vi.useRealTimers();
     const founderSubscription = {
       ...activeSubscription,
@@ -566,45 +663,87 @@ describe('UpgradeGate', () => {
       founder: { position: 1, ends_at: '2026-08-27T12:00:00Z' },
       subscription: founderSubscription,
     });
-    vi.mocked(api.publishProject).mockResolvedValue({
-      publication_id: 'publication-founder',
-      release_id: 'release-founder',
-      artifact_id: 'artifact-123',
-      project_version_id: 'version-4',
-      stable_key: 'founder-widget',
-      revision: 4,
-      allowed_domains: ['https://example.com'],
-      checksum: 'founder-checksum',
-      embed_url: 'https://widgets.kaigo.space/embed/founder-widget.js',
-      runtime_url: 'https://widgets.kaigo.space/runtime/founder-widget',
+    vi.mocked(api.publishProject)
+      .mockRejectedValueOnce(new api.BuilderApiError('invalid body', {
+        status: 400,
+        code: 'invalid_body',
+        raw: 'invalid body',
+      }))
+      .mockResolvedValueOnce({
+        publication_id: 'publication-founder',
+        release_id: 'release-founder',
+        artifact_id: 'artifact-123',
+        project_version_id: 'version-4',
+        stable_key: 'founder-widget',
+        revision: 4,
+        allowed_domains: ['https://example.com'],
+        checksum: 'founder-checksum',
+        embed_url: 'https://widgets.kaigo.space/embed/founder-widget.js',
+        runtime_url: 'https://widgets.kaigo.space/runtime/founder-widget',
+      });
+    vi.mocked(api.createCustomerContact).mockResolvedValue({
+      request_id: 'support-partial-publication',
+      accepted: true,
     });
 
     render(<UpgradeGate {...gateProps} />);
-    await waitFor(() => expect(screen.getByRole('button', {
-      name: /выбрать условия публикации/i,
-    })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: /выбрать условия публикации/i }));
-    await waitFor(() => expect(screen.getByRole('button', {
-      name: /активировать 14 дней и опубликовать/i,
-    })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', {
-      name: /активировать 14 дней и опубликовать/i,
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'Активировать бесплатно и продолжить',
     }));
 
-    await waitFor(() => expect(api.claimFounderAccess).toHaveBeenCalledWith(
+    expect(await screen.findByRole('heading', {
+      name: 'Доступ подключён, публикация не завершена',
+    })).toBeVisible();
+    expect(api.claimFounderAccess).toHaveBeenCalledOnce();
+    expect(api.publishProject).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('Всё готово к публикации')).not.toBeInTheDocument();
+    expect(screen.queryByText(/invalid body/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', {
+      name: 'Расскажите, как прошёл пилот',
+    })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Нужна помощь? Связаться с Kaigo',
+    }));
+    expect(screen.getByRole('dialog', { name: 'Связаться с Kaigo' })).toBeVisible();
+    expect(screen.queryByRole('dialog', {
+      name: 'Расскажите, как прошёл пилот',
+    })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Сообщение' }), {
+      target: { value: 'Публикация не завершилась, помогите проверить запуск.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+    await waitFor(() => expect(api.createCustomerContact).toHaveBeenCalledWith(
       'project-123',
+      'Публикация не завершилась, помогите проверить запуск.',
       'csrf-billing',
+      'checkout-request-123',
+      {
+        kind: 'support',
+        rating: undefined,
+        testimonialAllowed: false,
+      },
     ));
-    await waitFor(() => expect(api.publishProject).toHaveBeenCalledWith(
+    expect(vi.mocked(api.createCustomerContact).mock.calls[0]?.[4]?.kind).not.toBe(
+      'founder_feedback',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить публикацию' }));
+
+    expect(await screen.findByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Скопировать код установки' })).toBeVisible();
+    expect(api.claimFounderAccess).toHaveBeenCalledOnce();
+    expect(api.publishProject).toHaveBeenCalledTimes(2);
+    expect(api.publishProject).toHaveBeenNthCalledWith(
+      2,
       'project-123',
       {
         project_version_id: 'version-4',
         expected_active_release_id: null,
       },
       'csrf-billing',
-    ));
-    expect(screen.getByText(/версия 4 опубликована и доступна/i)).toBeVisible();
-    expect(screen.getByText(/автопродление выключено/i)).toBeVisible();
+    );
   });
 
   it('sends founder feedback with rating and testimonial consent from Studio', async () => {
@@ -622,8 +761,24 @@ describe('UpgradeGate', () => {
       request_id: 'contact-1',
       accepted: true,
     });
+    let resolvePublication!: (
+      value: Awaited<ReturnType<typeof api.publishProject>>,
+    ) => void;
+    vi.mocked(api.publishProject).mockImplementation(() => new Promise((resolve) => {
+      resolvePublication = resolve;
+    }));
 
     render(<UpgradeGate {...gateProps} />);
+    await waitFor(() => expect(api.publishProject).toHaveBeenCalledOnce());
+    expect(screen.queryByRole('button', { name: 'Связаться с Kaigo' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', {
+      name: 'Расскажите, как прошёл пилот',
+    })).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolvePublication(updatedPublication(['https://example.com']));
+      await Promise.resolve();
+    });
     await waitFor(() => expect(screen.getByRole('button', {
       name: 'Связаться с Kaigo',
     })).toBeEnabled());
@@ -818,7 +973,7 @@ describe('UpgradeGate', () => {
     );
     expect(screen.getByText(/автопродление выключено/i)).toBeVisible();
     expect(screen.getByText(/тариф действует до/i)).toBeVisible();
-    expect(screen.getByText('Всё готово к публикации')).toBeVisible();
+    expect(screen.queryByText('Всё готово к публикации')).not.toBeInTheDocument();
   });
 
   it('keeps domain configuration out of the customer publication flow', async () => {
@@ -834,22 +989,29 @@ describe('UpgradeGate', () => {
       />,
     );
 
-    expect(await screen.findByRole('heading', { name: 'Всё готово к публикации' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
     expect(screen.queryByLabelText('На каких сайтах разрешить виджет')).not.toBeInTheDocument();
   });
 
-  it('labels the first primary action as publishing and receiving the code', async () => {
+  it('auto-publishes an active subscription exactly once across rerenders', async () => {
     vi.useRealTimers();
     vi.mocked(api.getBillingSubscription).mockResolvedValue({
       subscription: activeSubscription,
     });
 
-    render(<UpgradeGate {...gateProps} />);
+    const view = render(<UpgradeGate {...gateProps} />);
 
-    const publishAction = await screen.findByRole('button', {
+    await waitFor(() => expect(api.publishProject).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+    expect(screen.queryByText('Всё готово к публикации')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', {
       name: 'Опубликовать и получить код',
-    });
-    await waitFor(() => expect(publishAction).toBeEnabled());
+    })).not.toBeInTheDocument();
+
+    view.rerender(<UpgradeGate {...gateProps} sourceUrl="https://example.com/updated" />);
+    await act(async () => Promise.resolve());
+
+    expect(api.publishProject).toHaveBeenCalledTimes(1);
   });
 
   it('omits allowed domains from the first publication payload', async () => {
@@ -876,10 +1038,6 @@ describe('UpgradeGate', () => {
         sourceUrl="https://Example.COM/products/widget?campaign=private"
       />,
     );
-
-    const publishAction = await screen.findByRole('button', { name: /опубликовать/i });
-    await waitFor(() => expect(publishAction).toBeEnabled());
-    fireEvent.click(publishAction);
 
     await waitFor(() => expect(api.publishProject).toHaveBeenCalledWith(
       'project-123',
@@ -915,9 +1073,6 @@ describe('UpgradeGate', () => {
     ));
 
     render(<UpgradeGate {...gateProps} />);
-    const publishAction = await screen.findByRole('button', { name: /опубликовать/i });
-    await waitFor(() => expect(publishAction).toBeEnabled());
-    fireEvent.click(publishAction);
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(expected);
@@ -940,13 +1095,33 @@ describe('UpgradeGate', () => {
     ));
 
     render(<UpgradeGate {...gateProps} />);
-    const publishAction = await screen.findByRole('button', { name: /опубликовать/i });
-    await waitFor(() => expect(publishAction).toBeEnabled());
-    fireEvent.click(publishAction);
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Не удалось опубликовать виджет. Попробуйте ещё раз.');
     expect(alert).not.toHaveTextContent('upstream unavailable');
+  });
+
+  it('does not loop a failed active-subscription auto-publication after rerender', async () => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
+    vi.mocked(api.publishProject).mockRejectedValue(new api.BuilderApiError('invalid body', {
+      status: 400,
+      code: 'invalid_body',
+      raw: 'invalid body',
+    }));
+
+    const view = render(<UpgradeGate {...gateProps} />);
+
+    expect(await screen.findByRole('heading', {
+      name: 'Доступ подключён, публикация не завершена',
+    })).toBeVisible();
+    await waitFor(() => expect(api.publishProject).toHaveBeenCalledTimes(1));
+
+    view.rerender(<UpgradeGate {...gateProps} sourceUrl="https://example.com/updated" />);
+    await act(async () => Promise.resolve());
+
+    expect(api.publishProject).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Повторить публикацию' })).toBeEnabled();
   });
 
   it('publishes the selected accepted artifact, shows a stable embed snippet, and rolls back a known prior release', async () => {
@@ -993,15 +1168,7 @@ describe('UpgradeGate', () => {
     });
 
     const view = render(<UpgradeGate {...gateProps} />);
-    await act(async () => {
-      await Promise.resolve();
-    });
-    const publishAction = screen.getByRole('button', { name: 'Опубликовать и получить код' });
-    await waitFor(() => expect(publishAction).toBeEnabled());
-    fireEvent.click(publishAction);
-    await act(async () => {
-      await Promise.resolve();
-    });
+    await waitFor(() => expect(api.publishProject).toHaveBeenCalledTimes(1));
 
     expect(api.publishProject).toHaveBeenNthCalledWith(
       1,
@@ -1302,6 +1469,32 @@ describe('UpgradeGate', () => {
     ));
   });
 
+  it('never auto-updates a restored publication, even when the selected version changes', async () => {
+    vi.useRealTimers();
+    vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
+    vi.mocked(api.getProjectPublication).mockResolvedValue(
+      restoredPublication(['https://example.com']),
+    );
+
+    const view = render(<UpgradeGate {...gateProps} />);
+    expect(await screen.findByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+    expect(api.publishProject).not.toHaveBeenCalled();
+
+    view.rerender(
+      <UpgradeGate
+        {...gateProps}
+        projectVersionId="version-5"
+        projectVersionOrdinal={5}
+        artifactId="artifact-456"
+        revision={5}
+      />,
+    );
+    await act(async () => Promise.resolve());
+
+    expect(api.publishProject).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Обновить публикацию' })).toBeEnabled();
+  });
+
   it('fails closed when publication restoration fails', async () => {
     vi.useRealTimers();
     vi.mocked(api.getBillingSubscription).mockResolvedValue({ subscription: activeSubscription });
@@ -1352,11 +1545,6 @@ describe('UpgradeGate', () => {
 
     render(<UpgradeGate {...gateProps} />);
     await waitFor(() => expect(api.getProjectPublication).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByRole('button', {
-      name: 'Опубликовать и получить код',
-    })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: 'Опубликовать и получить код' }));
-
     await waitFor(() => expect(api.getProjectPublication).toHaveBeenCalledTimes(2));
     expect(api.publishProject).toHaveBeenCalledTimes(1);
     expect(await screen.findByRole('alert')).toHaveTextContent(
@@ -1392,11 +1580,6 @@ describe('UpgradeGate', () => {
         projectVersionOrdinal={undefined}
       />,
     );
-    await waitFor(() => expect(screen.getByRole('button', {
-      name: 'Опубликовать и получить код',
-    })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: 'Опубликовать и получить код' }));
-
     await waitFor(() => expect(api.publishProject).toHaveBeenCalledWith(
       'project-123',
       {
@@ -1417,7 +1600,7 @@ describe('UpgradeGate', () => {
       }))
       .mockResolvedValueOnce({ subscription: null });
 
-    render(<UpgradeGate csrfToken="csrf-billing" />);
+    render(<UpgradeGate csrfToken="csrf-billing" projectId="project-123" />);
     await act(async () => {
       await Promise.resolve();
     });
@@ -1431,7 +1614,9 @@ describe('UpgradeGate', () => {
     });
 
     expect(api.getBillingSubscription).toHaveBeenCalledTimes(2);
-    expect(screen.getByRole('button', { name: /выбрать условия публикации/i })).toBeEnabled();
+    expect(await screen.findByRole('button', {
+      name: 'Активировать бесплатно и продолжить',
+    })).toBeEnabled();
     expect(api.createBillingCheckout).not.toHaveBeenCalled();
   });
 

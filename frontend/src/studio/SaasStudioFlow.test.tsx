@@ -29,6 +29,48 @@ function sessionResponse() {
   });
 }
 
+function billingOfferResponse() {
+  return jsonResponse({
+    founder: {
+      eligible: true,
+      reason: null,
+      remaining: 14,
+      capacity: 20,
+      period_days: 14,
+      generation_tokens: 1_500_000,
+    },
+    plans: [
+      {
+        code: 'starter_intro_15d',
+        title: 'Kaigo Starter, первые 15 дней',
+        amount_minor: 50_000,
+        currency: 'RUB',
+        period_days: 15,
+        generation_tokens: 500_000,
+        renewal: null,
+      },
+      {
+        code: 'starter_monthly',
+        title: 'Kaigo Starter, 1 месяц',
+        amount_minor: 200_000,
+        currency: 'RUB',
+        period_days: 30,
+        generation_tokens: 1_000_000,
+        renewal: null,
+      },
+      {
+        code: 'starter_quarterly',
+        title: 'Kaigo Starter, 3 месяца',
+        amount_minor: 500_000,
+        currency: 'RUB',
+        period_days: 90,
+        generation_tokens: 3_000_000,
+        renewal: null,
+      },
+    ],
+  });
+}
+
 function project(activeRun: Record<string, unknown> | null = null) {
   return {
     id: PROJECT_ID,
@@ -807,6 +849,7 @@ describe('durable SaaS Studio flow', () => {
       if (url === '/api/billing/payments/pending') {
         return jsonResponse({ payment: null, checkout_url: null });
       }
+      if (url.startsWith('/api/billing/offer')) return billingOfferResponse();
       throw new Error(`unexpected request: ${url}`);
     }));
 
@@ -814,7 +857,11 @@ describe('durable SaaS Studio flow', () => {
     render(<StudioPage />);
 
     await user.click(await screen.findByRole('button', { name: 'Открыть публикацию' }));
-    expect(await screen.findByRole('button', { name: 'Выбрать условия публикации' })).toBeVisible();
+    expect(await screen.findByRole('heading', {
+      name: '14 дней полностью бесплатно',
+    })).toBeVisible();
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Выбрать условия публикации' })).not.toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
@@ -1029,6 +1076,7 @@ describe('durable SaaS Studio flow', () => {
       if (url === '/api/billing/payments/pending') {
         return jsonResponse({ payment: null, checkout_url: null });
       }
+      if (url.startsWith('/api/billing/offer')) return billingOfferResponse();
       throw new Error(`unexpected request: ${url}`);
     }));
 
@@ -1070,13 +1118,18 @@ describe('durable SaaS Studio flow', () => {
     const publicationDialog = screen.getByRole('dialog', { name: 'Публикация виджета' });
     expect(publicationDialog).toHaveClass('studio-drawer__panel--modal');
     expect(publicationDialog.parentElement).toHaveClass('studio-drawer--modal');
-    expect(within(publicationDialog).getByText('Подключите виджет к сайту')).toBeVisible();
-    expect(within(publicationDialog).getByRole('list', { name: 'Путь до запуска виджета' })).toBeVisible();
-    expect(within(publicationDialog).getByText('Доступ')).toBeVisible();
-    expect(within(publicationDialog).getByText('Выберите Founder-пилот или платный тариф')).toBeVisible();
-    expect(within(publicationDialog).getByText('Публикация')).toBeVisible();
-    expect(within(publicationDialog).getByText('Установка')).toBeVisible();
-    expect(within(publicationDialog).getByRole('button', { name: 'Выбрать условия публикации' })).toBeEnabled();
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(within(publicationDialog).getByRole('heading', {
+      name: '14 дней полностью бесплатно',
+    })).toBeVisible();
+    expect(within(publicationDialog).getByText(/без карты и автосписаний/i)).toBeVisible();
+    expect(within(publicationDialog).getByRole('button', {
+      name: 'Активировать бесплатно и продолжить',
+    })).toBeEnabled();
+    expect(within(publicationDialog).queryByRole('button', {
+      name: 'Выбрать условия публикации',
+    })).not.toBeInTheDocument();
+    expect(document.querySelector('.publication-offer__backdrop')).not.toBeInTheDocument();
   });
 
   it('lets the owner correct a claimed URL and brief before the first run', async () => {
@@ -1364,6 +1417,7 @@ describe('durable SaaS Studio flow', () => {
       if (url === '/api/billing/payments/pending') {
         return jsonResponse({ payment: null, checkout_url: null });
       }
+      if (url.startsWith('/api/billing/offer')) return billingOfferResponse();
       throw new Error(`unexpected request: ${url}`);
     }));
 
@@ -1376,7 +1430,10 @@ describe('durable SaaS Studio flow', () => {
       expect.stringContaining('/api/runs/run-version-1/preview/document?revision=1'),
     );
     await user.click(screen.getByRole('button', { name: 'Открыть публикацию' }));
-    expect(await screen.findByRole('button', { name: 'Выбрать условия публикации' })).toBeVisible();
+    expect(await screen.findByRole('heading', {
+      name: '14 дней полностью бесплатно',
+    })).toBeVisible();
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
   });
 
   it('publishes the selected historical version without restoring it first', async () => {

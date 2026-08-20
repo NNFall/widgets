@@ -256,13 +256,10 @@ test('active subscription publishes the current verified artifact with a stable 
   await accountDrawer.getByRole('button', { name: 'Закрыть панель' }).click();
 
   await page.getByRole('button', { name: 'Открыть публикацию' }).click();
-  await expect(page.getByRole('heading', { name: 'Всё готово к публикации' })).toBeVisible();
   await expect(page.getByLabel('На каких сайтах разрешить виджет')).toHaveCount(0);
-  const firstPublish = page.getByRole('button', { name: 'Опубликовать и получить код' });
-  await expect(firstPublish).toBeEnabled();
-  await firstPublish.click();
-
   await expect(page.getByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+  await expect(page.getByText('Всё готово к публикации')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Опубликовать и получить код' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Скопировать код установки' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Скопировать ссылку загрузчика' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Открыть инструкцию по установке' })).toHaveAttribute(
@@ -276,6 +273,8 @@ test('active subscription publishes the current verified artifact with a stable 
   await page.getByText('Код для разработчика').click();
   await expect(embedSnippet).toBeVisible();
   const publicationDialog = page.getByRole('dialog', { name: 'Публикация виджета' });
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await expect(page.locator('.publication-offer__backdrop')).toHaveCount(0);
   const modalBox = await publicationDialog.boundingBox();
   const viewport = page.viewportSize();
   if (viewport && viewport.width <= 760) {
@@ -317,7 +316,9 @@ test('active subscription publishes the current verified artifact with a stable 
   });
 });
 
-test('publication access offer stays readable in the publication modal @desktop @mobile', async ({ page, builderApi }) => {
+test('publication goes directly from the Founder offer to installation @desktop @mobile', async ({ page, builderApi }) => {
+  let founderClaimBody: unknown = null;
+  let founderClaimCsrf: string | undefined;
   await page.route('**/api/billing/offer**', (route) => route.fulfill({
     status: 200,
     json: {
@@ -360,20 +361,54 @@ test('publication access offer stays readable in the publication modal @desktop 
       ],
     },
   }));
+  await page.route('**/api/billing/founder/claim', async (route) => {
+    founderClaimBody = route.request().postDataJSON();
+    founderClaimCsrf = route.request().headers()['x-csrf-token'];
+    await route.fulfill({
+      status: 201,
+      json: {
+        created: true,
+        founder: { position: 1, ends_at: '2026-09-03T12:00:00.000Z' },
+        subscription: {
+          id: 'founder-playwright',
+          plan_code: 'founder_14d',
+          plan_title: 'Kaigo Founder, 14 дней',
+          access_kind: 'founder',
+          status: 'active',
+          current_period_start: '2026-08-20T12:00:00.000Z',
+          current_period_end: '2026-09-03T12:00:00.000Z',
+          auto_renew: false,
+          next_renewal_at: null,
+          next_charge: null,
+          generation_tokens_remaining: 1_500_000,
+        },
+      },
+    });
+  });
   builderApi.seedRun('run-publication-offer');
   await page.goto(`/studio?project=${builderApi.projectId}`);
 
   await page.getByRole('button', { name: 'Открыть публикацию' }).click();
   const publicationDialog = page.getByRole('dialog', { name: 'Публикация виджета' });
-  await publicationDialog.getByRole('button', { name: 'Выбрать условия публикации' }).click();
-
-  const offer = page.getByRole('dialog', { name: 'Опубликовать виджет' });
-  await expect(offer.getByText(/14 дней бесплатно/i)).toBeVisible();
-  await expect(offer.getByRole('heading', { name: '500 ₽' })).toBeVisible();
-  await expect(offer.getByRole('heading', { name: '2 000 ₽' })).toBeVisible();
-  await expect(offer.getByRole('heading', { name: '5 000 ₽' })).toBeVisible();
-  expect(await offer.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
-  expect(await offer.locator('.publication-offer__plan').count()).toBe(3);
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await expect(page.locator('.publication-offer__backdrop')).toHaveCount(0);
+  await expect(publicationDialog.getByRole('heading', {
+    name: '14 дней полностью бесплатно',
+  })).toBeVisible();
+  await expect(publicationDialog.getByText(/без карты и автосписаний/i)).toBeVisible();
+  await expect(publicationDialog.getByText(/честно рассказать/i)).toBeVisible();
+  await expect(publicationDialog.getByRole('heading', { name: '500 ₽' })).toBeVisible();
+  await expect(publicationDialog.getByRole('heading', { name: '2 000 ₽' })).toBeVisible();
+  await expect(publicationDialog.getByRole('heading', { name: '5 000 ₽' })).toBeVisible();
+  await expect(publicationDialog.getByRole('button', { name: 'Выбрать 15 дней' })).toBeVisible();
+  await expect(publicationDialog.getByRole('button', { name: 'Выбрать месяц' })).toBeVisible();
+  await expect(publicationDialog.getByRole('button', { name: 'Выбрать квартал' })).toBeVisible();
+  await expect(publicationDialog.getByRole('button', {
+    name: 'Выбрать условия публикации',
+  })).toHaveCount(0);
+  expect(await publicationDialog.evaluate((element) =>
+    element.scrollWidth - element.clientWidth,
+  )).toBeLessThanOrEqual(1);
   const viewport = page.viewportSize();
   const modalBox = await publicationDialog.boundingBox();
   if (viewport && viewport.width <= 760) {
@@ -381,6 +416,30 @@ test('publication access offer stays readable in the publication modal @desktop 
   } else {
     expect(modalBox?.width ?? 0).toBeGreaterThan(900);
   }
+  const founderAction = publicationDialog.getByRole('button', {
+    name: 'Активировать бесплатно и продолжить',
+  });
+  expect((await founderAction.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44);
+  await expectNoHorizontalOverflow(page);
+
+  await founderAction.click();
+
+  await expect(publicationDialog.getByRole('heading', { name: 'Виджет опубликован' })).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await expect(publicationDialog.getByRole('button', { name: 'Скопировать код установки' })).toBeVisible();
+  await expect(publicationDialog.getByRole('button', { name: 'Скопировать ссылку загрузчика' })).toBeVisible();
+  await expect(publicationDialog.locator('a[href="/install"]')).toBeVisible();
+  expect(founderClaimBody).toEqual({ project_id: builderApi.projectId });
+  expect(founderClaimCsrf).toBe(builderApi.csrfToken);
+  const publish = builderApi.requests.find(({ method, pathname }) =>
+    method === 'POST' && pathname === `/api/projects/${builderApi.projectId}/publish`,
+  );
+  expect(publish?.body).toEqual({
+    project_version_id: 'version-playwright-2',
+    expected_active_release_id: null,
+  });
+  expect(publish?.body).not.toHaveProperty('allowed_domains');
+  await expectNoHorizontalOverflow(page);
 });
 
 test('Studio scales the 390 x 844 mobile reference viewport inside a narrow host @mobile', async ({ page, builderApi }) => {
