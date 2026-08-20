@@ -465,6 +465,61 @@ class PatternCandidateRepository:
             created_at=record.created_at,
         )
 
+    async def clone_plan(
+        self,
+        *,
+        source_run_id: UUID,
+        target_run_id: UUID,
+    ) -> PersistedPatternCandidatePlan:
+        """Clone an immutable candidate plan without re-running the selector."""
+
+        existing = await self.load_plan(target_run_id)
+        if existing is not None:
+            return existing
+        source = await self.load_plan(source_run_id)
+        if source is None:
+            raise ValueError("source run has no persisted candidate plan")
+
+        record = PatternCandidatePlanRecord(
+            id=uuid4(),
+            run_id=target_run_id,
+            direction_artifact_id=None,
+            selector_model_call_id=None,
+            schema_version=source.plan.schema_version,
+            direction_id=source.plan.direction_id,
+            summary=source.plan.summary,
+            registry_digest=source.registry_digest,
+        )
+        self._session.add(record)
+        await self._session.flush()
+        for ordinal, source_group in enumerate(source.groups, start=1):
+            group = PatternCandidateGroupRecord(
+                id=uuid4(),
+                plan_id=record.id,
+                category=source_group.category.value,
+                ordinal=ordinal,
+                stage_mapping=list(source_group.stage_mapping),
+            )
+            self._session.add(group)
+            await self._session.flush()
+            self._session.add_all(
+                [
+                    PatternCandidateItemRecord(
+                        id=uuid4(),
+                        group_id=group.id,
+                        pattern_version_id=item.pattern_version_id,
+                        rank=item.rank,
+                        reason=item.reason,
+                    )
+                    for item in source_group.items
+                ]
+            )
+        await self._session.flush()
+        cloned = await self.load_plan(target_run_id)
+        if cloned is None:  # pragma: no cover - transaction invariant
+            raise RuntimeError("cloned candidate plan was not persisted")
+        return cloned
+
     async def effective_review_state(
         self,
         pattern_version_id: UUID | None = None,

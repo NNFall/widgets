@@ -9,6 +9,10 @@ from uuid import UUID
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.patterns.candidate_repository import (
+    PatternCandidateRepository,
+    PersistedPatternCandidatePlan,
+)
 from app.patterns.repository import PatternRepository, PersistedComposition
 from app.saas.models import (
     GenerationArtifact,
@@ -52,7 +56,7 @@ class ProjectVersionReadiness:
     artifact: GenerationArtifact
     parsed_artifact: WidgetArtifact
     request: BuilderRequest
-    composition: PersistedComposition
+    composition: PersistedComposition | PersistedPatternCandidatePlan
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,9 +164,13 @@ class ProjectVersionService:
             )
             if artifact_persona is not None:
                 request = replace(request, assistant_persona=artifact_persona)
-            composition = await PatternRepository(self._database).load_plan(
+            composition = await PatternCandidateRepository(self._database).load_plan(
                 version.run_id
             )
+            if composition is None:
+                composition = await PatternRepository(self._database).load_plan(
+                    version.run_id
+                )
         except (KeyError, TypeError, ValueError):
             return None
         if composition is None:
@@ -338,13 +346,19 @@ class ProjectVersionService:
             )
         )
         try:
-            await PatternRepository(self._database).clone_plan(
-                source_run_id=source.run_id,
-                target_run_id=run.id,
-            )
+            if isinstance(readiness.composition, PersistedPatternCandidatePlan):
+                await PatternCandidateRepository(self._database).clone_plan(
+                    source_run_id=source.run_id,
+                    target_run_id=run.id,
+                )
+            else:
+                await PatternRepository(self._database).clone_plan(
+                    source_run_id=source.run_id,
+                    target_run_id=run.id,
+                )
         except ValueError as error:
             raise ProjectVersionNotRefinable(
-                "project version has no persisted composition plan"
+                "project version has no persisted pattern plan"
             ) from error
         project.active_run_id = run.id
         project.status = "queued"

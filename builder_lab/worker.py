@@ -2486,10 +2486,18 @@ class PostgresWorkerQueue:
                         f"run {run.id} has an invalid source version artifact"
                     )
                 previous = WidgetArtifact.from_dict(artifact_payload)
-                composition = await PatternRepository(database).load_plan(run.id)
+                candidate_composition = await PatternCandidateRepository(
+                    database
+                ).load_plan(run.id)
+                legacy_composition = await PatternRepository(database).load_plan(run.id)
+                if candidate_composition is not None and legacy_composition is not None:
+                    raise RuntimeError(
+                        f"run {run.id} has incompatible persisted pattern plans"
+                    )
+                composition = candidate_composition or legacy_composition
                 if composition is None:
                     raise RuntimeError(
-                        f"run {run.id} has no cloned composition plan"
+                        f"run {run.id} has no cloned pattern plan"
                     )
                 selected_direction = DirectionProposal(
                     proposal_id=composition.plan.direction_id,
@@ -2504,10 +2512,11 @@ class PostgresWorkerQueue:
                         "Не менять подтверждённый визуальный язык без необходимости",
                     ),
                 )
-                context = {
-                    "composition_plan": composition.plan.to_dict(),
-                    "selected_direction": selected_direction.to_dict(),
-                }
+                context = {"selected_direction": selected_direction.to_dict()}
+                if candidate_composition is not None:
+                    context["pattern_candidate_plan"] = composition.plan.to_dict()
+                else:
+                    context["composition_plan"] = composition.plan.to_dict()
             else:
                 artifact_record = (
                     await database.execute(

@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db.base import Base
 from app.db.models import Tenant, User
+from app.patterns.candidate_repository import PatternCandidateRepository
 from app.patterns.repository import PatternRepository
 from app.projects.versions import (
     ProjectBusy,
@@ -35,6 +36,11 @@ from builder_lab.patterns.models import (
     PatternSelection,
 )
 from builder_lab.patterns.registry import load_builtin_registry
+from builder_lab.worker import PostgresWorkerQueue
+from tests.saas_cases.test_pattern_candidate_repository import (
+    complete_candidate_plan,
+    load_builtin_atomic_registry,
+)
 from tests.builder_lab_cases.test_validation import artifact
 
 
@@ -103,6 +109,7 @@ async def _seed(
     source_brief: str = "Build the durable source widget",
     quality_status: str = "verified",
     persist_plan: bool = True,
+    persist_candidate_plan: bool = False,
     artifact_persona: AssistantPersona | None = None,
 ) -> SeededVersion:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / f'{uuid4()}.db'}")
@@ -192,6 +199,12 @@ async def _seed(
                 plan=plan,
                 registry=load_builtin_registry(),
             )
+        if persist_candidate_plan:
+            await PatternCandidateRepository(database).create_plan(
+                run_id=source_run.id,
+                plan=complete_candidate_plan(),
+                registry=load_builtin_atomic_registry(),
+            )
         return SeededVersion(
             engine=engine,
             factory=factory,
@@ -264,6 +277,51 @@ async def test_enqueue_refinement_uses_durable_request_and_clones_plan_atomicall
         assert cloned.plan == source.plan == seeded.plan
         assert cloned.implementation_hashes == source.implementation_hashes
         assert trial_rows == 0
+    finally:
+        await seeded.engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_enqueue_refinement_clones_candidate_plan_and_restores_worker_context(
+    tmp_path,
+) -> None:
+    seeded = await _seed(
+        tmp_path,
+        persist_plan=False,
+        persist_candidate_plan=True,
+    )
+    expected_plan = complete_candidate_plan()
+    try:
+        async with seeded.factory() as database, database.begin():
+            run = await ProjectVersionService(database).enqueue_refinement(
+                seeded.project_id,
+                source_version_id=seeded.source_version_id,
+                expected_active_version_id=seeded.source_version_id,
+                change_request="Сделай приветствие короче",
+                idempotency_key="refine-candidate-plan",
+                actor_user_id=10,
+                tenant_id=1,
+            )
+            run_id = run.id
+
+        async with seeded.factory() as database:
+            source = await PatternCandidateRepository(database).load_plan(
+                seeded.source_run_id
+            )
+            cloned = await PatternCandidateRepository(database).load_plan(run_id)
+            assert source is not None and cloned is not None
+            assert cloned.id != source.id
+            assert cloned.plan == source.plan == expected_plan
+            assert cloned.implementation_hashes == source.implementation_hashes
+            assert await PatternRepository(database).load_plan(run_id) is None
+
+        queue = PostgresWorkerQueue(seeded.factory, lease_seconds=30)
+        claim = await queue.claim("candidate-refinement-worker")
+        assert claim is not None and claim.run_id == run_id
+        stage_input = await queue.stage_input(claim)
+        assert stage_input.context["pattern_candidate_plan"] == expected_plan.to_dict()
+        assert "composition_plan" not in stage_input.context
+        assert stage_input.previous_artifact is not None
     finally:
         await seeded.engine.dispose()
 
