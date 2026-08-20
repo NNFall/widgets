@@ -4630,6 +4630,536 @@ a {
   }
 }
 
+/* Public widget installation guide */
+.installation-page {
+  --installation-canvas: oklch(96.8% 0.008 83);
+  --installation-surface: oklch(99.2% 0.006 76);
+  --installation-ink: oklch(24% 0.035 245);
+  --installation-muted: oklch(47% 0.025 245);
+  --installation-line: oklch(84% 0.018 78);
+  --installation-accent: #a83212;
+  min-height: 100vh;
+  color: var(--installation-ink);
+  background: var(--installation-canvas);
+}
+
+.installation-page__header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  width: min(calc(100% - 72px), 1320px);
+  min-height: 88px;
+  margin-inline: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border-bottom: 1px solid var(--installation-line);
+  background: color-mix(in oklch, var(--installation-canvas) 92%, transparent);
+  backdrop-filter: blur(16px);
+}
+
+.installation-page__brand,
+.installation-page__studio-link,
+.installation-guide__official-link,
+.installation-page__footer a {
+  border-radius: 12px;
+}
+
+.installation-page a:focus-visible {
+  outline: 3px solid var(--installation-ink);
+  outline-offset: 3px;
+}
+
+.installation-page__brand {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.installation-page__brand .kaigo-logo__mark {
+  width: 34px;
+  height: 41px;
+}
+
+.installation-page__brand .kaigo-logo__wordmark {
+  font-size: 29px;
+}
+
+.installation-page__studio-link {
+  min-height: 48px;
+  padding-inline: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--installation-line);
+  background: var(--installation-surface);
+  font-size: 14px;
+  font-weight: 750;
+  transition: border-color 180ms cubic-bezier(.16, 1, .3, 1), transform 180ms cubic-bezier(.16, 1, .3, 1);
+}
+
+.installation-page__studio-link:hover {
+  border-color: var(--installation-accent);
+  transform: translateY(-1px);
+}
+
+.installation-page__intro {
+  width: min(calc(100% - 72px), 1320px);
+  margin-inline: auto;
+  padding: 84px 0 76px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(420px, .82fr);
+  align-items: end;
+  gap: clamp(48px, 7vw, 112px);
+  border-bottom: 1px solid var(--installation-line);
+}
+
+.installation-page__intro-copy {
+  min-width: 0;
+}
+
+.installation-page__kicker,
+.installation-page__aside > div:first-child > span {
+  display: block;
+  color: var(--installation-accent);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.installation-page__intro h1 {
+  max-width: 11ch;
+  margin: 18px 0 24px;
+  font-size: 64px;
+  line-height: 1.01;
+  letter-spacing: -.055em;
+}
+
+.installation-page__intro-copy > p {
+  max-width: 61ch;
+  margin: 0;
+  color: var(--installation-muted);
+  font-size: 18px;
+  line-height: 1.65;
+}
+
+.installation-page__snippet {
+  min-width: 0;
+  padding: 22px;
+  border: 1px solid var(--installation-line);
+  border-radius: 20px;
+  background: var(--installation-surface);
+  box-shadow: 0 24px 64px oklch(30% 0.035 245 / .08);
+}
+
+.installation-page__snippet > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.installation-page__snippet > div span {
+  color: var(--installation-accent);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+
+.installation-page__snippet > div strong {
+  font-size: 12px;
+}
+
+.installation-page__snippet pre {
+  max-width: 100%;
+  margin: 18px 0 14px;
+  padding: 18px;
+  overflow-x: auto;
+  border-radius: 13px;
+  color: oklch(95% 0.015 78);
+  background: oklch(25% 0.035 245);
+  scrollbar-width: thin;
+}
+
+.installation-page__snippet pre code {
+  font: 600 13px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre;
+}
+
+.installation-page__snippet > p {
+  margin: 0;
+  color: var(--installation-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.installation-page__snippet > p code,
+.installation-guide code {
+  color: var(--installation-ink);
+  font: 700 .92em/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.installation-page__body {
+  width: min(calc(100% - 72px), 1320px);
+  margin-inline: auto;
+  padding: 72px 0 96px;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: clamp(56px, 8vw, 128px);
+}
+
+.installation-page__aside {
+  align-self: start;
+  position: sticky;
+  top: 120px;
+  display: grid;
+  gap: 42px;
+}
+
+.installation-page__aside nav {
+  margin-top: 15px;
+  display: grid;
+}
+
+.installation-page__aside nav a {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--installation-line);
+  color: var(--installation-muted);
+  font-size: 14px;
+  font-weight: 650;
+  transition: color 180ms cubic-bezier(.16, 1, .3, 1), padding 180ms cubic-bezier(.16, 1, .3, 1);
+}
+
+.installation-page__aside nav a:hover {
+  padding-left: 4px;
+  color: var(--installation-ink);
+}
+
+.installation-page__security-note {
+  padding: 18px;
+  border: 1px solid color-mix(in oklch, var(--installation-accent) 24%, var(--installation-line));
+  border-radius: 16px;
+  background: color-mix(in oklch, var(--installation-accent) 6%, var(--installation-surface));
+}
+
+.installation-page__security-note strong {
+  font-size: 13px;
+}
+
+.installation-page__security-note p {
+  margin: 8px 0 0;
+  color: var(--installation-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.installation-page__guides {
+  min-width: 0;
+}
+
+.installation-guide {
+  min-width: 0;
+  padding: 0 0 64px;
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 28px;
+  scroll-margin-top: 118px;
+}
+
+.installation-guide + .installation-guide {
+  padding-top: 64px;
+  border-top: 1px solid var(--installation-line);
+}
+
+.installation-guide__number {
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--installation-surface);
+  background: var(--installation-ink);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+
+.installation-guide__content {
+  min-width: 0;
+}
+
+.installation-guide__content > header {
+  display: grid;
+  grid-template-columns: minmax(190px, .75fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 36px;
+}
+
+.installation-guide h2 {
+  margin: 0;
+  font-size: 27px;
+  line-height: 1.18;
+  letter-spacing: -.035em;
+}
+
+.installation-guide__content > header p {
+  max-width: 55ch;
+  margin: 2px 0 0;
+  color: var(--installation-muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.installation-guide ol {
+  margin: 28px 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: installation-step;
+}
+
+.installation-guide li {
+  min-height: 46px;
+  padding: 12px 0 12px 44px;
+  position: relative;
+  color: var(--installation-ink);
+  font-size: 15px;
+  line-height: 1.65;
+  counter-increment: installation-step;
+}
+
+.installation-guide li + li {
+  border-top: 1px solid color-mix(in oklch, var(--installation-line) 65%, transparent);
+}
+
+.installation-guide li::before {
+  content: counter(installation-step);
+  position: absolute;
+  left: 0;
+  top: 12px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--installation-accent);
+  background: color-mix(in oklch, var(--installation-accent) 10%, transparent);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.installation-guide__official-link {
+  width: fit-content;
+  min-height: 44px;
+  margin-top: 22px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--installation-line);
+  background: var(--installation-surface);
+  font-size: 13px;
+  font-weight: 750;
+  transition: border-color 180ms cubic-bezier(.16, 1, .3, 1), color 180ms cubic-bezier(.16, 1, .3, 1);
+}
+
+.installation-guide__official-link:hover {
+  border-color: var(--installation-accent);
+  color: var(--installation-accent);
+}
+
+.installation-page__footer {
+  width: min(calc(100% - 72px), 1320px);
+  min-height: 132px;
+  margin-inline: auto;
+  padding-block: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border-top: 1px solid var(--installation-line);
+}
+
+.installation-page__footer p {
+  margin: 0;
+  color: var(--installation-muted);
+  font-size: 15px;
+}
+
+.installation-page__footer a {
+  min-height: 48px;
+  padding-inline: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--installation-surface);
+  background: var(--installation-ink);
+  font-size: 14px;
+  font-weight: 750;
+  transition: background 180ms cubic-bezier(.16, 1, .3, 1), transform 180ms cubic-bezier(.16, 1, .3, 1);
+}
+
+.installation-page__footer a:hover {
+  background: var(--installation-accent);
+  transform: translateY(-1px);
+}
+
+@media (max-width: 960px) {
+  .installation-page__intro {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .installation-page__snippet {
+    max-width: 720px;
+  }
+
+  .installation-page__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .installation-page__aside {
+    position: static;
+    grid-template-columns: minmax(0, 1fr) minmax(250px, .72fr);
+    gap: 32px;
+  }
+}
+
+@media (max-width: 640px) {
+  .installation-page__header,
+  .installation-page__intro,
+  .installation-page__body,
+  .installation-page__footer {
+    width: min(calc(100% - 32px), 1320px);
+  }
+
+  .installation-page__header {
+    min-height: 72px;
+  }
+
+  .installation-page__brand .kaigo-logo__mark {
+    width: 29px;
+    height: 35px;
+  }
+
+  .installation-page__brand .kaigo-logo__wordmark {
+    font-size: 24px;
+  }
+
+  .installation-page__studio-link {
+    min-height: 44px;
+    padding-inline: 12px;
+    font-size: 12px;
+  }
+
+  .installation-page__studio-link span {
+    display: none;
+  }
+
+  .installation-page__intro {
+    padding: 52px 0 48px;
+    gap: 34px;
+  }
+
+  .installation-page__intro h1 {
+    margin-block: 14px 18px;
+    font-size: 42px;
+  }
+
+  .installation-page__intro-copy > p {
+    font-size: 16px;
+  }
+
+  .installation-page__snippet {
+    padding: 16px;
+    border-radius: 16px;
+  }
+
+  .installation-page__snippet > div {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .installation-page__snippet pre {
+    margin-top: 14px;
+    padding: 14px;
+  }
+
+  .installation-page__snippet pre code {
+    font-size: 11px;
+  }
+
+  .installation-page__body {
+    padding: 48px 0 68px;
+    gap: 56px;
+  }
+
+  .installation-page__aside {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 26px;
+  }
+
+  .installation-guide {
+    padding-bottom: 48px;
+    grid-template-columns: 42px minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .installation-guide + .installation-guide {
+    padding-top: 48px;
+  }
+
+  .installation-guide__number {
+    width: 38px;
+    height: 38px;
+    font-size: 10px;
+  }
+
+  .installation-guide__content > header {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .installation-guide h2 {
+    font-size: 23px;
+  }
+
+  .installation-guide ol {
+    margin-top: 22px;
+  }
+
+  .installation-guide li {
+    padding-left: 36px;
+    font-size: 14px;
+  }
+
+  .installation-page__footer {
+    min-height: 160px;
+    align-items: stretch;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  .installation-page__footer a {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .installation-page__studio-link,
+  .installation-page__aside nav a,
+  .installation-guide__official-link,
+  .installation-page__footer a {
+    transition: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .studio-app *,
   .studio-app *::before,

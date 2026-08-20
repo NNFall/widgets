@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 
 import { LandingPage } from './landing/LandingPage';
 import { ProductTourPage } from './landing/ProductTourPage';
+import { WidgetInstallationPage } from './landing/WidgetInstallationPage';
 
 const StudioRoute = lazy(async () => {
   const module = await import('./studio/StudioRoute');
@@ -23,6 +24,10 @@ export function App() {
 
   if (pathname === '/tour') {
     return <ProductTourPage />;
+  }
+
+  if (pathname === '/install') {
+    return <WidgetInstallationPage />;
   }
 
   if (pathname !== '/studio') {
