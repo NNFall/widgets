@@ -19,9 +19,24 @@ describe('PresentationGate', () => {
 
     render(<PresentationGate><h1>Обычная студия</h1></PresentationGate>);
 
-    expect(await screen.findByRole('heading', { name: /опубликовать виджет/i })).toBeVisible();
-    expect(screen.getByText(/14 дней бесплатно/i)).toBeVisible();
+    const access = await screen.findByRole('region', {
+      name: '14 дней полностью бесплатно',
+    });
+    expect(screen.getAllByRole('region', {
+      name: '14 дней полностью бесплатно',
+    })).toHaveLength(1);
+    expect(access).toBeVisible();
+    expect(screen.getByRole('heading', {
+      name: '14 дней полностью бесплатно',
+    })).toBeVisible();
     expect(screen.getByText(/осталось 20 мест/i)).toBeVisible();
+    expect(screen.getByRole('heading', { name: '500 ₽' })).toBeVisible();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(document.querySelector('.publication-offer__backdrop')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /опубликовать виджет/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', {
+      name: 'Выбрать условия публикации',
+    })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Обычная студия' })).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/operator/funnel',

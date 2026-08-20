@@ -30,10 +30,19 @@ test('operator presentation links render real publication components @compact', 
   await expect(page.getByRole('link', { name: /Первые 20 клиентов/i })).toBeVisible();
 
   await page.goto('/studio?presentation=founder-offer');
-  const offer = page.getByRole('dialog', { name: /Опубликовать виджет/i });
-  await expect(offer).toBeVisible();
-  await expect(offer.getByText(/14 дней бесплатно/i)).toBeVisible();
-  await expect(offer.getByRole('heading', { name: '500 ₽' })).toBeVisible();
+  const access = page.getByRole('region', { name: '14 дней полностью бесплатно' });
+  await expect(access).toHaveCount(1);
+  await expect(access).toBeVisible();
+  await expect(access.getByRole('heading', {
+    name: '14 дней полностью бесплатно',
+  })).toBeVisible();
+  await expect(access.getByRole('heading', { name: '500 ₽' })).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.locator('.publication-offer__backdrop')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: /Опубликовать виджет/i })).toHaveCount(0);
+  await expect(page.getByRole('button', {
+    name: 'Выбрать условия публикации',
+  })).toHaveCount(0);
   await testInfo.attach('founder-offer', {
     body: await page.screenshot({ fullPage: true }),
     contentType: 'image/png',
