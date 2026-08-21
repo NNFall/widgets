@@ -1,5 +1,5 @@
-import { render } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, render } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { StudioPreview } from './StudioPreview';
 
@@ -10,6 +10,32 @@ const baseProps = {
   qualityStatus: 'verified',
   onViewportChange: vi.fn(),
 };
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+function mockCanvasGeometry(width: number, height: number) {
+  const geometry = { width, height };
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function clientWidth(
+    this: HTMLElement,
+  ) {
+    return this.classList.contains('studio-preview__canvas') ? geometry.width : 0;
+  });
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function clientHeight(
+    this: HTMLElement,
+  ) {
+    return this.classList.contains('studio-preview__canvas') ? geometry.height : 0;
+  });
+  vi.stubGlobal('getComputedStyle', vi.fn(() => ({
+    paddingLeft: '12px',
+    paddingRight: '12px',
+    paddingTop: '12px',
+    paddingBottom: '12px',
+  })));
+  return geometry;
+}
 
 describe('StudioPreview', () => {
   it('publishes the audit-equivalent dimensions of the selected preview device', () => {
@@ -50,12 +76,17 @@ describe('StudioPreview', () => {
     );
   });
 
-  it('clears mobile sizing when the preview disappears before desktop reset', () => {
+  it('fits the 390 by 844 device inside both available canvas dimensions', () => {
+    mockCanvasGeometry(360, 516);
     const { container, rerender } = render(
       <StudioPreview {...baseProps} viewport="mobile" />,
     );
     const canvas = container.querySelector<HTMLElement>('.studio-preview__canvas');
-    expect(canvas?.style.minHeight).not.toBe('');
+    const slot = container.querySelector<HTMLElement>('.studio-preview__device-slot');
+    expect(slot).toHaveAttribute('data-preview-scale', '0.5829');
+    expect(Number.parseFloat(slot?.style.height ?? '')).toBeLessThanOrEqual(492);
+    expect(Number.parseFloat(slot?.style.width ?? '')).toBeLessThanOrEqual(336);
+    expect(canvas?.style.minHeight).toBe('');
 
     rerender(
       <StudioPreview
@@ -67,5 +98,38 @@ describe('StudioPreview', () => {
     );
 
     expect(canvas?.style.minHeight).toBe('');
+  });
+
+  it('recalculates the height-constrained scale when ResizeObserver reports a shorter canvas', () => {
+    const geometry = mockCanvasGeometry(390, 720);
+    let resizeCallback: ResizeObserverCallback | null = null;
+    const disconnect = vi.fn();
+    vi.stubGlobal('ResizeObserver', class ResizeObserverMock {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallback = callback;
+      }
+
+      observe() {}
+
+      disconnect() {
+        disconnect();
+      }
+    });
+
+    const { container, unmount } = render(
+      <StudioPreview {...baseProps} viewport="mobile" />,
+    );
+    const slot = container.querySelector<HTMLElement>('.studio-preview__device-slot');
+    expect(slot).toHaveAttribute('data-preview-scale', '0.8246');
+
+    geometry.height = 460;
+    act(() => {
+      resizeCallback?.([], {} as ResizeObserver);
+    });
+
+    expect(slot).toHaveAttribute('data-preview-scale', '0.5166');
+    expect(Number.parseFloat(slot?.style.height ?? '')).toBeLessThanOrEqual(436);
+    unmount();
+    expect(disconnect).toHaveBeenCalledOnce();
   });
 });

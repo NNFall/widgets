@@ -16,6 +16,18 @@ const PREVIEW_VIEWPORTS = {
   mobile: { width: 390, height: 844 },
 } as const;
 
+function cssPixels(value: string) {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export function calculateMobilePreviewScale(availableWidth: number, availableHeight: number) {
+  const constraints = [1];
+  if (availableWidth > 0) constraints.push(availableWidth / PREVIEW_VIEWPORTS.mobile.width);
+  if (availableHeight > 0) constraints.push(availableHeight / PREVIEW_VIEWPORTS.mobile.height);
+  return Math.max(0, Math.min(...constraints));
+}
+
 function createPreviewChannel() {
   const values = new Uint8Array(18);
   crypto.getRandomValues(values);
@@ -79,17 +91,16 @@ export function StudioPreview({
 
     const fitMobileViewport = () => {
       const computed = getComputedStyle(canvas);
-      const horizontalPadding = Number.parseFloat(computed.paddingLeft)
-        + Number.parseFloat(computed.paddingRight);
-      const verticalPadding = Number.parseFloat(computed.paddingTop)
-        + Number.parseFloat(computed.paddingBottom);
+      const horizontalPadding = cssPixels(computed.paddingLeft)
+        + cssPixels(computed.paddingRight);
+      const verticalPadding = cssPixels(computed.paddingTop)
+        + cssPixels(computed.paddingBottom);
       const availableWidth = Math.max(0, canvas.clientWidth - horizontalPadding);
-      const scale = availableWidth > 0
-        ? Math.min(1, availableWidth / PREVIEW_VIEWPORTS.mobile.width)
-        : 1;
+      const availableHeight = Math.max(0, canvas.clientHeight - verticalPadding);
+      const scale = calculateMobilePreviewScale(availableWidth, availableHeight);
       slot.style.width = `${PREVIEW_VIEWPORTS.mobile.width * scale}px`;
       slot.style.height = `${PREVIEW_VIEWPORTS.mobile.height * scale}px`;
-      canvas.style.minHeight = `${Math.max(620, PREVIEW_VIEWPORTS.mobile.height * scale + verticalPadding)}px`;
+      canvas.style.removeProperty('min-height');
       slot.dataset.previewScale = scale.toFixed(4);
       device.style.transform = `scale(${scale})`;
     };

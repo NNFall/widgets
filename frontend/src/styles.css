@@ -8122,7 +8122,7 @@ a {
 
 .studio-preview-pane .studio-preview__canvas[data-viewport='mobile'] .studio-preview__device {
   min-height: 0;
-  height: 100%;
+  height: 844px;
 }
 
 .studio-account {
