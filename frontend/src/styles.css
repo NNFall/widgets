@@ -3987,6 +3987,7 @@ a {
   border-radius: 22px;
   box-shadow: 0 0 0 8px #2e3133, 0 24px 50px rgba(46, 39, 35, .2);
   transform-origin: left top;
+  transition: opacity 160ms ease;
 }
 
 .studio-preview iframe {

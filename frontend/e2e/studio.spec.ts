@@ -211,6 +211,117 @@ test('Studio gives generated widgets audit-equivalent desktop and mobile viewpor
   await expectRuntimeOpensAndCloses(page);
 });
 
+test('Studio keeps the complete mobile device inside the locked workbench at every target size @desktop', async ({ page, builderApi }) => {
+  builderApi.seedRun('run-preview-fit-matrix');
+  await page.setViewportSize({ width: 1_280, height: 720 });
+  await page.goto(`/studio?project=${builderApi.projectId}`);
+  await page.getByRole('button', { name: 'На телефоне' }).click();
+
+  const targets = [
+    { width: 1_280, height: 720 },
+    { width: 390, height: 844 },
+    { width: 390, height: 720 },
+    { width: 360, height: 640 },
+    { width: 320, height: 568 },
+  ];
+
+  for (const target of targets) {
+    await page.setViewportSize(target);
+    const previewTab = page.getByRole('button', { name: 'Предпросмотр', exact: true });
+    if (await previewTab.isVisible()) await previewTab.click();
+    await expect(page.getByTestId('studio-preview-canvas')).toHaveAttribute('data-viewport', 'mobile');
+    await expect.poll(async () => page.locator('.studio-preview__device-slot').getAttribute('data-preview-scale'))
+      .not.toBeNull();
+
+    const metrics = await page.evaluate(() => {
+      const bounds = (selector: string) => {
+        const element = document.querySelector(selector);
+        if (!element) return null;
+        const rect = element.getBoundingClientRect();
+        return {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          right: rect.right,
+          bottom: rect.bottom,
+        };
+      };
+      return {
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight,
+        scrollWidth: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
+        scrollHeight: Math.max(document.documentElement.scrollHeight, document.body.scrollHeight),
+        app: bounds('.studio-app--workbench'),
+        canvas: bounds('.studio-preview__canvas'),
+        slot: bounds('.studio-preview__device-slot'),
+        device: bounds('.studio-preview__device'),
+        frame: bounds('iframe[title="Предпросмотр консультанта Kaigo"]'),
+        scale: document.querySelector('.studio-preview__device-slot')?.getAttribute('data-preview-scale'),
+        computed: (() => {
+          const canvas = document.querySelector<HTMLElement>('.studio-preview__canvas');
+          const slot = document.querySelector<HTMLElement>('.studio-preview__device-slot');
+          const device = document.querySelector<HTMLElement>('.studio-preview__device');
+          const frame = document.querySelector<HTMLElement>('iframe[title="Предпросмотр консультанта Kaigo"]');
+          return {
+            canvas: canvas ? {
+              width: canvas.clientWidth,
+              height: canvas.clientHeight,
+              padding: getComputedStyle(canvas).padding,
+            } : null,
+            slot: slot ? {
+              width: getComputedStyle(slot).width,
+              height: getComputedStyle(slot).height,
+              minHeight: getComputedStyle(slot).minHeight,
+            } : null,
+            device: device ? {
+              width: getComputedStyle(device).width,
+              height: getComputedStyle(device).height,
+              minHeight: getComputedStyle(device).minHeight,
+              transform: getComputedStyle(device).transform,
+            } : null,
+            frame: frame ? {
+              width: getComputedStyle(frame).width,
+              height: getComputedStyle(frame).height,
+              minHeight: getComputedStyle(frame).minHeight,
+            } : null,
+          };
+        })(),
+      };
+    });
+
+    expect(metrics.innerWidth).toBe(target.width);
+    expect(metrics.innerHeight).toBe(target.height);
+    expect(metrics.app, `${target.width}x${target.height}: workbench`).not.toBeNull();
+    expect(metrics.canvas, `${target.width}x${target.height}: canvas`).not.toBeNull();
+    expect(metrics.slot, `${target.width}x${target.height}: slot`).not.toBeNull();
+    expect(metrics.device, `${target.width}x${target.height}: device`).not.toBeNull();
+    expect(metrics.frame, `${target.width}x${target.height}: iframe`).not.toBeNull();
+    if (!metrics.app || !metrics.canvas || !metrics.slot || !metrics.device || !metrics.frame) continue;
+    expect(metrics.scrollWidth - target.width, `${target.width}x${target.height}: horizontal overflow`)
+      .toBeLessThanOrEqual(1);
+    expect(metrics.scrollHeight - target.height, `${target.width}x${target.height}: vertical overflow`)
+      .toBeLessThanOrEqual(1);
+    expect(metrics.app.bottom, `${target.width}x${target.height}: app bottom`)
+      .toBeLessThanOrEqual(target.height + 1);
+    for (const [name, box] of [['slot', metrics.slot], ['device', metrics.device], ['iframe', metrics.frame]] as const) {
+      expect(box.x, `${target.width}x${target.height}: ${name} left`).toBeGreaterThanOrEqual(metrics.canvas.x - 1);
+      expect(box.y, `${target.width}x${target.height}: ${name} top`).toBeGreaterThanOrEqual(metrics.canvas.y - 1);
+      expect(box.right, `${target.width}x${target.height}: ${name} right`).toBeLessThanOrEqual(metrics.canvas.right + 1);
+      expect(
+        box.bottom,
+        `${target.width}x${target.height}: ${name} bottom; geometry=${JSON.stringify(metrics)}`,
+      ).toBeLessThanOrEqual(metrics.canvas.bottom + 1);
+      expect(box.bottom, `${target.width}x${target.height}: ${name} viewport bottom`).toBeLessThanOrEqual(target.height + 1);
+    }
+  }
+
+  const internalViewport = await page.frameLocator('iframe[title="Предпросмотр консультанта Kaigo"]')
+    .locator('body')
+    .evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  expect(internalViewport).toEqual({ width: 390, height: 844 });
+});
+
 test('Studio owner cancels and safely retries a recoverable project run @desktop', async ({ page, builderApi }) => {
   const source = builderApi.seedRunningRun('run-recoverable');
   await page.goto(`/studio?project=${builderApi.projectId}`);
