@@ -155,6 +155,7 @@ function deferred<T>() {
 
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
   window.history.replaceState({}, '', `/studio?project=${PROJECT_ID}`);
 });
 
@@ -1287,6 +1288,150 @@ describe('durable SaaS Studio flow', () => {
     });
     expect(new Headers(request.init?.headers).get('X-CSRF-Token')).toBe('csrf-for-studio');
     expect(new Headers(request.init?.headers).get('Idempotency-Key')).toMatch(/^refine-version-1-/);
+    expect(screen.getByText('Сделай приветствие короче')).toBeVisible();
+    expect(screen.getByText('Доработка выполняется')).toBeVisible();
+    expect(screen.getByText('Доработка поставлена в очередь')).toBeVisible();
+  });
+
+  it('restores the completed refinement conversation from versions and public run events', async () => {
+    const publicSummary = 'В RFN Assistant обновлена реакция закрытого launcher: при наведении активируются орбитальный контур, координатная сетка и подпись. Закрытие панели теперь ощущается как сборка терминала обратно в нижнюю точку маршрута за счёт выразительного обратного перехода и вращения кнопки закрытия.';
+    const completedRefinement = run({
+      id: 'run-refinement-2',
+      status: 'completed',
+      state: 'completed',
+      progress: 100,
+      latest_sequence: 2,
+      events: [
+        {
+          sequence: 1,
+          type: 'provider.completed',
+          message: 'provider=gemini prompt=do-not-render internal_payload=secret',
+          payload: { status: 'running' },
+          created_at: '2026-07-30T09:00:01Z',
+        },
+        {
+          sequence: 2,
+          type: 'stage.completed',
+          message: publicSummary,
+          payload: { status: 'completed', stage: 'validation' },
+          created_at: '2026-07-30T09:09:00Z',
+        },
+      ],
+      preview: {
+        id: 'artifact-version-2',
+        revision: 2,
+        body_html: '<main>RFN Assistant</main>',
+        css: '',
+        javascript: '',
+        quality_status: 'verified',
+        source: 'accepted_artifact',
+      },
+    });
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) {
+        return jsonResponse({
+          ...project(completedRefinement),
+          active_version_id: 'version-2',
+        });
+      }
+      if (url === '/api/runs/run-refinement-2') return jsonResponse(completedRefinement);
+      if (url === `/api/projects/${PROJECT_ID}/versions`) {
+        return jsonResponse({
+          active_version_id: 'version-2',
+          versions: [
+            {
+              id: 'version-2', project_id: PROJECT_ID, ordinal: 2, kind: 'refinement',
+              change_request: 'пусть будет название RFN Assistant а также анимацию при наведении на закрытый виджет поменяй, и сделай анимацию интересную закрытие виджета',
+              parent_version_id: 'version-1', run_id: 'run-refinement-2',
+              artifact_id: 'artifact-version-2', artifact_revision: 2, refinable: true,
+              created_at: '2026-07-30T09:10:00Z',
+            },
+            {
+              id: 'version-1', project_id: PROJECT_ID, ordinal: 1, kind: 'initial',
+              change_request: null, parent_version_id: null, run_id: 'run-version-1',
+              artifact_id: 'artifact-version-1', artifact_revision: 1, refinable: true,
+              created_at: '2026-07-30T08:00:00Z',
+            },
+          ],
+        });
+      }
+      if (url === '/api/artifacts/artifact-version-2') {
+        return jsonResponse(versionArtifact('artifact-version-2', 2, 'RFN Assistant'));
+      }
+      if (url === '/api/billing/subscription') return jsonResponse({ subscription: null });
+      if (url === '/api/billing/payments/pending') {
+        return jsonResponse({ payment: null, checkout_url: null });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+
+    render(<StudioPage />);
+
+    expect(await screen.findByText(/пусть будет название RFN Assistant/)).toBeVisible();
+    expect(screen.getByText('Готово — версия 2')).toBeVisible();
+    expect(screen.getByText(publicSummary)).toBeVisible();
+    expect(screen.queryByText(/provider=gemini/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'История версий' })).not.toBeInTheDocument();
+  });
+
+  it('restores a running refinement request and its latest public progress after reload', async () => {
+    const runningRefinement = run({
+      id: 'run-refinement-running',
+      status: 'running',
+      state: 'running',
+      progress: 54,
+      current_stage: 'conversation',
+      change_request: 'Сделай launcher заметнее на тёмном фоне',
+      latest_sequence: 1,
+      events: [{
+        sequence: 1,
+        type: 'stage.started',
+        message: 'Настраиваем сценарий общения и реакцию виджета',
+        payload: { status: 'running', stage: 'conversation' },
+        created_at: '2026-07-30T09:05:00Z',
+      }],
+    });
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/session') return sessionResponse();
+      if (url === `/api/projects/${PROJECT_ID}`) {
+        return jsonResponse({
+          ...project(runningRefinement),
+          active_version_id: 'version-1',
+        });
+      }
+      if (url === '/api/runs/run-refinement-running') return jsonResponse(runningRefinement);
+      if (url === '/api/runs/run-refinement-running/events') return emptyEventStream();
+      if (url === `/api/projects/${PROJECT_ID}/versions`) {
+        return jsonResponse({
+          active_version_id: 'version-1',
+          versions: [{
+            id: 'version-1', project_id: PROJECT_ID, ordinal: 1, kind: 'initial',
+            change_request: null, parent_version_id: null, run_id: 'run-version-1',
+            artifact_id: 'artifact-version-1', artifact_revision: 1, refinable: true,
+            created_at: '2026-07-30T08:00:00Z',
+          }],
+        });
+      }
+      if (url === '/api/artifacts/artifact-version-1') {
+        return jsonResponse(versionArtifact('artifact-version-1', 1));
+      }
+      if (url === '/api/billing/subscription') return jsonResponse({ subscription: null });
+      if (url === '/api/billing/payments/pending') {
+        return jsonResponse({ payment: null, checkout_url: null });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    }));
+
+    render(<StudioPage />);
+
+    expect(await screen.findByText('Сделай launcher заметнее на тёмном фоне')).toBeVisible();
+    expect(screen.getByText('Доработка выполняется')).toBeVisible();
+    expect(screen.getByText('Настраиваем сценарий общения и реакцию виджета')).toBeVisible();
   });
 
   it('reloads project versions after a refinement CAS conflict without resubmitting', async () => {
@@ -1372,6 +1517,7 @@ describe('durable SaaS Studio flow', () => {
       status: 'failed',
       state: 'failed',
       progress: 84,
+      change_request: 'Сделай анимацию закрытия выразительнее',
       error_code: 'visual_quality_failed',
       error_message: 'Visual audit failed',
       preview: {
@@ -1424,6 +1570,8 @@ describe('durable SaaS Studio flow', () => {
     const user = userEvent.setup();
     render(<StudioPage />);
 
+    expect(await screen.findByText('Сделай анимацию закрытия выразительнее')).toBeVisible();
+    expect(screen.getByText('Не удалось завершить доработку')).toBeVisible();
     const preview = await screen.findByTitle('Предпросмотр консультанта Kaigo');
     expect(preview).toHaveAttribute(
       'src',

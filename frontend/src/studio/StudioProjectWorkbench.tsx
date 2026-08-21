@@ -19,6 +19,7 @@ import { StudioDrawer } from './StudioDrawer';
 import { StudioLibrary } from './StudioLibrary';
 import { StudioPreview } from './StudioPreview';
 import { StudioProgress } from './StudioProgress';
+import { StudioRefinementHistory } from './StudioRefinementHistory';
 import { StudioTimeline } from './StudioTimeline';
 import { UpgradeGate } from './UpgradeGate';
 import type { PreviewViewport } from './types';
@@ -199,10 +200,14 @@ export function StudioProjectWorkbench({
           </details>
 
           <div className="studio-conversation__feed">
-            <div className="studio-message studio-message--assistant">
-              <span className="studio-message__mark" aria-hidden>K</span>
-              <p>{assistantMessage}</p>
-            </div>
+            {controller.refinementHistory.length === 0 && (
+              <div className="studio-message studio-message--assistant">
+                <span className="studio-message__mark" aria-hidden>K</span>
+                <p>{assistantMessage}</p>
+              </div>
+            )}
+
+            <StudioRefinementHistory entries={controller.refinementHistory} />
 
             {controller.connection === 'polling' && (
               <p className="studio-conversation__connection" role="status">
@@ -246,7 +251,7 @@ export function StudioProjectWorkbench({
 
             <StudioTimeline events={controller.events} running={running} />
 
-            {!running && isReadyQuality(qualityStatus) && (
+            {controller.refinementHistory.length === 0 && !running && isReadyQuality(qualityStatus) && (
               <div className="studio-message studio-message--assistant studio-message--ready">
                 <CheckCircle aria-hidden size={18} weight="fill" />
                 <p>Готово. Каждое новое пожелание сохранится отдельной версией.</p>

@@ -267,6 +267,8 @@ export interface SaasRunSnapshot {
   started_at: string | null;
   finished_at: string | null;
   latest_sequence: number;
+  /** Owner-authored refinement request; null for initial and restore runs. */
+  change_request?: string | null;
   events?: SaasEvent[];
   preview?: SaasPreviewArtifact | null;
 }

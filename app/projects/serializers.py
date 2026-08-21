@@ -84,6 +84,9 @@ def serialize_run(
         "started_at": _timestamp(run.started_at),
         "finished_at": _timestamp(run.finished_at),
         "latest_sequence": max(0, run.next_event_sequence - 1),
+        # This is owner-authored input, not the provider prompt. The run routes are
+        # owner-scoped and the Studio needs it to restore an in-flight refinement.
+        "change_request": run.change_request,
     }
     if events is not None:
         payload["events"] = [serialize_event(event) for event in events]

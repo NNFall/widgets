@@ -405,6 +405,7 @@ async def test_owner_lists_versions_and_starts_idempotent_paid_refinement(tmp_pa
         assert first.status == replay.status == 202
         assert conflict.status == 409
         first_payload = await first.json()
+        assert first_payload["change_request"] == "Сделай приветствие короче"
         assert (await replay.json())["id"] == first_payload["id"]
 
         async with factory() as database:

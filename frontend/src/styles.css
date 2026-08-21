@@ -7760,6 +7760,78 @@ a {
   background: transparent;
 }
 
+.studio-refinement-history,
+.studio-refinement-turn {
+  display: grid;
+  gap: 12px;
+}
+
+.studio-refinement-history {
+  gap: 18px;
+}
+
+.studio-refinement-turn + .studio-refinement-turn {
+  border-top: 1px solid rgb(32 45 43 / 10%);
+  padding-top: 18px;
+}
+
+.studio-message--user {
+  width: min(88%, 430px);
+  justify-self: end;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 5px;
+  border: 1px solid rgb(252 92 36 / 18%);
+  border-radius: 16px 16px 5px 16px;
+  background: #fff4ed;
+  padding: 12px 14px;
+}
+
+.studio-message--user .studio-message__author {
+  color: #9b3d1f;
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+}
+
+.studio-message--user p {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: #2d2825;
+  background: transparent;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.studio-message--refinement {
+  align-items: start;
+}
+
+.studio-message--refinement > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.studio-message--refinement strong {
+  color: #20302d;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.studio-message--refinement p {
+  overflow-wrap: anywhere;
+}
+
+.studio-refinement-turn[data-status="failed"] .studio-message--refinement,
+.studio-refinement-turn[data-status="cancelled"] .studio-message--refinement {
+  border-color: rgb(161 73 56 / 18%);
+  background: #fff8f5;
+}
+
 .studio-conversation__connection {
   margin: 0;
   padding: 8px 10px;

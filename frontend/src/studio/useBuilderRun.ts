@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   BuilderApiError,
@@ -22,6 +22,11 @@ import {
   updateProjectDraft,
 } from './api';
 import { russianErrorMessage, russianRequestErrorMessage, safeEventMessage } from './errors';
+import {
+  buildRefinementConversation,
+  type PendingRefinementConversation,
+  type RefinementConversationEntry,
+} from './refinementConversation';
 import { safeActivityForEvent } from './studioPresentation';
 import type {
   BuilderEvent,
@@ -137,6 +142,7 @@ export interface BuilderRunController {
   versionsAvailable: boolean;
   activeVersionId: string | null;
   versions: SaasProjectVersion[];
+  refinementHistory: RefinementConversationEntry[];
   selectedVersion: SaasProjectVersion | null;
   previewRunId: string | null;
   selectedArtifact: WidgetArtifact | null;
@@ -468,6 +474,7 @@ function useLegacyBuilderRun(enabled: boolean): BuilderRunController {
     versionsAvailable: false,
     activeVersionId: null,
     versions: [],
+    refinementHistory: [],
     selectedVersion: null,
     previewRunId: runId,
     selectedArtifact: snapshot?.artifact ?? snapshot?.draft_artifact ?? null,
@@ -688,6 +695,41 @@ function activityFor(status: BuilderRunStatus) {
   return 'Создание остановлено по вашему запросу';
 }
 
+function refinementStorageKey(projectId: string, runId: string) {
+  return `kaigo:studio:refinement:${projectId}:${runId}`;
+}
+
+function readStoredRefinement(projectId: string, runId: string) {
+  try {
+    const raw = sessionStorage.getItem(refinementStorageKey(projectId, runId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { changeRequest?: unknown };
+    const value = typeof parsed.changeRequest === 'string' ? parsed.changeRequest.trim() : '';
+    return value && value.length <= 2_000 && !value.includes('\0') ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeRefinement(projectId: string, runId: string, changeRequest: string) {
+  try {
+    sessionStorage.setItem(
+      refinementStorageKey(projectId, runId),
+      JSON.stringify({ changeRequest }),
+    );
+  } catch {
+    // The owner-scoped run response remains authoritative when storage is unavailable.
+  }
+}
+
+function forgetStoredRefinement(projectId: string, runId: string) {
+  try {
+    sessionStorage.removeItem(refinementStorageKey(projectId, runId));
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
 function useSaasProjectRun(projectId: string | null): BuilderRunController {
   const [project, setProject] = useState<SaasProject | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
@@ -701,17 +743,26 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
   const [versionsAvailable, setVersionsAvailable] = useState(Boolean(projectId));
   const [activeVersionId, setActiveVersionId] = useState<string | null>(null);
   const [versions, setVersions] = useState<SaasProjectVersion[]>([]);
+  const [runsById, setRunsById] = useState<Record<string, SaasRunSnapshot>>({});
+  const [pendingRefinement, setPendingRefinement] = useState<PendingRefinementConversation | null>(null);
   const [selectedVersion, setSelectedVersion] = useState<SaasProjectVersion | null>(null);
   const [versionArtifact, setVersionArtifact] = useState<WidgetArtifact | null>(null);
   const [csrfToken, setCsrfToken] = useState<string | null>(null);
   const csrfRef = useRef<string | null>(null);
   const projectRef = useRef<SaasProject | null>(null);
   const runRef = useRef<SaasRunSnapshot | null>(null);
+  const runsByIdRef = useRef<Record<string, SaasRunSnapshot>>({});
   const lastSequenceRef = useRef(0);
   const mutationPendingRef = useRef(false);
   const selectedVersionRef = useRef<SaasProjectVersion | null>(null);
   const selectionEpochRef = useRef(0);
   const projectEpochRef = useRef(0);
+
+  const rememberRun = useCallback((run: SaasRunSnapshot) => {
+    const next = { ...runsByIdRef.current, [run.id]: run };
+    runsByIdRef.current = next;
+    setRunsById(next);
+  }, []);
 
   const loadSelectedVersion = useCallback(async (
     version: SaasProjectVersion,
@@ -783,6 +834,18 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     if (isSaasRunRegression(previous, run, lastSequenceRef.current)) return;
     if (previous?.id !== run.id) lastSequenceRef.current = 0;
     runRef.current = run;
+    rememberRun(run);
+    const changeRequest = run.change_request?.trim()
+      || readStoredRefinement(owner.id, run.id);
+    if (changeRequest) {
+      storeRefinement(owner.id, run.id, changeRequest);
+      setPendingRefinement({
+        changeRequest,
+        runId: run.id,
+        status: saasStatus(run),
+        assistantMessage: null,
+      });
+    }
     const hydratedSequence = Math.max(0, ...(run.events ?? []).map((event) => event.sequence));
     lastSequenceRef.current = Math.max(lastSequenceRef.current, hydratedSequence);
     setRunId(run.id);
@@ -808,7 +871,7 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     } else if (status !== 'cancelled') {
       setError(null);
     }
-  }, []);
+  }, [rememberRun]);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -817,6 +880,7 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     csrfRef.current = null;
     projectRef.current = null;
     runRef.current = null;
+    runsByIdRef.current = {};
     lastSequenceRef.current = 0;
     mutationPendingRef.current = false;
     setCsrfToken(null);
@@ -834,6 +898,8 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     setVersionsAvailable(Boolean(projectId));
     setActiveVersionId(null);
     setVersions([]);
+    setRunsById({});
+    setPendingRefinement(null);
     setSelectedVersion(null);
     setVersionArtifact(null);
     if (!projectId) return () => abort.abort();
@@ -889,6 +955,27 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     void hydrate();
     return () => abort.abort();
   }, [applyRun, applyVersionList, disableVersions, projectId]);
+
+  useEffect(() => {
+    if (!projectId || versions.length === 0) return;
+    const abort = new AbortController();
+    const refinementVersions = versions.filter((version) => version.kind === 'refinement');
+    for (const version of refinementVersions) {
+      forgetStoredRefinement(projectId, version.run_id);
+    }
+    const missingRunIds = [...new Set(refinementVersions
+      .map((version) => version.run_id)
+      .filter((versionRunId) => !runsByIdRef.current[versionRunId]))];
+    if (missingRunIds.length === 0) return () => abort.abort();
+
+    void Promise.allSettled(missingRunIds.map(async (versionRunId) => {
+      const historicalRun = await getProjectRun(versionRunId, abort.signal);
+      if (!abort.signal.aborted && historicalRun.project_id === projectId) {
+        rememberRun(historicalRun);
+      }
+    }));
+    return () => abort.abort();
+  }, [projectId, rememberRun, versions]);
 
   useEffect(() => {
     if (!projectId || snapshot?.status !== 'completed') return;
@@ -1182,6 +1269,12 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     setMutationPending(true);
     setError(null);
     setActivityMessage('Запускаем управляемую доработку');
+    setPendingRefinement({
+      changeRequest,
+      runId: null,
+      status: 'queued',
+      assistantMessage: 'Доработка поставлена в очередь',
+    });
     try {
       const sourceVersionId = sourceVersion.id;
       const run = await refineProjectVersion(
@@ -1194,6 +1287,13 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
       );
       if (!isCurrentProject()) return;
       const updated = { ...owner, status: run.status, active_run: run };
+      storeRefinement(projectId, run.id, changeRequest);
+      setPendingRefinement({
+        changeRequest,
+        runId: run.id,
+        status: saasStatus(run),
+        assistantMessage: 'Доработка поставлена в очередь',
+      });
       projectRef.current = updated;
       setProject(updated);
       applyRun(updated, run);
@@ -1223,6 +1323,11 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
         setError(saasError(caught, 'Не удалось запустить доработку.'));
         setActivityMessage('Доработка не запущена');
       }
+      setPendingRefinement((current) => current ? {
+        ...current,
+        status: 'failed',
+        assistantMessage: 'Запрос не отправлен. Проверьте соединение и попробуйте ещё раз.',
+      } : current);
     } finally {
       if (projectEpochRef.current === projectEpoch) {
         mutationPendingRef.current = false;
@@ -1286,6 +1391,11 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     }
   }, [applyRun, applyVersionList, projectId]);
 
+  const refinementHistory = useMemo(
+    () => buildRefinementConversation(versions, runsById, pendingRefinement),
+    [pendingRefinement, runsById, versions],
+  );
+
   return {
     project,
     projectMode: Boolean(projectId),
@@ -1301,6 +1411,7 @@ function useSaasProjectRun(projectId: string | null): BuilderRunController {
     versionsAvailable,
     activeVersionId,
     versions,
+    refinementHistory,
     selectedVersion,
     previewRunId: selectedVersion?.run_id ?? runId,
     selectedArtifact: selectedVersion
