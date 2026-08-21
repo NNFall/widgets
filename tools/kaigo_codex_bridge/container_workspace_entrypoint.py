@@ -35,6 +35,10 @@ _CODEX_HOME = Path("/codex-home")
 _CODEX_EXECUTABLE = "/usr/local/bin/codex"
 _PYTHON_EXECUTABLE = "/usr/local/bin/python3"
 _MCP_SERVER = "/opt/kaigo/tools/kaigo_codex_bridge/workspace_mcp_server.py"
+_MCP_ENVIRONMENT = {
+    "PYTHONPATH": "/opt/kaigo",
+    "PYTHONUTF8": "1",
+}
 _MODEL = "gpt-5.6-sol"
 _REASONING_EFFORT = "max"
 _PERMISSION_PROFILE = "kaigo_mcp_read_only"
@@ -193,6 +197,10 @@ def build_mcp_codex_command(*, workspace: Path) -> tuple[str, ...]:
         f"{json.dumps(key)}={json.dumps(value)}"
         for key, value in filesystem_permissions.items()
     ) + "}"
+    mcp_environment_config = "{" + ",".join(
+        f"{json.dumps(key)}={json.dumps(value)}"
+        for key, value in _MCP_ENVIRONMENT.items()
+    ) + "}"
     command: list[str] = [
         _CODEX_EXECUTABLE,
         "exec",
@@ -231,6 +239,8 @@ def build_mcp_codex_command(*, workspace: Path) -> tuple[str, ...]:
             "mcp_servers.kaigo_workspace.args="
             + json.dumps([_MCP_SERVER], separators=(",", ":"))
         ),
+        "-c",
+        "mcp_servers.kaigo_workspace.env=" + mcp_environment_config,
         "-c",
         "mcp_servers.kaigo_workspace.enabled=true",
         "-c",

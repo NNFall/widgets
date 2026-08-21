@@ -5,8 +5,12 @@ import asyncio
 from builtins import BaseExceptionGroup
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
+import subprocess
+import sys
+import tomllib
 from typing import Any
 
 import pytest
@@ -967,6 +971,86 @@ def test_codex_command_is_mcp_only_with_custom_read_only_profile(
         + json.dumps(list(MCP_TOOL_NAMES), separators=(",", ":"))
     ) in config
     assert 'mcp_servers.kaigo_workspace.required=true' in config
+    assert (
+        'mcp_servers.kaigo_workspace.env='
+        '{"PYTHONPATH"="/opt/kaigo","PYTHONUTF8"="1"}'
+    ) in config
+
+
+def test_mcp_handshake_survives_codex_sanitized_environment(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path / "workspace")
+    command = build_mcp_codex_command(workspace=workspace.root)
+    config = tuple(
+        command[index + 1]
+        for index, argument in enumerate(command)
+        if argument == "-c"
+    )
+    env_override = next(
+        value.removeprefix("mcp_servers.kaigo_workspace.env=")
+        for value in config
+        if value.startswith("mcp_servers.kaigo_workspace.env=")
+    )
+    configured_env = tomllib.loads(f"value={env_override}")["value"]
+    assert configured_env == {
+        "PYTHONPATH": "/opt/kaigo",
+        "PYTHONUTF8": "1",
+    }
+
+    sanitized_env = dict(os.environ)
+    sanitized_env.pop("PYTHONPATH", None)
+    sanitized_env.update(configured_env)
+    sanitized_env["PYTHONPATH"] = str(REPOSITORY_ROOT)
+    server_program = (
+        "import sys; from pathlib import Path; "
+        "from tools.kaigo_codex_bridge.workspace_mcp_server import "
+        "WorkspaceMcpService, serve_stdio; "
+        "serve_stdio(WorkspaceMcpService(Path(sys.argv[1])))"
+    )
+    initialize = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "codex-cli", "version": "0.145.0"},
+        },
+    }
+    initialized = {
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized",
+    }
+    list_tools = {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
+    request_bytes = b"".join(
+        json.dumps(item, separators=(",", ":")).encode("utf-8") + b"\n"
+        for item in (initialize, initialized, list_tools)
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", server_program, str(workspace.root)],
+        cwd=workspace.root,
+        env=sanitized_env,
+        input=request_bytes,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr.decode(
+        "utf-8", errors="replace"
+    )
+    assert completed.stderr == b""
+    responses = tuple(
+        json.loads(line)
+        for line in completed.stdout.decode("utf-8").splitlines()
+    )
+    assert tuple(response["id"] for response in responses) == (1, 2)
+    assert responses[0]["result"]["protocolVersion"] == "2025-06-18"
+    assert tuple(
+        tool["name"] for tool in responses[1]["result"]["tools"]
+    ) == MCP_TOOL_NAMES
 
 
 def test_no_model_strict_config_probe_has_same_mcp_boundary(tmp_path: Path) -> None:
