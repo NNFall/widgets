@@ -1,0 +1,37 @@
+FROM node:22-bookworm-slim@sha256:f32b81066cde10a75dbac96646099533316d94bac4150c55da1636e1f0ffdc46 AS codex-build
+
+ARG CODEX_PACKAGE="@openai/codex@0.145.0"
+ARG CODEX_INTEGRITY="sha512-/PSPSFujjjmiyVFvG2yu/grOFhsWdokTH8t2KGWhXSo/M5n/dIDsnbsnO82/7bLtIoDuzQf7ATBUMWqPWQINlQ=="
+
+RUN set -eux; \
+    npm pack "${CODEX_PACKAGE}" --pack-destination /tmp; \
+    archive=/tmp/openai-codex-0.145.0.tgz; \
+    actual="$(node -e 'const fs=require("fs"),crypto=require("crypto"); process.stdout.write("sha512-"+crypto.createHash("sha512").update(fs.readFileSync(process.argv[1])).digest("base64"))' "${archive}")"; \
+    test "${actual}" = "${CODEX_INTEGRITY}"; \
+    npm install --global --ignore-scripts --no-audit --no-fund "${archive}"; \
+    rm -f "${archive}"; \
+    codex --version | grep -F "0.145.0"
+
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+
+COPY --from=codex-build /usr/local/bin/node /usr/local/bin/node
+COPY --from=codex-build /usr/local/lib/node_modules/@openai/codex /usr/local/lib/node_modules/@openai/codex
+
+RUN ln -s ../lib/node_modules/@openai/codex/bin/codex.js /usr/local/bin/codex
+
+RUN groupadd --gid 10001 codex \
+    && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /home/codex codex \
+    && mkdir -p /home/codex /opt/kaigo/builder_lab /opt/kaigo/tools/kaigo_codex_bridge \
+    && chown -R 10001:10001 /home/codex /opt/kaigo
+
+COPY --chown=10001:10001 builder_lab/__init__.py builder_lab/contracts.py builder_lab/css_contract.py builder_lab/models.py builder_lab/validation.py builder_lab/refinement_workspace.py /opt/kaigo/builder_lab/
+COPY --chown=10001:10001 tools/__init__.py /opt/kaigo/tools/
+COPY --chown=10001:10001 tools/kaigo_codex_bridge/container_workspace_entrypoint.py tools/kaigo_codex_bridge/workspace_mcp_server.py /opt/kaigo/tools/kaigo_codex_bridge/
+
+ENV PYTHONPATH=/opt/kaigo \
+    PYTHONUTF8=1 \
+    HOME=/home/codex
+
+WORKDIR /opt/kaigo
+USER 10001:10001
+CMD ["python3", "/opt/kaigo/tools/kaigo_codex_bridge/container_workspace_entrypoint.py", "--idle"]

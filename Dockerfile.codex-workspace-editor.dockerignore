@@ -1,0 +1,13 @@
+**
+!builder_lab/
+!builder_lab/__init__.py
+!builder_lab/contracts.py
+!builder_lab/css_contract.py
+!builder_lab/models.py
+!builder_lab/validation.py
+!builder_lab/refinement_workspace.py
+!tools/
+!tools/__init__.py
+!tools/kaigo_codex_bridge/
+!tools/kaigo_codex_bridge/container_workspace_entrypoint.py
+!tools/kaigo_codex_bridge/workspace_mcp_server.py
