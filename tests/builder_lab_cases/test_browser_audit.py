@@ -15,7 +15,7 @@ from builder_lab.browser_audit import (
     BrowserAuditReport,
     CapturedScreenshot,
 )
-from builder_lab.preview import build_preview_document
+from builder_lab.preview import build_preview_document, build_trusted_runtime_document
 from builder_lab.visual_models import LayoutState, ScreenshotEvidence, ScreenshotState
 from tests.builder_lab_cases.test_validation import artifact
 
@@ -2187,6 +2187,81 @@ class BrowserAuditChromiumTests(unittest.IsolatedAsyncioTestCase):
         )
         with self.assertRaises(BrowserAuditError):
             await BrowserAudit().audit(hostile)
+
+
+class BrowserAuditDocumentBuilderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_default_document_builder_is_resolved_when_mount_runs(self):
+        calls = []
+
+        def late_builder(candidate, *, channel_id):
+            calls.append((candidate.revision, channel_id))
+            return build_preview_document(candidate, channel_id=channel_id)
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            audit = BrowserAudit(browser=browser)
+            context, page, _failures = await audit._new_context(browser, 390, 844)
+            try:
+                with patch(
+                    "builder_lab.browser_audit.build_preview_document",
+                    side_effect=late_builder,
+                ):
+                    frame = await audit._mount(
+                        page,
+                        audit_artifact(),
+                        freeze_motion=False,
+                    )
+                self.assertEqual(await frame.locator('[data-region="root"]').count(), 1)
+                self.assertEqual(calls, [(12, "browser-audit-channel-20260719")])
+            finally:
+                await context.close()
+                await browser.close()
+
+    async def test_trusted_document_builder_ignores_generated_javascript(self):
+        hostile = audit_artifact(
+            javascript=(
+                "document.body.replaceChildren('MALICIOUS');"
+                "window.parent.postMessage({source:'tamper'}, '*');"
+            )
+        )
+        documents = []
+
+        def trusted_builder(candidate, *, channel_id):
+            document = build_trusted_runtime_document(
+                candidate,
+                channel_id=channel_id,
+            )
+            documents.append(document)
+            return document
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(headless=True)
+            audit = BrowserAudit(
+                browser=browser,
+                document_builder=trusted_builder,
+            )
+            try:
+                screenshots, layouts = await audit._audit_viewport(
+                    browser=browser,
+                    artifact=hostile,
+                    prefix="mobile",
+                    width=390,
+                    height=844,
+                )
+                self.assertEqual(len(screenshots), 3)
+                self.assertEqual(len(layouts), 4)
+                self.assertEqual(
+                    [item.evidence.state.value for item in screenshots],
+                    ["mobile.closed", "mobile.open_initial", "mobile.after_turn_2"],
+                )
+                self.assertTrue(all(item.data.startswith(b"\xff\xd8\xff") for item in screenshots))
+                self.assertTrue(documents)
+                self.assertTrue(
+                    all("script data-kaigo-generated" not in item for item in documents)
+                )
+                self.assertTrue(all("MALICIOUS" not in item for item in documents))
+            finally:
+                await browser.close()
 
 
 if __name__ == "__main__":

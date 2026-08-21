@@ -6,7 +6,7 @@ import io
 import math
 import re
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from PIL import Image
 from playwright.async_api import Browser, BrowserContext, Error as PlaywrightError, Page, async_playwright
@@ -592,10 +592,14 @@ class BrowserAudit:
         self,
         *,
         browser: Browser | None = None,
+        document_builder: Callable[..., str] | None = None,
         timeout_ms: int = 10_000,
         total_timeout_seconds: float = 120,
     ) -> None:
         self._browser = browser
+        if document_builder is not None and not callable(document_builder):
+            raise TypeError("document_builder must be callable or null")
+        self._document_builder = document_builder
         self._timeout_ms = timeout_ms
         if total_timeout_seconds <= 0 or total_timeout_seconds > 300:
             raise ValueError("total_timeout_seconds is invalid")
@@ -885,7 +889,11 @@ class BrowserAudit:
         attention_delay_ms: int | None = None,
         freeze_motion: bool = True,
     ):
-        document = build_preview_document(artifact, channel_id=CHANNEL_ID)
+        # Keep the legacy default late-resolved so existing tests and callers can
+        # monkeypatch the module-level builder. Refinement audits inject the
+        # publication-equivalent trusted builder explicitly.
+        document_builder = self._document_builder or build_preview_document
+        document = document_builder(artifact, channel_id=CHANNEL_ID)
         if attention_delay_ms is not None:
             if attention_delay_ms <= 0:
                 raise ValueError("attention_delay_ms is invalid")
