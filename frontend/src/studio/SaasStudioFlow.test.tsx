@@ -1431,7 +1431,8 @@ describe('durable SaaS Studio flow', () => {
 
     expect(await screen.findByText('Сделай launcher заметнее на тёмном фоне')).toBeVisible();
     expect(screen.getByText('Доработка выполняется')).toBeVisible();
-    expect(screen.getByText('Настраиваем сценарий общения и реакцию виджета')).toBeVisible();
+    expect(screen.getAllByText('Настраиваем полезный диалог с посетителем')[0]).toBeVisible();
+    expect(screen.queryByText('Настраиваем сценарий общения и реакцию виджета')).not.toBeInTheDocument();
   });
 
   it('reloads project versions after a refinement CAS conflict without resubmitting', async () => {
@@ -1572,6 +1573,7 @@ describe('durable SaaS Studio flow', () => {
 
     expect(await screen.findByText('Сделай анимацию закрытия выразительнее')).toBeVisible();
     expect(screen.getByText('Не удалось завершить доработку')).toBeVisible();
+    expect(screen.queryByText('Visual audit failed')).not.toBeInTheDocument();
     const preview = await screen.findByTitle('Предпросмотр консультанта Kaigo');
     expect(preview).toHaveAttribute(
       'src',

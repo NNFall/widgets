@@ -106,9 +106,11 @@ function errorPersistenceState(snapshot: BuilderRunSnapshot | null): ErrorPersis
 function ErrorNotice({
   error,
   persistence,
+  showDetails = true,
 }: {
   error: StudioError;
   persistence: ErrorPersistenceState;
+  showDetails?: boolean;
 }) {
   return (
     <div className="studio-error" role="alert">
@@ -121,10 +123,12 @@ function ErrorNotice({
         {persistence === 'terminal_without_artifact' && (
           <p>История запуска сохранена, но версия виджета не была создана.</p>
         )}
-        <details>
-          <summary>Детали</summary>
-          <pre>{error.raw}</pre>
-        </details>
+        {showDetails && (
+          <details>
+            <summary>Детали</summary>
+            <pre>{error.raw}</pre>
+          </details>
+        )}
       </div>
     </div>
   );
@@ -448,7 +452,7 @@ export function StudioPage() {
         </header>
         <main className="studio-shell studio-shell--composer">
           {controller.error && !controller.project ? (
-            <ErrorNotice error={controller.error} persistence={persistence} />
+            <ErrorNotice error={controller.error} persistence={persistence} showDetails={false} />
           ) : controller.isHydrating || !controller.project ? (
             <p className="studio-composer__loading" role="status">Загружаем проект…</p>
           ) : autostartFlow ? (
@@ -469,7 +473,7 @@ export function StudioPage() {
             />
           )}
           {controller.error && controller.project && (
-            <ErrorNotice error={controller.error} persistence={persistence} />
+            <ErrorNotice error={controller.error} persistence={persistence} showDetails={false} />
           )}
         </main>
       </div>
@@ -485,7 +489,7 @@ export function StudioPage() {
         sourceUrl={controller.project?.source_url ?? sourceUrl}
         brief={controller.project?.brief ?? brief}
         errorNotice={controller.error ? (
-          <ErrorNotice error={controller.error} persistence={persistence} />
+          <ErrorNotice error={controller.error} persistence={persistence} showDetails={false} />
         ) : undefined}
         onOpenProject={openProject}
         onOpenStudioHome={openStudioHome}

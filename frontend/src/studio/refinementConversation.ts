@@ -3,8 +3,14 @@ import type {
   SaasProjectVersion,
   SaasRunSnapshot,
 } from './types';
+import { safeActivityForEvent } from './studioPresentation';
 
 const COMPLETED_FALLBACK = 'Доработка завершена. Откройте результат справа и проверьте изменения.';
+const INTERNAL_ASSIGNMENT = /(?:\b(?:model|provider|prompt|system[_\s-]?prompt|internal[_\s-]?payload|payload|api[_\s-]?key|authorization|traceback)\b\s*[:=]|["'](?:model|provider|prompt|system_prompt|internal_payload|payload|api_key)["']\s*:|\bbearer\s+[a-z0-9._~-]+)/i;
+const INTERNAL_TERM = /\b(?:model|provider|prompt|payload|system[_\s-]?prompt|internal[_\s-]?payload)\b|(?:промпт|провайдер|внутренн(?:ий|яя|ее)\s+(?:контекст|сообщение|инструкц|данные))/i;
+const INTERNAL_ROLE_OR_INSTRUCTION = /\b(?:system|developer|assistant|user|tool)\s*:|(?:you are (?:the |an? )?(?:provider |system )?assistant|ignore (?:all |the )?previous instructions?|print (?:the )?secrets?|reveal (?:the )?hidden|ты\s+[—-]\s+системный|игнорируй предыдущие инструкции?|системн(?:ый|ая|ое)\s+(?:промпт|сообщение)|внутренн(?:ий|яя|ее)\s+(?:промпт|инструкц))/i;
+const TECHNICAL_SYNTAX = /[<>{}`\u0000-\u001f\u007f]|https?:\/\/|www\.|(?:^|\s)[a-z_][a-z0-9_.-]{1,40}\s*=|(?:^|\s)(?:\/root\/|[a-z]:\\)|#[0-9a-f]{3,8}\b/i;
+const CYRILLIC_LETTER = /[А-ЯЁа-яё]/g;
 
 export interface PendingRefinementConversation {
   changeRequest: string;
@@ -23,16 +29,36 @@ export interface RefinementConversationEntry {
   assistantMessage: string;
 }
 
-function publicStageMessage(run: SaasRunSnapshot | undefined, completed: boolean) {
-  const candidates = (run?.events ?? []).filter((event) => (
-    event.type === 'stage.completed'
-    || (!completed && event.type === 'stage.started')
-  ));
-  for (let index = candidates.length - 1; index >= 0; index -= 1) {
-    const message = candidates[index]?.message?.trim();
-    if (message) return message;
+function safeCompletedSummary(run: SaasRunSnapshot | undefined) {
+  const events = run?.events ?? [];
+  let rawMessage: string | null | undefined;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (events[index]?.type === 'stage.completed') {
+      rawMessage = events[index]?.message;
+      break;
+    }
   }
-  return null;
+  const raw = rawMessage?.trim();
+  if (!raw || raw.length > 1_000) return null;
+  if (
+    INTERNAL_ASSIGNMENT.test(raw)
+    || INTERNAL_TERM.test(raw)
+    || INTERNAL_ROLE_OR_INSTRUCTION.test(raw)
+    || TECHNICAL_SYNTAX.test(raw)
+  ) return null;
+  const message = raw.replace(/\s+/g, ' ');
+  if ((message.match(CYRILLIC_LETTER) ?? []).length < 8) return null;
+  return message;
+}
+
+function safeProgressMessage(run: SaasRunSnapshot | undefined) {
+  const event = run?.events?.at(-1);
+  if (!event) return null;
+  return safeActivityForEvent({
+    type: event.type,
+    stage: event.payload.stage ?? null,
+    message: event.message,
+  });
 }
 
 function presentation(
@@ -44,7 +70,7 @@ function presentation(
   if (status === 'completed') {
     return {
       title: versionNumber ? `Готово — версия ${versionNumber}` : 'Доработка готова',
-      message: publicStageMessage(run, true) ?? COMPLETED_FALLBACK,
+      message: safeCompletedSummary(run) ?? COMPLETED_FALLBACK,
     };
   }
   if (status === 'failed') {
@@ -61,7 +87,7 @@ function presentation(
   }
   return {
     title: 'Доработка выполняется',
-    message: publicStageMessage(run, false)
+    message: safeProgressMessage(run)
       ?? pendingMessage
       ?? (status === 'running' ? 'Kaigo вносит изменения и проверяет результат.' : 'Доработка поставлена в очередь'),
   };
