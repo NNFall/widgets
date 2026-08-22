@@ -20,6 +20,7 @@ from builder_lab.forensics.config import GenerationForensicsConfig
 @pytest.mark.asyncio
 async def test_operator_funnel_report_is_allowlisted_aggregate_only_and_no_store(
     tmp_path,
+    caplog,
 ) -> None:
     engine = create_async_engine(
         f"sqlite+aiosqlite:///{tmp_path / 'operator-funnel.db'}"
@@ -154,6 +155,7 @@ async def test_operator_funnel_report_is_allowlisted_aggregate_only_and_no_store
     app = web.Application()
     app[SESSION_FACTORY_KEY] = factory
     app["config"] = SimpleNamespace(
+        operator_read_token="t" * 32,
         generation_forensics=GenerationForensicsConfig(
             enabled=True,
             root=tmp_path / "forensics",
@@ -174,6 +176,28 @@ async def test_operator_funnel_report_is_allowlisted_aggregate_only_and_no_store
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
+        with caplog.at_level("INFO"):
+            service_response = await client.get(
+                "/api/operator/funnel?from=2026-07-01&to=2026-08-01&source=telegram",
+                headers={"Authorization": "Bearer " + "t" * 32},
+            )
+        assert service_response.status == 200
+        assert service_response.headers["Cache-Control"] == "no-store"
+        assert "t" * 32 not in caplog.text
+        service_payload = await service_response.json()
+        assert set(service_payload) == {
+            "period",
+            "filters",
+            "stages",
+            "engagement",
+            "sources",
+        }
+        service_page = await client.get(
+            "/operator/funnel?from=2026-07-01&to=2026-08-01&source=telegram",
+            headers={"Authorization": "Bearer " + "t" * 32},
+        )
+        assert service_page.status == 401
+
         assert (await client.get("/api/operator/funnel")).status == 401
         await client.post("/test/login/11")
         assert (await client.get("/api/operator/funnel")).status == 403

@@ -70,6 +70,7 @@ class AppConfig:
     funnel_cleanup_batch_size: int = 500
     funnel_cleanup_time_budget_seconds: int = 5
     oauth_callback_concurrency: int = 4
+    operator_read_token: str | None = field(default=None, repr=False)
     readiness_token: str | None = field(default=None, repr=False)
     expected_worker_deployment_id: str | None = None
     expected_worker_image_identity: str | None = None
@@ -103,6 +104,14 @@ class AppConfig:
                 "generation_forensics must be a GenerationForensicsConfig"
             )
         self.generation_forensics.validate_for_environment(self.environment)
+        if self.operator_read_token is not None:
+            self.operator_read_token = self.operator_read_token.strip()
+            if not self.operator_read_token:
+                self.operator_read_token = None
+            elif len(self.operator_read_token.encode("utf-8")) < 32:
+                raise ValueError(
+                    "operator_read_token must be at least 32 bytes"
+                )
         if self.environment == "production" and self.auto_create_schema:
             raise ValueError("schema auto-creation is forbidden in production")
         oauth_pairs = (
@@ -553,6 +562,7 @@ def load_config() -> AppConfig:
             "KAIGO_FUNNEL_CLEANUP_TIME_BUDGET_SECONDS", 5
         ),
         oauth_callback_concurrency=_env_int("KAIGO_OAUTH_CALLBACK_CONCURRENCY", 4),
+        operator_read_token=_first_nonblank("KAIGO_OPERATOR_READ_TOKEN"),
         readiness_token=_first_nonblank("KAIGO_READINESS_TOKEN"),
         expected_worker_deployment_id=_first_nonblank("KAIGO_RELEASE_ID"),
         expected_worker_image_identity=_first_nonblank(

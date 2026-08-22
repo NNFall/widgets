@@ -217,6 +217,36 @@ PUBLICATION_RELEASE_LOCK_HELD=1
    before opening a database session. Rotate `KAIGO_BUILDER_WORKER_BOOT_ID`
    for every rollout and keep the release, immutable worker-image, and boot
    identities identical in the app and worker environments.
+   If automation needs the aggregate operator reports, optionally generate a
+   separate random 32+ byte `KAIGO_OPERATOR_READ_TOKEN` directly in the
+   root-only application secret store. This token is accepted only on the JSON
+   read routes for the funnel and sanitized generation runs; it is not a user,
+   admin, billing, or mutation credential. Never put it in Git, a URL, shell
+   arguments, logs, or chat. The CLI can read the same value from a one-line
+   root-only file through `KAIGO_OPERATOR_READ_TOKEN_FILE`:
+
+   ```bash
+   set -euo pipefail
+   umask 077
+   OPERATOR_TOKEN_FILE="$(mktemp /run/kaigo-operator-read-token.XXXXXX)"
+   trap 'rm -f "$OPERATOR_TOKEN_FILE"' EXIT
+   openssl rand -base64 48 | tr -d '\n' > "$OPERATOR_TOKEN_FILE"
+   chmod 600 "$OPERATOR_TOKEN_FILE"
+   test "$(stat -c '%a' "$OPERATOR_TOKEN_FILE")" = 600
+   # Install the value from this file into KAIGO_OPERATOR_READ_TOKEN in the
+   # root-only app EnvironmentFile without printing it or passing it in argv.
+   export KAIGO_OPERATOR_READ_TOKEN_FILE="$OPERATOR_TOKEN_FILE"
+   python scripts/operator_metrics.py snapshot \
+     --from 2026-08-22 --to 2026-08-23 --source yandex
+   unset KAIGO_OPERATOR_READ_TOKEN_FILE
+   trap - EXIT
+   rm -f "$OPERATOR_TOKEN_FILE"
+   ```
+
+   Rotate by replacing the environment value and restarting the application;
+   the previous value immediately stops working. Revoke by removing the
+   variable and restarting. A missing value leaves the existing OAuth-only
+   operator access unchanged.
 4. Enable bridge netfilter before installing the worker unit. The unit fails
    closed when `/proc/sys/net/bridge/bridge-nf-call-iptables` is absent or not
    set to `1`, because its database and egress containment rules would
@@ -803,6 +833,18 @@ DB-backed `/api/ready`, the static `/studio/` application, and the public
 `/api/auth/session` contract. Without owner, publication, and sandbox webhook
 evidence it returns `release_ready: false` and `release_status: "incomplete"`.
 This diagnostic is useful, but it is not a completed release gate.
+
+The read-only operator report client is deliberately separate from the browser
+cookie smoke. When `KAIGO_OPERATOR_READ_TOKEN_FILE` is present, it can fetch
+only the aggregate JSON reports:
+
+```bash
+python scripts/operator_metrics.py snapshot \
+  --from 2026-08-22 --to 2026-08-23 --source yandex
+```
+
+Do not put the token in a query string or export it through shell tracing. The
+service token cannot authorize HTML pages, admin actions, billing, or writes.
 
 For the full gate, put the real browser cookie in a temporary root-owned file.
 Masked `read` keeps it out of shell history and `ps`; the trap removes the file

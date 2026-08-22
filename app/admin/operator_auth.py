@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+import secrets
+from typing import Literal
+
 from aiohttp import web
 from aiohttp_session import get_session
 from sqlalchemy import func, select
@@ -7,6 +11,12 @@ from sqlalchemy import func, select
 from app.db.session import get_session_factory
 from app.saas.models import UserIdentity
 from builder_lab.forensics.config import GenerationForensicsConfig
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorPrincipal:
+    user_id: int | None
+    auth_method: Literal["oauth", "service_token"]
 
 
 def _forensics_config(request: web.Request) -> GenerationForensicsConfig:
@@ -50,4 +60,52 @@ async def require_verified_operator(request: web.Request) -> int:
     return user_id
 
 
-__all__ = ["require_verified_operator"]
+def _bearer_token(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    scheme, separator, token = value.partition(" ")
+    if (
+        scheme.casefold() != "bearer"
+        or not separator
+        or not token
+        or token != token.strip()
+        or " " in token
+    ):
+        return None
+    return token
+
+
+async def require_read_operator(request: web.Request) -> OperatorPrincipal:
+    """Require the OAuth operator or the optional read-only service token."""
+
+    _forensics_config(request)
+    configured_token = getattr(request.app.get("config"), "operator_read_token", None)
+    supplied_token = _bearer_token(request.headers.get("Authorization"))
+    if (
+        isinstance(configured_token, str)
+        and supplied_token is not None
+        and secrets.compare_digest(configured_token, supplied_token)
+    ):
+        return OperatorPrincipal(user_id=None, auth_method="service_token")
+
+    # Keep the OAuth boundary as the fallback and avoid making the service
+    # credential a general-purpose admin identity.
+    return OperatorPrincipal(
+        user_id=await require_verified_operator(request),
+        auth_method="oauth",
+    )
+
+
+def operator_log_extra(principal: OperatorPrincipal) -> dict[str, object]:
+    extra: dict[str, object] = {"operator_auth_method": principal.auth_method}
+    if principal.user_id is not None:
+        extra["operator_user_id"] = principal.user_id
+    return extra
+
+
+__all__ = [
+    "OperatorPrincipal",
+    "operator_log_extra",
+    "require_read_operator",
+    "require_verified_operator",
+]

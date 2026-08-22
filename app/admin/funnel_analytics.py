@@ -6,7 +6,12 @@ import logging
 
 from aiohttp import web
 
-from app.admin.operator_auth import require_verified_operator
+from app.admin.operator_auth import (
+    OperatorPrincipal,
+    operator_log_extra,
+    require_read_operator,
+    require_verified_operator,
+)
 from app.analytics.reporting import load_funnel_report
 from app.db.session import get_session_factory
 
@@ -50,8 +55,19 @@ def _date_range(request: web.Request) -> tuple[datetime, datetime]:
     return start, end
 
 
-async def _report(request: web.Request) -> tuple[int, dict[str, object]]:
-    operator_id = await require_verified_operator(request)
+async def _report(
+    request: web.Request,
+    *,
+    read_only: bool = False,
+) -> tuple[OperatorPrincipal, dict[str, object]]:
+    principal = (
+        await require_read_operator(request)
+        if read_only
+        else OperatorPrincipal(
+            user_id=await require_verified_operator(request),
+            auth_method="oauth",
+        )
+    )
     start, end = _date_range(request)
     source = request.query.get("source") or None
     factory = get_session_factory(request.app)
@@ -65,13 +81,13 @@ async def _report(request: web.Request) -> tuple[int, dict[str, object]]:
             )
     except ValueError as error:
         raise web.HTTPBadRequest(headers=_NO_STORE) from error
-    return operator_id, report
+    return principal, report
 
 
 async def operator_funnel_json(request: web.Request) -> web.Response:
-    operator_id, report = await _report(request)
+    principal, report = await _report(request, read_only=True)
     LOGGER.info(
-        "operator_funnel_report_viewed", extra={"operator_user_id": operator_id}
+        "operator_funnel_report_viewed", extra=operator_log_extra(principal)
     )
     return web.json_response(report, headers=_NO_STORE)
 
@@ -105,7 +121,7 @@ def _engagement_table(rows: list[dict[str, object]]) -> str:
 
 
 async def operator_funnel_page(request: web.Request) -> web.Response:
-    operator_id, report = await _report(request)
+    principal, report = await _report(request)
     period = report["period"]
     filters = report["filters"]
     selected_source = filters["source"] or ""
@@ -144,7 +160,7 @@ async def operator_funnel_page(request: web.Request) -> web.Response:
         "<h2>Первый источник</h2><table><thead><tr><th>Источник</th><th>Пути</th></tr></thead>"
         f"<tbody>{source_rows}</tbody></table>"
     )
-    LOGGER.info("operator_funnel_page_viewed", extra={"operator_user_id": operator_id})
+    LOGGER.info("operator_funnel_page_viewed", extra=operator_log_extra(principal))
     return web.Response(
         text=_layout(body),
         content_type="text/html",

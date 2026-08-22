@@ -14,7 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.admin.auth import require_admin_session
 from app.admin.layout import render_layout
-from app.admin.operator_auth import require_verified_operator
+from app.admin.operator_auth import (
+    operator_log_extra,
+    require_read_operator,
+    require_verified_operator,
+)
 from app.db.session import get_session_factory
 from app.generation_timeline import (
     load_operator_recent_runs,
@@ -776,16 +780,18 @@ async def admin_generation_run_export(request: web.Request) -> web.StreamRespons
 
 
 async def operator_runs_json(request: web.Request) -> web.Response:
-    operator_id = await require_verified_operator(request)
+    principal = await require_read_operator(request)
     factory = get_session_factory(request.app)
     async with factory() as database:
         rows = await load_operator_recent_runs(database, limit=_limit(request))
-    LOGGER.info("operator_generation_runs_listed", extra={"operator_user_id": operator_id})
+    LOGGER.info(
+        "operator_generation_runs_listed", extra=operator_log_extra(principal)
+    )
     return web.json_response({"runs": rows}, headers=_NO_STORE)
 
 
 async def operator_run_json(request: web.Request) -> web.Response:
-    operator_id = await require_verified_operator(request)
+    principal = await require_read_operator(request)
     run_id = _run_id(request.match_info["run_id"])
     factory = get_session_factory(request.app)
     async with factory() as database:
@@ -799,7 +805,10 @@ async def operator_run_json(request: web.Request) -> web.Response:
         raise web.HTTPNotFound(headers=_NO_STORE)
     LOGGER.info(
         "operator_generation_run_viewed",
-        extra={"operator_user_id": operator_id, "generation_run_id": str(run_id)},
+        extra={
+            **operator_log_extra(principal),
+            "generation_run_id": str(run_id),
+        },
     )
     return web.json_response(summary, headers=_NO_STORE)
 

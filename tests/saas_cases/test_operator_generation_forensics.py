@@ -160,6 +160,7 @@ async def test_operator_timeline_requires_verified_oauth_allowlist_and_leaks_no_
     app = web.Application()
     app[SESSION_FACTORY_KEY] = factory
     app["config"] = SimpleNamespace(
+        operator_read_token="t" * 32,
         generation_forensics=GenerationForensicsConfig(
             enabled=True,
             root=tmp_path / "forensics",
@@ -181,6 +182,23 @@ async def test_operator_timeline_requires_verified_oauth_allowlist_and_leaks_no_
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
+        service_headers = {"Authorization": "Bearer " + "t" * 32}
+        service_listing = await client.get(
+            "/api/operator/generation-runs",
+            headers=service_headers,
+        )
+        service_detail = await client.get(
+            f"/api/operator/generation-runs/{RUN_ID}",
+            headers=service_headers,
+        )
+        assert service_listing.status == service_detail.status == 200
+        assert service_listing.headers["Cache-Control"] == "no-store"
+        service_page = await client.get(
+            f"/operator/generation-runs/{RUN_ID}",
+            headers=service_headers,
+        )
+        assert service_page.status == 401
+
         anonymous = await client.get("/api/operator/generation-runs")
         assert anonymous.status == 401
 

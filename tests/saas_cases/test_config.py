@@ -65,6 +65,29 @@ def test_project_versions_flag_is_strict_and_defaults_off(
         load_config()
 
 
+def test_operator_read_token_is_loaded_and_hidden_from_config_repr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _database(monkeypatch)
+    monkeypatch.setenv("KAIGO_ENVIRONMENT", "test")
+    token = "t" * 32
+    monkeypatch.setenv("KAIGO_OPERATOR_READ_TOKEN", token)
+
+    config = load_config()
+
+    assert config.operator_read_token == token
+    assert token not in repr(config)
+
+
+def test_operator_read_token_rejects_short_configured_value() -> None:
+    with pytest.raises(ValueError, match="operator_read_token"):
+        AppConfig(
+            database_url="postgresql://db",
+            environment="test",
+            operator_read_token="too-short",
+        )
+
+
 def test_publication_chat_capability_defaults_to_one_hour(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

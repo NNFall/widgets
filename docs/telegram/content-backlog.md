@@ -41,6 +41,7 @@
 | TG-030 | 1 | hold | Почему 3 из 3 AI-кандидатов — ещё не широкий rollout | После исчерпания дневной квоты 3.7 модель 3.6 дала verified 37signals без Codex fallback; теперь стабильность нужно подтвердить на 30 candidate-вызовах | [Release packet](release-packets/2026-08-17-antigravity-text-provider.md) |
 | TG-031 | 1 | ready | Почему мы убрали поле домена из публикации виджета | Пользователь нажимает одну кнопку, получает код, ссылку загрузчика и инструкцию, а точный HTTPS-адрес проекта сохраняется автоматически | [Release packet](release-packets/2026-08-20-simple-widget-publication.md) |
 | TG-032 | 1 | hold | Где теряются первые посетители Kaigo | Своя анонимная воронка показывает путь от рекламного перехода и дочитывания лендинга до бесплатного результата и публикации | [Release packet](release-packets/2026-08-20-first-party-funnel-analytics.md) |
+| TG-033 | 1 | hold | Как Kaigo сам читает свою воронку | Read-only CLI собирает агрегированную воронку и запуски без ручного OAuth и без доступа к сырым данным | [Release packet](release-packets/2026-08-22-operator-read-only-analytics.md) |
 
 ## Как добавлять тему
 
