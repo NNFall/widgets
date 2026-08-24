@@ -21,7 +21,6 @@ from app.projects.routes import (
     _chat_reference_context,
     _project_scope,
     _require_csrf,
-    _scope,
     _uuid,
 )
 from app.publication.service import (

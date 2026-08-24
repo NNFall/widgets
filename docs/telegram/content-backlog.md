@@ -43,6 +43,7 @@
 | TG-032 | 1 | hold | Где теряются первые посетители Kaigo | Своя анонимная воронка показывает путь от рекламного перехода и дочитывания лендинга до бесплатного результата и публикации | [Release packet](release-packets/2026-08-20-first-party-funnel-analytics.md) |
 | TG-033 | 1 | hold | Как Kaigo сам читает свою воронку | Read-only CLI собирает агрегированную воронку и запуски без ручного OAuth и без доступа к сырым данным | [Release packet](release-packets/2026-08-22-operator-read-only-analytics.md) |
 | TG-034 | 1 | idea | Почему обычный редирект www не должен ломать анализ сайта | Безопасный crawler теперь принимает только каноническую пару www и корневого домена, сохраняя SSRF-защиту | [Release packet](release-packets/2026-08-24-www-apex-reference-redirect.md) |
+| TG-035 | 1 | idea | Как разработчик отлаживает любой виджет без паролей в ссылке | Проверенная OAuth-сессия открывает чужой проект, версию и публикацию, но списывает лимиты только владельца | [Release packet](release-packets/2026-08-24-developer-project-access.md) |
 
 ## Как добавлять тему
 
