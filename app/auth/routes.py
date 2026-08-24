@@ -18,6 +18,7 @@ from aiohttp import web
 from aiohttp_session import STORAGE_KEY, get_session, new_session
 from sqlalchemy import delete, or_, select, update
 
+from app.admin.operator_auth import developer_session_snapshot
 from app.analytics.service import (
     FUNNEL_JOURNEY_SESSION_KEY,
     ensure_funnel_journey,
@@ -680,6 +681,7 @@ async def auth_session(request: web.Request) -> web.Response:
             "csrf_token": csrf_token if isinstance(user_id, int) else None,
             "pending_draft_id": session.get("pending_draft_id"),
             "providers": sorted(request.app[OAUTH_PROVIDERS_KEY]),
+            "developer": await developer_session_snapshot(request),
         }
     )
 

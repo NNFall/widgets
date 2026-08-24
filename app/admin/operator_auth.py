@@ -19,6 +19,66 @@ class OperatorPrincipal:
     auth_method: Literal["oauth", "service_token"]
 
 
+@dataclass(frozen=True, slots=True)
+class DeveloperPrincipal:
+    """Verified browser identity allowed to debug every SaaS project."""
+
+    user_id: int
+    email: str
+
+
+def _developer_config(request: web.Request) -> GenerationForensicsConfig | None:
+    app_config = request.app.get("config")
+    config = getattr(app_config, "generation_forensics", None)
+    if not isinstance(config, GenerationForensicsConfig):
+        return None
+    if not config.enabled or not config.admin_emails:
+        return None
+    return config
+
+
+async def optional_developer_principal(
+    request: web.Request,
+) -> DeveloperPrincipal | None:
+    """Return the verified OAuth developer identity, if this session has one.
+
+    This helper is intentionally browser-session-only. It never accepts the
+    read-only bearer token because that token must not become a mutation or
+    cross-tenant project credential.
+    """
+
+    config = _developer_config(request)
+    if config is None:
+        return None
+    session = await get_session(request)
+    user_id = session.get("user_id")
+    if not isinstance(user_id, int):
+        return None
+    factory = get_session_factory(request.app)
+    async with factory() as database:
+        identity = await database.scalar(
+            select(UserIdentity)
+            .where(
+                UserIdentity.user_id == user_id,
+                UserIdentity.provider.in_(("google", "yandex")),
+                UserIdentity.email_verified.is_(True),
+                func.lower(UserIdentity.email).in_(config.admin_emails),
+            )
+            .limit(1)
+        )
+    if identity is None or not isinstance(identity.email, str):
+        return None
+    return DeveloperPrincipal(user_id=user_id, email=identity.email)
+
+
+async def developer_session_snapshot(request: web.Request) -> dict[str, object]:
+    principal = await optional_developer_principal(request)
+    return {
+        "enabled": principal is not None,
+        "scope": "all_projects" if principal is not None else None,
+    }
+
+
 def _forensics_config(request: web.Request) -> GenerationForensicsConfig:
     app_config = request.app.get("config")
     config = getattr(app_config, "generation_forensics", None)
@@ -104,8 +164,11 @@ def operator_log_extra(principal: OperatorPrincipal) -> dict[str, object]:
 
 
 __all__ = [
+    "DeveloperPrincipal",
     "OperatorPrincipal",
+    "developer_session_snapshot",
     "operator_log_extra",
+    "optional_developer_principal",
     "require_read_operator",
     "require_verified_operator",
 ]
