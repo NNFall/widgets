@@ -143,24 +143,28 @@ class PublicationService:
         artifact_id: UUID | None = None,
         revision: int | None = None,
         allowed_domains: Sequence[str] | None = None,
+        developer: bool = False,
     ) -> PublishedRelease:
         if artifact_id is None and revision is None:
             raise InvalidPublicationArtifact("artifact_id is required")
         async with self._session_factory() as database, database.begin():
             # Global lock ordering is Project -> Publication. It serializes the
             # concurrent first-publish path before the unique project key is hit.
-            project = await database.scalar(
-                select(Project)
-                .where(
-                    Project.id == project_id,
-                    Project.owner_user_id == actor_user_id,
-                    Project.tenant_id == tenant_id,
+            project_filters = [Project.id == project_id]
+            if not developer:
+                project_filters.extend(
+                    [
+                        Project.owner_user_id == actor_user_id,
+                        Project.tenant_id == tenant_id,
+                    ]
                 )
-                .with_for_update()
+            project = await database.scalar(
+                select(Project).where(*project_filters).with_for_update()
             )
             if project is None:
                 raise PublicationNotFound("project not found")
-            await self._require_entitlement(database, actor_user_id)
+            entitlement_user_id = project.owner_user_id if developer else actor_user_id
+            await self._require_entitlement(database, entitlement_user_id)
             publication = await database.scalar(
                 select(Publication)
                 .where(Publication.project_id == project.id)
@@ -239,6 +243,7 @@ class PublicationService:
         project_version_id: UUID,
         expected_active_release_id: UUID | None,
         allowed_domains: Sequence[str] | None = None,
+        developer: bool = False,
     ) -> PublishedRelease:
         if not isinstance(project_version_id, UUID):
             raise InvalidPublicationArtifact("project_version_id is required")
@@ -248,18 +253,21 @@ class PublicationService:
             raise PublicationConflict("invalid expected active release")
 
         async with self._session_factory() as database, database.begin():
-            project = await database.scalar(
-                select(Project)
-                .where(
-                    Project.id == project_id,
-                    Project.owner_user_id == actor_user_id,
-                    Project.tenant_id == tenant_id,
+            project_filters = [Project.id == project_id]
+            if not developer:
+                project_filters.extend(
+                    [
+                        Project.owner_user_id == actor_user_id,
+                        Project.tenant_id == tenant_id,
+                    ]
                 )
-                .with_for_update()
+            project = await database.scalar(
+                select(Project).where(*project_filters).with_for_update()
             )
             if project is None:
                 raise PublicationNotFound("project not found")
-            await self._require_entitlement(database, actor_user_id)
+            entitlement_user_id = project.owner_user_id if developer else actor_user_id
+            await self._require_entitlement(database, entitlement_user_id)
             publication = await database.scalar(
                 select(Publication)
                 .where(Publication.project_id == project.id)
@@ -358,15 +366,18 @@ class PublicationService:
         *,
         actor_user_id: int,
         tenant_id: int,
+        developer: bool = False,
     ) -> ProjectPublicationState | None:
         async with self._session_factory() as database:
-            project = await database.scalar(
-                select(Project).where(
-                    Project.id == project_id,
-                    Project.owner_user_id == actor_user_id,
-                    Project.tenant_id == tenant_id,
+            project_filters = [Project.id == project_id]
+            if not developer:
+                project_filters.extend(
+                    [
+                        Project.owner_user_id == actor_user_id,
+                        Project.tenant_id == tenant_id,
+                    ]
                 )
-            )
+            project = await database.scalar(select(Project).where(*project_filters))
             if project is None:
                 raise PublicationNotFound("project not found")
             publication = await database.scalar(
@@ -440,24 +451,34 @@ class PublicationService:
         tenant_id: int,
         target_release_id: UUID,
         expected_active_release_id: UUID | None | object = _EXPECTED_RELEASE_UNSET,
+        developer: bool = False,
     ) -> PublishedRelease:
         async with self._session_factory() as database, database.begin():
             # Resolve the parent through a join while locking only Project, then
             # acquire Publication. This preserves the global Project ->
             # Publication lock order even during concurrent rollback/publish.
+            project_filters = [Publication.id == publication_id]
+            if not developer:
+                project_filters.extend(
+                    [
+                        Project.owner_user_id == actor_user_id,
+                        Project.tenant_id == tenant_id,
+                    ]
+                )
             project_id = await database.scalar(
                 select(Project.id)
                 .join(Publication, Publication.project_id == Project.id)
-                .where(
-                    Publication.id == publication_id,
-                    Project.owner_user_id == actor_user_id,
-                    Project.tenant_id == tenant_id,
-                )
+                .where(*project_filters)
                 .with_for_update(of=Project)
             )
             if project_id is None:
                 raise PublicationNotFound("publication not found")
-            await self._require_entitlement(database, actor_user_id)
+            entitlement_user_id = actor_user_id
+            if developer:
+                entitlement_user_id = await database.scalar(
+                    select(Project.owner_user_id).where(Project.id == project_id)
+                )
+            await self._require_entitlement(database, entitlement_user_id)
             publication = await database.scalar(
                 select(Publication)
                 .where(Publication.id == publication_id)

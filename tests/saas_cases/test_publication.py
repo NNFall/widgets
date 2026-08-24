@@ -56,6 +56,7 @@ from app.saas.models import (
     UserIdentity,
 )
 from builder_lab.models import AssistantPersona, BuilderRequest, EngineName
+from builder_lab.forensics.config import GenerationForensicsConfig
 from tests.builder_lab_cases.test_validation import artifact
 
 
@@ -1173,6 +1174,43 @@ async def test_publish_route_requires_auth_csrf_owner_verified_and_subscription(
         assert duplicate_payload["release_id"] == payload["release_id"]
         assert duplicate_payload["embed_url"].startswith("https://kaigo.example/")
         assert "attacker.invalid" not in duplicate_payload["embed_url"]
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_allowlisted_developer_can_publish_foreign_project_with_owner_entitlement(
+    tmp_path,
+) -> None:
+    config = SimpleNamespace(
+        public_auth_enabled=True,
+        public_base_url="https://kaigo.example/",
+        environment="production",
+        publication_allow_insecure_origins=False,
+        generation_forensics=GenerationForensicsConfig(
+            enabled=True,
+            root=tmp_path / "forensics",
+            ttl_hours=120,
+            max_bytes=1_000_000,
+            admin_emails=("owner@example.com",),
+        ),
+    )
+    engine, factory, client, ids = await _publication_app(tmp_path, config=config)
+    try:
+        await client.post("/test/login/10")
+        route = f"/api/projects/{ids['foreign_project']}/publication"
+        state = await client.get(route)
+        assert state.status == 200
+        assert await state.json() == {"publication": None}
+
+        response = await client.post(
+            f"/api/projects/{ids['foreign_project']}/publish",
+            json={"artifact_id": str(ids["foreign"]), "allowed_domains": ["https://other.example"]},
+            headers={"X-CSRF-Token": "csrf"},
+        )
+        assert response.status == 201
+        assert (await response.json())["stable_key"]
     finally:
         await client.close()
         await engine.dispose()

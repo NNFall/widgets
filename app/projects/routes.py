@@ -6,6 +6,7 @@ import json
 import re
 import secrets
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import UUID
 from weakref import WeakValueDictionary
@@ -14,6 +15,7 @@ from aiohttp import web
 from aiohttp_session import get_session
 from sqlalchemy import select
 
+from app.admin.operator_auth import optional_developer_principal
 from app.analytics.service import (
     FUNNEL_JOURNEY_SESSION_KEY,
     create_funnel_journey,
@@ -37,6 +39,7 @@ from app.chat import (
     ChatContext,
     ChatServiceError,
 )
+from app.db.models import User
 from app.projects.serializers import (
     serialize_artifact,
     serialize_event,
@@ -83,6 +86,13 @@ GENERATION_FORENSICS_CONFIG_KEY = web.AppKey(
     "generation_forensics_config",
     GenerationForensicsConfig,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectScope:
+    user_id: int
+    tenant_id: int
+    developer: bool = False
 
 
 def _session_funnel_journey_id(session) -> UUID | None:
@@ -132,6 +142,16 @@ async def _scope(request: web.Request, *, verified: bool = False) -> tuple[int, 
     return user_id, tenant_id
 
 
+async def _project_scope(
+    request: web.Request,
+    *,
+    verified: bool = False,
+) -> ProjectScope:
+    user_id, tenant_id = await _scope(request, verified=verified)
+    developer = (await optional_developer_principal(request)) is not None
+    return ProjectScope(user_id=user_id, tenant_id=tenant_id, developer=developer)
+
+
 async def _require_csrf(request: web.Request) -> None:
     session = await get_session(request)
     expected, supplied = session.get("csrf_token"), request.headers.get("X-CSRF-Token")
@@ -155,12 +175,24 @@ def _uuid(value: str) -> UUID:
         raise web.HTTPNotFound(text=_error("not_found"), content_type="application/json") from error
 
 
-async def _owned_project(database, project_id: UUID, user_id: int, tenant_id: int, *, lock: bool = False):
-    statement = select(Project).where(
-        Project.id == project_id,
-        Project.owner_user_id == user_id,
-        Project.tenant_id == tenant_id,
-    )
+async def _owned_project(
+    database,
+    project_id: UUID,
+    user_id: int,
+    tenant_id: int,
+    *,
+    developer: bool = False,
+    lock: bool = False,
+):
+    filters = [Project.id == project_id]
+    if not developer:
+        filters.extend(
+            [
+                Project.owner_user_id == user_id,
+                Project.tenant_id == tenant_id,
+            ]
+        )
+    statement = select(Project).where(*filters)
     project = await database.scalar(statement.with_for_update() if lock else statement)
     if project is None:
         raise web.HTTPNotFound(text=_error("not_found"), content_type="application/json")
@@ -173,16 +205,21 @@ async def _owned_run(
     user_id: int,
     tenant_id: int,
     *,
+    developer: bool = False,
     lock: bool = False,
 ):
+    filters = [GenerationRun.id == run_id]
+    if not developer:
+        filters.extend(
+            [
+                Project.owner_user_id == user_id,
+                Project.tenant_id == tenant_id,
+            ]
+        )
     statement = (
         select(GenerationRun, Project)
         .join(Project, GenerationRun.project_id == Project.id)
-        .where(
-            GenerationRun.id == run_id,
-            Project.owner_user_id == user_id,
-            Project.tenant_id == tenant_id,
-        )
+        .where(*filters)
     )
     row = (
         await database.execute(statement.with_for_update() if lock else statement)
@@ -470,15 +507,28 @@ async def _enqueue_express_run(
 
 
 async def list_projects(request: web.Request) -> web.Response:
-    user_id, tenant_id = await _scope(request)
+    scope = await _project_scope(request)
     factory = get_session_factory(request.app)
     async with factory() as database:
-        projects = list((await database.execute(
-            select(Project)
-            .where(Project.owner_user_id == user_id, Project.tenant_id == tenant_id)
+        statement = (
+            select(Project, User.email)
+            .join(User, User.id == Project.owner_user_id)
             .order_by(Project.created_at.desc(), Project.id)
-        )).scalars())
-    return web.json_response({"projects": [serialize_project(project) for project in projects]})
+        )
+        if not scope.developer:
+            statement = statement.where(
+                Project.owner_user_id == scope.user_id,
+                Project.tenant_id == scope.tenant_id,
+            )
+        rows = list((await database.execute(statement)).all())
+    return web.json_response(
+        {
+            "projects": [
+                serialize_project(project, owner_email=email)
+                for project, email in rows
+            ]
+        }
+    )
 
 
 async def create_project(request: web.Request) -> web.Response:
@@ -561,7 +611,8 @@ async def create_project(request: web.Request) -> web.Response:
 
 
 async def update_project_draft(request: web.Request) -> web.Response:
-    user_id, tenant_id = await _scope(request)
+    scope = await _project_scope(request)
+    user_id, tenant_id, developer = scope.user_id, scope.tenant_id, scope.developer
     await _require_csrf(request)
     try:
         body = await request.json()
@@ -596,6 +647,7 @@ async def update_project_draft(request: web.Request) -> web.Response:
             _uuid(request.match_info["project_id"]),
             user_id,
             tenant_id,
+            developer=developer,
             lock=True,
         )
         previous_run = await database.scalar(
@@ -616,10 +668,16 @@ async def update_project_draft(request: web.Request) -> web.Response:
 
 
 async def get_project(request: web.Request) -> web.Response:
-    user_id, tenant_id = await _scope(request)
+    scope = await _project_scope(request)
     factory = get_session_factory(request.app)
     async with factory() as database:
-        project = await _owned_project(database, _uuid(request.match_info["project_id"]), user_id, tenant_id)
+        project = await _owned_project(
+            database,
+            _uuid(request.match_info["project_id"]),
+            scope.user_id,
+            scope.tenant_id,
+            developer=scope.developer,
+        )
         active_run = (
             await database.scalar(
                 select(GenerationRun).where(
@@ -630,20 +688,28 @@ async def get_project(request: web.Request) -> web.Response:
             if project.active_run_id
             else None
         )
-        payload = serialize_project(project, active_run=active_run)
+        owner_email = await database.scalar(
+            select(User.email).where(User.id == project.owner_user_id)
+        )
+        payload = serialize_project(
+            project,
+            active_run=active_run,
+            owner_email=owner_email,
+        )
     return web.json_response(payload)
 
 
 async def list_project_versions(request: web.Request) -> web.Response:
     _require_project_versions_enabled(request)
-    user_id, tenant_id = await _scope(request)
+    scope = await _project_scope(request)
     factory = get_session_factory(request.app)
     async with factory() as database:
         project = await _owned_project(
             database,
             _uuid(request.match_info["project_id"]),
-            user_id,
-            tenant_id,
+            scope.user_id,
+            scope.tenant_id,
+            developer=scope.developer,
         )
         version_rows = list(
             (
@@ -703,7 +769,8 @@ async def _require_active_subscription(database, user_id: int) -> None:
 
 async def refine_project_version(request: web.Request) -> web.Response:
     _require_project_versions_enabled(request)
-    user_id, tenant_id = await _scope(request, verified=True)
+    scope = await _project_scope(request, verified=True)
+    user_id, tenant_id, developer = scope.user_id, scope.tenant_id, scope.developer
     await _require_csrf(request)
     key = _idempotency_key(request)
     body = await _project_version_body(
@@ -734,6 +801,7 @@ async def refine_project_version(request: web.Request) -> web.Response:
                 project_id,
                 user_id,
                 tenant_id,
+                developer=developer,
                 lock=True,
             )
             version_service = ProjectVersionService(database)
@@ -755,7 +823,10 @@ async def refine_project_version(request: web.Request) -> web.Response:
             if prepared.existing_run is not None:
                 run = prepared.existing_run
             else:
-                await _require_active_subscription(database, user_id)
+                billing_user_id = project.owner_user_id if developer else user_id
+                enqueue_user_id = project.owner_user_id if developer else user_id
+                enqueue_tenant_id = project.tenant_id if developer else tenant_id
+                await _require_active_subscription(database, billing_user_id)
                 try:
                     run = await version_service.enqueue_refinement(
                         project.id,
@@ -763,8 +834,8 @@ async def refine_project_version(request: web.Request) -> web.Response:
                         expected_active_version_id=expected_active_version_id,
                         change_request=change_request,
                         idempotency_key=key,
-                        actor_user_id=user_id,
-                        tenant_id=tenant_id,
+                        actor_user_id=enqueue_user_id,
+                        tenant_id=enqueue_tenant_id,
                     )
                 except (
                     ProjectBusy,
@@ -779,7 +850,7 @@ async def refine_project_version(request: web.Request) -> web.Response:
                 await ensure_pending_forensic_manifest(
                     database,
                     config=request.app[GENERATION_FORENSICS_CONFIG_KEY],
-                    user_id=user_id,
+                    user_id=billing_user_id,
                     project_id=project.id,
                     run_id=run.id,
                     created_at=created_at,
@@ -787,7 +858,7 @@ async def refine_project_version(request: web.Request) -> web.Response:
                 try:
                     await GenerationCreditService(factory).reserve_in_session(
                         database,
-                        user_id=user_id,
+                        user_id=billing_user_id,
                         project_id=project.id,
                         run_id=run.id,
                     )
@@ -810,7 +881,8 @@ async def refine_project_version(request: web.Request) -> web.Response:
 
 async def restore_project_version(request: web.Request) -> web.Response:
     _require_project_versions_enabled(request)
-    user_id, tenant_id = await _scope(request, verified=True)
+    scope = await _project_scope(request, verified=True)
+    user_id, tenant_id, developer = scope.user_id, scope.tenant_id, scope.developer
     await _require_csrf(request)
     key = _idempotency_key(request)
     body = await _project_version_body(
@@ -830,6 +902,7 @@ async def restore_project_version(request: web.Request) -> web.Response:
                 project_id,
                 user_id,
                 tenant_id,
+                developer=developer,
                 lock=True,
             )
             version_service = ProjectVersionService(database)
@@ -865,7 +938,8 @@ async def restore_project_version(request: web.Request) -> web.Response:
 
 
 async def create_run(request: web.Request) -> web.Response:
-    user_id, tenant_id = await _scope(request, verified=True)
+    scope = await _project_scope(request, verified=True)
+    user_id, tenant_id, developer = scope.user_id, scope.tenant_id, scope.developer
     await _require_csrf(request)
     key = _idempotency_key(request)
     try:
@@ -880,8 +954,14 @@ async def create_run(request: web.Request) -> web.Response:
     try:
         async with factory() as database, database.begin():
             project = await _owned_project(
-                database, _uuid(request.match_info["project_id"]), user_id, tenant_id, lock=True
+                database,
+                _uuid(request.match_info["project_id"]),
+                user_id,
+                tenant_id,
+                developer=developer,
+                lock=True,
             )
+            billing_user_id = project.owner_user_id if developer else user_id
             run = await database.scalar(select(GenerationRun).where(
                 GenerationRun.project_id == project.id,
                 GenerationRun.idempotency_key == key,
@@ -891,7 +971,7 @@ async def create_run(request: web.Request) -> web.Response:
                     database,
                     factory,
                     project,
-                    user_id,
+                    billing_user_id,
                     key,
                     request.app[GENERATION_FORENSICS_CONFIG_KEY],
                     funnel_journeys_enabled=_funnel_journeys_enabled(request),
@@ -900,15 +980,15 @@ async def create_run(request: web.Request) -> web.Response:
                 try:
                     await TrialService(factory).reserve_trial_in_session(
                         database,
-                        user_id,
+                        billing_user_id,
                         run.id,
                         request_id=key,
                     )
                 except TrialUnavailable:
-                    await _require_active_subscription(database, user_id)
+                    await _require_active_subscription(database, billing_user_id)
                     await GenerationCreditService(factory).reserve_in_session(
                         database,
-                        user_id=user_id,
+                        user_id=billing_user_id,
                         project_id=project.id,
                         run_id=run.id,
                     )
@@ -929,12 +1009,19 @@ async def create_run(request: web.Request) -> web.Response:
 
 
 async def cancel_run(request: web.Request) -> web.Response:
-    user_id, tenant_id = await _scope(request)
+    scope = await _project_scope(request)
+    user_id, tenant_id, developer = scope.user_id, scope.tenant_id, scope.developer
     await _require_csrf(request)
     run_id = _uuid(request.match_info["run_id"])
     factory = get_session_factory(request.app)
     async with factory() as database:
-        run, project = await _owned_run(database, run_id, user_id, tenant_id)
+        run, project = await _owned_run(
+            database,
+            run_id,
+            user_id,
+            tenant_id,
+            developer=developer,
+        )
         existing_request = await database.scalar(
             select(GenerationEvent.id).where(
                 GenerationEvent.run_id == run.id,
@@ -953,7 +1040,13 @@ async def cancel_run(request: web.Request) -> web.Response:
     if existing_request is None:
         await PostgresWorkerQueue(factory).request_cancel(run_id)
     async with factory() as database:
-        run, _ = await _owned_run(database, run_id, user_id, tenant_id)
+        run, _ = await _owned_run(
+            database,
+            run_id,
+            user_id,
+            tenant_id,
+            developer=developer,
+        )
         requested = await database.scalar(
             select(GenerationEvent.id).where(
                 GenerationEvent.run_id == run.id,
@@ -976,7 +1069,8 @@ async def cancel_run(request: web.Request) -> web.Response:
 
 
 async def retry_run(request: web.Request) -> web.Response:
-    user_id, tenant_id = await _scope(request, verified=True)
+    scope = await _project_scope(request, verified=True)
+    user_id, tenant_id, developer = scope.user_id, scope.tenant_id, scope.developer
     await _require_csrf(request)
     key = _idempotency_key(request)
     source_run_id = _uuid(request.match_info["run_id"])
@@ -988,6 +1082,7 @@ async def retry_run(request: web.Request) -> web.Response:
             source_run_id,
             user_id,
             tenant_id,
+            developer=developer,
         )
         existing = await database.scalar(
             select(GenerationRun).where(
@@ -1016,13 +1111,14 @@ async def retry_run(request: web.Request) -> web.Response:
                 text=_error("run_not_retryable"), content_type="application/json"
             )
         project_id = project.id
+        billing_user_id = project.owner_user_id if developer else user_id
 
     outcome = await TrialSettlementReconciler(factory).settle_run(source_run_id)
     paid_retry = outcome in {"paid", "consumed"}
     if outcome == "consumed":
         async with factory() as database:
             try:
-                await _require_active_subscription(database, user_id)
+                await _require_active_subscription(database, billing_user_id)
             except web.HTTPConflict:
                 raise web.HTTPConflict(
                     text=_error("trial_consumed"),
@@ -1041,6 +1137,7 @@ async def retry_run(request: web.Request) -> web.Response:
                     project_id,
                     user_id,
                     tenant_id,
+                    developer=developer,
                     lock=True,
                 )
                 existing = await database.scalar(
@@ -1079,12 +1176,12 @@ async def retry_run(request: web.Request) -> web.Response:
                             content_type="application/json",
                         )
                     if paid_retry:
-                        await _require_active_subscription(database, user_id)
+                        await _require_active_subscription(database, billing_user_id)
                     run = await _enqueue_express_run(
                         database,
                         factory,
                         project,
-                        user_id,
+                        billing_user_id,
                         key,
                         request.app[GENERATION_FORENSICS_CONFIG_KEY],
                         funnel_journeys_enabled=_funnel_journeys_enabled(request),
@@ -1095,7 +1192,7 @@ async def retry_run(request: web.Request) -> web.Response:
                     if paid_retry:
                         await GenerationCreditService(factory).reserve_in_session(
                             database,
-                            user_id=user_id,
+                            user_id=billing_user_id,
                             project_id=project.id,
                             run_id=run.id,
                         )
@@ -1207,10 +1304,17 @@ async def _preview(database, run_id: UUID) -> dict | None:
 
 
 async def get_run(request: web.Request) -> web.Response:
-    user_id, tenant_id = await _scope(request)
+    scope = await _project_scope(request)
+    user_id, tenant_id, developer = scope.user_id, scope.tenant_id, scope.developer
     factory = get_session_factory(request.app)
     async with factory() as database:
-        run, _ = await _owned_run(database, _uuid(request.match_info["run_id"]), user_id, tenant_id)
+        run, _ = await _owned_run(
+            database,
+            _uuid(request.match_info["run_id"]),
+            user_id,
+            tenant_id,
+            developer=developer,
+        )
         events = list((await database.execute(
             select(GenerationEvent).where(GenerationEvent.run_id == run.id).order_by(GenerationEvent.sequence)
         )).scalars())
@@ -1219,15 +1323,23 @@ async def get_run(request: web.Request) -> web.Response:
 
 
 async def get_timeline_summary(request: web.Request) -> web.Response:
-    user_id, tenant_id = await _scope(request)
+    scope = await _project_scope(request)
+    user_id, tenant_id, developer = scope.user_id, scope.tenant_id, scope.developer
     run_id = _uuid(request.match_info["run_id"])
     factory = get_session_factory(request.app)
     async with factory() as database:
+        _run, project = await _owned_run(
+            database,
+            run_id,
+            user_id,
+            tenant_id,
+            developer=developer,
+        )
         summary = await load_owner_timeline_summary(
             database,
             run_id=run_id,
-            owner_user_id=user_id,
-            tenant_id=tenant_id,
+            owner_user_id=project.owner_user_id,
+            tenant_id=project.tenant_id,
         )
     if summary is None:
         raise web.HTTPNotFound(
@@ -1237,18 +1349,8 @@ async def get_timeline_summary(request: web.Request) -> web.Response:
 
 
 async def get_preview(request: web.Request) -> web.Response:
-    user_id, tenant_id = await _scope(request)
-    factory = get_session_factory(request.app)
-    async with factory() as database:
-        run, _ = await _owned_run(database, _uuid(request.match_info["run_id"]), user_id, tenant_id)
-        preview = await _preview(database, run.id)
-    if preview is None:
-        raise web.HTTPNotFound(text=_error("preview_not_found"), content_type="application/json")
-    return web.json_response({"artifact": preview})
-
-
-async def get_preview_document(request: web.Request) -> web.Response:
-    user_id, tenant_id = await _scope(request)
+    scope = await _project_scope(request)
+    user_id, tenant_id, developer = scope.user_id, scope.tenant_id, scope.developer
     factory = get_session_factory(request.app)
     async with factory() as database:
         run, _ = await _owned_run(
@@ -1256,6 +1358,25 @@ async def get_preview_document(request: web.Request) -> web.Response:
             _uuid(request.match_info["run_id"]),
             user_id,
             tenant_id,
+            developer=developer,
+        )
+        preview = await _preview(database, run.id)
+    if preview is None:
+        raise web.HTTPNotFound(text=_error("preview_not_found"), content_type="application/json")
+    return web.json_response({"artifact": preview})
+
+
+async def get_preview_document(request: web.Request) -> web.Response:
+    scope = await _project_scope(request)
+    user_id, tenant_id, developer = scope.user_id, scope.tenant_id, scope.developer
+    factory = get_session_factory(request.app)
+    async with factory() as database:
+        run, _ = await _owned_run(
+            database,
+            _uuid(request.match_info["run_id"]),
+            user_id,
+            tenant_id,
+            developer=developer,
         )
         if (
             len(request.query) != 2
@@ -1380,7 +1501,8 @@ async def _chat_payload(request: web.Request) -> tuple[str, str, int]:
 
 
 async def run_chat(request: web.Request) -> web.Response:
-    user_id, tenant_id = await _scope(request)
+    scope = await _project_scope(request)
+    user_id, tenant_id, developer = scope.user_id, scope.tenant_id, scope.developer
     await _require_csrf(request)
     try:
         request_id, message, revision = await _chat_payload(request)
@@ -1398,6 +1520,7 @@ async def run_chat(request: web.Request) -> web.Response:
             _uuid(request.match_info["run_id"]),
             user_id,
             tenant_id,
+            developer=developer,
         )
         selected = await _preview_candidate(database, run.id, revision=revision)
         reference_context = await _chat_reference_context(database, run.id)
@@ -1454,11 +1577,13 @@ async def run_chat(request: web.Request) -> web.Response:
     )
     if session.get(PROJECT_CHAT_SESSION_KEY) != session_id:
         session[PROJECT_CHAT_SESSION_KEY] = session_id
+    chat_user_id = project.owner_user_id if developer else user_id
+    chat_tenant_id = project.tenant_id if developer else tenant_id
     try:
         reply = await service.reply(
-            scope=f"tenant:{tenant_id}:user:{user_id}:run:{run.id}:revision:{revision}",
+            scope=f"tenant:{chat_tenant_id}:user:{chat_user_id}:run:{run.id}:revision:{revision}",
             session_id=session_id,
-            client_id=f"tenant:{tenant_id}:user:{user_id}",
+            client_id=f"tenant:{chat_tenant_id}:user:{chat_user_id}",
             request_id=request_id,
             text=message,
             context=ChatContext(
@@ -1482,19 +1607,24 @@ async def run_chat(request: web.Request) -> web.Response:
 
 
 async def get_artifact(request: web.Request) -> web.Response:
-    user_id, tenant_id = await _scope(request)
+    scope = await _project_scope(request)
+    user_id, tenant_id, developer = scope.user_id, scope.tenant_id, scope.developer
     artifact_id = _uuid(request.match_info["artifact_id"])
     factory = get_session_factory(request.app)
     async with factory() as database:
+        filters = [GenerationArtifact.id == artifact_id]
+        if not developer:
+            filters.extend(
+                [
+                    Project.owner_user_id == user_id,
+                    Project.tenant_id == tenant_id,
+                ]
+            )
         artifact = await database.scalar(
             select(GenerationArtifact)
             .join(GenerationRun, GenerationArtifact.run_id == GenerationRun.id)
             .join(Project, GenerationRun.project_id == Project.id)
-            .where(
-                GenerationArtifact.id == artifact_id,
-                Project.owner_user_id == user_id,
-                Project.tenant_id == tenant_id,
-            )
+            .where(*filters)
         )
     if artifact is None:
         raise web.HTTPNotFound(text=_error("not_found"), content_type="application/json")
@@ -1502,7 +1632,8 @@ async def get_artifact(request: web.Request) -> web.Response:
 
 
 async def stream_events(request: web.Request) -> web.StreamResponse:
-    user_id, tenant_id = await _scope(request)
+    scope = await _project_scope(request)
+    user_id, tenant_id, developer = scope.user_id, scope.tenant_id, scope.developer
     run_id = _uuid(request.match_info["run_id"])
     try:
         cursor = max(0, int(request.headers.get("Last-Event-ID", "0")))
@@ -1510,7 +1641,13 @@ async def stream_events(request: web.Request) -> web.StreamResponse:
         raise web.HTTPBadRequest(text=_error("invalid_last_event_id"), content_type="application/json") from error
     factory = get_session_factory(request.app)
     async with factory() as database:
-        await _owned_run(database, run_id, user_id, tenant_id)
+        await _owned_run(
+            database,
+            run_id,
+            user_id,
+            tenant_id,
+            developer=developer,
+        )
     response = web.StreamResponse(status=200, headers={
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
@@ -1522,7 +1659,13 @@ async def stream_events(request: web.Request) -> web.StreamResponse:
     while True:
         # Close the session before waiting; SSE must never hold an idle transaction.
         async with factory() as database:
-            run, _ = await _owned_run(database, run_id, user_id, tenant_id)
+            run, _ = await _owned_run(
+                database,
+                run_id,
+                user_id,
+                tenant_id,
+                developer=developer,
+            )
             events = list((await database.execute(
                 select(GenerationEvent)
                 .where(GenerationEvent.run_id == run.id, GenerationEvent.sequence > cursor)

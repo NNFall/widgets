@@ -6810,6 +6810,16 @@ a {
   -webkit-line-clamp: 2;
 }
 
+.studio-library__owner {
+  margin: 0 0 5px;
+  overflow: hidden;
+  color: #8b5b4a;
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .studio-library__identity time {
   display: block;
   color: #7a878f;

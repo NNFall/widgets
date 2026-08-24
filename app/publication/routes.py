@@ -17,7 +17,13 @@ from aiohttp import web
 from sqlalchemy import select
 from app.chat import CHAT_SERVICE_KEY, ChatContext, ChatServiceError
 from app.db.session import get_session_factory
-from app.projects.routes import _chat_reference_context, _require_csrf, _scope, _uuid
+from app.projects.routes import (
+    _chat_reference_context,
+    _project_scope,
+    _require_csrf,
+    _scope,
+    _uuid,
+)
 from app.publication.service import (
     InvalidAllowedDomain,
     InvalidPublicationArtifact,
@@ -429,13 +435,15 @@ def _publication_state_payload(publication, *, base: str) -> web.Response:
 
 
 async def get_project_publication(request: web.Request) -> web.Response:
-    user_id, tenant_id = await _scope(request, verified=True)
+    scope = await _project_scope(request, verified=True)
+    user_id, tenant_id, developer = scope.user_id, scope.tenant_id, scope.developer
     project_id = _uuid(request.match_info["project_id"])
     try:
         publication = await _service(request).get_project_state(
             project_id,
             actor_user_id=user_id,
             tenant_id=tenant_id,
+            developer=developer,
         )
     except (PublicationNotFound, ReleaseCorrupt):
         raise web.HTTPNotFound(
@@ -447,7 +455,8 @@ async def get_project_publication(request: web.Request) -> web.Response:
 
 
 async def publish_project(request: web.Request) -> web.Response:
-    user_id, tenant_id = await _scope(request, verified=True)
+    scope = await _project_scope(request, verified=True)
+    user_id, tenant_id, developer = scope.user_id, scope.tenant_id, scope.developer
     await _require_csrf(request)
     base = _public_base_url(request)
     project_id = _uuid(request.match_info["project_id"])
@@ -478,6 +487,7 @@ async def publish_project(request: web.Request) -> web.Response:
                     payload["expected_active_release_id"], nullable=True
                 ),
                 allowed_domains=_allowed_domains(payload),
+                developer=developer,
             )
         else:
             payload = await _body(
@@ -506,6 +516,7 @@ async def publish_project(request: web.Request) -> web.Response:
                 artifact_id=parsed_artifact_id,
                 revision=revision,
                 allowed_domains=_allowed_domains(payload),
+                developer=developer,
             )
     except web.HTTPException:
         raise
@@ -531,7 +542,8 @@ async def publish_project(request: web.Request) -> web.Response:
 
 
 async def rollback_publication(request: web.Request) -> web.Response:
-    user_id, tenant_id = await _scope(request, verified=True)
+    scope = await _project_scope(request, verified=True)
+    user_id, tenant_id, developer = scope.user_id, scope.tenant_id, scope.developer
     await _require_csrf(request)
     base = _public_base_url(request)
     publication_id = _uuid(request.match_info["publication_id"])
@@ -554,6 +566,7 @@ async def rollback_publication(request: web.Request) -> web.Response:
                 expected_active_release_id=_request_uuid(
                     payload["expected_active_release_id"]
                 ),
+                developer=developer,
             )
         else:
             payload = await _body(
@@ -566,6 +579,7 @@ async def rollback_publication(request: web.Request) -> web.Response:
                 actor_user_id=user_id,
                 tenant_id=tenant_id,
                 target_release_id=_request_uuid(payload["target_release_id"]),
+                developer=developer,
             )
     except web.HTTPException:
         raise

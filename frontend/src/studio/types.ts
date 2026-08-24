@@ -96,6 +96,10 @@ export interface AuthSessionSnapshot {
   user_id: number | null;
   email: string | null;
   csrf_token: string | null;
+  developer?: {
+    enabled: boolean;
+    scope: 'all_projects' | null;
+  };
 }
 
 export type BillingPaymentStatus =
@@ -189,6 +193,7 @@ export interface SaasProject {
   id: string;
   tenant_id: number;
   owner_user_id: number;
+  owner_email?: string | null;
   source_url: string;
   brief: string | null;
   status: string;

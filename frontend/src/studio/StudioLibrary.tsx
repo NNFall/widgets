@@ -112,6 +112,9 @@ export function StudioLibrary({ onOpenProject, onCreateProject }: StudioLibraryP
                   {project.brief?.trim() && (
                     <p className="studio-library__brief">{project.brief.trim()}</p>
                   )}
+                  {project.owner_email && (
+                    <p className="studio-library__owner">Владелец: {project.owner_email}</p>
+                  )}
                   <time dateTime={project.updated_at}>{projectDate(project.updated_at)}</time>
                 </div>
               </div>

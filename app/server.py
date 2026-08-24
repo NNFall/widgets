@@ -7,6 +7,7 @@ from aiohttp_session import setup as setup_session, get_session
 from sqlalchemy import select
 
 from app.admin.routes import setup_admin_routes
+from app.admin.developer import setup_developer_routes
 from app.admin.generation_forensics import setup_operator_forensics_routes
 from app.admin.funnel_analytics import setup_operator_funnel_routes
 from app.analytics.routes import setup_analytics_routes
@@ -388,6 +389,7 @@ async def create_app(
         setup_chat_runtime(app, service_factory=chat_service_factory)
     app.router.add_get('/', _home)
     setup_admin_routes(app, generation_forensics=cfg.generation_forensics)
+    setup_developer_routes(app)
     setup_operator_forensics_routes(app)
     setup_operator_funnel_routes(app)
     setup_api_routes(app)

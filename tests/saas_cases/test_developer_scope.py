@@ -12,6 +12,7 @@ from app.admin.operator_auth import (
     developer_session_snapshot,
     optional_developer_principal,
 )
+from app.admin.developer import setup_developer_routes
 from app.auth.routes import OAUTH_PROVIDERS_KEY, auth_session
 from app.db.base import Base
 from app.db.models import Tenant, User
@@ -87,6 +88,7 @@ async def test_only_verified_google_or_yandex_allowlisted_session_gets_developer
     app.router.add_get("/login/{user_id}", set_user)
     app.router.add_get("/inspect", inspect)
     app.router.add_get("/session", auth_session)
+    setup_developer_routes(app)
     client = TestClient(TestServer(app))
     await client.start_server()
     try:
@@ -102,6 +104,13 @@ async def test_only_verified_google_or_yandex_allowlisted_session_gets_developer
             "enabled": True,
             "scope": "all_projects",
         }
+        access = await client.get("/admin/developer")
+        assert access.status == 200
+        assert await access.json() == {
+            "email": "Developer@Example.com",
+            "scope": "all_projects",
+            "url": "/studio",
+        }
 
         member = TestClient(TestServer(app))
         await member.start_server()
@@ -112,6 +121,7 @@ async def test_only_verified_google_or_yandex_allowlisted_session_gets_developer
                 "email": None,
                 "snapshot": {"enabled": False, "scope": None},
             }
+            assert (await member.get("/admin/developer")).status == 403
         finally:
             await member.close()
     finally:

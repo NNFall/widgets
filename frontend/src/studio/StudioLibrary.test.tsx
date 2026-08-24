@@ -17,11 +17,13 @@ function project(
   sourceUrl: string,
   updatedAt = '2026-08-05T10:15:00Z',
   brief: string | null = null,
+  ownerEmail: string | null = null,
 ) {
   return {
     id,
     tenant_id: 2,
     owner_user_id: 4,
+    owner_email: ownerEmail,
     source_url: sourceUrl,
     brief,
     status,
@@ -49,6 +51,7 @@ describe('StudioLibrary', () => {
           'https://atelier.ru/catalog',
           '2026-08-05T10:15:00Z',
           'Помогает подобрать услугу и записаться на консультацию.',
+          'owner@example.com',
         ),
         project('project-running', 'running', 'https://shop.example.com/'),
         project('project-unknown', 'internal_pending', 'not a url'),
@@ -69,6 +72,7 @@ describe('StudioLibrary', () => {
     expect(screen.getByText('Состояние уточняется')).toBeInTheDocument();
     expect(screen.queryByText('internal_pending')).not.toBeInTheDocument();
     expect(screen.getByText('Помогает подобрать услугу и записаться на консультацию.')).toBeInTheDocument();
+    expect(screen.getByText('Владелец: owner@example.com')).toBeInTheDocument();
     expect(screen.getAllByText(new Intl.DateTimeFormat('ru-RU', {
       day: 'numeric',
       month: 'long',

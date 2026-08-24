@@ -95,11 +95,17 @@ def serialize_run(
     return payload
 
 
-def serialize_project(project: Project, *, active_run: GenerationRun | None = None) -> dict[str, Any]:
+def serialize_project(
+    project: Project,
+    *,
+    active_run: GenerationRun | None = None,
+    owner_email: str | None = None,
+) -> dict[str, Any]:
     return {
         "id": str(project.id),
         "tenant_id": project.tenant_id,
         "owner_user_id": project.owner_user_id,
+        "owner_email": owner_email,
         "source_url": project.source_url,
         "brief": project.brief,
         "status": project.status,

@@ -370,6 +370,89 @@ async def test_create_project_requires_owner_session_and_csrf_and_always_creates
 
 
 @pytest.mark.asyncio
+async def test_allowlisted_developer_can_open_foreign_project_but_other_user_cannot(
+    tmp_path,
+) -> None:
+    developer_config = GenerationForensicsConfig(
+        enabled=True,
+        root=tmp_path / "forensics",
+        ttl_hours=120,
+        max_bytes=1_000_000,
+        admin_emails=("owner@example.com",),
+    )
+
+    def configure(app: web.Application, _factory) -> None:
+        app["config"] = SimpleNamespace(
+            funnel_journeys_enabled=True,
+            project_versions_enabled=False,
+            generation_forensics=developer_config,
+        )
+
+    engine, factory, client, owner_id, foreign_id = await _project_app(
+        tmp_path,
+        configure_app=configure,
+        generation_forensics=developer_config,
+    )
+    try:
+        async with factory() as database, database.begin():
+            run = GenerationRun(
+                project_id=foreign_id,
+                mode="express",
+                state="completed",
+                progress=100,
+                idempotency_key="developer-foreign-run",
+            )
+            database.add(run)
+            await database.flush()
+            database.add(
+                GenerationEvent(
+                    id=9876,
+                    run_id=run.id,
+                    sequence=1,
+                    event_type="run.completed",
+                    public_message="Done",
+                    payload={"status": "completed"},
+                )
+            )
+            foreign_run_id = run.id
+
+        await client.post("/test/login/10")
+        listing = await client.get("/api/projects")
+        assert listing.status == 200
+        projects = (await listing.json())["projects"]
+        assert {project["id"] for project in projects} == {
+            str(owner_id),
+            str(foreign_id),
+        }
+        foreign_payload = await (await client.get(f"/api/projects/{foreign_id}")).json()
+        assert foreign_payload["owner_email"] == "other@example.com"
+        assert (await client.get(f"/api/runs/{foreign_run_id}")).status == 200
+
+        started = await client.post(
+            f"/api/projects/{foreign_id}/runs",
+            json={"mode": "express"},
+            headers={"X-CSRF-Token": "test-csrf", "Idempotency-Key": "developer-start-foreign"},
+        )
+        assert started.status == 202
+        started_run_id = UUID((await started.json())["id"])
+        async with factory() as database:
+            entitlement_users = set(
+                (await database.scalars(select(TrialEntitlement.user_id))).all()
+            )
+            stored_run = await database.get(GenerationRun, started_run_id)
+        assert 11 in entitlement_users
+        assert 10 not in entitlement_users
+        assert stored_run is not None and stored_run.project_id == foreign_id
+
+        await client.post("/test/login/20")
+        assert (await client.get(f"/api/projects/{foreign_id}")).status == 404
+        assert (await client.get(f"/api/runs/{foreign_run_id}")).status == 404
+    finally:
+        await client.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_create_project_does_not_write_journey_when_rollout_is_disabled(
     tmp_path,
 ) -> None:
