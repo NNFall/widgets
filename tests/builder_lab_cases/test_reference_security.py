@@ -14,6 +14,7 @@ from builder_lab.reference_crawler import (
     RobotsDenied,
     UnsafeReferenceUrl,
     UrlGuard,
+    _canonicalize_document_url,
     sanitize_url_for_log,
 )
 from builder_lab.reference_storage import (
@@ -54,6 +55,38 @@ class GuardedRobotsPolicyTests(unittest.IsolatedAsyncioTestCase):
             "https://example.com/robots-policy.txt",
         ])
 
+    async def test_www_to_apex_robots_redirect_is_allowed(self):
+        requests = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(str(request.url))
+            if request.url.host == "www.example.com":
+                return httpx.Response(
+                    301,
+                    headers={"location": "https://example.com/robots.txt"},
+                )
+            return httpx.Response(
+                200,
+                text=(
+                    "User-agent: KaigoVisualResearch\nAllow: /\n"
+                    "User-agent: *\nAllow: /\n"
+                ),
+            )
+
+        policy = GuardedRobotsPolicy(
+            guard=UrlGuard(resolver=lambda _host: [PUBLIC]),
+            transport=httpx.MockTransport(handler),
+        )
+
+        self.assertTrue(await policy.is_allowed("https://www.example.com/public"))
+        self.assertEqual(
+            requests,
+            [
+                "https://www.example.com/robots.txt",
+                "https://example.com/robots.txt",
+            ],
+        )
+
     async def test_private_robots_redirect_is_rejected_before_second_request(self):
         requests = []
 
@@ -74,6 +107,48 @@ class GuardedRobotsPolicyTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(UnsafeReferenceUrl):
             await policy.is_allowed("https://example.com/")
         self.assertEqual(requests, ["https://example.com/robots.txt"])
+
+    async def test_www_to_apex_document_redirect_is_allowed(self):
+        requests = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append((request.method, str(request.url)))
+            if request.url.host == "www.example.com":
+                return httpx.Response(
+                    301,
+                    headers={
+                        "location": (
+                            "https://example.com/robots.txt"
+                            if request.url.path == "/robots.txt"
+                            else "https://example.com/"
+                        )
+                    },
+                )
+            return httpx.Response(200, text="<html><body>ok</body></html>")
+
+        transport = httpx.MockTransport(handler)
+        guard = UrlGuard(resolver=lambda _host: [PUBLIC])
+        robots = GuardedRobotsPolicy(guard=guard, transport=transport)
+
+        canonical = await _canonicalize_document_url(
+            "https://www.example.com/",
+            guard=guard,
+            robots=robots,
+            timeout_seconds=5,
+            transport=transport,
+        )
+
+        self.assertEqual(canonical, "https://example.com/")
+        self.assertEqual(
+            requests,
+            [
+                ("GET", "https://www.example.com/robots.txt"),
+                ("GET", "https://example.com/robots.txt"),
+                ("HEAD", "https://www.example.com/"),
+                ("GET", "https://example.com/robots.txt"),
+                ("HEAD", "https://example.com/"),
+            ],
+        )
 
     async def test_verified_404_allows_but_5xx_fails_closed(self):
         statuses = {"allow.test": 404, "deny.test": 503}

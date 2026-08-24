@@ -255,6 +255,27 @@ def _origin_url(url: str) -> str:
     )
 
 
+def _canonical_site_host(host: str) -> str:
+    normalized = host.casefold().rstrip(".")
+    return normalized[4:] if normalized.startswith("www.") else normalized
+
+
+def _same_site_origin(left: str, right: str) -> bool:
+    """Allow only the explicit www/apex alias of the same public origin."""
+
+    try:
+        left_origin = _origin_key(left)
+        right_origin = _origin_key(right)
+    except ValueError:
+        return False
+    return (
+        left_origin[0] == right_origin[0]
+        and left_origin[2] == right_origin[2]
+        and _canonical_site_host(left_origin[1])
+        == _canonical_site_host(right_origin[1])
+    )
+
+
 class GuardedRobotsPolicy:
     """Per-origin robots policy loaded only through the Kaigo URL guard."""
 
@@ -299,7 +320,7 @@ class GuardedRobotsPolicy:
                             await asyncio.to_thread(
                                 self.guard.validate_redirect, redirected
                             )
-                            if _origin_url(redirected) != origin:
+                            if not _same_site_origin(redirected, origin):
                                 raise RobotsDenied(
                                     "cross-origin robots redirects are denied"
                                 )
@@ -359,18 +380,19 @@ async def _canonicalize_document_url(
     robots: GuardedRobotsPolicy | None,
     timeout_seconds: int,
     max_redirects: int = 8,
+    transport: Any | None = None,
 ) -> str:
     """Resolve only HEAD redirects; any later GET redirect is fail-closed."""
     import httpx
 
     current = _without_fragment(url)
-    allowed_origin = _origin_key(current)
     seen: set[str] = set()
     async with httpx.AsyncClient(
         follow_redirects=False,
         headers={"User-Agent": KAIGO_RESEARCH_USER_AGENT},
         timeout=timeout_seconds,
         trust_env=False,
+        transport=transport,
     ) as client:
         for _hop in range(max_redirects + 1):
             if current in seen:
@@ -394,7 +416,7 @@ async def _canonicalize_document_url(
                 )
             redirected = _without_fragment(urljoin(current, location))
             await asyncio.to_thread(guard.validate_redirect, redirected)
-            if _origin_key(redirected) != allowed_origin:
+            if not _same_site_origin(redirected, current):
                 raise ReferenceCaptureError("cross-origin document redirect blocked")
             current = redirected
     raise ReferenceCaptureError("document redirect hop limit exceeded")
