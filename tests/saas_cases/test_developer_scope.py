@@ -112,6 +112,15 @@ async def test_only_verified_google_or_yandex_allowlisted_session_gets_developer
             "url": "/studio",
         }
 
+        unauthenticated = TestClient(TestServer(app))
+        await unauthenticated.start_server()
+        try:
+            assert (
+                await unauthenticated.get("/admin/developer?key=temporary-test-key")
+            ).status == 401
+        finally:
+            await unauthenticated.close()
+
         member = TestClient(TestServer(app))
         await member.start_server()
         try:
